@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Calcium-Ion/go-epay/epay"
@@ -51,9 +50,9 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		return
 	}
 
-	if req.PaymentMethod == "fastpay" || strings.HasPrefix(req.PaymentMethod, "fastpay_") || (isFastPayWebhookConfigured() && strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay")) {
+	if fastPayMethod, useFastPay := resolveFastPayMethod(req.PaymentMethod); useFastPay {
 		c.Set("parsed_plan_id", req.PlanId)
-		c.Set("parsed_payment_method", req.PaymentMethod)
+		c.Set("parsed_payment_method", fastPayMethod)
 		SubscriptionRequestFastPay(c)
 		return
 	}
