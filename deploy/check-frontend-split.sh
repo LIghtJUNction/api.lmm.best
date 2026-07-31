@@ -3,7 +3,9 @@ set -Eeuo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 config=$repo/deploy/nginx/lmm-api-locations.conf
+mime_types=$repo/deploy/nginx/mime.types
 release=$repo/deploy/frontend-release.sh
+nginx_installer=$repo/deploy/nginx/install-nginx-split.sh
 
 fail() { printf 'split-check: %s\n' "$*" >&2; exit 1; }
 assert_literal() { grep -Fq -- "$1" "$2" || fail "$2 is missing: $1"; }
@@ -13,6 +15,16 @@ for route in '/api/' '/v1/' '/v1beta/' '/pg/' '/mj/' '/suno/' '/kling/v1/' '/jim
 done
 assert_literal '^/[^/]+/mj(?:/|$)' "$config"
 assert_literal 'location ^~ /oauth/' "$config"
+assert_literal 'include /etc/nginx/lmm-api-mime.types;' "$config"
+assert_literal 'default_type application/octet-stream;' "$config"
+if grep -Fq 'include /etc/nginx/mime.types;' "$config"; then
+  fail 'site config must not depend on or manage the global nginx MIME map'
+fi
+assert_literal 'application/javascript               js mjs;' "$mime_types"
+assert_literal 'text/css                              css;' "$mime_types"
+assert_literal 'application/json                     json map;' "$mime_types"
+assert_literal 'image/svg+xml                         svg svgz;' "$mime_types"
+assert_literal 'font/woff2                            woff2;' "$mime_types"
 assert_literal 'location = /terms' "$config"
 assert_literal 'location = /privacy' "$config"
 assert_literal 'alias /var/www/api.lmm.best/legal/terms.html;' "$config"
@@ -43,6 +55,12 @@ assert_literal 'mv -Tf -- "$temp" "$root/current"' "$release"
 assert_literal 'flock -n 9' "$release"
 assert_literal 'immutable asset collision with different content' "$release"
 assert_literal 'preflight_assets "$stage/static"' "$release"
+assert_literal 'flock -n 9' "$nginx_installer"
+assert_literal 'mv -Tf -- "$temp" "$target"' "$nginx_installer"
+assert_literal 'nginx -t' "$nginx_installer"
+assert_literal 'systemctl reload nginx' "$nginx_installer"
+assert_literal 'restore_backup "$backup"' "$nginx_installer"
+assert_literal 'MIME_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-mime.types' "$nginx_installer"
 if grep -Fq 'location ^~ /dashboard/' "$config"; then
   fail 'broad /dashboard/ proxy would swallow frontend dashboard routes'
 fi
@@ -59,4 +77,22 @@ while IFS= read -r route; do
 done < <(sed -nE 's/.*router\.Group\("?([^" ]+)"?\).*/\1/p' "$repo"/router/*.go | sort -u)
 
 bash -n "$release"
+bash -n "$nginx_installer"
+if command -v nginx >/dev/null; then
+  LMM_NGINX_MIME_TYPES="$mime_types" "$repo/deploy/test-nginx-mime.sh"
+else
+  printf 'split-check: nginx not installed; MIME integration test skipped\n' >&2
+fi
+"$repo/deploy/test-nginx-installer.sh"
+
+# The behavioral test must consume the tracked map, not an unrelated system
+# file. Corrupting a copy of that map must make nginx validation fail.
+mime_test_root=$(mktemp -d)
+trap 'rm -rf -- "$mime_test_root"' EXIT
+cp -- "$mime_types" "$mime_test_root/mime.types"
+printf 'this is not nginx syntax\n' >>"$mime_test_root/mime.types"
+if command -v nginx >/dev/null &&
+   LMM_NGINX_MIME_TYPES="$mime_test_root/mime.types" "$repo/deploy/test-nginx-mime.sh" >/dev/null 2>&1; then
+  fail 'corrupted tracked MIME map unexpectedly passed nginx validation'
+fi
 printf 'frontend/backend split checks passed\n'
