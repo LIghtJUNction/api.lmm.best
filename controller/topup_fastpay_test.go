@@ -57,3 +57,9 @@ func TestFastPayNotify_InvalidSign(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "fail", w.Body.String())
 }
+
+func TestGetFastPaySubmitUrl(t *testing.T) {
+	assert.Equal(t, "https://api.lmm.best:9443/fastpay-server/api/pay/submit", getFastPaySubmitUrl("https://api.lmm.best:9443/fastpay-server"))
+	assert.Equal(t, "https://api.lmm.best:9443/fastpay-server/api/pay/submit", getFastPaySubmitUrl("https://api.lmm.best:9443/fastpay-server/submit.php"))
+	assert.Equal(t, "https://api.lmm.best:9443/fastpay-server/api/pay/submit", getFastPaySubmitUrl("https://api.lmm.best:9443/fastpay-server/api/pay/submit"))
+}
