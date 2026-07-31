@@ -218,6 +218,8 @@ func RequestEpay(c *gin.Context) {
 	}
 
 	if req.PaymentMethod == "fastpay" || strings.HasPrefix(req.PaymentMethod, "fastpay_") || (isFastPayWebhookConfigured() && strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay")) {
+		c.Set("parsed_amount", req.Amount)
+		c.Set("parsed_payment_method", req.PaymentMethod)
 		RequestFastPay(c)
 		return
 	}

@@ -26,7 +26,22 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 	}
 
 	var req SubscriptionFastPayPayRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
+	// Check if values were pre-parsed by SubscriptionRequestEpay
+	if v, exists := c.Get("parsed_plan_id"); exists {
+		if planId, ok := v.(int); ok {
+			req.PlanId = planId
+		}
+	}
+	if v, exists := c.Get("parsed_payment_method"); exists {
+		if pm, ok := v.(string); ok {
+			req.PaymentMethod = pm
+		}
+	}
+	// If not pre-parsed, try reading body directly
+	if req.PlanId <= 0 {
+		_ = c.ShouldBindJSON(&req)
+	}
+	if req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
