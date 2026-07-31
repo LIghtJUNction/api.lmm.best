@@ -1,10 +1,10 @@
 <div align="center">
 
-![new-api](/web/public/logo.png)
+![lmm.best.api](/web/public/logo.png)
 
-# LMM API
+# lmm.best.api
 
-🍥 **Next-Generation LLM Gateway and AI Asset Management System**
+**Next-Generation LLM Gateway and AI Asset Management System**
 
 <p align="center">
   <a href="./README.zh_CN.md">简体中文</a> |
@@ -44,16 +44,16 @@
 </p>
 
 <p align="center">
-  <a href="#-quick-start">Quick Start</a> •
-  <a href="#-key-features">Key Features</a> •
-  <a href="#-deployment">Deployment</a> •
-  <a href="#-documentation">Documentation</a> •
-  <a href="#-help-support">Help</a>
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#key-features">Key Features</a> •
+  <a href="#deployment">Deployment</a> •
+  <a href="#documentation">Documentation</a> •
+  <a href="#help-support">Help</a>
 </p>
 
 </div>
 
-## 📝 Project Description
+## Project Description
 
 > [!IMPORTANT]
 > - This project is intended solely for lawful and authorized AI API gateway, organization-level authentication, multi-model management, usage analytics, cost accounting, and private deployment scenarios.
@@ -63,7 +63,7 @@
 
 ---
 
-## 🤝 Trusted Partners
+## Trusted Partners
 
 <p align="center">
   <em>No particular order</em>
@@ -92,7 +92,7 @@
 
 ---
 
-## 🙏 Special Thanks
+## Special Thanks
 
 <p align="center">
   <a href="https://www.jetbrains.com/?from=new-api" target="_blank">
@@ -106,7 +106,7 @@
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Using Docker Compose (Recommended)
 
@@ -145,26 +145,26 @@ docker run --name new-api -d --restart always \
   calciumion/new-api:latest
 ```
 
-> **💡 Tip:** `-v ./data:/data` will save data in the `data` folder of the current directory, you can also change it to an absolute path like `-v /your/custom/path:/data`
+> **Tip:** `-v ./data:/data` will save data in the `data` folder of the current directory, you can also change it to an absolute path like `-v /your/custom/path:/data`
 
 </details>
 
 ---
 
-🎉 After deployment is complete, visit `http://localhost:3000` to start using!
+After deployment is complete, visit `http://localhost:3000` to start using!
 
 > [!WARNING]
 > When operating this project as a public generative AI service or API resale service, users should first complete all required filing, licensing, content safety, real-name verification, log retention, tax, payment, and upstream authorization obligations.
 
-📖 For more deployment methods, please refer to [Deployment Guide](https://docs.newapi.pro/en/docs/installation)
+For more deployment methods, please refer to [Deployment Guide](https://docs.newapi.pro/en/docs/installation)
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 <div align="center">
 
-### 📖 [Official Documentation](https://docs.newapi.pro/en/docs) | [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
+### [Official Documentation](https://docs.newapi.pro/en/docs) | [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/QuantumNous/new-api)
 
 </div>
 
@@ -172,63 +172,63 @@ docker run --name new-api -d --restart always \
 
 | Category | Link |
 |------|------|
-| 🚀 Deployment Guide | [Installation Documentation](https://docs.newapi.pro/en/docs/installation) |
-| ⚙️ Environment Configuration | [Environment Variables](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables) |
-| 📡 API Documentation | [API Documentation](https://docs.newapi.pro/en/docs/api) |
-| ❓ FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
-| 💬 Community Interaction | [Communication Channels](https://docs.newapi.pro/en/docs/support/community-interaction) |
+| Deployment Guide | [Installation Documentation](https://docs.newapi.pro/en/docs/installation) |
+| Environment Configuration | [Environment Variables](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables) |
+| API Documentation | [API Documentation](https://docs.newapi.pro/en/docs/api) |
+| FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
+| Community Interaction | [Communication Channels](https://docs.newapi.pro/en/docs/support/community-interaction) |
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 > For detailed features, please refer to [Features Introduction](https://docs.newapi.pro/en/docs/guide/wiki/basic-concepts/features-introduction)
 
-### 🎨 Core Functions
+### Core Functions
 
 | Feature | Description |
 |------|------|
-| 🎨 New UI | Modern user interface design |
-| 🌍 Multi-language | Supports Simplified Chinese, Traditional Chinese, English, French, Japanese |
-| 🔄 Data Compatibility | Fully compatible with the original One API database |
-| 📈 Data Dashboard | Visual console and statistical analysis |
-| 🔒 Permission Management | Token grouping, model restrictions, user management |
+| New UI | Modern user interface design |
+| Multi-language | Supports Simplified Chinese, Traditional Chinese, English, French, Japanese |
+| Data Compatibility | Fully compatible with the original One API database |
+| Data Dashboard | Visual console and statistical analysis |
+| Permission Management | Token grouping, model restrictions, user management |
 
-### 💰 Authorized Usage Accounting and Billing
+### Authorized Usage Accounting and Billing
 
-- ✅ Internal top-up and quota allocation for lawful authorized scenarios (EPay, Stripe)
-- ✅ Organization-level per-request, usage-based, and cache-hit cost accounting
-- ✅ Cache billing statistics for OpenAI, Azure, DeepSeek, Claude, Qwen, and supported models
-- ✅ Flexible billing policies for internal management or authorized enterprise customers
+- Internal top-up and quota allocation for lawful authorized scenarios (EPay, Stripe)
+- Organization-level per-request, usage-based, and cache-hit cost accounting
+- Cache billing statistics for OpenAI, Azure, DeepSeek, Claude, Qwen, and supported models
+- Flexible billing policies for internal management or authorized enterprise customers
 
-### 🔐 Authorization and Security
+### Authorization and Security
 
-- 😈 Discord authorization login
-- 🤖 LinuxDO authorization login
-- 📱 Telegram authorization login
-- 🔑 OIDC unified authentication
-- 🔍 Key quota query usage (with [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool))
+- Discord authorization login
+- LinuxDO authorization login
+- Telegram authorization login
+- OIDC unified authentication
+- Key quota query usage (with [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool))
 
-### 🚀 Advanced Features
+### Advanced Features
 
 **API Format Support:**
-- ⚡ [OpenAI Responses](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/create-response)
-- ⚡ [OpenAI Realtime API](https://docs.newapi.pro/en/docs/api/ai-model/realtime/create-realtime-session) (including Azure)
-- ⚡ [Claude Messages](https://docs.newapi.pro/en/docs/api/ai-model/chat/create-message)
-- ⚡ [Google Gemini](https://doc.newapi.pro/en/api/google-gemini-chat)
-- 🔄 [Rerank Models](https://docs.newapi.pro/en/docs/api/ai-model/rerank/create-rerank) (Cohere, Jina)
+- [OpenAI Responses](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/create-response)
+- [OpenAI Realtime API](https://docs.newapi.pro/en/docs/api/ai-model/realtime/create-realtime-session) (including Azure)
+- [Claude Messages](https://docs.newapi.pro/en/docs/api/ai-model/chat/create-message)
+- [Google Gemini](https://doc.newapi.pro/en/api/google-gemini-chat)
+- [Rerank Models](https://docs.newapi.pro/en/docs/api/ai-model/rerank/create-rerank) (Cohere, Jina)
 
 **Intelligent Routing:**
-- ⚖️ Channel weighted random
-- 🔄 Automatic retry on failure
-- 🚦 User-level model rate limiting
+- Channel weighted random
+- Automatic retry on failure
+- User-level model rate limiting
 
 **Format Conversion:**
-- 🔄 **OpenAI Compatible ⇄ Claude Messages**
-- 🔄 **OpenAI Compatible → Google Gemini**
-- 🔄 **Google Gemini → OpenAI Compatible** - Text only, function calling not supported yet
-- 🚧 **OpenAI Compatible ⇄ OpenAI Responses** - In development
-- 🔄 **Thinking-to-content functionality**
+- **OpenAI Compatible ⇄ Claude Messages**
+- **OpenAI Compatible → Google Gemini**
+- **Google Gemini → OpenAI Compatible** - Text only, function calling not supported yet
+- **OpenAI Compatible ⇄ OpenAI Responses** - In development
+- **Thinking-to-content functionality**
 
 **Reasoning Effort Support:**
 
@@ -257,23 +257,23 @@ docker run --name new-api -d --restart always \
 
 ---
 
-## 🤖 Model Support
+## Model Support
 
 > For details, please refer to [API Documentation - Gateway Interface](https://docs.newapi.pro/en/docs/api)
 
 | Model Type | Description | Documentation |
 |---------|------|------|
-| 🤖 OpenAI-Compatible | OpenAI compatible models | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createchatcompletion) |
-| 🤖 OpenAI Responses | OpenAI Responses format | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createresponse) |
-| 🎨 Midjourney-Proxy | [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) | [Documentation](https://doc.newapi.pro/api/midjourney-proxy-image) |
-| 🎵 Suno-API | [Suno API](https://github.com/Suno-API/Suno-API) | [Documentation](https://doc.newapi.pro/api/suno-music) |
-| 🔄 Rerank | Cohere, Jina | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/rerank/creatererank) |
-| 💬 Claude | Messages format | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/createmessage) |
-| 🌐 Gemini | Google Gemini format | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
-| 🔧 Dify | ChatFlow mode | - |
-| 🎯 Custom upstream | Supports configuring legally authorized upstream endpoints | - |
+| OpenAI-Compatible | OpenAI compatible models | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createchatcompletion) |
+| OpenAI Responses | OpenAI Responses format | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createresponse) |
+| Midjourney-Proxy | [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) | [Documentation](https://doc.newapi.pro/api/midjourney-proxy-image) |
+| Suno-API | [Suno API](https://github.com/Suno-API/Suno-API) | [Documentation](https://doc.newapi.pro/api/suno-music) |
+| Rerank | Cohere, Jina | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/rerank/creatererank) |
+| Claude | Messages format | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/createmessage) |
+| Gemini | Google Gemini format | [Documentation](https://docs.newapi.pro/en/docs/api/ai-model/chat/gemini/geminirelayv1beta) |
+| Dify | ChatFlow mode | - |
+| Custom upstream | Supports configuring legally authorized upstream endpoints | - |
 
-### 📡 Supported Interfaces
+### Supported Interfaces
 
 <details>
 <summary>View complete interface list</summary>
@@ -293,12 +293,12 @@ docker run --name new-api -d --restart always \
 
 ---
 
-## 🚢 Deployment
+## Deployment
 
 > [!TIP]
 > **Latest Docker image:** `calciumion/new-api:latest`
 
-### 📋 Deployment Requirements
+### Deployment Requirements
 
 | Component | Requirement |
 |------|------|
@@ -307,7 +307,7 @@ docker run --name new-api -d --restart always \
 | **Container engine** | Docker / Docker Compose |
 | **System architecture** | 64-bit only (amd64 / arm64); 32-bit systems are not supported |
 
-### ⚙️ Environment Variable Configuration
+### Environment Variable Configuration
 
 <details>
 <summary>Common environment variable configuration</summary>
@@ -340,11 +340,11 @@ docker run --name new-api -d --restart always \
 | `PYROSCOPE_BLOCK_RATE` | Pyroscope block sampling rate | `5` |
 | `HOSTNAME` | Hostname tag for Pyroscope | `new-api` |
 
-📖 **Complete configuration:** [Environment Variables Documentation](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables)
+**Complete configuration:** [Environment Variables Documentation](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables)
 
 </details>
 
-### 🔧 Deployment Methods
+### Deployment Methods
 
 <details>
 <summary><strong>Method 1: Docker Compose (Recommended)</strong></summary>
@@ -385,7 +385,7 @@ docker run --name new-api -d --restart always \
   calciumion/new-api:latest
 ```
 
-> **💡 Path explanation:**
+> **Path explanation:**
 > - `./data:/data` - Relative path, data saved in the data folder of the current directory
 > - You can also use absolute path, e.g.: `/your/custom/path:/data`
 
@@ -398,11 +398,11 @@ docker run --name new-api -d --restart always \
 2. Search for **New-API** in the application store
 3. One-click installation
 
-📖 [Tutorial with images](./docs/BT.md)
+[Tutorial with images](./docs/BT.md)
 
 </details>
 
-### ⚠️ Multi-machine Deployment Considerations
+### Multi-machine Deployment Considerations
 
 > [!WARNING]
 > - All nodes must use the same primary database and the same `SESSION_SECRET`; otherwise Access Tokens, refresh sessions, and temporary authentication flows cannot be verified consistently.
@@ -420,7 +420,7 @@ A shorter `SYNC_FREQUENCY` reduces the independent-Redis staleness window but ca
 
 See [User authentication and login sessions](./docs/authentication.md) for the token, Origin-check and PAT contracts.
 
-### 🔄 Channel Retry and Cache
+### Channel Retry and Cache
 
 **Retry configuration:** `Settings → Operation Settings → General Settings → Failure Retry Count`
 
@@ -430,7 +430,7 @@ See [User authentication and login sessions](./docs/authentication.md) for the t
 
 ---
 
-## 🔗 Related Projects
+## Related Projects
 
 ### Upstream Projects
 
@@ -448,29 +448,29 @@ See [User authentication and login sessions](./docs/authentication.md) for the t
 
 ---
 
-## 💬 Help Support
+## Help Support
 
-### 📖 Documentation Resources
+### Documentation Resources
 
 | Resource | Link |
 |------|------|
-| 📘 FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
-| 💬 Community Interaction | [Communication Channels](https://docs.newapi.pro/en/docs/support/community-interaction) |
-| 🐛 Issue Feedback | [Issue Feedback](https://docs.newapi.pro/en/docs/support/feedback-issues) |
-| 📚 Complete Documentation | [Official Documentation](https://docs.newapi.pro/en/docs) |
+| FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
+| Community Interaction | [Communication Channels](https://docs.newapi.pro/en/docs/support/community-interaction) |
+| Issue Feedback | [Issue Feedback](https://docs.newapi.pro/en/docs/support/feedback-issues) |
+| Complete Documentation | [Official Documentation](https://docs.newapi.pro/en/docs) |
 
-### 🤝 Contribution Guide
+### Contribution Guide
 
 Welcome all forms of contribution!
 
-- 🐛 Report Bugs
-- 💡 Propose New Features
-- 📝 Improve Documentation
-- 🔧 Submit Code
+- Report Bugs
+- Propose New Features
+- Improve Documentation
+- Submit Code
 
 ---
 
-## 📜 License
+## License
 
 This project is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
 
@@ -488,7 +488,7 @@ If your organization's policies do not permit the use of AGPLv3-licensed softwar
 
 ---
 
-## 🌟 Star History
+## Star History
 
 <div align="center">
 
@@ -500,12 +500,12 @@ If your organization's policies do not permit the use of AGPLv3-licensed softwar
 
 <div align="center">
 
-### 💖 Thank you for using LMM API
+### Thank you for using lmm.best.api
 
-If this project is helpful to you, welcome to give us a ⭐️ Star！
+If this project is helpful to you, welcome to give us a Star.
 
 **[Official Documentation](https://docs.newapi.pro/en/docs)** • **[Issue Feedback](https://github.com/Calcium-Ion/new-api/issues)** • **[Latest Release](https://github.com/Calcium-Ion/new-api/releases)**
 
-<sub>Built with ❤️ by QuantumNous</sub>
+<sub>Built by QuantumNous</sub>
 
 </div>

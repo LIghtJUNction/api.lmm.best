@@ -24,6 +24,7 @@ import { toast } from 'sonner'
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
+import { api } from '@/lib/api'
 import { formatTimestamp, formatTimestampToDate } from '@/lib/format'
 
 import { SettingsSection } from '../components/settings-section'
@@ -41,6 +42,22 @@ type UpdateCheckerSectionProps = {
   startTime?: number | null
 }
 
+function isCurrentVersionLatest(
+  currentVersion: string | null | undefined,
+  latestVersion: string
+): boolean {
+  if (!currentVersion) return false
+
+  const vcsMatch = currentVersion.match(
+    /(?:^|[.+-])g([0-9a-f]{7,64})(?:$|[.+-])/i
+  )
+  if (vcsMatch) {
+    return vcsMatch[1].toLowerCase().startsWith(latestVersion.toLowerCase())
+  }
+
+  return currentVersion === latestVersion
+}
+
 export function UpdateCheckerSection({
   currentVersion,
   startTime,
@@ -56,26 +73,19 @@ export function UpdateCheckerSection({
   const handleCheckUpdates = async () => {
     setChecking(true)
     try {
-      const response = await fetch(
-        'https://api.github.com/repos/Calcium-Ion/new-api/releases/latest',
-        {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'new-api-dashboard',
-          },
-        }
-      )
-
-      if (!response.ok) {
-        throw new Error(t('Failed to contact GitHub releases API'))
+      const response = await api.get('/api/option/project-update', {
+        skipBusinessError: true,
+      })
+      if (!response.data?.success) {
+        throw new Error(t('Failed to check for updates'))
       }
 
-      const data = (await response.json()) as ReleaseInfo
+      const data = response.data.data as ReleaseInfo
       if (!data?.tag_name) {
         throw new Error(t('Unexpected release payload'))
       }
 
-      if (currentVersion && data.tag_name === currentVersion) {
+      if (isCurrentVersionLatest(currentVersion, data.tag_name)) {
         toast.success(
           t('You are running the latest version ({{version}}).', {
             version: data.tag_name,
