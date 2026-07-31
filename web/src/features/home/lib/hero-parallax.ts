@@ -16,9 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-const CJK_LOCALE_PATTERN =
-  /^(?:zh(?:cn|tw|-[a-z0-9]+(?:-[a-z0-9]+)*)?|ja(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?)$/i
-
-export function isCjkLocale(locale: string) {
-  return CJK_LOCALE_PATTERN.test(locale.trim())
+export function normalizePointerPosition(
+  pointer: number,
+  start: number,
+  size: number
+) {
+  if (size <= 0) return 0
+  const normalized = ((pointer - start) / size) * 2 - 1
+  return Math.max(-1, Math.min(1, normalized))
 }
