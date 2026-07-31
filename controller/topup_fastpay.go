@@ -27,6 +27,48 @@ type FastPayPayRequest struct {
 	PaymentMethod string `json:"payment_method"`
 }
 
+type FastPayConfig struct {
+	Address    string
+	MerchantNo string
+	ApiSecret  string
+}
+
+func getFastPayConfig() *FastPayConfig {
+	addr := strings.TrimSpace(setting.FastPayAddress)
+	merchantNo := strings.TrimSpace(setting.FastPayMerchantNo)
+	secret := strings.TrimSpace(setting.FastPayApiSecret)
+
+	// Fallback to operation_setting PayAddress/EpayId/EpayKey if PayAddress contains fastpay
+	if addr == "" && strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay") {
+		addr = strings.TrimSpace(operation_setting.PayAddress)
+	}
+	if merchantNo == "" && strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay") {
+		merchantNo = strings.TrimSpace(operation_setting.EpayId)
+	}
+	if secret == "" && strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay") {
+		secret = strings.TrimSpace(operation_setting.EpayKey)
+	}
+
+	if addr == "" || merchantNo == "" || secret == "" {
+		return nil
+	}
+
+	return &FastPayConfig{
+		Address:    addr,
+		MerchantNo: merchantNo,
+		ApiSecret:  secret,
+	}
+}
+
+func getFastPaySubmitUrl(rawAddr string) string {
+	u := strings.TrimSuffix(strings.TrimSpace(rawAddr), "/submit.php")
+	u = strings.TrimRight(u, "/")
+	if !strings.HasSuffix(u, "/api/pay/submit") {
+		u += "/api/pay/submit"
+	}
+	return u
+}
+
 // GenerateFastPaySign generates MD5 signature according to FastPay specification:
 // 1. Sort all non-null params (excluding "sign") by ASCII order.
 // 2. Format as key1=val1&key2=val2...
@@ -81,7 +123,8 @@ func RequestFastPay(c *gin.Context) {
 		return
 	}
 
-	if !isFastPayWebhookConfigured() {
+	cfg := getFastPayConfig()
+	if cfg == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "当前管理员未配置 FAST 易支付信息"})
 		return
 	}
@@ -104,7 +147,7 @@ func RequestFastPay(c *gin.Context) {
 	tradeNo := fmt.Sprintf("USR%dNO%s%d", id, common.GetRandomString(6), time.Now().Unix())
 
 	params := map[string]string{
-		"merchantNo": setting.FastPayMerchantNo,
+		"merchantNo": cfg.MerchantNo,
 		"outTradeNo": tradeNo,
 		"amount":     strconv.FormatFloat(payMoney, 'f', 2, 64),
 		"subject":    fmt.Sprintf("TUC%d", req.Amount),
@@ -113,7 +156,7 @@ func RequestFastPay(c *gin.Context) {
 		"returnUrl":  returnUrl,
 		"timestamp":  strconv.FormatInt(time.Now().Unix(), 10),
 	}
-	params["sign"] = GenerateFastPaySign(params, setting.FastPayApiSecret)
+	params["sign"] = GenerateFastPaySign(params, cfg.ApiSecret)
 
 	amount := req.Amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
@@ -138,10 +181,7 @@ func RequestFastPay(c *gin.Context) {
 		return
 	}
 
-	submitUrl := strings.TrimRight(setting.FastPayAddress, "/")
-	if !strings.HasSuffix(submitUrl, "/api/pay/submit") {
-		submitUrl += "/api/pay/submit"
-	}
+	submitUrl := getFastPaySubmitUrl(cfg.Address)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
@@ -188,7 +228,13 @@ func FastPayNotify(c *gin.Context) {
 		"timestamp":  fmt.Sprintf("%v", payload.Timestamp),
 	}
 
-	if !VerifyFastPaySign(params, setting.FastPayApiSecret, payload.Sign) {
+	cfg := getFastPayConfig()
+	secret := ""
+	if cfg != nil {
+		secret = cfg.ApiSecret
+	}
+
+	if !VerifyFastPaySign(params, secret, payload.Sign) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 回调验签失败 outTradeNo=%s client_ip=%s", payload.OutTradeNo, c.ClientIP()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return

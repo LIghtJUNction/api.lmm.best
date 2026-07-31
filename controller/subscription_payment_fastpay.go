@@ -6,14 +6,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -47,7 +45,8 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 		return
 	}
 
-	if !isFastPayWebhookConfigured() {
+	cfg := getFastPayConfig()
+	if cfg == nil {
 		common.ApiErrorMsg(c, "当前管理员未配置 FAST 易支付信息")
 		return
 	}
@@ -86,7 +85,7 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 	}
 
 	params := map[string]string{
-		"merchantNo": setting.FastPayMerchantNo,
+		"merchantNo": cfg.MerchantNo,
 		"outTradeNo": tradeNo,
 		"amount":     strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
 		"subject":    fmt.Sprintf("SUB:%s", plan.Title),
@@ -95,12 +94,9 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 		"returnUrl":  returnUrl,
 		"timestamp":  strconv.FormatInt(time.Now().Unix(), 10),
 	}
-	params["sign"] = GenerateFastPaySign(params, setting.FastPayApiSecret)
+	params["sign"] = GenerateFastPaySign(params, cfg.ApiSecret)
 
-	submitUrl := strings.TrimRight(setting.FastPayAddress, "/")
-	if !strings.HasSuffix(submitUrl, "/api/pay/submit") {
-		submitUrl += "/api/pay/submit"
-	}
+	submitUrl := getFastPaySubmitUrl(cfg.Address)
 
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": submitUrl})
 }
@@ -130,7 +126,13 @@ func SubscriptionFastPayNotify(c *gin.Context) {
 		"timestamp":  fmt.Sprintf("%v", payload.Timestamp),
 	}
 
-	if !VerifyFastPaySign(params, setting.FastPayApiSecret, payload.Sign) {
+	cfg := getFastPayConfig()
+	secret := ""
+	if cfg != nil {
+		secret = cfg.ApiSecret
+	}
+
+	if !VerifyFastPaySign(params, secret, payload.Sign) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 订阅回调验签失败 outTradeNo=%s client_ip=%s", payload.OutTradeNo, c.ClientIP()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
