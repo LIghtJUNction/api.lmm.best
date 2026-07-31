@@ -1,17 +1,15 @@
 package controller
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -79,9 +77,7 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 		}
 	}
 
-	callBackAddress := service.GetCallbackAddress()
 	returnUrl := paymentReturnPath("/wallet?pay=success")
-	notifyUrl := callBackAddress + "/api/subscription/fastpay/notify"
 	tradeNo := fmt.Sprintf("SUBUSR%dNO%s%d", userId, common.GetRandomString(6), time.Now().Unix())
 
 	order := &model.SubscriptionOrder{
@@ -99,17 +95,15 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 		return
 	}
 
-	params := map[string]string{
-		"merchantNo": cfg.MerchantNo,
-		"outTradeNo": tradeNo,
-		"amount":     strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
-		"subject":    fmt.Sprintf("SUB:%s", plan.Title),
-		"payType":    req.PaymentMethod,
-		"notifyUrl":  notifyUrl,
-		"returnUrl":  returnUrl,
-		"timestamp":  strconv.FormatInt(time.Now().Unix(), 10),
-	}
-	params["sign"] = GenerateFastPaySign(params, cfg.ApiSecret)
+	params := buildFastPayOrderParams(
+		cfg,
+		tradeNo,
+		strconv.FormatFloat(plan.PriceAmount, 'f', 2, 64),
+		fmt.Sprintf("SUB:%s", plan.Title),
+		req.PaymentMethod,
+		returnUrl,
+		time.Now().Unix(),
+	)
 
 	submitUrl := getFastPaySubmitUrl(cfg.Address)
 
@@ -117,29 +111,13 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 }
 
 func SubscriptionFastPayNotify(c *gin.Context) {
-	bodyBytes, err := io.ReadAll(c.Request.Body)
-	if err != nil || len(bodyBytes) == 0 {
+	payload, bodyBytes, err := readFastPayNotifyPayload(c)
+	if err != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
 
-	var payload FastPayNotifyPayload
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		_, _ = c.Writer.Write([]byte("fail"))
-		return
-	}
-
-	params := map[string]string{
-		"merchantNo": payload.MerchantNo,
-		"orderNo":    payload.OrderNo,
-		"outTradeNo": payload.OutTradeNo,
-		"amount":     fmt.Sprintf("%v", payload.Amount),
-		"payAmount":  fmt.Sprintf("%v", payload.PayAmount),
-		"payType":    payload.PayType,
-		"status":     fmt.Sprintf("%v", payload.Status),
-		"payTime":    payload.PayTime,
-		"timestamp":  fmt.Sprintf("%v", payload.Timestamp),
-	}
+	params := fastPayNotifySignParams(payload)
 
 	cfg := getFastPayConfig()
 	secret := ""
@@ -158,11 +136,18 @@ func SubscriptionFastPayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
+	completeSubscriptionFastPayNotify(c, payload, string(bodyBytes))
+}
 
+func isSubscriptionFastPayTradeNo(tradeNo string) bool {
+	return strings.HasPrefix(tradeNo, "SUBUSR")
+}
+
+func completeSubscriptionFastPayNotify(c *gin.Context, payload FastPayNotifyPayload, rawPayload string) {
 	LockOrder(payload.OutTradeNo)
 	defer UnlockOrder(payload.OutTradeNo)
 
-	if err := model.CompleteSubscriptionOrder(payload.OutTradeNo, string(bodyBytes), model.PaymentProviderFastPay, payload.PayType); err != nil {
+	if err := model.CompleteSubscriptionOrder(payload.OutTradeNo, rawPayload, model.PaymentProviderFastPay, payload.PayType); err != nil {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}

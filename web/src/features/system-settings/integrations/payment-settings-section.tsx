@@ -108,6 +108,7 @@ const paymentSchema = z.object({
     return /^https?:\/\//.test(trimmed)
   }, 'Provide a valid URL starting with http:// or https://'),
   FastPayMerchantNo: z.string(),
+  FastPayShopNo: z.string(),
   FastPayApiSecret: z.string(),
   Price: z.coerce.number().min(0),
   MinTopUp: z.coerce.number().min(0),
@@ -430,6 +431,7 @@ export function PaymentSettingsSection({
       EpayKey: values.EpayKey.trim(),
       FastPayAddress: removeTrailingSlash(values.FastPayAddress),
       FastPayMerchantNo: values.FastPayMerchantNo.trim(),
+      FastPayShopNo: values.FastPayShopNo.trim(),
       FastPayApiSecret: values.FastPayApiSecret.trim(),
       Price: values.Price,
       MinTopUp: values.MinTopUp,
@@ -475,6 +477,7 @@ export function PaymentSettingsSection({
       EpayKey: initialRef.current.EpayKey.trim(),
       FastPayAddress: removeTrailingSlash(initialRef.current.FastPayAddress),
       FastPayMerchantNo: initialRef.current.FastPayMerchantNo.trim(),
+      FastPayShopNo: initialRef.current.FastPayShopNo.trim(),
       FastPayApiSecret: initialRef.current.FastPayApiSecret.trim(),
       Price: initialRef.current.Price,
       MinTopUp: initialRef.current.MinTopUp,
@@ -538,11 +541,24 @@ export function PaymentSettingsSection({
     }
 
     if (sanitized.FastPayMerchantNo !== initial.FastPayMerchantNo) {
-      updates.push({ key: 'FastPayMerchantNo', value: sanitized.FastPayMerchantNo })
+      updates.push({
+        key: 'FastPayMerchantNo',
+        value: sanitized.FastPayMerchantNo,
+      })
     }
 
-    if (sanitized.FastPayApiSecret && sanitized.FastPayApiSecret !== initial.FastPayApiSecret) {
-      updates.push({ key: 'FastPayApiSecret', value: sanitized.FastPayApiSecret })
+    if (sanitized.FastPayShopNo !== initial.FastPayShopNo) {
+      updates.push({ key: 'FastPayShopNo', value: sanitized.FastPayShopNo })
+    }
+
+    if (
+      sanitized.FastPayApiSecret &&
+      sanitized.FastPayApiSecret !== initial.FastPayApiSecret
+    ) {
+      updates.push({
+        key: 'FastPayApiSecret',
+        value: sanitized.FastPayApiSecret,
+      })
     }
 
     if (sanitized.Price !== initial.Price) {
@@ -1277,7 +1293,9 @@ export function PaymentSettingsSection({
                 </div>
 
                 <div className='mt-6 border-t pt-6'>
-                  <h4 className='mb-4 text-base font-semibold'>FAST 易支付 (FastPay)</h4>
+                  <h4 className='mb-4 text-base font-semibold'>
+                    FAST 易支付 (FastPay)
+                  </h4>
                   <FormField
                     control={form.control}
                     name='FastPayAddress'
@@ -1295,13 +1313,15 @@ export function PaymentSettingsSection({
                           />
                         </FormControl>
                         <FormDescription>
-                          {t('The gateway base URL for FastPay API')}
+                          {t(
+                            "The gateway base URL for FastPay API. Set the FastPay merchant callback URL to this site's /api/user/fastpay/notify endpoint."
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
-                  <div className='grid gap-6 md:grid-cols-2'>
+                  <div className='grid gap-6 md:grid-cols-3'>
                     <FormField
                       control={form.control}
                       name='FastPayMerchantNo'
@@ -1318,6 +1338,30 @@ export function PaymentSettingsSection({
                               }
                             />
                           </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='FastPayShopNo'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('FastPay Shop No')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder='S12345678'
+                              autoComplete='off'
+                              {...field}
+                              onChange={(event) =>
+                                field.onChange(event.target.value)
+                              }
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t('The shop that receives FastPay payments')}
+                          </FormDescription>
                           <FormMessage />
                         </FormItem>
                       )}

@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -30,12 +31,14 @@ type FastPayPayRequest struct {
 type FastPayConfig struct {
 	Address    string
 	MerchantNo string
+	ShopNo     string
 	ApiSecret  string
 }
 
 func getFastPayConfig() *FastPayConfig {
 	addr := strings.TrimSpace(setting.FastPayAddress)
 	merchantNo := strings.TrimSpace(setting.FastPayMerchantNo)
+	shopNo := strings.TrimSpace(setting.FastPayShopNo)
 	secret := strings.TrimSpace(setting.FastPayApiSecret)
 
 	// Fallback to operation_setting PayAddress/EpayId/EpayKey if PayAddress contains fastpay
@@ -49,13 +52,14 @@ func getFastPayConfig() *FastPayConfig {
 		secret = strings.TrimSpace(operation_setting.EpayKey)
 	}
 
-	if addr == "" || merchantNo == "" || secret == "" {
+	if addr == "" || merchantNo == "" || shopNo == "" || secret == "" {
 		return nil
 	}
 
 	return &FastPayConfig{
 		Address:    addr,
 		MerchantNo: merchantNo,
+		ShopNo:     shopNo,
 		ApiSecret:  secret,
 	}
 }
@@ -106,6 +110,21 @@ func VerifyFastPaySign(params map[string]string, secret string, expectedSign str
 	}
 	sign := GenerateFastPaySign(params, secret)
 	return strings.EqualFold(sign, expectedSign)
+}
+
+func buildFastPayOrderParams(cfg *FastPayConfig, outTradeNo, amount, subject, payType, returnUrl string, timestamp int64) map[string]string {
+	params := map[string]string{
+		"merchantNo": cfg.MerchantNo,
+		"shopNo":     cfg.ShopNo,
+		"outTradeNo": outTradeNo,
+		"amount":     amount,
+		"subject":    subject,
+		"payType":    payType,
+		"returnUrl":  returnUrl,
+		"timestamp":  strconv.FormatInt(timestamp, 10),
+	}
+	params["sign"] = GenerateFastPaySign(params, cfg.ApiSecret)
+	return params
 }
 
 func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) error {
@@ -198,22 +217,18 @@ func RequestFastPay(c *gin.Context) {
 		return
 	}
 
-	callBackAddress := service.GetCallbackAddress()
 	returnUrl := paymentReturnPath("/usage-logs")
-	notifyUrl := callBackAddress + "/api/user/fastpay/notify"
 	tradeNo := fmt.Sprintf("USR%dNO%s%d", id, common.GetRandomString(6), time.Now().Unix())
 
-	params := map[string]string{
-		"merchantNo": cfg.MerchantNo,
-		"outTradeNo": tradeNo,
-		"amount":     strconv.FormatFloat(payMoney, 'f', 2, 64),
-		"subject":    fmt.Sprintf("TUC%d", int64Amount),
-		"payType":    req.PaymentMethod,
-		"notifyUrl":  notifyUrl,
-		"returnUrl":  returnUrl,
-		"timestamp":  strconv.FormatInt(time.Now().Unix(), 10),
-	}
-	params["sign"] = GenerateFastPaySign(params, cfg.ApiSecret)
+	params := buildFastPayOrderParams(
+		cfg,
+		tradeNo,
+		strconv.FormatFloat(payMoney, 'f', 2, 64),
+		fmt.Sprintf("TUC%d", int64Amount),
+		req.PaymentMethod,
+		returnUrl,
+		time.Now().Unix(),
+	)
 
 	amount := int64Amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
@@ -260,20 +275,42 @@ type FastPayNotifyPayload struct {
 	Sign       string      `json:"sign"`
 }
 
-func FastPayNotify(c *gin.Context) {
+func readFastPayNotifyPayload(c *gin.Context) (FastPayNotifyPayload, []byte, error) {
 	bodyBytes, err := io.ReadAll(c.Request.Body)
-	if err != nil || len(bodyBytes) == 0 {
-		_, _ = c.Writer.Write([]byte("fail"))
-		return
+	if err != nil || len(bytes.TrimSpace(bodyBytes)) == 0 {
+		return FastPayNotifyPayload{}, nil, fmt.Errorf("empty callback body")
 	}
 
 	var payload FastPayNotifyPayload
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		_, _ = c.Writer.Write([]byte("fail"))
-		return
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
+	if strings.Contains(contentType, "application/json") || bytes.HasPrefix(bytes.TrimSpace(bodyBytes), []byte("{")) {
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			return FastPayNotifyPayload{}, nil, err
+		}
+		return payload, bodyBytes, nil
 	}
 
-	params := map[string]string{
+	values, err := url.ParseQuery(string(bodyBytes))
+	if err != nil {
+		return FastPayNotifyPayload{}, nil, err
+	}
+	payload = FastPayNotifyPayload{
+		MerchantNo: values.Get("merchantNo"),
+		OrderNo:    values.Get("orderNo"),
+		OutTradeNo: values.Get("outTradeNo"),
+		Amount:     values.Get("amount"),
+		PayAmount:  values.Get("payAmount"),
+		PayType:    values.Get("payType"),
+		Status:     values.Get("status"),
+		PayTime:    values.Get("payTime"),
+		Timestamp:  values.Get("timestamp"),
+		Sign:       values.Get("sign"),
+	}
+	return payload, bodyBytes, nil
+}
+
+func fastPayNotifySignParams(payload FastPayNotifyPayload) map[string]string {
+	return map[string]string{
 		"merchantNo": payload.MerchantNo,
 		"orderNo":    payload.OrderNo,
 		"outTradeNo": payload.OutTradeNo,
@@ -284,6 +321,16 @@ func FastPayNotify(c *gin.Context) {
 		"payTime":    payload.PayTime,
 		"timestamp":  fmt.Sprintf("%v", payload.Timestamp),
 	}
+}
+
+func FastPayNotify(c *gin.Context) {
+	payload, bodyBytes, err := readFastPayNotifyPayload(c)
+	if err != nil {
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+
+	params := fastPayNotifySignParams(payload)
 
 	cfg := getFastPayConfig()
 	secret := ""
@@ -300,6 +347,10 @@ func FastPayNotify(c *gin.Context) {
 	statusStr := fmt.Sprintf("%v", payload.Status)
 	if statusStr != "1" && statusStr != "SUCCESS" {
 		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	if isSubscriptionFastPayTradeNo(payload.OutTradeNo) {
+		completeSubscriptionFastPayNotify(c, payload, string(bodyBytes))
 		return
 	}
 
