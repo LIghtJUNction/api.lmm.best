@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Calcium-Ion/go-epay/epay"
@@ -47,6 +48,11 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	}
 	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
 		common.ApiErrorMsg(c, "支付方式不存在")
+		return
+	}
+
+	if req.PaymentMethod == "fastpay" || strings.HasPrefix(req.PaymentMethod, "fastpay_") {
+		SubscriptionRequestFastPay(c)
 		return
 	}
 

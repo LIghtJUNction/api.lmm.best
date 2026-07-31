@@ -102,6 +102,13 @@ const paymentSchema = z.object({
   }, 'Provide a valid callback URL starting with http:// or https://'),
   EpayId: z.string(),
   EpayKey: z.string(),
+  FastPayAddress: z.string().refine((value) => {
+    const trimmed = value.trim()
+    if (!trimmed) return true
+    return /^https?:\/\//.test(trimmed)
+  }, 'Provide a valid URL starting with http:// or https://'),
+  FastPayMerchantNo: z.string(),
+  FastPayApiSecret: z.string(),
   Price: z.coerce.number().min(0),
   MinTopUp: z.coerce.number().min(0),
   CustomCallbackAddress: z
@@ -421,6 +428,9 @@ export function PaymentSettingsSection({
       PayAddress: removeTrailingSlash(values.PayAddress),
       EpayId: values.EpayId.trim(),
       EpayKey: values.EpayKey.trim(),
+      FastPayAddress: removeTrailingSlash(values.FastPayAddress),
+      FastPayMerchantNo: values.FastPayMerchantNo.trim(),
+      FastPayApiSecret: values.FastPayApiSecret.trim(),
       Price: values.Price,
       MinTopUp: values.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(values.CustomCallbackAddress),
@@ -463,6 +473,9 @@ export function PaymentSettingsSection({
       PayAddress: removeTrailingSlash(initialRef.current.PayAddress),
       EpayId: initialRef.current.EpayId.trim(),
       EpayKey: initialRef.current.EpayKey.trim(),
+      FastPayAddress: removeTrailingSlash(initialRef.current.FastPayAddress),
+      FastPayMerchantNo: initialRef.current.FastPayMerchantNo.trim(),
+      FastPayApiSecret: initialRef.current.FastPayApiSecret.trim(),
       Price: initialRef.current.Price,
       MinTopUp: initialRef.current.MinTopUp,
       CustomCallbackAddress: removeTrailingSlash(
@@ -518,6 +531,18 @@ export function PaymentSettingsSection({
 
     if (sanitized.EpayKey && sanitized.EpayKey !== initial.EpayKey) {
       updates.push({ key: 'EpayKey', value: sanitized.EpayKey })
+    }
+
+    if (sanitized.FastPayAddress !== initial.FastPayAddress) {
+      updates.push({ key: 'FastPayAddress', value: sanitized.FastPayAddress })
+    }
+
+    if (sanitized.FastPayMerchantNo !== initial.FastPayMerchantNo) {
+      updates.push({ key: 'FastPayMerchantNo', value: sanitized.FastPayMerchantNo })
+    }
+
+    if (sanitized.FastPayApiSecret && sanitized.FastPayApiSecret !== initial.FastPayApiSecret) {
+      updates.push({ key: 'FastPayApiSecret', value: sanitized.FastPayApiSecret })
     }
 
     if (sanitized.Price !== initial.Price) {
@@ -1249,6 +1274,80 @@ export function PaymentSettingsSection({
                       </FormItem>
                     )}
                   />
+                </div>
+
+                <div className='mt-6 border-t pt-6'>
+                  <h4 className='mb-4 text-base font-semibold'>FAST 易支付 (FastPay)</h4>
+                  <FormField
+                    control={form.control}
+                    name='FastPayAddress'
+                    render={({ field }) => (
+                      <FormItem className='mb-4'>
+                        <FormLabel>{t('FastPay API Address')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder='https://api.lmm.best:9443/fastpay-server'
+                            autoComplete='off'
+                            {...field}
+                            onChange={(event) =>
+                              field.onChange(event.target.value)
+                            }
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t('The gateway base URL for FastPay API')}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <div className='grid gap-6 md:grid-cols-2'>
+                    <FormField
+                      control={form.control}
+                      name='FastPayMerchantNo'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('FastPay Merchant No')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder='M12345678'
+                              autoComplete='off'
+                              {...field}
+                              onChange={(event) =>
+                                field.onChange(event.target.value)
+                              }
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='FastPayApiSecret'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('FastPay Secret Key')}</FormLabel>
+                          <FormControl>
+                            <Input
+                              type='password'
+                              placeholder={t('Enter new key to update')}
+                              autoComplete='new-password'
+                              {...field}
+                              onChange={(event) =>
+                                field.onChange(event.target.value)
+                              }
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t('Leave blank unless rotating the secret')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
                 </div>
               </div>
             </TabsContent>
