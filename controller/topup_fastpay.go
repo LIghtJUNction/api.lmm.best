@@ -108,13 +108,50 @@ func VerifyFastPaySign(params map[string]string, secret string, expectedSign str
 	return strings.EqualFold(sign, expectedSign)
 }
 
+func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) error {
+	var req struct {
+		Amount        float64 `json:"amount" form:"amount"`
+		PaymentMethod string  `json:"payment_method" form:"payment_method"`
+	}
+
+	_ = c.ShouldBind(&req)
+
+	if req.Amount > 0 {
+		*amount = req.Amount
+	}
+	if req.PaymentMethod != "" {
+		*paymentMethod = req.PaymentMethod
+	}
+
+	if *amount <= 0 {
+		if amtStr := c.PostForm("amount"); amtStr != "" {
+			*amount, _ = strconv.ParseFloat(amtStr, 64)
+		} else if amtStr := c.Query("amount"); amtStr != "" {
+			*amount, _ = strconv.ParseFloat(amtStr, 64)
+		}
+	}
+
+	if *paymentMethod == "" {
+		if pm := c.PostForm("payment_method"); pm != "" {
+			*paymentMethod = pm
+		} else if pm := c.Query("payment_method"); pm != "" {
+			*paymentMethod = pm
+		}
+	}
+
+	if *amount <= 0 {
+		return fmt.Errorf("amount is required and must be > 0")
+	}
+	return nil
+}
+
 func RequestFastPay(c *gin.Context) {
 	if !requirePaymentCompliance(c) {
 		return
 	}
 
 	var req FastPayPayRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod); err != nil {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 参数解包失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
 		return
