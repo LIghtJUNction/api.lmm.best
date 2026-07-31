@@ -32,24 +32,20 @@ export function Home() {
   const { i18n, t } = useTranslation()
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const { resolvedTheme } = useTheme()
-  const { auth } = useAuthStore()
-  const isAuthenticated = !!auth.user
+  const isAuthenticated = useAuthStore((state) => Boolean(state.auth.user))
   const { content, isLoaded, isUrl } = useHomePageContent()
 
   const syncIframePreferences = useCallback(() => {
-    try {
-      iframeRef.current?.contentWindow?.postMessage(
-        { themeMode: resolvedTheme },
-        '*'
-      )
-      iframeRef.current?.contentWindow?.postMessage(
-        { lang: i18n.language },
-        '*'
-      )
-    } catch {
-      // Cross-origin frames may reject access while navigating.
-    }
-  }, [i18n.language, resolvedTheme])
+    if (!isUrl || !iframeRef.current?.contentWindow) return
+
+    // Without allow-same-origin the sandbox has an opaque origin, so a concrete
+    // target cannot match. Keep the message payload limited to display preferences.
+    iframeRef.current.contentWindow.postMessage(
+      { themeMode: resolvedTheme },
+      '*'
+    )
+    iframeRef.current.contentWindow.postMessage({ lang: i18n.language }, '*')
+  }, [i18n.language, isUrl, resolvedTheme])
 
   useEffect(() => {
     if (isUrl) {
