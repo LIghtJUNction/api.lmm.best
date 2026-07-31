@@ -33,6 +33,38 @@ type FastPayConfig struct {
 	ApiSecret  string
 }
 
+func normalizeFastPayMethod(paymentMethod string) string {
+	method := strings.TrimSpace(paymentMethod)
+	if method == "fastpay" {
+		return ""
+	}
+	return strings.TrimPrefix(method, "fastpay_")
+}
+
+// resolveFastPayMethod selects FAST for an explicitly prefixed method, or as
+// the default online gateway when FAST is configured and Epay is not. Plain
+// payment methods remain on Epay when both gateways are configured.
+func resolveFastPayMethod(paymentMethod string) (string, bool) {
+	method := strings.TrimSpace(paymentMethod)
+	normalized := normalizeFastPayMethod(method)
+	if method == "fastpay" || strings.HasPrefix(method, "fastpay_") {
+		return normalized, true
+	}
+
+	if getFastPayConfig() == nil {
+		return normalized, false
+	}
+	if !isEpayWebhookConfigured() || strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay") {
+		return normalized, true
+	}
+
+	return normalized, false
+}
+
+func isSupportedFastPayMethod(paymentMethod string) bool {
+	return paymentMethod == "alipay" || paymentMethod == "wxpay"
+}
+
 func getFastPayConfig() *FastPayConfig {
 	addr := strings.TrimSpace(setting.FastPayAddress)
 	merchantNo := strings.TrimSpace(setting.FastPayMerchantNo)
@@ -172,6 +204,11 @@ func RequestFastPay(c *gin.Context) {
 	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod); err != nil {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 参数解包失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
+		return
+	}
+	req.PaymentMethod = normalizeFastPayMethod(req.PaymentMethod)
+	if !isSupportedFastPayMethod(req.PaymentMethod) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "FAST 易支付仅支持支付宝或微信支付"})
 		return
 	}
 	int64Amount := int64(req.Amount)
