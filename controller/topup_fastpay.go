@@ -23,8 +23,8 @@ import (
 )
 
 type FastPayPayRequest struct {
-	Amount        int64  `json:"amount"`
-	PaymentMethod string `json:"payment_method"`
+	Amount        float64 `json:"amount"`
+	PaymentMethod string  `json:"payment_method"`
 }
 
 type FastPayConfig struct {
@@ -115,10 +115,12 @@ func RequestFastPay(c *gin.Context) {
 
 	var req FastPayPayRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 参数解包失败 error=%q", err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
 		return
 	}
-	if req.Amount < getMinTopup() {
+	int64Amount := int64(req.Amount)
+	if int64Amount < getMinTopup() {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
 		return
 	}
@@ -135,7 +137,7 @@ func RequestFastPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
+	payMoney := getPayMoney(int64Amount, group)
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -150,7 +152,7 @@ func RequestFastPay(c *gin.Context) {
 		"merchantNo": cfg.MerchantNo,
 		"outTradeNo": tradeNo,
 		"amount":     strconv.FormatFloat(payMoney, 'f', 2, 64),
-		"subject":    fmt.Sprintf("TUC%d", req.Amount),
+		"subject":    fmt.Sprintf("TUC%d", int64Amount),
 		"payType":    req.PaymentMethod,
 		"notifyUrl":  notifyUrl,
 		"returnUrl":  returnUrl,
@@ -158,7 +160,7 @@ func RequestFastPay(c *gin.Context) {
 	}
 	params["sign"] = GenerateFastPaySign(params, cfg.ApiSecret)
 
-	amount := req.Amount
+	amount := int64Amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount := decimal.NewFromInt(int64(amount))
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
