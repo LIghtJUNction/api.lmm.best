@@ -25,12 +25,15 @@ import {
   useState,
 } from 'react'
 
+import {
+  DEFAULT_THEME,
+  resolveTheme,
+  THEME_COLORS,
+  type ResolvedTheme,
+  type Theme,
+} from '@/context/theme'
 import { getCookie, setCookie, removeCookie } from '@/lib/cookies'
 
-type Theme = 'dark' | 'light' | 'system'
-type ResolvedTheme = Exclude<Theme, 'system'>
-
-const DEFAULT_THEME = 'system'
 const THEME_COOKIE_NAME = 'vite-ui-theme'
 const THEME_COOKIE_MAX_AGE = 60 * 60 * 24 * 365 // 1 year
 const THEMES = new Set<Theme>(['dark', 'light', 'system'])
@@ -51,7 +54,7 @@ type ThemeProviderState = {
 
 const initialState: ThemeProviderState = {
   defaultTheme: DEFAULT_THEME,
-  resolvedTheme: 'light',
+  resolvedTheme: 'dark',
   theme: DEFAULT_THEME,
   setTheme: () => null,
   resetTheme: () => null,
@@ -66,8 +69,17 @@ function getSystemTheme(): ResolvedTheme {
     : 'light'
 }
 
-function resolveTheme(theme: Theme): ResolvedTheme {
-  return theme === 'system' ? getSystemTheme() : theme
+function resolveCurrentTheme(theme: Theme): ResolvedTheme {
+  return resolveTheme(theme, getSystemTheme() === 'dark')
+}
+
+function applyThemeToDocument(theme: ResolvedTheme) {
+  const root = window.document.documentElement
+  root.classList.remove('light', 'dark')
+  root.classList.add(theme)
+  window.document
+    .querySelector("meta[name='theme-color']")
+    ?.setAttribute('content', THEME_COLORS[theme])
 }
 
 function getStoredTheme(storageKey: string, fallback: Theme): Theme {
@@ -85,17 +97,15 @@ export function ThemeProvider({
     getStoredTheme(storageKey, defaultTheme)
   )
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    resolveTheme(getStoredTheme(storageKey, defaultTheme))
+    resolveCurrentTheme(getStoredTheme(storageKey, defaultTheme))
   )
 
   useEffect(() => {
-    const root = window.document.documentElement
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
 
     const applyTheme = () => {
-      const nextResolvedTheme = theme === 'system' ? getSystemTheme() : theme
-      root.classList.remove('light', 'dark')
-      root.classList.add(nextResolvedTheme)
+      const nextResolvedTheme = resolveCurrentTheme(theme)
+      applyThemeToDocument(nextResolvedTheme)
       setResolvedTheme(nextResolvedTheme)
     }
 
