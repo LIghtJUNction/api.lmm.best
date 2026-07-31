@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -212,6 +213,11 @@ func RequestEpay(c *gin.Context) {
 
 	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式不存在"})
+		return
+	}
+
+	if req.PaymentMethod == "fastpay" || strings.HasPrefix(req.PaymentMethod, "fastpay_") {
+		RequestFastPay(c)
 		return
 	}
 
