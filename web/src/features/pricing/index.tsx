@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { PageTransition } from '@/components/page-transition'
+import { Card, CardContent } from '@/components/ui/card'
 
 import {
   LoadingSkeleton,
@@ -191,6 +192,33 @@ export function Pricing() {
                 'Discover curated AI models, compare pricing and capabilities, and choose the right model for every scenario.'
               )}
             </p>
+            <Card
+              data-card-hover='false'
+              className='border-primary/30 bg-primary/5 mx-auto mt-5 max-w-3xl gap-0 py-0 text-left sm:mt-6'
+            >
+              <CardContent className='grid gap-4 p-4 text-sm sm:grid-cols-3 sm:p-5'>
+                <div>
+                  <p className='font-medium'>
+                    {t('Usage-based, pay-as-you-go billing')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-xs leading-relaxed'>
+                    {t(
+                      'The model prices shown here are based on actual usage and do not use a recurring subscription cycle.'
+                    )}
+                  </p>
+                </div>
+                <p className='text-muted-foreground text-xs leading-relaxed'>
+                  {t(
+                    'Prices are shown per 1M or 1K tokens, or per request, with input, output, cache, image, and audio charges listed separately when applicable.'
+                  )}
+                </p>
+                <p className='text-muted-foreground text-xs leading-relaxed'>
+                  {t(
+                    'Included access covers enabled models and capabilities; actual availability depends on your account group.'
+                  )}
+                </p>
+              </CardContent>
+            </Card>
             <SearchBar
               value={searchInput}
               onChange={setSearchInput}
