@@ -119,6 +119,7 @@ func isFastPayTopUpEnabled() bool {
 func isFastPayWebhookConfigured() bool {
 	return strings.TrimSpace(setting.FastPayAddress) != "" &&
 		strings.TrimSpace(setting.FastPayMerchantNo) != "" &&
+		strings.TrimSpace(setting.FastPayShopNo) != "" &&
 		strings.TrimSpace(setting.FastPayApiSecret) != ""
 }
 

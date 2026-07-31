@@ -21,6 +21,7 @@ func preservePaymentGatewaySettings(t *testing.T) {
 	t.Helper()
 	originalFastPayAddress := setting.FastPayAddress
 	originalFastPayMerchantNo := setting.FastPayMerchantNo
+	originalFastPayShopNo := setting.FastPayShopNo
 	originalFastPayAPISecret := setting.FastPayApiSecret
 	originalPayAddress := operation_setting.PayAddress
 	originalEpayID := operation_setting.EpayId
@@ -29,6 +30,7 @@ func preservePaymentGatewaySettings(t *testing.T) {
 	t.Cleanup(func() {
 		setting.FastPayAddress = originalFastPayAddress
 		setting.FastPayMerchantNo = originalFastPayMerchantNo
+		setting.FastPayShopNo = originalFastPayShopNo
 		setting.FastPayApiSecret = originalFastPayAPISecret
 		operation_setting.PayAddress = originalPayAddress
 		operation_setting.EpayId = originalEpayID
@@ -41,6 +43,7 @@ func TestResolveFastPayMethod_WhenOnlyFastPayIsConfigured(t *testing.T) {
 	preservePaymentGatewaySettings(t)
 	setting.FastPayAddress = "https://fastpay.example.com/fastpay-server"
 	setting.FastPayMerchantNo = "M123"
+	setting.FastPayShopNo = "S123"
 	setting.FastPayApiSecret = "fastpay_secret"
 	operation_setting.PayAddress = "https://pay.example.com"
 	operation_setting.EpayId = "10001"
@@ -55,6 +58,7 @@ func TestResolveFastPayMethod_PrefixedMethodWinsWhenBothGatewaysAreConfigured(t 
 	preservePaymentGatewaySettings(t)
 	setting.FastPayAddress = "https://fastpay.example.com/fastpay-server"
 	setting.FastPayMerchantNo = "M123"
+	setting.FastPayShopNo = "S123"
 	setting.FastPayApiSecret = "fastpay_secret"
 	operation_setting.PayAddress = "https://epay.example.com"
 	operation_setting.EpayId = "10001"
@@ -75,6 +79,7 @@ func TestGetTopUpInfo_EnablesOnlineTopUpWhenOnlyFastPayIsConfigured(t *testing.T
 	preservePaymentGatewaySettings(t)
 	setting.FastPayAddress = "https://fastpay.example.com/fastpay-server"
 	setting.FastPayMerchantNo = "M123"
+	setting.FastPayShopNo = "S123"
 	setting.FastPayApiSecret = "fastpay_secret"
 	operation_setting.PayAddress = "https://pay.example.com"
 	operation_setting.EpayId = "10001"
