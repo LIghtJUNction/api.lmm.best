@@ -63,6 +63,7 @@ const defaultBillingSettings: BillingSettings = {
   EpayKey: '',
   FastPayAddress: '',
   FastPayMerchantNo: '',
+  FastPayShopNo: '',
   FastPayApiSecret: '',
   Price: 7.3,
   MinTopUp: 1,

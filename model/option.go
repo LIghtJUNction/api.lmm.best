@@ -95,6 +95,7 @@ func InitOptionMap() {
 	common.OptionMap["CreemWebhookSecret"] = setting.CreemWebhookSecret
 	common.OptionMap["FastPayAddress"] = setting.FastPayAddress
 	common.OptionMap["FastPayMerchantNo"] = setting.FastPayMerchantNo
+	common.OptionMap["FastPayShopNo"] = setting.FastPayShopNo
 	common.OptionMap["FastPayApiSecret"] = setting.FastPayApiSecret
 	common.OptionMap["WaffoEnabled"] = strconv.FormatBool(setting.WaffoEnabled)
 	common.OptionMap["WaffoApiKey"] = setting.WaffoApiKey
@@ -452,6 +453,8 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.FastPayAddress = value
 	case "FastPayMerchantNo":
 		setting.FastPayMerchantNo = value
+	case "FastPayShopNo":
+		setting.FastPayShopNo = value
 	case "FastPayApiSecret":
 		setting.FastPayApiSecret = value
 	case "WaffoEnabled":
