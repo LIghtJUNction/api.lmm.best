@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -139,6 +140,24 @@ export function PaymentConfirmDialog({
               </div>
             </div>
           </div>
+
+          <Alert>
+            <AlertTitle>{t('Refund policy')}</AlertTitle>
+            <AlertDescription>
+              <p>
+                {t(
+                  'Unused top-up balance may be refunded within 7 days. Used or partially used balance is generally non-refundable.'
+                )}
+              </p>
+              <a
+                href='/user-agreement'
+                target='_blank'
+                rel='noopener noreferrer'
+              >
+                {t('View full Terms and refund policy')}
+              </a>
+            </AlertDescription>
+          </Alert>
         </div>
 
         <AlertDialogFooter className='grid grid-cols-2 gap-2 sm:flex'>
