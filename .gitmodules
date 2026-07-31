@@ -1,0 +1,3 @@
+[submodule "api-lmm-best-pay"]
+	path = api-lmm-best-pay
+	url = https://github.com/LIghtJUNction/api-lmm-best-pay.git
