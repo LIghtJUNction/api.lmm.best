@@ -138,6 +138,7 @@ const BILLING_SECTIONS = [
           EpayKey: settings.EpayKey,
           FastPayAddress: settings.FastPayAddress,
           FastPayMerchantNo: settings.FastPayMerchantNo,
+          FastPayShopNo: settings.FastPayShopNo,
           FastPayApiSecret: settings.FastPayApiSecret,
           Price: settings.Price,
           MinTopUp: settings.MinTopUp,
