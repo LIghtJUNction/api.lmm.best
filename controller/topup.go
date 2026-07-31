@@ -189,8 +189,7 @@ func getMinTopup() int64 {
 
 func RequestEpay(c *gin.Context) {
 	var req EpayRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod); err != nil {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay 参数解包失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
 		return
