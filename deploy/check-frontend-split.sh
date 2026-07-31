@@ -15,11 +15,25 @@ assert_literal '^/[^/]+/mj(?:/|$)' "$config"
 assert_literal 'location ^~ /oauth/' "$config"
 assert_literal 'location = /terms' "$config"
 assert_literal 'location = /privacy' "$config"
-assert_literal 'return 302 /user-agreement' "$config"
-assert_literal 'return 302 /privacy-policy' "$config"
+assert_literal 'alias /var/www/api.lmm.best/legal/terms.html;' "$config"
+assert_literal 'alias /var/www/api.lmm.best/legal/privacy.html;' "$config"
+assert_literal 'default_type text/html;' "$config"
+assert_literal 'charset utf-8;' "$config"
+assert_literal 'add_header X-Content-Type-Options nosniff always;' "$config"
+[[ $(grep -Fc 'default_type text/html;' "$config") == 2 ]] ||
+  fail 'each exact legal alias must set the HTML content type'
+[[ $(grep -Fc 'charset utf-8;' "$config") == 2 ]] ||
+  fail 'each exact legal alias must set UTF-8'
+[[ $(grep -Fc 'add_header X-Content-Type-Options nosniff always;' "$config") == 2 ]] ||
+  fail 'each exact legal alias must set nosniff'
+if grep -Eq 'return 30[1278] /(user-agreement|privacy-policy)' "$config"; then
+  fail 'legal aliases must not redirect into the SPA'
+fi
 assert_literal 'alias /srv/lmm-api-frontend/assets/' "$config"
 assert_literal 'location = /dashboard/billing/subscription' "$config"
 assert_literal 'location = /dashboard/billing/usage' "$config"
+assert_literal 'location = /jimeng ' "$config"
+assert_literal 'location ^~ /jimeng/' "$config"
 assert_literal 'jpe?g|js|json|map|png|svg|webp|woff2?' "$config"
 assert_literal 'max-age=31536000, immutable' "$config"
 assert_literal 'no-cache, must-revalidate' "$config"
@@ -31,6 +45,9 @@ assert_literal 'immutable asset collision with different content' "$release"
 assert_literal 'preflight_assets "$stage/static"' "$release"
 if grep -Fq 'location ^~ /dashboard/' "$config"; then
   fail 'broad /dashboard/ proxy would swallow frontend dashboard routes'
+fi
+if grep -Fq 'location ^~ /jimeng {' "$config"; then
+  fail 'broad /jimeng prefix would also proxy /jimengx'
 fi
 
 # Keep the nginx split synchronized with every top-level Gin router family.

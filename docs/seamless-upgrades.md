@@ -22,7 +22,7 @@ sudo deploy/frontend-release.sh rollback
 sudo deploy/frontend-release.sh rollback --release <git-sha>
 ```
 
-Install `deploy/nginx/http-map.conf` in nginx's `http` context and include `deploy/nginx/lmm-api-locations.conf` inside the existing TLS server. Validate with `nginx -t` before reloading nginx. The template sends every known backend route family to port 3000, preserves WebSocket/SSE behavior, serves the shared `/static` asset store with immutable caching, and makes entry points revalidate. Missing static or root-public assets return 404 instead of SPA HTML. `/terms` and `/privacy` redirect to the frontend's current `/user-agreement` and `/privacy-policy` routes.
+Install `deploy/nginx/http-map.conf` in nginx's `http` context and include `deploy/nginx/lmm-api-locations.conf` inside the existing TLS server. Validate with `nginx -t` before reloading nginx. The template sends every known backend route family to port 3000, preserves WebSocket/SSE behavior, serves the shared `/static` asset store with immutable caching, and makes entry points revalidate. Missing static or root-public assets return 404 instead of SPA HTML. The production `/terms` and `/privacy` semantics are preserved as exact aliases to `/var/www/api.lmm.best/legal/terms.html` and `privacy.html`; nginx serves both as UTF-8 HTML with `X-Content-Type-Options: nosniff`, independently of a frontend release.
 
 Run `make check-frontend-split` whenever routers or deployment files change. Adding a new top-level backend router family requires updating the nginx split and its check in the same change.
 
