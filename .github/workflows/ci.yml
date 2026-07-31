@@ -57,6 +57,32 @@ jobs:
       - name: Test root and relaykit modules
         run: make test
 
+      - name: Verify Go-to-Rust route ownership contract
+        run: rust/scripts/check-go-route-manifest.sh
+
+  rust:
+    name: Rust migration workspace
+    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+          ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.ref || github.ref }}
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Test
+        run: cargo test --all-targets --all-features --locked
+
   frontend:
     name: Frontend typecheck and test
     if: github.event.action != 'closed' || github.event.pull_request.merged == true
