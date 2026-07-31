@@ -16,7 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { getBuildRevision } from '@/lib/build-metadata'
 import { cn } from '@/lib/utils'
+
+const DEFAULT_BRAND_LOGO = '/logo.png'
+
+function getBrandLogoSrc(src = DEFAULT_BRAND_LOGO) {
+  if (src !== DEFAULT_BRAND_LOGO) return src
+  return `${src}?v=${encodeURIComponent(getBuildRevision())}`
+}
 
 interface HeaderLogoProps {
   src: string
@@ -24,6 +32,10 @@ interface HeaderLogoProps {
   loading: boolean
   logoLoaded: boolean
   className?: string
+  width?: number
+  height?: number
+  decoding?: 'async' | 'auto' | 'sync'
+  fetchPriority?: 'high' | 'low' | 'auto'
 }
 
 /**
@@ -36,11 +48,19 @@ export function HeaderLogo({
   loading,
   logoLoaded,
   className,
+  width,
+  height,
+  decoding,
+  fetchPriority,
 }: HeaderLogoProps) {
   return (
     <img
-      src={src}
+      src={getBrandLogoSrc(src)}
       alt={alt}
+      width={width}
+      height={height}
+      decoding={decoding}
+      fetchPriority={fetchPriority}
       className={cn(
         'h-6 w-6 rounded-full transition-opacity duration-200',
         !loading && logoLoaded ? 'opacity-100' : 'opacity-0',
