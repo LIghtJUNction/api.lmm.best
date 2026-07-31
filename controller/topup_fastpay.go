@@ -109,6 +109,24 @@ func VerifyFastPaySign(params map[string]string, secret string, expectedSign str
 }
 
 func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) error {
+	// Check if values were pre-parsed by a parent handler (e.g. RequestEpay delegating to RequestFastPay)
+	if v, exists := c.Get("parsed_amount"); exists {
+		if amt, ok := v.(float64); ok && amt > 0 {
+			*amount = amt
+		}
+	}
+	if v, exists := c.Get("parsed_payment_method"); exists {
+		if pm, ok := v.(string); ok && pm != "" {
+			*paymentMethod = pm
+		}
+	}
+
+	// If we already have values from context, no need to read body
+	if *amount > 0 && *paymentMethod != "" {
+		return nil
+	}
+
+	// Otherwise try to parse from request body/form/query
 	var req struct {
 		Amount        float64 `json:"amount" form:"amount"`
 		PaymentMethod string  `json:"payment_method" form:"payment_method"`
@@ -116,10 +134,10 @@ func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) err
 
 	_ = c.ShouldBind(&req)
 
-	if req.Amount > 0 {
+	if *amount <= 0 && req.Amount > 0 {
 		*amount = req.Amount
 	}
-	if req.PaymentMethod != "" {
+	if *paymentMethod == "" && req.PaymentMethod != "" {
 		*paymentMethod = req.PaymentMethod
 	}
 

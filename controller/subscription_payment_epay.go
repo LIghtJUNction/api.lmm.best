@@ -52,6 +52,8 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	}
 
 	if req.PaymentMethod == "fastpay" || strings.HasPrefix(req.PaymentMethod, "fastpay_") || (isFastPayWebhookConfigured() && strings.Contains(strings.ToLower(operation_setting.PayAddress), "fastpay")) {
+		c.Set("parsed_plan_id", req.PlanId)
+		c.Set("parsed_payment_method", req.PaymentMethod)
 		SubscriptionRequestFastPay(c)
 		return
 	}
