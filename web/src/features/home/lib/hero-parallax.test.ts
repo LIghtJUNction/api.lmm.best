@@ -19,28 +19,18 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { isCjkLocale } from './cjk-locale'
+import { normalizePointerPosition } from './hero-parallax'
 
-describe('isCjkLocale', () => {
-  test('recognizes project and conventional Chinese/Japanese locale codes', () => {
-    const locales = ['zhCN', 'zhTW', 'zh', 'zh-CN', 'zh-Hant-TW', 'ja', 'ja-JP']
-    for (const locale of locales) {
-      assert.equal(isCjkLocale(locale), true, locale)
-    }
+describe('hero parallax pointer normalization', () => {
+  test('maps the bounds and midpoint to a normalized range', () => {
+    assert.equal(normalizePointerPosition(20, 20, 100), -1)
+    assert.equal(normalizePointerPosition(70, 20, 100), 0)
+    assert.equal(normalizePointerPosition(120, 20, 100), 1)
   })
 
-  test('does not misclassify unrelated or extended locale-like strings', () => {
-    const locales = [
-      'en',
-      'fr',
-      'zhCN-extra',
-      'zhTWfoo',
-      'japanese',
-      'zh-',
-      'ja-',
-    ]
-    for (const locale of locales) {
-      assert.equal(isCjkLocale(locale), false, locale)
-    }
+  test('clamps out-of-bounds positions and handles empty bounds', () => {
+    assert.equal(normalizePointerPosition(-100, 20, 100), -1)
+    assert.equal(normalizePointerPosition(500, 20, 100), 1)
+    assert.equal(normalizePointerPosition(20, 20, 0), 0)
   })
 })
