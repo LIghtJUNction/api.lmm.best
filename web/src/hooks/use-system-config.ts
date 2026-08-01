@@ -174,6 +174,10 @@ export function useSystemConfig(options: UseSystemConfigOptions = {}) {
   useEffect(() => {
     const { logo } = config
 
+    // The built-in brand is inline SVG. Never issue a request for the legacy
+    // bitmap sentinel; only tenant-provided logos need asynchronous loading.
+    if (logo === DEFAULT_LOGO) return
+
     // Skip if logo is already loaded
     if (!logo || logo === loadedLogoUrl) return
 
@@ -199,6 +203,9 @@ export function useSystemConfig(options: UseSystemConfigOptions = {}) {
   return {
     ...config,
     loading,
-    logoLoaded: config.logo === loadedLogoUrl && !!loadedLogoUrl,
+    // DEFAULT_LOGO renders as LmmBrandMark rather than an image resource.
+    logoLoaded:
+      config.logo === DEFAULT_LOGO ||
+      (config.logo === loadedLogoUrl && !!loadedLogoUrl),
   }
 }

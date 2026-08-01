@@ -19,8 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { BarChart3, Route, Waypoints } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { AnimateInView } from '@/components/animate-in-view'
-
 const FEATURES = [
   {
     number: '01',
@@ -58,12 +56,11 @@ export function Features() {
         </div>
 
         <div className='grid border-y-2 border-[#141413] md:grid-cols-3 dark:border-[#FAF9F5]'>
-          {FEATURES.map((feature, index) => {
+          {FEATURES.map((feature) => {
             const Icon = feature.icon
             return (
-              <AnimateInView
+              <article
                 key={feature.number}
-                delay={index * 90}
                 className='group flex min-h-60 flex-col gap-8 border-b border-[#141413]/30 py-7 last:border-b-0 md:min-h-64 md:border-r md:border-b-0 md:px-8 md:first:pl-0 md:last:border-r-0 md:last:pr-0 dark:border-[#FAF9F5]/30'
               >
                 <div className='flex items-center justify-between'>
@@ -82,7 +79,7 @@ export function Features() {
                     {t(feature.description)}
                   </p>
                 </div>
-              </AnimateInView>
+              </article>
             )
           })}
         </div>

@@ -20,7 +20,6 @@ import { Link } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { AnimateInView } from '@/components/animate-in-view'
 import { Button } from '@/components/ui/button'
 
 interface CTAProps {
@@ -34,7 +33,7 @@ export function CTA({ isAuthenticated = false }: CTAProps) {
 
   return (
     <section className='bg-[#BCD1CA] px-5 py-20 text-[#141413] sm:px-8 sm:py-28'>
-      <AnimateInView className='mx-auto grid max-w-7xl gap-8 border-y-2 border-[#141413] py-10 md:grid-cols-[1fr_auto] md:items-end'>
+      <div className='mx-auto grid max-w-7xl gap-8 border-y-2 border-[#141413] py-10 md:grid-cols-[1fr_auto] md:items-end'>
         <div>
           <p className='mb-4 text-xs font-semibold tracking-[0.18em] uppercase'>
             {t('Open Source')}
@@ -50,7 +49,7 @@ export function CTA({ isAuthenticated = false }: CTAProps) {
           {t('Get Started')}
           <ArrowRight data-icon='inline-end' />
         </Button>
-      </AnimateInView>
+      </div>
     </section>
   )
 }
