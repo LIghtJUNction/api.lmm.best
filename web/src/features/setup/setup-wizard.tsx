@@ -23,6 +23,7 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import { BrandLogo } from '@/components/brand-logo'
 import { ErrorState } from '@/components/error-state'
 import { LanguageSwitcher } from '@/components/language-switcher'
 import { LoadingState } from '@/components/loading-state'
@@ -289,10 +290,9 @@ export function SetupWizard() {
             {systemConfigLoading ? (
               <Skeleton className='absolute inset-0 rounded-full' />
             ) : (
-              <img
+              <BrandLogo
                 src={logo}
-                alt={t('System logo')}
-                className='h-12 w-12 rounded-full object-cover shadow-sm'
+                className='h-12 w-12 object-contain shadow-sm'
               />
             )}
           </div>

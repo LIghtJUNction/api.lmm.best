@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
-import { useTranslation } from 'react-i18next'
 
+import { BrandLogo } from '@/components/brand-logo'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSystemConfig } from '@/hooks/use-system-config'
 
@@ -27,7 +27,6 @@ type AuthLayoutProps = {
 }
 
 export function AuthLayout({ children }: AuthLayoutProps) {
-  const { t } = useTranslation()
   const { systemName, logo, loading } = useSystemConfig()
 
   return (
@@ -40,11 +39,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
           {loading ? (
             <Skeleton className='absolute inset-0 rounded-full' />
           ) : (
-            <img
-              src={logo}
-              alt={t('Logo')}
-              className='h-8 w-8 rounded-full object-cover'
-            />
+            <BrandLogo src={logo} className='h-8 w-8 object-contain' />
           )}
         </div>
         {loading ? (

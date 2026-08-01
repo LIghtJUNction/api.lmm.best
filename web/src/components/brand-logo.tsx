@@ -16,15 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { BrandLogo } from '@/components/brand-logo'
+import { LmmBrandMark } from '@/components/lmm-brand-mark'
 import { DEFAULT_LOGO } from '@/lib/constants'
-import { cn } from '@/lib/utils'
 
-interface HeaderLogoProps {
-  src: string
+type BrandLogoProps = {
+  /** An empty or default value renders the built-in inline mark. */
+  src?: string
+  /** Omit when adjacent text already names the brand. */
   alt?: string
-  loading: boolean
-  logoLoaded: boolean
   className?: string
   width?: number
   height?: number
@@ -33,37 +32,41 @@ interface HeaderLogoProps {
 }
 
 /**
- * Logo component for header with loading state
- * Shows image only when fully loaded for smooth UX
+ * Renders the built-in mark inline and only creates an image request for a
+ * tenant-provided logo. The legacy DEFAULT_LOGO sentinel remains the config
+ * fallback but is never emitted as an image URL.
  */
-export function HeaderLogo({
+export function BrandLogo({
   src,
   alt = '',
-  loading,
-  logoLoaded,
   className,
   width,
   height,
   decoding,
   fetchPriority,
-}: HeaderLogoProps) {
+}: BrandLogoProps) {
+  const resolvedSrc = src?.trim() || DEFAULT_LOGO
+
+  if (resolvedSrc === DEFAULT_LOGO) {
+    return (
+      <LmmBrandMark
+        title={alt || undefined}
+        width={width}
+        height={height}
+        className={className}
+      />
+    )
+  }
+
   return (
-    <BrandLogo
-      src={src}
+    <img
+      src={resolvedSrc}
       alt={alt}
       width={width}
       height={height}
       decoding={decoding}
       fetchPriority={fetchPriority}
-      className={cn(
-        'h-7 w-7 transition-opacity duration-200',
-        src !== DEFAULT_LOGO && !loading && logoLoaded
-          ? 'opacity-100'
-          : src !== DEFAULT_LOGO
-            ? 'opacity-0'
-            : undefined,
-        className
-      )}
+      className={className}
     />
   )
 }

@@ -20,9 +20,12 @@ import { Link } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { BrandLogo } from '@/components/brand-logo'
+import { LMM_BRAND_NAME } from '@/components/lmm-brand-mark'
 import { useSystemConfig } from '@/hooks/use-system-config'
-import { cn } from '@/lib/utils'
 import { normalizeInterfaceLanguage } from '@/i18n/languages'
+import { DEFAULT_LOGO, DEFAULT_SYSTEM_NAME } from '@/lib/constants'
+import { cn } from '@/lib/utils'
 
 interface FooterLink {
   text: string
@@ -106,7 +109,7 @@ function ComplianceLinks() {
     },
   ]
   return (
-    <div className='border-border bg-muted/40 text-foreground/80 flex w-full flex-wrap items-center justify-center gap-x-5 gap-y-2 rounded-xl border px-4 py-3 text-sm sm:justify-start'>
+    <div className='flex w-full flex-wrap items-center justify-center gap-x-5 gap-y-2 border-y border-[#141413]/25 py-3 text-sm text-[#141413]/75 sm:justify-start dark:border-[#FAF9F5]/25 dark:text-[#FAF9F5]/75'>
       {items.map((item) => (
         <Link
           key={item.key}
@@ -162,13 +165,19 @@ export function Footer(props: FooterProps) {
     footerHtml,
     demoSiteEnabled,
   } = useSystemConfig()
-  const docsLang = docsLanguageByInterfaceLanguage[
-    normalizeInterfaceLanguage(i18n.resolvedLanguage || i18n.language)
-  ]
+  const docsLang =
+    docsLanguageByInterfaceLanguage[
+      normalizeInterfaceLanguage(i18n.resolvedLanguage || i18n.language)
+    ]
   const docsBaseUrl = `https://docs.newapi.pro/${docsLang || 'en'}/docs`
 
-  const displayLogo = systemLogo || props.logo || '/logo.png'
-  const displayName = systemName || props.name || 'LMM API'
+  const displayLogo = systemLogo || props.logo || DEFAULT_LOGO
+  const configuredName = systemName || props.name || DEFAULT_SYSTEM_NAME
+  const usesDefaultBrand = displayLogo === DEFAULT_LOGO
+  const displayName =
+    usesDefaultBrand && configuredName === DEFAULT_SYSTEM_NAME
+      ? LMM_BRAND_NAME
+      : configuredName
   const isDemoSiteMode = Boolean(demoSiteEnabled)
   const currentYear = new Date().getFullYear()
 
@@ -235,13 +244,13 @@ export function Footer(props: FooterProps) {
     return (
       <footer
         className={cn(
-          'border-border/40 relative z-10 border-t',
+          'relative z-10 border-t-2 border-[#141413] bg-[#FAF9F5] text-[#141413] dark:border-[#FAF9F5] dark:bg-[#141413] dark:text-[#FAF9F5]',
           props.className
         )}
       >
-        <div className='mx-auto w-full max-w-6xl px-6 py-5'>
-          <div className='bg-muted/20 border-border/50 flex flex-col gap-4 rounded-2xl border px-4 py-4 backdrop-blur-sm sm:px-5'>
-            <div className='flex flex-col items-center justify-between gap-4 sm:flex-row'>
+        <div className='mx-auto w-full max-w-7xl px-5 py-6 sm:px-8'>
+          <div className='flex flex-col gap-4'>
+            <div className='flex flex-col items-center justify-between gap-3 sm:flex-row'>
               <div
                 className='custom-footer text-muted-foreground min-w-0 text-center text-sm sm:text-left'
                 dangerouslySetInnerHTML={{ __html: footerHtml }}
@@ -257,23 +266,26 @@ export function Footer(props: FooterProps) {
 
   return (
     <footer
-      className={cn('border-border/40 relative z-10 border-t', props.className)}
+      className={cn(
+        'relative z-10 border-t-2 border-[#141413] bg-[#FAF9F5] text-[#141413] dark:border-[#FAF9F5] dark:bg-[#141413] dark:text-[#FAF9F5]',
+        props.className
+      )}
     >
-      <div className='mx-auto max-w-6xl px-6 py-12 md:py-16'>
-        <div className='flex flex-col justify-between gap-10 md:flex-row md:gap-16'>
+      <div className='mx-auto max-w-7xl px-5 py-7 sm:px-8 md:py-8'>
+        <div
+          className='mb-6 h-[3px] w-20 rotate-[-1deg] rounded-full bg-[#BCD1CA]'
+          aria-hidden='true'
+        />
+        <div className='flex flex-col justify-between gap-6 md:flex-row md:gap-16'>
           {/* Brand column */}
           <div className='shrink-0'>
             <Link to='/' className='group flex items-center gap-2.5'>
-              <img
-                src={displayLogo}
-                alt={displayName}
-                className='size-7 rounded-lg object-contain'
-              />
-              <span className='text-sm font-semibold tracking-tight'>
+              <BrandLogo src={displayLogo} className='size-9 object-contain' />
+              <span className='text-base font-semibold tracking-[-0.025em]'>
                 {displayName}
               </span>
             </Link>
-            <p className='text-muted-foreground/60 mt-3 max-w-[200px] text-xs leading-relaxed'>
+            <p className='mt-3 max-w-[15rem] text-xs leading-relaxed text-[#141413]/58 dark:text-[#FAF9F5]/58'>
               {t('Powerful API Management Platform')}
             </p>
           </div>
@@ -299,12 +311,12 @@ export function Footer(props: FooterProps) {
           )}
         </div>
 
-        <div className='mt-10'>
+        <div className='mt-6'>
           <ComplianceLinks />
         </div>
 
         {/* Copyright and project attribution; wraps on narrow screens. */}
-        <div className='border-border/30 mt-12 flex flex-col items-center justify-between gap-x-3 gap-y-2 border-t pt-6 sm:flex-row'>
+        <div className='mt-6 flex flex-col items-center justify-between gap-x-3 gap-y-2 border-t border-[#141413]/25 pt-4 sm:flex-row dark:border-[#FAF9F5]/25'>
           <div className='text-muted-foreground/40 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:justify-start'>
             <span>
               &copy; {currentYear} {displayName}.{' '}

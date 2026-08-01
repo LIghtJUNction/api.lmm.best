@@ -25,3 +25,6 @@ dist-ssr
 *.sln
 *.sw?
 .tanstack/*
+
+# Playwright visual-review artifacts; the reproducible runner remains tracked.
+/test-results/

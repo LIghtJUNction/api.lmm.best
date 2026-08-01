@@ -19,8 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { BarChart3, Route, Unplug } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { AnimateInView } from '@/components/animate-in-view'
-
 const STEPS = [
   {
     number: '1',
@@ -48,42 +46,58 @@ export function HowItWorks() {
   const { t } = useTranslation()
 
   return (
-    <section className='bg-[#F0EEE6] px-5 py-20 text-[#141413] sm:px-8 sm:py-28 dark:bg-[#22221F] dark:text-[#FAF9F5]'>
-      <div className='mx-auto max-w-7xl'>
-        <AnimateInView className='mb-14 max-w-2xl'>
-          <p className='mb-4 text-xs font-semibold tracking-[0.18em] uppercase'>
+    <section
+      data-home-onboarding
+      aria-labelledby='home-onboarding-title'
+      className='bg-[#F0EEE6] px-5 py-12 text-[#141413] sm:px-8 sm:py-14 md:py-16 dark:bg-[#141413] dark:text-[#FAF9F5]'
+    >
+      <div className='mx-auto max-w-7xl border-y-2 border-[#141413] py-8 sm:py-10 dark:border-[#FAF9F5]'>
+        <header className='mb-8 grid gap-3 md:mb-10 md:grid-cols-[15rem_minmax(0,1fr)] md:items-end'>
+          <p className='text-xs font-semibold tracking-[0.18em] uppercase'>
             {t('How It Works')}
           </p>
-          <h2 className='font-serif text-4xl leading-none font-medium tracking-[-0.04em] sm:text-5xl'>
+          <h2
+            id='home-onboarding-title'
+            className='max-w-[18ch] font-serif text-3xl leading-[0.95] font-medium tracking-[-0.04em] text-balance sm:text-4xl lg:text-5xl'
+          >
             {t('Three steps to get started')}
           </h2>
-        </AnimateInView>
+        </header>
 
-        <ol className='grid gap-10 md:grid-cols-3'>
+        <ol className='grid border-t-2 border-[#141413] md:grid-cols-3 dark:border-[#FAF9F5]'>
           {STEPS.map((step, index) => {
             const Icon = step.icon
             return (
-              <AnimateInView
+              <li
                 key={step.number}
-                delay={index * 100}
-                as='li'
-                className='relative border-t-2 border-[#141413] pt-6 dark:border-[#FAF9F5]'
+                className='relative grid gap-5 border-b border-[#141413]/30 py-6 last:border-b-0 md:border-r md:border-b-0 md:px-6 md:first:pl-0 md:last:border-r-0 md:last:pr-0 dark:border-[#FAF9F5]/30'
               >
-                <div className='mb-12 flex items-center justify-between'>
-                  <span className='font-mono text-sm'>0{step.number}</span>
-                  <Icon
-                    className='size-7'
+                <div className='flex items-start justify-between gap-4'>
+                  <span className='font-mono text-xs tracking-[0.16em]'>
+                    0{step.number}
+                  </span>
+                  <span
+                    className='flex size-11 rotate-[-2deg] items-center justify-center [border-radius:45%_55%_48%_52%/56%_43%_57%_44%] border-2 border-[#141413] bg-[#BCD1CA] text-[#141413] odd:rotate-[2deg]'
                     aria-hidden='true'
-                    strokeWidth={1.5}
-                  />
+                  >
+                    <Icon className='size-6' strokeWidth={1.8} />
+                  </span>
                 </div>
-                <h3 className='font-serif text-2xl font-medium'>
-                  {t(step.title)}
-                </h3>
-                <p className='mt-3 text-sm leading-6 text-[#141413]/65 dark:text-[#FAF9F5]/65'>
-                  {t(step.description)}
-                </p>
-              </AnimateInView>
+                <div className='self-end'>
+                  <h3 className='font-serif text-2xl leading-tight font-medium'>
+                    {t(step.title)}
+                  </h3>
+                  <p className='mt-2 max-w-sm text-sm leading-6 text-[#141413]/68 dark:text-[#FAF9F5]/68'>
+                    {t(step.description)}
+                  </p>
+                </div>
+                {index < STEPS.length - 1 ? (
+                  <span
+                    className='absolute right-[-0.45rem] bottom-[-0.36rem] hidden size-3 rounded-full bg-[#141413] md:block dark:bg-[#FAF9F5]'
+                    aria-hidden='true'
+                  />
+                ) : null}
+              </li>
             )
           })}
         </ol>
