@@ -3,6 +3,7 @@
 pub mod canonical;
 pub mod inspect;
 pub mod manifest;
+pub mod migrate;
 pub mod report;
 
 use thiserror::Error;
@@ -25,4 +26,22 @@ pub enum MigrationError {
     /// A source value cannot be converted without information loss.
     #[error("canonical conversion failed: {0}")]
     Canonical(String),
+    /// PostgreSQL baseline, copy, or verification failed.
+    #[error("PostgreSQL migration failed: {0}")]
+    Postgres(#[from] postgres::Error),
+}
+
+impl MigrationError {
+    /// Stable non-sensitive category suitable for an audit report.
+    #[must_use]
+    pub const fn category(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "filesystem",
+            Self::Sqlite(_) => "sqlite",
+            Self::Json(_) => "json",
+            Self::Manifest(_) => "contract",
+            Self::Canonical(_) => "conversion",
+            Self::Postgres(_) => "postgresql",
+        }
+    }
 }

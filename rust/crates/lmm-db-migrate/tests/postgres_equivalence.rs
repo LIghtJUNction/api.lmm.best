@@ -27,6 +27,10 @@ fn sqlite_and_postgres_should_have_identical_canonical_table_hashes() {
 
     assert_eq!(sqlite_evidence.0, 2);
     assert_eq!(sqlite_evidence, postgres_evidence);
+    assert_eq!(
+        sqlite_evidence.1.to_hex().as_str(),
+        "ea352fd199b951db37fe86a389b4883736a8867483a715bbdf3c39cfe2471aee"
+    );
     println!(
         "equivalence proof: table={TABLE} count={} blake3={}",
         sqlite_evidence.0, sqlite_evidence.1
