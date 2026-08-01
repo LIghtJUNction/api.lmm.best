@@ -34,14 +34,20 @@ The server-scoped template explicitly includes `/etc/nginx/lmm-api-mime.types`; 
 
 Run `make check-frontend-split` whenever routers or deployment files change. Adding a new top-level backend router family requires updating the nginx split and its check in the same change.
 
-## Backend today: autonomous, bounded interruption
+## Go backend today: autonomous, bounded interruption
 
 Production currently uses one Go process and SQLite. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
 
 Do not run old and new backend binaries concurrently against the SQLite database. Two writers, startup migrations, and background jobs make that unsafe; copying SQLite for each process would instead create divergent state.
 
-## PostgreSQL migration prerequisite
+## Rust internal-probe blue/green foundation
 
-True backend blue/green deployment is a later phase and requires a reviewed migration from SQLite to PostgreSQL first. The migration plan must cover backup and restore, row/count and application-level validation, maintenance boundaries, rollback criteria, and production-specific configuration. No generic migration command should be run against production without that plan.
+The native Rust blue/green deployment foundation is installed on ArchDmit, with blue on `127.0.0.1:3100` and green on `127.0.0.1:3101`. It currently owns only loopback-restricted GET/HEAD liveness, readiness, and build probes. Releases, per-slot symlinks, nginx upstream publication, PREPARED/COMMITTED journals, crash reconciliation, and graceful slot shutdown are independent of the Go process. See `docs/rust-blue-green.md` for the operational contract and production rehearsal evidence.
 
-After PostgreSQL is established, backend blue/green still requires explicit liveness/readiness endpoints, expand/contract migrations compatible with N and N-1, singleton ownership for background jobs, shared runtime state, authenticated canaries, atomic nginx upstream switching, and graceful draining/reconnection of SSE and WebSocket clients. nginx must not automatically retry non-idempotent requests.
+This foundation is deliberately not a production API cutover. Production business routes still go to Go on port 3000, and SQLite remains authoritative. The Rust production-routing enable marker is a hard failure condition until route parity and PostgreSQL cutover are approved.
+
+## PostgreSQL production migration prerequisite
+
+The verified SQLite-to-PostgreSQL copier and isolated rehearsal exist, but the production database has not been migrated. The final cutover still requires an autonomous maintenance/write-freeze transaction, offline source backup and integrity check, full copy and independent verification, authenticated canaries, and a durable first-PostgreSQL-write boundary. Before the first PG write, automatic rollback to SQLite is allowed; after the first PG write, automatic rollback to SQLite is forbidden.
+
+Before business traffic moves to Rust, route/auth/quota/billing/streaming parity, expand/contract migrations compatible with N and N-1, singleton ownership for background jobs, authenticated canaries, and graceful draining/reconnection of SSE and WebSocket clients remain mandatory. nginx must not automatically retry non-idempotent requests.

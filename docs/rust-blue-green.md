@@ -12,7 +12,7 @@
 - nginx upstream include 先写 `.next`，经 `mv -T` 原子替换，再执行 `nginx -t` 与 reload。失败时恢复审计目录保存的旧 include。
 - nginx 不配置对非幂等请求的重试。当前 route ownership include 只提供三个仅 loopback 可访问的 GET/HEAD 内部探针。
 - 每次事务用 `flock` 串行化，并在 `/var/log/lmm-api-rs/deployments/<UTC>-<revision>/` 保存不含连接串的 hash、探针结果、切换前配置与结果。
-- 切换前 journal 写入 `PREPARED`（old/new/revision/旧 upstream hash 与备份路径），reload 成功后立即写 `COMMITTED`。若进程在窗口内被 SIGKILL，下次启动通过真实 nginx TLS build canary 判断运行中 worker：命中新 revision 就提交，否则先恢复旧 worker 与旧 upstream。
+- 切换前 journal 写入 `PREPARED`（old/new/revision/旧 upstream hash 与备份路径），reload 成功后立即写 `COMMITTED`。若进程在窗口内被 SIGKILL，下次启动通过真实 nginx TLS build canary 判断运行中 worker：命中新 revision 就提交并停止旧 slot，否则先恢复旧 worker 与旧 upstream、再停止未接流的新 slot；恢复 journal 始终保留原 PREPARED artifact revision。
 - 当前只接管短生命周期内部 GET/HEAD 探针，切换后直接向旧 slot 发送 SIGTERM，由 Rust 的 `LMM_DRAIN_TIMEOUT_SECONDS` 完成有界排空。未来接管业务流量前必须提供 Rust 自身的 HTTP、SSE 与 WebSocket 连接生命周期指标，不能用任意外部 shell 命令伪装精确 drain。
 
 ## 首次安装
@@ -54,7 +54,7 @@ sudo deploy-lmm-api-rs --artifact /absolute/path/lmm-api-rs \
   --sha256 <sha256> --revision <git-sha> --systemd-run
 ```
 
-部署器安装 inactive slot、启动并检查 `/livez`、`/readyz` 和 revision、写 PREPARED journal、原子切换内部探针 upstream、reload nginx，再通过真实 TLS `/readyz` 与 `/build` 确认 nginx 选中了目标 revision。回滚严格按“启动旧 slot 并 direct-ready → 原子恢复旧 upstream → `nginx -t`/reload/is-active → TLS canary 验证旧 revision → 停止新 slot”执行；任一步失败会保留新 slot 并写 `NEEDS_ATTENTION`，绝不报告成功。旧 release 不在同一事务删除。
+部署器安装 inactive slot、启动并检查 `/livez`、`/readyz` 和 revision、写 PREPARED journal、原子切换内部探针 upstream、reload nginx，再通过真实 TLS `/readyz` 与 `/build` 确认 nginx 选中了目标 revision。nginx reload 是异步的，旧 worker 可能在短窗口内继续响应；canary 因此在有限截止时间内重试，并且只有 readiness、revision 与 slot 同时匹配才算收敛。回滚严格按“启动旧 slot 并 direct-ready → 原子恢复旧 upstream → `nginx -t`/reload/is-active → TLS canary 验证旧 revision → 停止新 slot”执行；任一步失败会保留新 slot 并写 `NEEDS_ATTENTION`，绝不报告成功。旧 release 不在同一事务删除。
 
 ## 故障注入与验证
 
@@ -77,3 +77,15 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 3. schema 使用 expand/contract，N 与 N-1 均兼容，后台任务具有单例租约。
 4. WebSocket/SSE 具备明确的 drain/reconnect 行为，非幂等请求不会被代理重试。
 5. staging 完成 readiness、safe GET canary、切换后故障注入和回滚演练。
+
+## ArchDmit 内部探针演练记录
+
+2026-08-01 在 ArchDmit 完成了不接管业务流量的原生 systemd 演练：
+
+- 使用隔离的 `lmm_api_rs_rehearsal` PostgreSQL 数据库和专用 Valkey `127.0.0.1:6380`；生产 SQLite 仍是 Go 服务的权威数据库。
+- 从 port 9 bootstrap 首次发布 blue，再以同一 artifact revision 切换到 green，TLS build canary 分别确认 slot 身份。
+- 真实 nginx reload 首次 canary 命中了尚未退出的旧 worker 并返回 502。部署器现会在有界窗口内重试 readiness + revision + slot，确认新 worker 收敛后才提交。
+- 在 reload 后对部署进程执行 SIGKILL，后续独立 systemd reconcile 依据真实 TLS worker 完成 PREPARED → COMMITTED，对账 journal 保留原 artifact revision，并停止旧 slot。
+- `/api/status` 继续返回 200，`/v1/models` 继续由 Go 鉴权并返回 401；公网访问 Rust 内部探针返回 403。Go 服务在整场演练中 PID 未变化且 `NRestarts=0`。
+
+这份记录只证明内部探针蓝绿事务和崩溃恢复可用，不代表 PostgreSQL 生产迁移、Rust 业务路由兼容或完整后端切换已经完成。
