@@ -99,6 +99,11 @@ elif grep -q '127.0.0.1:3100' "${LMM_RS_NGINX_UPSTREAM:?}"; then
 else
     slot=green
 fi
+if [[ $url == https://*/build && ${LMM_TEST_STALE_CANARY_ONCE:-0} == 1 && \
+    ! -e ${LMM_TEST_STALE_CANARY_MARKER:?} ]]; then
+    touch "$LMM_TEST_STALE_CANARY_MARKER"
+    [[ $slot == blue ]] && slot=green || slot=blue
+fi
 if [[ $url == */build ]]; then
     printf '{"version":"0.1.0","revision":"%s","slot":"%s"}\n' "$revision" "$slot"
 else
@@ -143,6 +148,18 @@ fi
 cmp "$TMP/nginx/upstream.expected" "$TMP/nginx/upstream.conf"
 grep -Rq '^FAILED status=' "$TMP/audit"
 
+# nginx reload is asynchronous: an old worker may answer the first TLS build
+# canary. Deployment must retry until revision + slot converge.
+rm -f "$TMP/state-stale-canary"
+PATH="$TMP/bin:$PATH" LMM_TEST_MODE=1 LMM_TEST_REVISION=abcdef126 \
+    LMM_TEST_STALE_CANARY_ONCE=1 LMM_TEST_STALE_CANARY_MARKER="$TMP/state-stale-canary" \
+    LMM_RS_ROOT="$TMP/root" LMM_RS_ETC_ROOT="$TMP/etc" LMM_RS_RUN_ROOT="$TMP/run" \
+    LMM_RS_AUDIT_ROOT="$TMP/audit" LMM_RS_NGINX_UPSTREAM="$TMP/nginx/upstream.conf" \
+    "$HERE/deploy-lmm-api-rs.sh" --artifact "$TMP/artifact" --sha256 "$sha" \
+    --revision abcdef126 >/dev/null
+test -e "$TMP/state-stale-canary"
+grep -Fxq green "$TMP/root/active-slot"
+
 # An immutable revision may be reused only when its installed artifact hash matches.
 mkdir -p "$TMP/root/releases/abcdef127"
 printf 'different artifact\n' >"$TMP/root/releases/abcdef127/lmm-api-rs"
@@ -178,6 +195,7 @@ PATH="$TMP/bin:$PATH" LMM_TEST_MODE=1 LMM_TEST_REVISION=abcdef129 LMM_RS_ROOT="$
     --revision abcdef129 --reconcile-only >/dev/null
 grep -Fxq green "$TMP/root/active-slot"
 grep -Fq 'phase=COMMITTED slot=green' "$TMP/root/deploy-journal"
+grep -Fq 'revision=abcdef129' "$TMP/root/deploy-journal"
 
 # SIGKILL immediately after reload leaves stale state; the next transaction derives blue from nginx.
 if PATH="$TMP/bin:$PATH" LMM_TEST_MODE=1 LMM_TEST_REVISION=abcdef130 LMM_DEPLOY_FAIL_AT=kill-after-reload \

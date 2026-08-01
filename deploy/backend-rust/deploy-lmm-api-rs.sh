@@ -105,8 +105,9 @@ atomic_text() {
 }
 write_result() { atomic_text "$AUDIT_DIR/result" 0600 "$1"; }
 write_journal() {
-    phase=$1 slot=${2:-none}
-    line="transaction=$TRANSACTION_ID phase=$phase slot=$slot revision=$safe_revision"
+    phase=$1 slot=${2:-none} journal_revision=${3:-$safe_revision}
+    [[ $journal_revision =~ ^[A-Za-z0-9._-]{7,128}$ ]] || die "journal revision contains unsafe characters"
+    line="transaction=$TRANSACTION_ID phase=$phase slot=$slot revision=$journal_revision"
     atomic_text "$JOURNAL_FILE" 0600 "$line"
     atomic_text "$AUDIT_DIR/journal" 0600 "$line"
 }
@@ -119,8 +120,25 @@ if [[ -r $ETC_ROOT/deploy.conf ]]; then
 fi
 curl_nginx() {
     path=$1 output=$2
-    curl --fail --silent --show-error --max-time 5 --resolve "$CANARY_RESOLVE" \
+    curl --fail --silent --show-error --noproxy '*' --max-time 5 --resolve "$CANARY_RESOLVE" \
         --cacert "$CANARY_CA" "$CANARY_ORIGIN$path" >"$output"
+}
+verify_nginx_identity() {
+    expected_revision=$1 expected_slot=$2 label=$3
+    attempts=${LMM_NGINX_CANARY_ATTEMPTS:-20}
+    [[ $attempts =~ ^[1-9][0-9]*$ ]] || die "LMM_NGINX_CANARY_ATTEMPTS must be a positive integer"
+    ready_file="$AUDIT_DIR/readyz.${label}.json"
+    build_file="$AUDIT_DIR/build.${label}.json"
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if curl_nginx /_internal/rust/readyz "$ready_file" && \
+            curl_nginx /_internal/rust/build "$build_file" && \
+            grep -Fq "\"revision\":\"$expected_revision\"" "$build_file" && \
+            grep -Fq "\"slot\":\"$expected_slot\"" "$build_file"; then
+            return 0
+        fi
+        ((attempt == attempts)) || sleep 0.25
+    done
+    return 1
 }
 slot_from_upstream() {
     [[ -s $NGINX_UPSTREAM ]] || return 1
@@ -141,12 +159,13 @@ reconcile_state() {
         [[ $pending_backup == "$AUDIT_ROOT"/* && -f $pending_backup && ! -L $pending_backup ]] || die "PREPARED backup path is unsafe"
         [[ $pending_sha =~ ^[[:xdigit:]]{64}$ ]] || die "PREPARED upstream hash is invalid"
         [[ $(sha256sum "$pending_backup" | awk '{print $1}') == "$pending_sha" ]] || die "PREPARED upstream backup hash mismatch"
-        canary_file="$AUDIT_DIR/reconcile-build.json"
-        if curl_nginx /_internal/rust/build "$canary_file" && \
-            grep -Fq "\"revision\":\"$pending_revision\"" "$canary_file" && \
-            grep -Fq "\"slot\":\"$pending_new\"" "$canary_file"; then
+        if verify_nginx_identity "$pending_revision" "$pending_new" reconcile; then
             atomic_text "$ACTIVE_FILE" 0600 "$pending_new"
-            write_journal COMMITTED "$pending_new"
+            write_journal COMMITTED "$pending_new" "$pending_revision"
+            if [[ $pending_old != none && $pending_old != "$pending_new" ]]; then
+                systemctl stop "lmm-api-rs@${pending_old}.service"
+                ! systemctl is-active --quiet "lmm-api-rs@${pending_old}.service" || die "reconciled old slot remained active"
+            fi
             printf '%s' "$pending_new"
             return
         fi
@@ -158,7 +177,9 @@ reconcile_state() {
         atomic_from_file "$pending_backup" "$NGINX_UPSTREAM" 0644
         nginx -t; systemctl reload nginx; systemctl is-active --quiet nginx
         atomic_text "$ACTIVE_FILE" 0600 "$pending_old"
-        write_journal ROLLED_BACK "$pending_old"
+        write_journal ROLLED_BACK "$pending_old" "$pending_revision"
+        systemctl stop "lmm-api-rs@${pending_new}.service"
+        ! systemctl is-active --quiet "lmm-api-rs@${pending_new}.service" || die "reconciled new slot remained active after rollback"
         printf '%s' "$pending_old"
         return
     fi
@@ -197,12 +218,9 @@ rollback() {
                 if [[ ${LMM_ROLLBACK_FAIL_AT:-} == old-reload ]]; then rollback_failed=1; fi
                 if ! systemctl is-active --quiet nginx; then rollback_failed=1; fi
                 if ((nginx_reloaded)) && [[ $active != none ]]; then
-                    if ! curl_nginx /_internal/rust/readyz "$AUDIT_DIR/readyz.rollback-nginx.json"; then rollback_failed=1; fi
-                    if ! curl_nginx /_internal/rust/build "$AUDIT_DIR/build.rollback-nginx.json"; then rollback_failed=1; fi
                     if [[ ${LMM_ROLLBACK_FAIL_AT:-} == old-canary ]]; then rollback_failed=1; fi
                     old_revision=$(sed -nE 's/.*"revision":"([^"]+)".*/\1/p' "$AUDIT_DIR/build.rollback-direct.json")
-                    if [[ -z $old_revision ]] || ! grep -Fq "\"revision\":\"$old_revision\"" "$AUDIT_DIR/build.rollback-nginx.json" || \
-                        ! grep -Fq "\"slot\":\"$active\"" "$AUDIT_DIR/build.rollback-nginx.json"; then rollback_failed=1; fi
+                    if [[ -z $old_revision ]] || ! verify_nginx_identity "$old_revision" "$active" rollback-nginx; then rollback_failed=1; fi
                 fi
             else
                 rollback_failed=1
@@ -216,10 +234,7 @@ rollback() {
                 if ! nginx -t; then retain_failed=1; fi
                 if ! systemctl reload nginx; then retain_failed=1; fi
                 if ! systemctl is-active --quiet nginx; then retain_failed=1; fi
-                if ! curl_nginx /_internal/rust/readyz "$AUDIT_DIR/readyz.retained-new.json"; then retain_failed=1; fi
-                if ! curl_nginx /_internal/rust/build "$AUDIT_DIR/build.retained-new.json"; then retain_failed=1; fi
-                if ! grep -Fq "\"revision\":\"$REVISION\"" "$AUDIT_DIR/build.retained-new.json" || \
-                    ! grep -Fq "\"slot\":\"$inactive\"" "$AUDIT_DIR/build.retained-new.json"; then retain_failed=1; fi
+                if ! verify_nginx_identity "$REVISION" "$inactive" retained-new; then retain_failed=1; fi
             else
                 retain_failed=1
             fi
@@ -328,10 +343,7 @@ if [[ ${LMM_DEPLOY_FAIL_AT:-} == kill-after-reload ]]; then kill -KILL $$; fi
 write_journal COMMITTED "$inactive"
 atomic_text "$ACTIVE_FILE" 0600 "$inactive"
 
-curl_nginx /_internal/rust/readyz "$AUDIT_DIR/readyz.nginx.json"
-curl_nginx /_internal/rust/build "$AUDIT_DIR/build.nginx.json"
-grep -Fq "\"revision\":\"$REVISION\"" "$AUDIT_DIR/build.nginx.json" || die "post-reload nginx canary selected the wrong revision"
-grep -Fq "\"slot\":\"$inactive\"" "$AUDIT_DIR/build.nginx.json" || die "post-reload nginx canary selected the wrong slot"
+verify_nginx_identity "$REVISION" "$inactive" nginx || die "post-reload nginx canary did not converge on the expected revision and slot"
 [[ ${LMM_DEPLOY_FAIL_AT:-} != switch ]] || die "injected failure at switch"
 
 # Only short internal GET probes are owned here; SIGTERM uses the application's bounded drain.
