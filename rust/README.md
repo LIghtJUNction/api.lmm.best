@@ -22,10 +22,12 @@ cargo test --all-targets --all-features --locked
 ./scripts/check-go-route-manifest.sh
 ```
 
-`/livez` performs no dependency I/O. `/readyz` requires PostgreSQL and the
-schema reader window; a Valkey failure reports `degraded` without rejecting
-traffic because the cache is non-authoritative. `/_internal/build` must be
-restricted by the edge or bound to the internal deployment network.
+`/livez` performs no dependency I/O. `/readyz` requires PostgreSQL, the schema
+reader window, and read permission on every table required by an implemented
+Rust slice (currently `options`); a generic `SELECT 1` is not sufficient. A
+Valkey failure reports `degraded` without rejecting traffic because the cache
+is non-authoritative. `/_internal/build` must be restricted by the edge or
+bound to the internal deployment network.
 
 The public-content slice reads Valkey first using versioned, bounded-TTL keys,
 then falls back to the authoritative PostgreSQL `options` table on a cache miss

@@ -95,3 +95,5 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只读垂直切片，用于 direct differential testing。实现按 domain content kind → application repository/cache ports → SQLx PostgreSQL 与 Redis/Valkey adapters → Axum transport 分层。Valkey 使用 `lmm:public-content:v1:*` 短 TTL cache-aside；miss 或故障回源 PostgreSQL，缓存写失败不影响响应，PG 始终是唯一权威来源。
 
 这些路径尚未加入 nginx Rust ownership。生产 `/api/` 仍全部进入 Go；在生产 PG 切换、差分测试和 Rust 全局 API rate limit 完成前不得改变这一点。
+
+2026-08-01 将 commit `883526b1a553697b5c3ce02dbf5ea7ab8fd3c7e5` 发布到内部 blue slot 后，使用从 Go TLS 响应复制到隔离 rehearsal PG 的三项内容逐项比较规范化 JSON，三条路径全部一致。真实 Valkey 6380 上三个 versioned key 均建立且 TTL 为 5 秒。生产 `/api/status` 保持 200，公网内部探针保持 403，Go PID 与 `NRestarts=0` 未变化。演练同时确认 rehearsal schema 对象必须由应用 role 拥有或显式授予最小权限；readiness 的 `SELECT 1` 不能替代业务表权限 canary。
