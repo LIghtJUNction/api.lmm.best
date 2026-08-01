@@ -48,6 +48,13 @@ This foundation is deliberately not a production API cutover. Production busines
 
 ## PostgreSQL production migration prerequisite
 
-The verified SQLite-to-PostgreSQL copier and isolated rehearsal exist, but the production database has not been migrated. The final cutover still requires an autonomous maintenance/write-freeze transaction, offline source backup and integrity check, full copy and independent verification, authenticated canaries, and a durable first-PostgreSQL-write boundary. Before the first PG write, automatic rollback to SQLite is allowed; after the first PG write, automatic rollback to SQLite is forbidden.
+The verified SQLite-to-PostgreSQL copier and autonomous coordinator now exist,
+but production has not been migrated. The coordinator stops the Go writer,
+backs up and verifies SQLite, copies into a fresh versioned schema, atomically
+publishes PG+Valkey configuration, and runs public plus authenticated canaries.
+Before its durable first-PG-write marker it may automatically restore SQLite;
+after that marker, automatic SQLite rollback is permanently forbidden. See
+`docs/postgresql-cutover.md` for the exact state machine and remaining rehearsal
+and approval gates.
 
 Before business traffic moves to Rust, route/auth/quota/billing/streaming parity, expand/contract migrations compatible with N and N-1, singleton ownership for background jobs, authenticated canaries, and graceful draining/reconnection of SSE and WebSocket clients remain mandatory. nginx must not automatically retry non-idempotent requests.
