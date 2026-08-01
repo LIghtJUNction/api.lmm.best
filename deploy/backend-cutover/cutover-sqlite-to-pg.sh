@@ -69,7 +69,7 @@ if ((RUN_AS_TRANSIENT)); then
   [[ $(sha256sum "$durable" | awk '{print $1}') == "$hash" ]] || die "durable candidate env checksum mismatch"
   exec systemd-run --unit="lmm-api-cutover-${REVISION}" --collect \
     --property=Type=oneshot --property=TimeoutStartSec=2h \
-    --property=OnFailure=lmm-api-cutover-reconcile.service -- \
+    --property=OnFailure=lmm-api-cutover-recover.service -- \
     "$SELF" --candidate-env "$durable" --revision "$REVISION" --schema "$SCHEMA"
 fi
 
@@ -204,11 +204,15 @@ validate_boundary() {
   [[ $candidate_f == candidate_sha256="$marker_hash" && $marker_hash == "$candidate_hash" ]] || die "PostgreSQL boundary candidate mismatch"
   [[ $crossed_f =~ ^crossed_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || die "PostgreSQL boundary timestamp is unsafe"
 }
-validate_reconcile_assets() {
+validate_reconcile_audit_dir() {
   [[ -d $AUDIT_DIR && ! -L $AUDIT_DIR ]] || die "journal audit directory is absent or unsafe"
+}
+validate_saved_sqlite_env() {
   [[ -f $OLD_ENV && ! -L $OLD_ENV && $(file_hash "$OLD_ENV") == "$old_env_hash" ]] || die "saved SQLite environment checksum mismatch"
-  [[ -f $durable_candidate && ! -L $durable_candidate && $(file_hash "$durable_candidate") == "$candidate_hash" ]] || die "durable candidate environment checksum mismatch"
   [[ $(stat -c %u "$OLD_ENV") == "$config_owner" && $(stat -c %a "$OLD_ENV") =~ ^(600|400)$ ]] || die "saved SQLite environment is unsafe"
+}
+validate_durable_candidate() {
+  [[ -f $durable_candidate && ! -L $durable_candidate && $(file_hash "$durable_candidate") == "$candidate_hash" ]] || die "durable candidate environment checksum mismatch"
   [[ $(stat -c %u "$durable_candidate") == "$config_owner" && $(stat -c %a "$durable_candidate") =~ ^(600|400)$ ]] || die "durable candidate environment is unsafe"
 }
 write_boundary() {
@@ -216,21 +220,25 @@ write_boundary() {
     "transaction=$transaction revision=$REVISION schema=$SCHEMA candidate_sha256=$candidate_hash crossed_at=$(date -u +%FT%TZ)"
 }
 reconcile_transaction() {
-  local current_hash= service_was_active=0 forward=0
+  local current_hash='' forward=0
   parse_journal
-  validate_reconcile_assets
+  validate_reconcile_audit_dir
   current_hash=$(file_hash "$GO_ENV") || die "active Go environment is absent or unsafe"
   validate_boundary && forward=1
   [[ $current_hash != "$candidate_hash" ]] || forward=1
+  case $phase in
+    PG_WRITE_BOUNDARY|PG_ENV_INSTALLED|FORWARD_READY|FORWARD_RECOVERY_REQUIRED|COMPLETE) forward=1 ;;
+  esac
 
   if ((forward)); then
+    validate_durable_candidate
     if [[ ! -e $BOUNDARY ]]; then
       write_boundary
     else
       validate_boundary
     fi
     if [[ $current_hash != "$candidate_hash" ]]; then
-      service_active && { systemctl stop "$GO_UNIT"; service_was_active=1; }
+      service_active && systemctl stop "$GO_UNIT"
       atomic_copy "$durable_candidate" "$GO_ENV" 0600
     fi
     [[ $(file_hash "$GO_ENV") == "$candidate_hash" ]] || die "candidate environment publication failed"
@@ -246,8 +254,9 @@ reconcile_transaction() {
     return 0
   fi
 
+  validate_saved_sqlite_env
   if [[ $current_hash != "$old_env_hash" ]]; then
-    service_active && { systemctl stop "$GO_UNIT"; service_was_active=1; }
+    service_active && systemctl stop "$GO_UNIT"
     atomic_copy "$OLD_ENV" "$GO_ENV" 0600
   fi
   [[ $(file_hash "$GO_ENV") == "$old_env_hash" ]] || die "saved SQLite environment restoration failed"
@@ -256,9 +265,12 @@ reconcile_transaction() {
   if ((PREPARE_START)); then
     return 0
   fi
-  if ! service_active; then start_and_health || die "SQLite-backed Go API did not become healthy"; fi
+  if service_active; then
+    curl --fail --silent --max-time 10 "$CANARY_ORIGIN/api/status" >/dev/null || die "SQLite-backed Go API is not healthy"
+  else
+    start_and_health || die "SQLite-backed Go API did not become healthy"
+  fi
   write_result "FAILED_ROLLED_BACK_SQLITE reconciled=1"
-  : "$service_was_active"
 }
 
 mkdir -p "$STATE_ROOT" "${LOCK_FILE%/*}"
@@ -266,8 +278,8 @@ exec 9>"$LOCK_FILE"
 flock -n 9 || die "another backend cutover is running"
 
 if ((RECONCILE_ONLY)); then
-  if [[ ! -e $JOURNAL ]]; then
-    [[ ! -e $GATE ]] || die "cutover gate exists without a journal; manual inspection is required"
+  if [[ ! -e $JOURNAL && ! -L $JOURNAL ]]; then
+    [[ ! -e $GATE && ! -L $GATE ]] || die "cutover gate exists without a journal; manual inspection is required"
     echo "No interrupted backend cutover requires reconciliation"
     exit 0
   fi
@@ -276,7 +288,8 @@ if ((RECONCILE_ONLY)); then
   exit 0
 fi
 
-[[ ! -e $BOUNDARY ]] || die "a previous PostgreSQL write boundary exists; automatic SQLite cutover is permanently disabled"
+[[ ! -e $GATE && ! -L $GATE ]] || die "a cutover gate already exists; run --reconcile-only before starting a new transaction"
+[[ ! -e $BOUNDARY && ! -L $BOUNDARY ]] || die "a previous PostgreSQL write boundary exists; automatic SQLite cutover is permanently disabled"
 for file in "$ARTIFACT_ENV" "$GO_ENV" "$SQLITE_SOURCE" "$MIGRATION_ENV" "$CANARY_TOKEN_FILE" "$MIGRATOR" "$MANIFEST" "$BASELINE" "$CATALOG_SQL"; do
   [[ -f $file && ! -L $file ]] || die "required regular file is absent or unsafe: $file"
 done
@@ -341,7 +354,9 @@ recover() {
   local failure_status=$?
   trap - ERR EXIT
   ((failure_status != 0)) || exit 0
-  if reconcile_transaction; then
+  # Keep reconciliation's die/exit contained so an unsuccessful recovery can
+  # still leave a durable operator-attention result from the original process.
+  if (reconcile_transaction); then
     exit "$failure_status"
   fi
   atomic_text "$AUDIT_DIR/NEEDS_ATTENTION" 0600 "durable cutover reconciliation failed"

@@ -9,30 +9,67 @@ database role, final maintenance window, and operator approval are present.
 ## State and rollback law
 
 The transaction runs outside the initiating SSH/API connection and writes a
-durable journal under `/var/lib/lmm-api-cutover` plus private results under
-`/var/log/lmm-api-cutover/<transaction>/`.
+strict, non-secret durable journal under `/var/lib/lmm-api-cutover` plus private
+results under `/var/log/lmm-api-cutover/<transaction>/`. Every non-dry-run path
+first copies the candidate environment into the root-owned
+`/var/lib/lmm-api-cutover/artifacts/` directory and verifies its SHA-256. The
+journal records only a version, generated transaction ID, phase, revision,
+schema, and the candidate/saved-environment hashes; it is parsed defensively and
+is never sourced.
 
 1. `PREFLIGHT`: validate exact assets, current health, candidate environment,
    PostgreSQL/Valkey services, DSN identity, and a fresh admin canary token.
-2. `FREEZING_WRITES`: stop the only Go writer and confirm it is inactive.
-3. Run an offline WAL checkpoint, reject remaining SQLite sidecars, run
+2. `GATED`: durably create `cutover-in-progress`. The installed
+   `lmm-api.service` `ExecCondition` prevents an ordinary start while the
+   transaction direction is ambiguous.
+3. `FREEZING_WRITES`: stop the only Go writer and confirm it is inactive.
+4. Run an offline WAL checkpoint, reject remaining SQLite sidecars, run
    `quick_check`, and create a hash-verified private SQLite backup.
-4. `COPYING_TO_POSTGRES`: transactionally create a fresh versioned schema,
+5. `COPYING_TO_POSTGRES`: transactionally create a fresh versioned schema,
    COPY all 34 tables, set 29 sequences, validate the catalog, and independently
    compare counts, BLAKE3 hashes, and financial aggregates.
-5. Atomically install the full candidate Go environment. The preparer permits
-   only `SQL_DSN` and `REDIS_CONN_STRING` to differ from the current environment.
-6. Durably write `PG_WRITE_BOUNDARY`, then start Go. Startup may execute GORM
-   migrations and background jobs; from this exact marker onward SQLite is no
-   longer a legal automatic rollback target.
-7. Require public `/api/status` and authenticated `/api/user/self` canaries,
+6. Durably write `PG_WRITE_BOUNDARY` **before** publishing any environment that
+   can start Go on PostgreSQL. Startup may execute GORM migrations and
+   background jobs; from this exact marker onward SQLite is no longer a legal
+   automatic rollback target.
+7. Hash-verify and atomically publish the staged candidate environment, clear
+   the gate only after the direction is unambiguous, then start Go.
+8. Require public `/api/status` and authenticated `/api/user/self` canaries,
    then publish `SUCCESS_POSTGRES`.
 
 Any failure before `PG_WRITE_BOUNDARY` atomically restores the old environment,
-starts Go on SQLite, and verifies health. Any failure after the marker retains
-the PostgreSQL environment, attempts forward restart, writes
-`FAILED_FORWARD_ONLY`, and creates `NEEDS_ATTENTION`. The marker permanently
-blocks rerunning an automatic SQLite cutover.
+starts Go on SQLite, and verifies health. Any failure at or after the marker
+hash-verifies and publishes only the PostgreSQL environment, starts Go, and runs
+both canaries; it never touches the SQLite environment. A current environment
+whose hash equals the durable candidate is also treated as evidence that
+PostgreSQL may have been activated, even if an older coordinator left no marker;
+reconciliation first recreates the marker and proceeds only forward. A marker
+permanently blocks rerunning an automatic SQLite cutover.
+
+`lmm-api-cutover --reconcile-only` is an explicit, idempotent manual recovery
+entry point. It needs no candidate path, revision, or schema from the initiating
+shell: those identities come from the strictly validated journal and generated
+state paths. Before the marker it restores the exact hash-verified saved SQLite
+environment and health. At or after the marker it converges only forward to the
+immutable candidate, service health, public canary, authenticated canary, and a
+durable result. Repeating reconciliation after either `ROLLED_BACK_SQLITE` or
+`COMPLETE` is safe.
+
+The installer enables `lmm-api-cutover-reconcile.service` before
+`lmm-api.service` at boot. A second oneshot runs after the API starts to finish
+health and authenticated canaries. If boot-time preparation cannot parse or
+verify the state, the gate remains present and `lmm-api.service` cannot start;
+the API cannot race ahead of reconciliation after reboot. Transient cutover
+failure independently triggers `lmm-api-cutover-recover.service`, a full
+reconciler that is separate from the already-completed boot prepare unit.
+
+The `lmm-api.service` start condition also enforces the activation law on every
+start, even when no in-progress gate exists. PostgreSQL in the active Go
+environment is rejected without a boundary. When a boundary exists it must be
+a root-owned private regular file in the exact strict metadata format, and the
+active environment SHA-256 must equal its `candidate_sha256`; a symlink,
+malformed marker, unsafe mode, SQLite environment, or hash mismatch blocks the
+start without echoing marker or environment contents.
 
 ## Target ownership
 
@@ -55,6 +92,15 @@ cargo build --release --locked -p lmm-db-migrate
 sudo deploy/backend-cutover/install-lmm-api-cutover.sh \
   --migrator "$PWD/target/release/lmm-db-migrate"
 ```
+
+Installation stages and validates every managed script, schema asset, example,
+unit, drop-in, and command link beside its destination before publication. It
+backs up the exact prior presence, bytes, type, ownership, and mode, uses
+same-filesystem atomic replacements, then reloads systemd and enables the two
+boot units. A publish, daemon-reload, or enable failure restores all managed
+paths and their previous enablement state and reloads the restored systemd
+view. Actual `cutover.conf`, `migration.env`, candidate environments, and canary
+tokens are never installer-managed and are not overwritten.
 
 Create `/etc/lmm-api-cutover/migration.env` and `cutover.conf` from the checked-in
 examples with mode `0600 root:root`. Store a newly issued admin bearer token in
@@ -93,11 +139,27 @@ The systemd entry returns immediately. Treat the durable result, journal,
 service health, active database identity, and authenticated canary as evidence;
 do not rely on a transient unit that may already have been collected.
 
+If a transient unit or its initiating control channel is lost, inspect and, if
+needed, invoke the independent reconciler:
+
+```bash
+sudo lmm-api-cutover --reconcile-only
+```
+
+Systemd detachment makes the maintenance transaction survive loss of SSH or an
+API control channel. It does **not** make this one-time SQLite freeze a
+zero-downtime deployment: stopping the only Go process disconnects active HTTP,
+SSE, and WebSocket connections, which clients must retry or reconnect.
+
 ## Required rehearsal before production
 
 Run the repository fault tests, then repeat the complete transaction against an
 isolated SQLite fixture and isolated PostgreSQL database on ArchDmit. Prove at
-least: migration failure restores SQLite, candidate-env failure restores SQLite,
-post-boundary start/canary failure never restores SQLite, loss of the initiating
-connection does not stop progress, Go and Rust share Valkey counters, and every
-audit artifact contains no DSN, token, row value, or financial value.
+least: death after gate/stop/backup and immediately before the marker restores
+SQLite; death at the marker, candidate publication, service start, or either
+canary never restores SQLite; boot ordering cannot bypass the gate; loss of the
+initiating connection does not stop progress; Go and Rust share Valkey counters;
+and every audit artifact contains no DSN, token, row value, or financial value.
+Repository fake-systemd tests are necessary but not production authorization.
+Production remains prohibited until this isolated rehearsal passes and the
+operator explicitly approves the maintenance cutover.

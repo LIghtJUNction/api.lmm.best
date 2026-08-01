@@ -1,0 +1,7 @@
+[Unit]
+Description=Recover a failed lmm-api database cutover transaction
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/lmm-api-cutover/cutover-sqlite-to-pg.sh --reconcile-only
