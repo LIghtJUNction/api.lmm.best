@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "sqlite_source": {
+    "backup": "20260801T002129+0800/one-api.db",
+    "sha256": "d05517e4b9ed9866a8b64ae1188ad38534772629ba0625c335571742a9dfc223"
+  },
+  "generator_inputs": {
+    "model_go_aggregate_sha256": "92579488068a9623d9afd05587a73218a6a369df47a3b924c4b4faf907b9e92f",
+    "go_module_aggregate_sha256": "4a172126c946cc626b68436a2ec3a8b140387abbfa5a8afdc9bf1418902512fe",
+    "postgres_major": 18
+  },
+  "artifacts": {
+    "export-postgres-catalog.sql": "21144a5efdf828c602b6bd8f09fd2ec77dbca4c409f71a1870d2cb28e045396d",
+    "postgresql-baseline.sql": "aafa99aeb74de5c78c6aadd0ee877f236c54ca6d254d90fb06e3f8763d8e5239",
+    "table-map.json": "39770f83ef1e007bf0eb09bc62264f1dd4cec602afd7c416daeddffe54b332d5"
+  },
+  "method": "Run the current Go/GORM AutoMigrate set against an empty native PostgreSQL 18 database, export schema-only SQL, and capture SQLite catalog metadata read-only from the named offline backup."
+}
