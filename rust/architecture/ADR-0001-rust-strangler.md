@@ -9,14 +9,16 @@ vertical slice at a time and the tracked Gin route manifest is the migration
 ledger. A route has exactly one active implementation and one write owner;
 traffic splitting never causes both versions to execute a mutation.
 
-The route baseline records method, path, final Gin handler, explicit ownership
-metadata, and hashes of all router/middleware source. Gin does not expose its
-full middleware chain through `Routes()`, so auth, body-limit and streaming
-changes are detected conservatively through source drift and require a human
-ownership review; the manifest does not claim semantic middleware parsing.
-Ownership rules have explicit priorities and exact/prefix match semantics. CI
-requires every registered Go route to have exactly one highest-priority owner;
-unmatched routes, same-priority ambiguity, and dead rules fail validation.
+The immutable route baseline records method, path, and final Gin handler from
+the final indexed Go router, with a separately tracked SHA-256. The ignored
+local Go backup is never a CI or release dependency. A second static inventory
+records Rust implementation coverage without implying production ownership.
+Gin did not expose its full middleware chain through `Routes()`, so auth,
+body-limit, and streaming compatibility still require explicit review. The
+manifest does not claim semantic middleware parsing. Ownership rules have
+explicit priorities and exact/prefix match semantics. CI requires every frozen
+route to have exactly one highest-priority owner; unmatched routes,
+same-priority ambiguity, and dead rules fail validation.
 
 PostgreSQL is the sole durable source of truth. Valkey is non-authoritative:
 cache loss must affect latency, never correctness, identity, quota, or billing.

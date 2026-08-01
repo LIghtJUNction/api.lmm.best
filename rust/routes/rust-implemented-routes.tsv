@@ -1,0 +1,4 @@
+# method	path	Rust handler
+GET	/api/about	lmm_api_rs::http::about
+GET	/api/home_page_content	lmm_api_rs::http::home_page_content
+GET	/api/notice	lmm_api_rs::http::notice

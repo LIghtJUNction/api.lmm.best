@@ -27,6 +27,12 @@ cargo test --all-targets --all-features --locked
 ./scripts/check-go-route-manifest.sh
 ```
 
+`routes/legacy-go-routes.tsv` is the immutable 356-route compatibility oracle
+frozen from the final indexed Go router. Its SHA-256 is tracked separately, so
+route validation remains Go-independent after the source moves to the ignored
+local backup. `routes/rust-implemented-routes.tsv` records implementation
+coverage; it does not claim production traffic ownership.
+
 `/livez` performs no dependency I/O. `/readyz` always requires PostgreSQL, the
 schema reader window, and read permission on every table required by an
 implemented Rust slice (currently `options`); a generic `SELECT 1` is not

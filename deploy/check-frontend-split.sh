@@ -6,6 +6,7 @@ config=$repo/deploy/nginx/lmm-api-locations.conf
 mime_types=$repo/deploy/nginx/mime.types
 release=$repo/deploy/frontend-release.sh
 nginx_installer=$repo/deploy/nginx/install-nginx-split.sh
+route_manifest=$repo/rust/routes/legacy-go-routes.tsv
 
 fail() { printf 'split-check: %s\n' "$*" >&2; exit 1; }
 assert_literal() { grep -Fq -- "$1" "$2" || fail "$2 is missing: $1"; }
@@ -68,13 +69,16 @@ if grep -Fq 'location ^~ /jimeng {' "$config"; then
   fail 'broad /jimeng prefix would also proxy /jimengx'
 fi
 
-# Keep the nginx split synchronized with every top-level Gin router family.
-while IFS= read -r route; do
+# Keep the nginx split synchronized with every route in the immutable legacy
+# backend surface. This remains available after the Go source is archived.
+while IFS=$'\t' read -r method route handler; do
+  [[ -n $method && -n $route && -n $handler ]] ||
+    fail "malformed frozen backend route: $method $route $handler"
   case $route in
-    /|/api|/api/*|/v1|/v1/*|/v1beta|/v1beta/*|/pg|/pg/*|/mj|/mj/*|/suno|/suno/*|/kling/v1|/kling/v1/*|jimeng|/jimeng|/jimeng/*|/dashboard|/dashboard/*|/:mode/mj) ;;
+    /|/api|/api/*|/v1|/v1/*|/v1beta|/v1beta/*|/pg|/pg/*|/mj|/mj/*|/suno|/suno/*|/kling/v1|/kling/v1/*|jimeng|/jimeng|/jimeng/*|/dashboard|/dashboard/*|/:mode/mj|/:mode/mj/*) ;;
     *) fail "unclassified backend router family: $route" ;;
   esac
-done < <(sed -nE 's/.*router\.Group\("?([^" ]+)"?\).*/\1/p' "$repo"/router/*.go | sort -u)
+done < "$route_manifest"
 
 bash -n "$release"
 bash -n "$nginx_installer"
