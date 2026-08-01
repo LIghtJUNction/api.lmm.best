@@ -47,11 +47,17 @@ impl ReadinessProbe for InfrastructureProbe {
         let max: i64 = row
             .try_get("max_reader_version")
             .map_err(|_| failed("schema"))?;
-        if (min..=max).contains(&self.schema_contract) {
-            Ok(())
-        } else {
-            Err(failed("schema"))
+        if !(min..=max).contains(&self.schema_contract) {
+            return Err(failed("schema"));
         }
+        tokio::time::timeout(
+            self.timeout,
+            sqlx::query("SELECT value FROM options WHERE FALSE").execute(&self.pg),
+        )
+        .await
+        .map_err(|_| failed("schema"))?
+        .map_err(|_| failed("schema"))?;
+        Ok(())
     }
 }
 fn failed(dependency: &'static str) -> ProbeError {
