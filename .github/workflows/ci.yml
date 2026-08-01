@@ -74,14 +74,23 @@ jobs:
         with:
           repository: ${{ github.event.pull_request.base.repo.full_name }}
           ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.ref || github.ref }}
+      - name: Install native PostgreSQL tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql postgresql-client
+          echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
       - name: Set up Rust
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - name: Verify migration artifact provenance
+        run: crates/lmm-db-migrate/scripts/verify-provenance.sh
       - name: Format
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --all-targets --all-features --locked
+      - name: Rehearse PostgreSQL baseline and canonical equivalence
+        run: bash crates/lmm-db-migrate/scripts/rehearse-postgres.sh
 
   frontend:
     name: Frontend typecheck and test
