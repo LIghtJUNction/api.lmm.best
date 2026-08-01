@@ -2,6 +2,9 @@
 //! Stable HTTP contracts shared across the migration boundary.
 use serde::Serialize;
 
+/// Typed cross-provider relay protocol contracts and conversions.
+pub mod relay;
+
 /// Standard error envelope returned by the Rust HTTP edge.
 #[derive(Debug, Serialize)]
 pub struct ErrorEnvelope {
