@@ -33,9 +33,13 @@ import {
   isStripePayment,
   isWaffoPayment,
   isWaffoPancakePayment,
+  cancelPaymentCheckout,
+  isSafeHttpCheckoutUrl,
+  redirectToPaymentCheckout,
+  reservePaymentCheckout,
   submitPaymentForm,
 } from '../lib'
-import type { AmountRequest, AmountResponse } from '../types'
+import type { AmountRequest, AmountResponse, PaymentResponse } from '../types'
 
 // ============================================================================
 // Payment Hook
@@ -108,11 +112,13 @@ export function usePayment() {
   // Process payment
   const processPayment = useCallback(
     async (topupAmount: number, paymentType: string) => {
+      let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
       try {
         setProcessing(true)
 
         const isStripe = isStripePayment(paymentType)
         const amount = Math.floor(topupAmount)
+        checkout = reservePaymentCheckout()
 
         const response = isStripe
           ? await requestStripePayment({
@@ -125,29 +131,43 @@ export function usePayment() {
             })
 
         if (!isApiSuccess(response)) {
+          cancelPaymentCheckout(checkout)
           toast.error(response.message || i18next.t('Payment request failed'))
           return false
         }
 
         // Handle Stripe payment
         if (isStripe && response.data?.pay_link) {
-          window.open(response.data.pay_link as string, '_blank')
+          if (!redirectToPaymentCheckout(checkout, response.data.pay_link)) {
+            cancelPaymentCheckout(checkout)
+            toast.error(i18next.t('Invalid payment redirect URL'))
+            return false
+          }
           toast.success(i18next.t('Redirecting to payment page...'))
           return true
         }
 
         // Handle non-Stripe payment
         if (!isStripe && response.data) {
-          const url = (response as unknown as { url?: string }).url
-          if (url) {
-            submitPaymentForm(url, response.data)
+          const url = (response as PaymentResponse).url
+          if (isSafeHttpCheckoutUrl(url)) {
+            if (!submitPaymentForm(url, response.data, checkout.target)) {
+              cancelPaymentCheckout(checkout)
+              toast.error(i18next.t('Invalid payment redirect URL'))
+              return false
+            }
             toast.success(i18next.t('Redirecting to payment page...'))
             return true
           }
         }
 
+        cancelPaymentCheckout(checkout)
+        toast.error(i18next.t('Invalid payment redirect URL'))
         return false
       } catch {
+        if (checkout) {
+          cancelPaymentCheckout(checkout)
+        }
         toast.error(i18next.t('Payment request failed'))
         return false
       } finally {

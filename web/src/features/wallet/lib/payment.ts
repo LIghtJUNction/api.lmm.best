@@ -23,6 +23,7 @@ import {
   DEFAULT_MIN_TOPUP,
 } from '../constants'
 import type { PaymentMethod, PresetAmount, TopupInfo } from '../types'
+import { getPaymentCurrencyLabel } from './format'
 
 // ============================================================================
 // Payment Processing Functions
@@ -43,14 +44,21 @@ function isSafariBrowser(): boolean {
  */
 export function submitPaymentForm(
   url: string,
-  params: Record<string, unknown>
-): void {
+  params: Record<string, unknown>,
+  target?: string | null
+): boolean {
+  if (!isSafeHttpCheckoutUrl(url)) {
+    return false
+  }
+
   const form = document.createElement('form')
   form.action = url
   form.method = 'POST'
 
-  // Don't open in new tab for Safari
-  if (!isSafariBrowser()) {
+  if (target) {
+    form.target = target
+  } else if (target === undefined && !isSafariBrowser()) {
+    // Preserve the legacy behavior for callers that do not reserve a window.
     form.target = '_blank'
   }
 
@@ -66,6 +74,83 @@ export function submitPaymentForm(
   document.body.appendChild(form)
   form.submit()
   document.body.removeChild(form)
+  return true
+}
+
+/** Reject relative and non-http(s) redirect targets returned by a gateway. */
+export function isSafeHttpCheckoutUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return false
+  }
+
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+export type PaymentCheckout = {
+  /** A reserved popup target, or null when the safe fallback is same-tab. */
+  target: string | null
+  popup: Window | null
+}
+
+/**
+ * Reserve a popup while the click is still a user gesture. Gateway responses
+ * arrive asynchronously, so opening a new window after awaiting them is
+ * routinely blocked by browsers. Safari keeps the legacy same-tab flow.
+ */
+export function reservePaymentCheckout(): PaymentCheckout {
+  if (isSafariBrowser()) {
+    return { target: null, popup: null }
+  }
+
+  const target = `payment_checkout_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2)}`
+  const popup = window.open('about:blank', target, 'noopener,noreferrer')
+
+  // Defense in depth for browsers that return a Window despite the features.
+  // The checkout must never receive a reference to the application window.
+  if (popup) {
+    try {
+      popup.opener = null
+    } catch {
+      // Cross-origin browser implementations may expose a read-only opener.
+    }
+  }
+
+  return popup ? { target, popup } : { target: null, popup: null }
+}
+
+/** Close an unused reserved popup after a failed payment request. */
+export function cancelPaymentCheckout(checkout: PaymentCheckout): void {
+  checkout.popup?.close()
+}
+
+/**
+ * Navigate a reserved checkout window. If the browser declined the popup,
+ * fall back to a safe same-tab navigation rather than trying another blocked
+ * popup after the async request completes.
+ */
+export function redirectToPaymentCheckout(
+  checkout: PaymentCheckout,
+  url: unknown
+): boolean {
+  if (!isSafeHttpCheckoutUrl(url)) {
+    return false
+  }
+
+  if (checkout.popup && !checkout.popup.closed) {
+    checkout.popup.location.href = url
+    checkout.popup.focus()
+  } else {
+    window.location.href = url
+  }
+
+  return true
 }
 
 /**
@@ -91,6 +176,21 @@ export function isWaffoPayment(paymentType: string): boolean {
  */
 export function isWaffoPancakePayment(paymentType: string): boolean {
   return paymentType === PAYMENT_TYPES.WAFFO_PANCAKE
+}
+
+/**
+ * The frozen Go Waffo Pancake checkout always creates USD orders. Do not let
+ * a CNY-configured page label that USD order as CNY or send it to checkout.
+ */
+export function isWaffoPancakeCurrencySupported(): boolean {
+  return getPaymentCurrencyLabel() === 'USD'
+}
+
+/** Provider-specific currency policy; other gateway providers retain CNY. */
+export function isPaymentMethodCurrencySupported(paymentType: string): boolean {
+  return (
+    !isWaffoPancakePayment(paymentType) || isWaffoPancakeCurrencySupported()
+  )
 }
 
 export interface PaymentProcessors {

@@ -21,6 +21,11 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { requestCreemPayment, isApiSuccess } from '../api'
+import {
+  cancelPaymentCheckout,
+  redirectToPaymentCheckout,
+  reservePaymentCheckout,
+} from '../lib'
 
 /**
  * Hook for handling Creem payment processing
@@ -29,22 +34,30 @@ export function useCreemPayment() {
   const [processing, setProcessing] = useState(false)
 
   const processCreemPayment = useCallback(async (productId: string) => {
-    setProcessing(true)
+    let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
     try {
+      setProcessing(true)
+      checkout = reservePaymentCheckout()
       const response = await requestCreemPayment({
         product_id: productId,
         payment_method: 'creem',
       })
 
       if (isApiSuccess(response) && response.data?.checkout_url) {
-        window.open(response.data.checkout_url, '_blank')
+        if (!redirectToPaymentCheckout(checkout, response.data.checkout_url)) {
+          cancelPaymentCheckout(checkout)
+          toast.error(i18next.t('Invalid payment redirect URL'))
+          return false
+        }
         toast.success(i18next.t('Redirecting to Creem checkout...'))
         return true
       }
 
+      cancelPaymentCheckout(checkout)
       toast.error(response.message || i18next.t('Payment request failed'))
       return false
     } catch (_error) {
+      if (checkout) cancelPaymentCheckout(checkout)
       toast.error(i18next.t('Payment request failed'))
       return false
     } finally {
