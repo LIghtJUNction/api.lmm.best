@@ -53,6 +53,8 @@ EnvironmentFile=/etc/lmm-api/valkey.env
 
 Apply this only as part of the reviewed backend blue/green deployment. Restarting lmm-api merely to attach Valkey would violate the seamless-upgrade boundary. All concurrently active backend slots must use the same Valkey URL and `CRYPTO_SECRET`.
 
+As verified on 2026-08-01, the production Go environment does not yet define `REDIS_CONN_STRING`; its global API limiter is therefore process-local. Rust already uses the dedicated 6380 instance. Partial Go/Rust route ownership is blocked until the autonomous backend cutover attaches Go (or its PG-compatible replacement) to the same dedicated Valkey without relying on the initiating API/SSH connection.
+
 ## Rollback
 
 List retained backup identifiers, review the selected manifest, then restore it:
