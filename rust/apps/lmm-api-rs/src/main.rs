@@ -1,9 +1,11 @@
 mod config;
 mod http;
 mod probes;
+mod public_content;
 use config::Config;
 use http::AppState;
 use probes::InfrastructureProbe;
+use public_content::{PgPublicContentRepository, ValkeyPublicContentCache};
 use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, io, sync::Arc};
 use tokio::{net::TcpListener, sync::watch};
@@ -16,8 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_lazy(&config.database_url)?;
     let valkey = redis::Client::open(config.valkey_url.as_str())?;
     let probe = InfrastructureProbe::new(
-        pg,
-        valkey,
+        pg.clone(),
+        valkey.clone(),
         config.schema_contract,
         config.dependency_timeout,
     );
@@ -28,6 +30,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         http::router(AppState {
             readiness: Arc::new(probe),
+            public_content: Arc::new(lmm_application::PublicContentService::new(
+                Arc::new(PgPublicContentRepository::new(pg)),
+                Arc::new(ValkeyPublicContentCache::new(
+                    valkey,
+                    config.public_content_cache_ttl,
+                )),
+            )),
             slot: config.slot.clone(),
         }),
     )

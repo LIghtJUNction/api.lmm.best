@@ -9,6 +9,7 @@ pub struct Config {
     pub schema_contract: i64,
     pub dependency_timeout: Duration,
     pub drain_timeout: Duration,
+    pub public_content_cache_ttl: Duration,
 }
 
 impl std::fmt::Debug for Config {
@@ -22,6 +23,7 @@ impl std::fmt::Debug for Config {
             .field("schema_contract", &self.schema_contract)
             .field("dependency_timeout", &self.dependency_timeout)
             .field("drain_timeout", &self.drain_timeout)
+            .field("public_content_cache_ttl", &self.public_content_cache_ttl)
             .finish()
     }
 }
@@ -46,6 +48,7 @@ impl Config {
                 .map_err(|_| ConfigError::Invalid("LMM_SCHEMA_CONTRACT"))?,
             dependency_timeout: seconds("LMM_DEPENDENCY_TIMEOUT_SECONDS", 2)?,
             drain_timeout: seconds("LMM_DRAIN_TIMEOUT_SECONDS", 30)?,
+            public_content_cache_ttl: positive_seconds("LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS", 5)?,
         })
     }
 }
@@ -65,6 +68,14 @@ fn seconds(name: &'static str, default: u64) -> Result<Duration, ConfigError> {
     )?;
     Ok(Duration::from_secs(value))
 }
+fn positive_seconds(name: &'static str, default: u64) -> Result<Duration, ConfigError> {
+    let value = seconds(name, default)?;
+    if value.is_zero() {
+        Err(ConfigError::Invalid(name))
+    } else {
+        Ok(value)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -81,6 +92,7 @@ mod tests {
             schema_contract: 1,
             dependency_timeout: Duration::from_secs(2),
             drain_timeout: Duration::from_secs(30),
+            public_content_cache_ttl: Duration::from_secs(5),
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("secret"));

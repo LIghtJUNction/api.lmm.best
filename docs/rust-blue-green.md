@@ -89,3 +89,9 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 - `/api/status` 继续返回 200，`/v1/models` 继续由 Go 鉴权并返回 401；公网访问 Rust 内部探针返回 403。Go 服务在整场演练中 PID 未变化且 `NRestarts=0`。
 
 这份记录只证明内部探针蓝绿事务和崩溃恢复可用，不代表 PostgreSQL 生产迁移、Rust 业务路由兼容或完整后端切换已经完成。
+
+## 当前 Rust 业务迁移状态
+
+Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只读垂直切片，用于 direct differential testing。实现按 domain content kind → application repository/cache ports → SQLx PostgreSQL 与 Redis/Valkey adapters → Axum transport 分层。Valkey 使用 `lmm:public-content:v1:*` 短 TTL cache-aside；miss 或故障回源 PostgreSQL，缓存写失败不影响响应，PG 始终是唯一权威来源。
+
+这些路径尚未加入 nginx Rust ownership。生产 `/api/` 仍全部进入 Go；在生产 PG 切换、差分测试和 Rust 全局 API rate limit 完成前不得改变这一点。
