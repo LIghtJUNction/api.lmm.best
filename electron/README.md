@@ -1,81 +1,16 @@
-# LMM API Electron Desktop App
+# Electron embedded backend retirement
 
-This directory contains the Electron wrapper for LMM API, providing a native desktop application with system tray support for Windows, macOS, and Linux.
+The Electron embedded-backend distribution is retired. It is not a supported deployment target and no release workflow publishes Electron installers.
 
-## Prerequisites
+The production backend is `lmm-api-rs`. It requires both of these externally managed services:
 
-### 1. Go Binary (Required)
-The Electron app requires the compiled Go binary to function. You have two options:
+- PostgreSQL, configured through `DATABASE_URL`.
+- Valkey, configured through `VALKEY_URL`.
 
-**Option A: Use existing binary (without Go installed)**
-```bash
-# If you have a pre-built binary (e.g., new-api-macos)
-cp ../new-api-macos ../new-api
-```
+It also requires the remaining Rust runtime settings, including `LMM_RS_LISTEN_ADDR`, `LMM_RS_SLOT`, and `LMM_SCHEMA_CONTRACT`. Use the Rust release bundle or the container deployment, then access the deployed web endpoint with a supported browser.
 
-**Option B: Build from source (requires Go)**
-TODO
+## Fail-closed behavior
 
-### 2. Electron Dependencies
-```bash
-cd electron
-npm install
-```
+`./build.sh` and every `npm run build*` command exit unsuccessfully. `main.js` only displays the retirement notice and exits. They never start a legacy backend, create a SQLite database, connect to Redis, or imply that PostgreSQL and Valkey are bundled locally.
 
-## Development
-
-Start the backend, the frontend, and Electron in separate terminals:
-```bash
-# Repository root
-go run main.go
-
-# Repository root
-make dev-web
-
-# electron/
-npm run dev-app
-```
-
-This will:
-- Use the Go backend on port 3000
-- Use the Rsbuild frontend development server on port 5173
-- Open an Electron window with DevTools enabled
-- Create a system tray icon (menu bar on macOS)
-- Store database in `../data/new-api.db`
-
-## Building for Production
-
-### Quick Build
-```bash
-# From electron/, build the frontend, Go binary, and desktop package
-./build.sh
-
-# Or package an existing binary for the current platform
-npm run build
-
-# Platform-specific builds
-npm run build:mac    # Creates .dmg and .zip
-npm run build:win    # Creates .exe installer
-npm run build:linux  # Creates .AppImage and .deb
-```
-
-### Build Output
-- Built applications are in `electron/dist/`
-- macOS: `.dmg` (installer) and `.zip` (portable)
-- Windows: `.exe` (installer) and portable exe
-- Linux: `.AppImage` and `.deb`
-
-## Configuration
-
-### Port
-Default port is 3000. To change, edit `main.js`:
-```javascript
-const PORT = 3000; // Change to desired port
-```
-
-### Database Location
-- **Development**: `../data/new-api.db` (project directory)
-- **Production**:
-  - macOS: `~/Library/Application Support/New API/data/`
-  - Windows: `%APPDATA%/New API/data/`
-  - Linux: `~/.config/New API/data/`
+The old desktop architecture depended on a backend that embedded the production web assets and owned a local SQLite database. The Rust service intentionally uses external PostgreSQL and Valkey, and the current Rust HTTP surface does not provide an equivalent safe self-contained desktop contract. Packaging remains disabled until a separately designed desktop architecture establishes those dependency, migration, upgrade, backup, and credential-management guarantees.

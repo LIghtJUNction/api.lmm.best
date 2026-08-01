@@ -28,26 +28,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let server = axum::serve(
         listener,
-        http::router(AppState {
-            readiness: Arc::new(probe),
-            valkey_readiness_policy: config.valkey_readiness_policy,
-            global_api_rate_limiter: Arc::new(ValkeyGlobalApiRateLimiter::new(
-                valkey.clone(),
-                config.valkey_readiness_policy,
-                config.global_api_rate_limit,
-                config.global_api_rate_limit_window,
-                config.dependency_timeout,
-            )),
-            public_content: Arc::new(lmm_application::PublicContentService::new(
-                Arc::new(PgPublicContentRepository::new(pg)),
-                Arc::new(ValkeyPublicContentCache::new(
-                    valkey,
-                    config.public_content_cache_ttl,
+        http::router_with_web(
+            AppState {
+                readiness: Arc::new(probe),
+                valkey_readiness_policy: config.valkey_readiness_policy,
+                global_api_rate_limiter: Arc::new(ValkeyGlobalApiRateLimiter::new(
+                    valkey.clone(),
+                    config.valkey_readiness_policy,
+                    config.global_api_rate_limit,
+                    config.global_api_rate_limit_window,
+                    config.dependency_timeout,
                 )),
-                config.dependency_timeout,
-            )),
-            slot: config.slot.clone(),
-        })
+                public_content: Arc::new(lmm_application::PublicContentService::new(
+                    Arc::new(PgPublicContentRepository::new(pg)),
+                    Arc::new(ValkeyPublicContentCache::new(
+                        valkey,
+                        config.public_content_cache_ttl,
+                    )),
+                    config.dependency_timeout,
+                )),
+                slot: config.slot.clone(),
+            },
+            config.web_dist_dir.clone(),
+        )
         .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))

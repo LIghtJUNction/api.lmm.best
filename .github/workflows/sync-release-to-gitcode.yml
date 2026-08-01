@@ -84,10 +84,6 @@ jobs:
 
           wait_for_workflow release.yml "Backend release"
 
-          if [[ "$GITHUB_REF_NAME" != *-* ]]; then
-            wait_for_workflow electron-build.yml "Electron release"
-          fi
-
       - name: Download GitHub release assets
         id: release
         env:

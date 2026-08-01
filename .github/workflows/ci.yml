@@ -2,7 +2,9 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, closed]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,110 +13,191 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  RUST_TOOLCHAIN: '1.88.0'
+
 jobs:
-  backend:
-    name: Backend vet, build, and test
-    if: github.event.action != 'closed' || github.event.pull_request.merged == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      GOWORK: 'off'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.ref || github.ref }}
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: |
-            go.sum
-            relaykit/go.sum
-
-      - name: Create frontend embed placeholder
-        run: |
-          mkdir -p web/dist
-          touch web/dist/index.html
-
-      - name: Vet root module
-        run: go vet ./...
-
-      - name: Vet relaykit independently
-        working-directory: relaykit
-        run: go vet ./...
-
-      - name: Build root module
-        run: go build ./...
-
-      - name: Build relaykit independently
-        working-directory: relaykit
-        run: go build ./...
-
-      - name: Test root and relaykit modules
-        run: make test
-
-      - name: Verify Go-to-Rust route ownership contract
-        run: rust/scripts/check-go-route-manifest.sh
-
-      - name: Verify backend cutover crash reconciliation
-        run: |
-          bash -n deploy/backend-cutover/*.sh
-          shellcheck deploy/backend-cutover/*.sh
-          bash deploy/backend-cutover/test-prepare-candidate-env.sh
-          bash deploy/backend-cutover/test-cutover.sh
-          bash deploy/backend-cutover/test-install-lmm-api-cutover.sh
-
   rust:
-    name: Rust migration workspace
-    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+    name: Rust workspace and PostgreSQL 18 contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: rust
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres-ci
+          POSTGRES_DB: lmm_rehearsal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d lmm_rehearsal"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.ref || github.ref }}
-      - name: Install native PostgreSQL tooling
+          fetch-depth: 0
+
+      - name: Install PostgreSQL client and JSON tooling
         run: |
           sudo apt-get update
-          sudo apt-get install --yes postgresql postgresql-client
-          echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
-      - name: Set up Rust
-        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
-      - name: Verify migration artifact provenance
-        run: crates/lmm-db-migrate/scripts/verify-provenance.sh
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Lint
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
-      - name: Test
-        run: cargo test --all-targets --all-features --locked
-      - name: Rehearse PostgreSQL baseline and canonical equivalence
-        run: bash crates/lmm-db-migrate/scripts/rehearse-postgres.sh
+          sudo apt-get install --yes postgresql-client jq
 
-  frontend:
-    name: Frontend typecheck and test
-    if: github.event.action != 'closed' || github.event.pull_request.merged == true
+      - name: Set up pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version --verbose
+
+      - name: Verify immutable route ownership evidence
+        run: bash rust/scripts/check-go-route-manifest.sh
+
+      - name: Report non-production Rust parity status
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          legacy=rust/routes/legacy-go-routes.tsv
+          implemented=rust/routes/rust-implemented-routes.tsv
+          ownership=rust/routes/ownership.tsv
+          parity_tmp="$(mktemp -d "${RUNNER_TEMP}/lmm-route-parity.XXXXXX")"
+          trap 'rm -rf "$parity_tmp"' EXIT
+
+          awk -F '\t' 'NF == 3 { print $1 "\t" $2 }' "$legacy" | sort -u > "$parity_tmp/legacy"
+          awk -F '\t' '$0 !~ /^#/ && NF == 3 { print $1 "\t" $2 }' "$implemented" | sort -u > "$parity_tmp/implemented"
+          legacy_count="$(wc -l < "$parity_tmp/legacy")"
+          implemented_count="$(wc -l < "$parity_tmp/implemented")"
+          missing_count="$(comm -23 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
+          extra_count="$(comm -13 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
+          rust_owned_count="$(awk -F '\t' '
+            FNR == NR {
+              if ($0 ~ /^#/ || NF == 0) next
+              priority[++rules] = $1 + 0
+              kind[rules] = $2
+              pattern[rules] = $3
+              owner[rules] = $4
+              next
+            }
+            {
+              path = $2
+              best = -1
+              winners = 0
+              for (rule = 1; rule <= rules; rule++) {
+                applies = (kind[rule] == "exact" && path == pattern[rule]) ||
+                          (kind[rule] == "prefix" && index(path, pattern[rule]) == 1)
+                if (!applies) continue
+                if (priority[rule] > best) {
+                  best = priority[rule]
+                  winners = 1
+                  winner = rule
+                } else if (priority[rule] == best) {
+                  winners++
+                }
+              }
+              if (winners == 1 && owner[winner] == "rust") rust_owned++
+            }
+            END { print rust_owned + 0 }
+          ' "$ownership" "$legacy")"
+
+          if [[ "$legacy_count" -eq 356 && "$implemented_count" -eq 356 &&
+                "$missing_count" -eq 0 && "$extra_count" -eq 0 &&
+                "$rust_owned_count" -eq 356 ]]; then
+            status="PRODUCTION-READY"
+            echo "::notice::Rust route parity is production-ready (356/356 implemented and Rust-owned)"
+          else
+            status="NON-PRODUCTION"
+            echo "::warning::Rust route parity is non-production: implemented=${implemented_count}/356, Rust-owned=${rust_owned_count}/356, missing=${missing_count}, extra=${extra_count}"
+          fi
+          echo "Rust route parity: ${status} — implemented ${implemented_count}/356; Rust-owned ${rust_owned_count}/356; missing ${missing_count}; extra ${extra_count}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify migration artifact provenance
+        run: bash rust/crates/lmm-db-migrate/scripts/verify-provenance.sh
+
+      - name: Check formatting
+        working-directory: rust
+        run: cargo fmt --all --check
+
+      - name: Lint workspace
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test workspace
+        working-directory: rust
+        run: cargo test --workspace --all-targets --all-features --locked
+
+      - name: Build Rust binaries
+        working-directory: rust
+        env:
+          LMM_BUILD_REVISION: ${{ github.sha }}
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Assert PostgreSQL 18 server
+        env:
+          PGPASSWORD: postgres-ci
+        run: |
+          version="$(psql -XAt -h 127.0.0.1 -U postgres -d lmm_rehearsal -c 'SHOW server_version_num')"
+          [[ "$version" =~ ^18[0-9]{4}$ ]]
+          echo "PostgreSQL server_version_num=$version"
+
+      - name: Validate PostgreSQL 18 baseline catalog
+        env:
+          PGPASSWORD: postgres-ci
+        run: |
+          set -euo pipefail
+          schema_dir=rust/crates/lmm-db-migrate/schema
+          catalog="$RUNNER_TEMP/postgres-catalog.json"
+          psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d lmm_rehearsal \
+            -f "$schema_dir/postgresql-baseline.sql" >/dev/null
+          psql -XAt -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d lmm_rehearsal \
+            -f "$schema_dir/export-postgres-catalog.sql" > "$catalog"
+          [[ "$(jq 'length' "$catalog")" == 34 ]]
+          [[ "$(jq '[.[].columns[]] | length' "$catalog")" == 421 ]]
+          [[ "$(jq '[.[].indexes[]] | length' "$catalog")" == 172 ]]
+          [[ "$(jq '[.[] | select(.sequence != null)] | length' "$catalog")" == 29 ]]
+          cargo run --quiet --locked --manifest-path rust/Cargo.toml -p lmm-db-migrate -- \
+            postgres-catalog-validate \
+            --manifest "$schema_dir/table-map.json" \
+            --catalog "$catalog"
+
+      - name: Run PostgreSQL 18 canonical equivalence test
+        env:
+          PGPASSWORD: postgres-ci
+          LMM_TEST_PG_SOCKET: 127.0.0.1
+          LMM_TEST_PG_PORT: '5432'
+          LMM_TEST_PG_DATABASE: lmm_rehearsal
+        working-directory: rust
+        run: >-
+          cargo test -p lmm-db-migrate --test postgres_equivalence --locked --
+          --ignored --exact --nocapture
+          sqlite_and_postgres_should_have_identical_canonical_table_hashes
+
+      - name: Run every PostgreSQL 18 schema contract test
+        env:
+          LMM_TEST_DATABASE_URL: postgresql://postgres:postgres-ci@127.0.0.1:5432/lmm_rehearsal
+        working-directory: rust
+        run: cargo test -p lmm-db-migrate --test schema_contract --locked -- --ignored --nocapture
+
+      - name: Run PostgreSQL 18 full-copy migration test
+        env:
+          LMM_TEST_DATABASE_URL: postgresql://postgres:postgres-ci@127.0.0.1:5432/lmm_rehearsal
+        working-directory: rust
+        run: >-
+          cargo test -p lmm-db-migrate --test full_copy --locked --
+          --ignored --exact --nocapture
+          full_copy_should_verify_all_tables_and_rollback_both_fault_phases
+
+  web:
+    name: Web checks and production build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
-
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          repository: ${{ github.event.pull_request.base.repo.full_name }}
-          ref: ${{ github.event.action == 'closed' && github.event.pull_request.base.ref || github.ref }}
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -124,8 +207,53 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
-        run: bun run typecheck
+      - name: Check formatting and copyright headers
+        run: |
+          bun run format:check
+          bun run copyright:check
+
+      - name: Lint and typecheck
+        run: |
+          bun run lint
+          bun run typecheck
 
       - name: Test
         run: bun test
+
+      - name: Build production web assets
+        env:
+          VITE_REACT_APP_VERSION: ${{ github.sha }}
+        run: bun run build
+
+  electron-retirement:
+    name: Electron embedded-backend retirement guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Validate retired package
+        run: |
+          npm ci --ignore-scripts
+          node --check main.js
+          bash -n build.sh
+          test -x build.sh
+          if ./build.sh; then
+            echo "::error::Retired Electron packaging unexpectedly succeeded"
+            exit 1
+          fi
+          if npm run build; then
+            echo "::error::Retired Electron npm packaging unexpectedly succeeded"
+            exit 1
+          fi

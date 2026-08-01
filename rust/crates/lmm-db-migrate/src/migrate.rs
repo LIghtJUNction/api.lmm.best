@@ -25,6 +25,7 @@ use crate::{
     },
     inspect::inspect_sqlite,
     manifest::{Column, Converter, Manifest, Table},
+    release::ReleaseBinding,
 };
 
 #[derive(Debug, Serialize)]
@@ -35,6 +36,7 @@ pub struct MigrationReport {
     pub sequence_count: usize,
     pub tables: Vec<TableEvidence>,
     pub financial_aggregates: Vec<AggregateEvidence>,
+    pub release: ReleaseBinding,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,10 +59,20 @@ pub struct RehearseOptions<'a> {
     pub manifest: &'a Manifest,
     pub baseline: &'a Path,
     pub catalog_sql: &'a Path,
+    pub contract_migration: &'a Path,
+    pub release: &'a ReleaseBinding,
     pub schema: &'a str,
     pub database_url: &'a str,
     pub fault_after_table: Option<&'a str>,
     pub fault_before_verify: bool,
+}
+
+pub struct VerifyOptions<'a> {
+    pub sqlite: &'a Path,
+    pub manifest: &'a Manifest,
+    pub schema: &'a str,
+    pub database_url: &'a str,
+    pub release: &'a ReleaseBinding,
 }
 
 pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, MigrationError> {
@@ -118,34 +130,43 @@ pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, Migrat
         &mut transaction,
         options.schema,
         options.manifest,
+        options.release,
     )?;
     ensure_source_still_offline(options.sqlite, options.manifest, &source_before)?;
+    crate::contract::install_or_verify(
+        &mut transaction,
+        options.schema,
+        options.contract_migration,
+        options.release,
+    )?;
     transaction.commit()?;
     source.connection.execute_batch("COMMIT")?;
     Ok(report)
 }
 
-pub fn verify(
-    sqlite: &Path,
-    manifest: &Manifest,
-    schema: &str,
-    database_url: &str,
-) -> Result<MigrationReport, MigrationError> {
-    validate_schema(schema)?;
-    let inspection = inspect_sqlite(sqlite, manifest)?;
+pub fn verify(options: &VerifyOptions<'_>) -> Result<MigrationReport, MigrationError> {
+    validate_schema(options.schema)?;
+    let inspection = inspect_sqlite(options.sqlite, options.manifest)?;
     if !inspection.drift.is_empty() {
         return Err(MigrationError::Manifest(
             "source schema does not match manifest".into(),
         ));
     }
-    let source_before = SourceSnapshot::capture(sqlite)?;
-    let source = open_source(sqlite, &source_before)?;
+    let source_before = SourceSnapshot::capture(options.sqlite)?;
+    let source = open_source(options.sqlite, &source_before)?;
     source.connection.execute_batch("BEGIN")?;
-    let mut client = Client::connect(database_url, NoTls)?;
+    let mut client = Client::connect(options.database_url, NoTls)?;
     let mut transaction = client.transaction()?;
     transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")?;
-    let report = verify_connections(&source.connection, &mut transaction, schema, manifest)?;
-    ensure_source_still_offline(sqlite, manifest, &source_before)?;
+    let report = verify_connections(
+        &source.connection,
+        &mut transaction,
+        options.schema,
+        options.manifest,
+        options.release,
+    )?;
+    crate::contract::verify_release(&mut transaction, options.schema, options.release)?;
+    ensure_source_still_offline(options.sqlite, options.manifest, &source_before)?;
     transaction.commit()?;
     source.connection.execute_batch("COMMIT")?;
     Ok(report)
@@ -236,7 +257,8 @@ fn reject_sidecars(path: &Path) -> Result<(), MigrationError> {
 }
 
 fn validate_schema(schema: &str) -> Result<(), MigrationError> {
-    let valid = !schema.is_empty()
+    let valid = schema != "public"
+        && !schema.is_empty()
         && schema.len() <= 63
         && schema
             .bytes()
@@ -244,7 +266,7 @@ fn validate_schema(schema: &str) -> Result<(), MigrationError> {
             .all(|(i, b)| b == b'_' || b.is_ascii_lowercase() || (i > 0 && b.is_ascii_digit()));
     if !valid {
         return Err(MigrationError::Manifest(
-            "schema must match [a-z_][a-z0-9_]{0,62}".into(),
+            "schema must be a non-public name matching [a-z_][a-z0-9_]{0,62}".into(),
         ));
     }
     Ok(())
@@ -525,6 +547,7 @@ fn verify_connections(
     target: &mut impl PgQuery,
     schema: &str,
     manifest: &Manifest,
+    release: &ReleaseBinding,
 ) -> Result<MigrationReport, MigrationError> {
     let mut tables = Vec::with_capacity(manifest.tables.len());
     for table in &manifest.tables {
@@ -555,6 +578,7 @@ fn verify_connections(
             .count(),
         tables,
         financial_aggregates,
+        release: release.clone(),
     })
 }
 

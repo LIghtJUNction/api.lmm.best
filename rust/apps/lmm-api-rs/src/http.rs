@@ -6,7 +6,7 @@ use std::sync::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, Request, State},
+    extract::{ConnectInfo, Extension, Request, State},
     http::{HeaderName, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -20,7 +20,12 @@ use lmm_contracts::{
     BuildResponse, ErrorBody, ErrorEnvelope, HealthResponse, LegacySuccessEnvelope,
 };
 use lmm_domain::PublicContentKind;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
+use tower::ServiceExt;
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -52,7 +57,7 @@ struct ServerRequestId(String);
 #[derive(Clone)]
 struct PreserveLegacyEmptyError;
 
-pub fn router(state: AppState) -> Router {
+pub fn router_with_web(state: AppState, web_dist_dir: Option<PathBuf>) -> Router {
     let inflight = Inflight::default();
     let router = Router::new()
         .route("/livez", get(livez))
@@ -61,13 +66,85 @@ pub fn router(state: AppState) -> Router {
         .route("/api/notice", get(notice))
         .route("/api/about", get(about))
         .route("/api/home_page_content", get(home_page_content))
-        .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed);
     #[cfg(test)]
     let router = router.route("/_test/json", axum::routing::post(test_json_extractor));
+    let router = if let Some(root) = web_dist_dir {
+        router
+            .fallback(spa_fallback)
+            .layer(Extension(WebAssets { root }))
+    } else {
+        router.fallback(not_found)
+    };
     router
         .with_state(state)
         .layer(middleware::from_fn_with_state(inflight, request_boundary))
+}
+
+#[derive(Clone)]
+struct WebAssets {
+    root: PathBuf,
+}
+
+async fn spa_fallback(Extension(web): Extension<WebAssets>, request: Request) -> Response {
+    if is_backend_path(request.uri().path()) || is_unsafe_static_path(request.uri().path()) {
+        return not_found(request).await;
+    }
+
+    let index = web.root.join("index.html");
+    ServeDir::new(web.root)
+        .fallback(ServeFile::new(index))
+        .oneshot(request)
+        .await
+        .expect("static file service is infallible")
+        .map(Body::new)
+}
+
+fn is_backend_path(path: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "/api",
+        "/v1",
+        "/v1beta",
+        "/pg",
+        "/mj",
+        "/suno",
+        "/kling/v1",
+        "/jimeng",
+        "/_internal",
+        "/livez",
+        "/readyz",
+    ];
+    const DASHBOARD_API_PATHS: &[&str] = &[
+        "/dashboard/billing/subscription",
+        "/dashboard/billing/usage",
+    ];
+
+    PREFIXES.iter().any(|prefix| has_path_prefix(path, prefix))
+        || DASHBOARD_API_PATHS
+            .iter()
+            .any(|prefix| has_path_prefix(path, prefix))
+        || is_mode_mj_path(path)
+}
+
+fn has_path_prefix(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn is_mode_mj_path(path: &str) -> bool {
+    let mut segments = path.trim_start_matches('/').split('/');
+    segments.next().is_some_and(|mode| !mode.is_empty()) && segments.next() == Some("mj")
+}
+
+fn is_unsafe_static_path(path: &str) -> bool {
+    let lowercase = path.to_ascii_lowercase();
+    path.contains('\\')
+        || path.split('/').any(|segment| matches!(segment, "." | ".."))
+        || ["%2e", "%2f", "%5c"]
+            .iter()
+            .any(|encoded| lowercase.contains(encoded))
 }
 
 #[cfg(test)]
@@ -305,12 +382,12 @@ fn status_code(status: StatusCode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, router};
+    use super::{AppState, router_with_web};
     use async_trait::async_trait;
     use axum::{
         body::Body,
         extract::ConnectInfo,
-        http::{Request, StatusCode},
+        http::{Request, StatusCode, header},
     };
     use lmm_application::{
         GlobalApiRateLimiter, ProbeError, PublicContentCache, PublicContentCacheError,
@@ -320,10 +397,13 @@ mod tests {
     use lmm_domain::PublicContentKind;
     use serde_json::Value;
     use std::{
+        fs,
         net::SocketAddr,
+        path::PathBuf,
         sync::{Arc, Mutex},
     };
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     struct MockProbe(Option<&'static str>);
 
@@ -332,6 +412,32 @@ mod tests {
     struct MissingCache;
 
     struct AllowAllRateLimiter;
+
+    fn router(state: AppState) -> axum::Router {
+        router_with_web(state, None)
+    }
+
+    struct WebFixture {
+        root: PathBuf,
+    }
+
+    impl WebFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("lmm-web-http-{}", Uuid::new_v4()));
+            fs::create_dir_all(root.join("assets")).expect("fixture directories are created");
+            fs::write(root.join("index.html"), "<main>spa shell</main>")
+                .expect("fixture index is written");
+            fs::write(root.join("assets/app.js"), "window.lmm = true;")
+                .expect("fixture asset is written");
+            Self { root }
+        }
+    }
+
+    impl Drop for WebFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.root).expect("fixture directory is removed");
+        }
+    }
 
     #[derive(Clone, Copy)]
     enum MockLimitMode {
@@ -507,6 +613,33 @@ mod tests {
         (status, id, body)
     }
 
+    async fn web_call(root: PathBuf, uri: &str) -> (StatusCode, String, String) {
+        let request = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .expect("test request is valid");
+        let response = router_with_web(state(None), Some(root))
+            .oneshot(request)
+            .await
+            .expect("router is infallible");
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("test body is readable");
+        (
+            status,
+            content_type,
+            String::from_utf8(bytes.to_vec()).expect("fixture response is UTF-8"),
+        )
+    }
+
     #[tokio::test]
     async fn boundary_should_replace_untrusted_request_id_and_echo_server_id() {
         let (_, id, body) = call("GET", "/missing", Some("attacker-controlled"), None).await;
@@ -547,6 +680,74 @@ mod tests {
             .expect("router is infallible");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(response.headers()["content-type"], "application/json");
+    }
+
+    #[tokio::test]
+    async fn configured_web_dist_should_serve_root_assets_and_spa_routes() {
+        let fixture = WebFixture::new();
+
+        let (root_status, root_type, root_body) = web_call(fixture.root.clone(), "/").await;
+        assert_eq!(root_status, StatusCode::OK);
+        assert!(root_type.starts_with("text/html"));
+        assert_eq!(root_body, "<main>spa shell</main>");
+
+        let (asset_status, asset_type, asset_body) =
+            web_call(fixture.root.clone(), "/assets/app.js").await;
+        assert_eq!(asset_status, StatusCode::OK);
+        assert!(asset_type.starts_with("text/javascript"));
+        assert_eq!(asset_body, "window.lmm = true;");
+
+        let (spa_status, spa_type, spa_body) =
+            web_call(fixture.root.clone(), "/settings/profile").await;
+        assert_eq!(spa_status, StatusCode::OK);
+        assert!(spa_type.starts_with("text/html"));
+        assert_eq!(spa_body, "<main>spa shell</main>");
+    }
+
+    #[tokio::test]
+    async fn web_fallback_should_not_capture_backend_namespaces() {
+        let fixture = WebFixture::new();
+
+        for path in [
+            "/api/unknown",
+            "/v1/unknown",
+            "/livez/unknown",
+            "/video/mj/unknown",
+        ] {
+            let (status, content_type, body) = web_call(fixture.root.clone(), path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "path: {path}");
+            assert!(content_type.starts_with("application/json"), "path: {path}");
+            let body: Value = serde_json::from_str(&body).expect("API error response is JSON");
+            assert_eq!(body["error"]["code"], "not_found", "path: {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn web_service_should_not_expose_parent_files() {
+        let fixture = WebFixture::new();
+        let secret = fixture
+            .root
+            .parent()
+            .expect("fixture has a parent")
+            .join(format!("lmm-web-secret-{}", Uuid::new_v4()));
+        fs::write(&secret, "must not be served").expect("secret fixture is written");
+
+        let (status, content_type, body) = web_call(
+            fixture.root.clone(),
+            &format!(
+                "/%2e%2e/{}",
+                secret
+                    .file_name()
+                    .expect("secret has a name")
+                    .to_string_lossy()
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(content_type.starts_with("application/json"));
+        assert!(!body.contains("must not be served"));
+
+        fs::remove_file(secret).expect("secret fixture is removed");
     }
 
     #[tokio::test]
