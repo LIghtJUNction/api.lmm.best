@@ -54,6 +54,8 @@ sudo deploy-lmm-api-rs --artifact /absolute/path/lmm-api-rs \
   --sha256 <sha256> --revision <git-sha> --systemd-run
 ```
 
+该入口有意立即返回；不要把后续 `systemctl show` 当作最终证据，因为 `--collect` 会回收完成的 transient unit。完成状态以 `/var/log/lmm-api-rs/deployments/*/result`、`/opt/lmm-api-rs/active-slot` 和 TLS build identity 三者为准。失败 unit 的 journal 只用于诊断，不能替代 durable result。
+
 部署器安装 inactive slot、启动并检查 `/livez`、`/readyz` 和 revision、写 PREPARED journal、原子切换内部探针 upstream、reload nginx，再通过真实 TLS `/readyz` 与 `/build` 确认 nginx 选中了目标 revision。nginx reload 是异步的，旧 worker 可能在短窗口内继续响应；canary 因此在有限截止时间内重试，并且只有 readiness、revision 与 slot 同时匹配才算收敛。回滚严格按“启动旧 slot 并 direct-ready → 原子恢复旧 upstream → `nginx -t`/reload/is-active → TLS canary 验证旧 revision → 停止新 slot”执行；任一步失败会保留新 slot 并写 `NEEDS_ATTENTION`，绝不报告成功。旧 release 不在同一事务删除。
 
 ## 故障注入与验证
@@ -97,3 +99,5 @@ Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只�
 这些路径尚未加入 nginx Rust ownership。生产 `/api/` 仍全部进入 Go；在生产 PG 切换、差分测试和 Rust 全局 API rate limit 完成前不得改变这一点。
 
 2026-08-01 将 commit `883526b1a553697b5c3ce02dbf5ea7ab8fd3c7e5` 发布到内部 blue slot 后，使用从 Go TLS 响应复制到隔离 rehearsal PG 的三项内容逐项比较规范化 JSON，三条路径全部一致。真实 Valkey 6380 上三个 versioned key 均建立且 TTL 为 5 秒。生产 `/api/status` 保持 200，公网内部探针保持 403，Go PID 与 `NRestarts=0` 未变化。演练同时确认 rehearsal schema 对象必须由应用 role 拥有或显式授予最小权限；readiness 的 `SELECT 1` 不能替代业务表权限 canary。
+
+commit `ba44b924e949dd52c780097ea8f9edb2001d864d` 增加 `options` 最小读权限 canary 后，隔离环境临时撤销权限会使候选 green 持续返回 503，部署事务自动保留旧 blue/3100；恢复应用 role 所有权后，同一 artifact 正常切换到 green，durable result 为 `SUCCESS active=green previous=blue`。整个故障注入期间 Go PID 与 `NRestarts=0` 未变化。
