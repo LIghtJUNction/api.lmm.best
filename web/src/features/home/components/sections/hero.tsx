@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { useStatus } from '@/hooks/use-status'
+import { normalizeInterfaceLanguage } from '@/i18n/languages'
 
 import { HeroArt } from '../hero-art'
 
@@ -67,10 +68,25 @@ function DocsLink({ href, label }: { href: string; label: string }) {
 }
 
 export function Hero({ isAuthenticated = false }: HeroProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { status } = useStatus()
+  const docsLangByInterfaceLanguage: Record<string, 'en' | 'ja' | 'zh'> = {
+    'en-US': 'en',
+    en: 'en',
+    'en-UK': 'en',
+    'zh-CN': 'zh',
+    zh: 'zh',
+    'zh-TW': 'zh',
+    ja: 'ja',
+    'ja-JP': 'ja',
+  }
+  const docsLang =
+    docsLangByInterfaceLanguage[
+      normalizeInterfaceLanguage(i18n.resolvedLanguage || i18n.language)
+    ]
   const docsUrl =
-    (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
+    (status?.docs_link as string | undefined) ||
+    `https://docs.newapi.pro/${docsLang || 'en'}/docs`
   return (
     <section
       className='flex min-h-[calc(100svh-var(--app-header-height))] items-center overflow-hidden bg-[#FAF9F5] px-5 py-16 text-[#141413] sm:px-8 sm:py-24'
