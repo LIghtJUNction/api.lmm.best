@@ -26,12 +26,18 @@ import {
 } from 'motion/react'
 import { useEffect, useRef, type PointerEvent } from 'react'
 
-import { HeaderLogo } from '@/components/layout/components/header-logo'
+import { Skeleton } from '@/components/ui/skeleton'
 
 import { normalizePointerPosition } from '../lib/hero-parallax'
 
 const POINTER_TRAVEL = 8
 const SPRING = { damping: 27, mass: 1, stiffness: 180 }
+const HERO_ART_SHELL_CLASS =
+  'mx-auto w-full max-w-xl overflow-hidden rounded-[2.5rem_1.5rem_3rem_1.75rem] border-2 border-[#141413] bg-[#BCD1CA] p-2 sm:p-3 lg:justify-self-end'
+const HERO_ART_MEDIA_CLASS =
+  'overflow-hidden rounded-[2rem_1.125rem_2.5rem_1.25rem]'
+const HERO_ART_CAPTION_CLASS =
+  'flex items-center gap-3 border-t-2 border-[#141413] px-3 pt-3 pb-1 text-xs leading-5 font-semibold tracking-[0.08em] uppercase sm:px-4'
 
 interface HeroArtProps {
   caption: string
@@ -92,9 +98,12 @@ export function HeroArt({ caption }: HeroArtProps) {
       ref={figureRef}
       onPointerMove={handlePointerMove}
       onPointerLeave={resetPointer}
-      className='landing-animate-fade-up mx-auto w-full max-w-md border-2 border-[#141413] bg-[#D97757] p-5 opacity-0 [animation-delay:240ms] sm:p-7 lg:mr-8 lg:max-w-sm lg:-translate-y-3 lg:justify-self-end lg:rounded-[42%_58%_45%_55%/8%_12%_88%_92%]'
+      className={`landing-animate-fade-up opacity-0 [animation-delay:240ms] ${HERO_ART_SHELL_CLASS}`}
     >
-      <motion.div style={{ y: shouldReduceMotion ? 0 : scrollY }}>
+      <motion.div
+        style={{ y: shouldReduceMotion ? 0 : scrollY }}
+        className={HERO_ART_MEDIA_CLASS}
+      >
         <motion.div
           style={{
             x: shouldReduceMotion ? 0 : springX,
@@ -102,24 +111,49 @@ export function HeroArt({ caption }: HeroArtProps) {
           }}
           className='will-change-transform'
         >
-          <div className='ml-auto w-[82%] overflow-hidden rounded-[52%_48%_60%_40%/43%_58%_42%_57%] border-2 border-[#141413] bg-[#BCD1CA]'>
-            <HeaderLogo
-              src='/logo.png'
-              width={512}
-              height={512}
+          <picture className='block'>
+            <source
+              media='(max-width: 639px)'
+              srcSet='/gateway-orchestration-640.webp 640w, /gateway-orchestration-960.webp 960w'
+              sizes='calc(100vw - 40px)'
+              type='image/webp'
+            />
+            <img
+              src='/gateway-orchestration-960.webp'
+              srcSet='/gateway-orchestration-640.webp 640w, /gateway-orchestration-960.webp 960w, /gateway-orchestration-1448.webp 1448w'
+              sizes='(min-width: 1024px) 520px, 576px'
+              width={1448}
+              height={1086}
               alt=''
-              loading={false}
-              logoLoaded
-              className='aspect-square size-full rounded-none object-cover transition-none'
+              className='aspect-4/3 w-full scale-[1.035] object-cover'
               decoding='async'
+              loading='eager'
               fetchPriority='high'
             />
-          </div>
+          </picture>
         </motion.div>
       </motion.div>
-      <figcaption className='mt-5 max-w-64 border-t border-[#141413] pt-3 text-xs leading-5 font-medium'>
-        {caption}
+      <figcaption className={HERO_ART_CAPTION_CLASS}>
+        <span
+          className='size-2 shrink-0 rounded-full bg-[#141413]'
+          aria-hidden='true'
+        />
+        <span>{caption}</span>
       </figcaption>
     </figure>
+  )
+}
+
+export function HeroArtSkeleton() {
+  return (
+    <div className={HERO_ART_SHELL_CLASS} aria-hidden='true'>
+      <div className={HERO_ART_MEDIA_CLASS}>
+        <Skeleton className='aspect-4/3 w-full rounded-none bg-[#FAF9F5]/70' />
+      </div>
+      <div className={HERO_ART_CAPTION_CLASS}>
+        <Skeleton className='size-2 shrink-0 rounded-full bg-[#141413]/15' />
+        <Skeleton className='h-5 w-56 max-w-[75%] bg-[#141413]/15' />
+      </div>
+    </div>
   )
 }

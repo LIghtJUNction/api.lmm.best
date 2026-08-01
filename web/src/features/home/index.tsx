@@ -21,11 +21,13 @@ import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { RichContent } from '@/components/rich-content'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useTheme } from '@/context/theme-provider'
 import { isLikelyHtml } from '@/lib/content-format'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { CTA, Features, Hero, HowItWorks, Stats } from './components'
+import { HeroArtSkeleton } from './components/hero-art'
 import { useHomePageContent } from './hooks'
 
 export function Home() {
@@ -56,8 +58,30 @@ export function Home() {
   if (!isLoaded) {
     return (
       <PublicLayout showMainContainer={false}>
-        <main className='flex min-h-screen items-center justify-center'>
-          <div className='text-muted-foreground'>{t('Loading...')}</div>
+        <main
+          className='flex min-h-[calc(100svh-var(--app-header-height))] items-center bg-[#FAF9F5] px-5 py-16 sm:px-8 sm:py-24'
+          aria-busy='true'
+          aria-live='polite'
+        >
+          <span className='sr-only'>{t('Loading...')}</span>
+          <div className='mx-auto grid w-full max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,0.85fr)_minmax(25rem,1.15fr)] lg:gap-16 xl:gap-24'>
+            <div className='max-w-2xl'>
+              <Skeleton className='mb-7 h-3 w-56 bg-[#141413]/10' />
+              <Skeleton className='h-28 w-full max-w-lg rounded-3xl bg-[#141413]/10 sm:h-40' />
+              <div className='mt-8 flex flex-col gap-3'>
+                <Skeleton className='h-4 w-full max-w-xl bg-[#141413]/10' />
+                <Skeleton className='h-4 w-4/5 max-w-lg bg-[#141413]/10' />
+              </div>
+              <div className='mt-10 flex flex-col gap-3 min-[420px]:flex-row min-[420px]:flex-wrap'>
+                <Skeleton className='h-9 w-full bg-[#141413]/10 min-[420px]:w-32' />
+                {!isAuthenticated ? (
+                  <Skeleton className='h-9 w-full bg-[#141413]/10 min-[420px]:w-24' />
+                ) : null}
+                <Skeleton className='h-9 w-full bg-[#141413]/10 min-[420px]:w-20' />
+              </div>
+            </div>
+            <HeroArtSkeleton />
+          </div>
         </main>
       </PublicLayout>
     )

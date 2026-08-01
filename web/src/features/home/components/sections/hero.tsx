@@ -29,6 +29,9 @@ interface HeroProps {
   isAuthenticated?: boolean
 }
 
+const OUTLINE_CTA_CLASS =
+  'border-[#141413]/35 bg-[#FAF9F5] text-[#141413] hover:border-[#141413] hover:bg-[#E3DACC] hover:text-[#141413] dark:border-[#141413]/35 dark:bg-[#FAF9F5] dark:text-[#141413] dark:hover:border-[#141413] dark:hover:bg-[#E3DACC] dark:hover:text-[#141413]'
+
 function DocsLink({ href, label }: { href: string; label: string }) {
   const isExternal = /^https?:\/\//i.test(href)
   const content = (
@@ -42,6 +45,8 @@ function DocsLink({ href, label }: { href: string; label: string }) {
     return (
       <Button
         variant='outline'
+        size='lg'
+        className={OUTLINE_CTA_CLASS}
         render={<a href={href} target='_blank' rel='noopener noreferrer' />}
       >
         {content}
@@ -50,7 +55,12 @@ function DocsLink({ href, label }: { href: string; label: string }) {
   }
 
   return (
-    <Button variant='outline' render={<Link to={href} />}>
+    <Button
+      variant='outline'
+      size='lg'
+      className={OUTLINE_CTA_CLASS}
+      render={<Link to={href} />}
+    >
       {content}
     </Button>
   )
@@ -62,27 +72,38 @@ export function Hero({ isAuthenticated = false }: HeroProps) {
   const docsUrl =
     (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
   return (
-    <section className='overflow-hidden bg-[#FAF9F5] px-5 pt-20 pb-16 text-[#141413] sm:px-8 sm:pt-28 sm:pb-24'>
-      <div className='mx-auto grid max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.7fr)] lg:gap-20'>
+    <section
+      className='flex min-h-[calc(100svh-var(--app-header-height))] items-center overflow-hidden bg-[#FAF9F5] px-5 py-16 text-[#141413] sm:px-8 sm:py-24'
+      aria-labelledby='home-hero-title'
+    >
+      <div className='mx-auto grid w-full max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,0.85fr)_minmax(25rem,1.15fr)] lg:gap-16 xl:gap-24'>
         <div className='max-w-2xl'>
-          <p className='landing-animate-fade-up mb-6 text-xs font-semibold tracking-[0.18em] uppercase opacity-0'>
-            {t('AI Application Infrastructure Foundation')}
-          </p>
+          <div className='landing-animate-fade-up mb-7 flex items-center gap-3 opacity-0'>
+            <span
+              className='h-px w-9 shrink-0 bg-[#141413]'
+              aria-hidden='true'
+            />
+            <p className='text-xs font-semibold tracking-[0.18em] uppercase'>
+              {t('AI Application Infrastructure Foundation')}
+            </p>
+          </div>
           <h1
+            id='home-hero-title'
             lang='en'
-            className='landing-animate-fade-up max-w-[13ch] font-serif text-[clamp(3rem,7vw,5.75rem)] leading-[0.94] font-medium tracking-[-0.055em] opacity-0 [animation-delay:60ms]'
+            className='landing-animate-fade-up max-w-[12ch] font-serif text-[clamp(3.25rem,7vw,5.75rem)] leading-[0.92] font-medium tracking-[-0.055em] text-balance opacity-0 [animation-delay:60ms]'
           >
             Token Not Included
           </h1>
-          <p className='landing-animate-fade-up mt-7 max-w-xl text-base leading-7 text-[#141413]/70 opacity-0 [animation-delay:120ms] sm:text-lg'>
+          <p className='landing-animate-fade-up mt-8 max-w-[34rem] text-base leading-7 text-pretty text-[#141413]/70 opacity-0 [animation-delay:120ms] sm:text-lg'>
             {t(
               'Access a vast selection of models via a standard, unified API protocol. Power AI applications, manage digital assets, and connect the Future.'
             )}
           </p>
 
-          <div className='landing-animate-fade-up mt-9 flex flex-wrap gap-3 opacity-0 [animation-delay:180ms]'>
+          <div className='landing-animate-fade-up mt-10 flex flex-col gap-3 opacity-0 [animation-delay:180ms] min-[420px]:flex-row min-[420px]:flex-wrap'>
             <Button
-              className='border-[#141413] bg-[#141413] text-[#FAF9F5] hover:bg-[#D97757] hover:text-[#141413]'
+              size='lg'
+              className='w-full border-[#141413] bg-[#141413] text-[#FAF9F5] hover:bg-[#D97757] hover:text-[#141413] min-[420px]:w-auto'
               render={<Link to={isAuthenticated ? '/dashboard' : '/sign-up'} />}
             >
               {isAuthenticated ? t('Go to Dashboard') : t('Get Started')}
@@ -91,13 +112,16 @@ export function Hero({ isAuthenticated = false }: HeroProps) {
             {!isAuthenticated ? (
               <Button
                 variant='outline'
-                className='border-[#141413]/30 bg-transparent hover:bg-[#E3DACC]'
+                size='lg'
+                className={`w-full min-[420px]:w-auto ${OUTLINE_CTA_CLASS}`}
                 render={<Link to='/pricing' />}
               >
                 {t('View Pricing')}
               </Button>
             ) : null}
-            <DocsLink href={docsUrl} label={t('Docs')} />
+            <div className='[&_[data-slot=button]]:w-full min-[420px]:[&_[data-slot=button]]:w-auto'>
+              <DocsLink href={docsUrl} label={t('Docs')} />
+            </div>
           </div>
         </div>
 
