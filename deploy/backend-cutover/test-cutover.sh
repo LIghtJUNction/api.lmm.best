@@ -57,6 +57,15 @@ run_cutover() {
     "$SCRIPT" --candidate-env "$TMP/candidate.env" --revision abcdef123 --schema lmm_prod_test "$@"
 }
 
+run_reconcile() {
+  PATH="$TMP/bin:$PATH" LMM_CUTOVER_TEST_MODE=1 LMM_TEST_SERVICE_STATE="$TMP/service-state" \
+    LMM_CUTOVER_ETC_ROOT="$TMP/etc" LMM_CUTOVER_STATE_ROOT="$TMP/state" \
+    LMM_CUTOVER_AUDIT_ROOT="$TMP/audit" LMM_CUTOVER_LOCK_FILE="$TMP/run/lock" \
+    LMM_CUTOVER_MIGRATOR="$TMP/bin/migrator" LMM_CUTOVER_MANIFEST="$TMP/assets/manifest" \
+    LMM_CUTOVER_BASELINE="$TMP/assets/baseline" LMM_CUTOVER_CATALOG_SQL="$TMP/assets/catalog" \
+    "$SCRIPT" --reconcile-only
+}
+
 run_cutover --dry-run >/dev/null
 grep -Rq '^DRY_RUN ' "$TMP/audit"
 
@@ -78,6 +87,16 @@ fi
 touch "$TMP/source.db-wal"
 run_cutover --dry-run >/dev/null
 rm -f "$TMP/source.db-wal"
+
+rm -rf "$TMP/audit" "$TMP/state"; mkdir -p "$TMP/audit" "$TMP/state/sqlite-backups"
+printf 'active\n' >"$TMP/service-state"; printf 'SHARED_SECRET=unchanged\n' >"$TMP/go.env"
+if LMM_CUTOVER_KILL_AT=after_gate run_cutover >/dev/null 2>&1; then
+  echo 'SIGKILL injection after durable gate did not terminate cutover' >&2; exit 1
+fi
+run_reconcile >/dev/null
+grep -Fxq 'SHARED_SECRET=unchanged' "$TMP/go.env"
+[[ $(cat "$TMP/service-state") == active ]]
+[[ ! -e $TMP/state/pg-write-boundary ]]
 
 rm -rf "$TMP/audit" "$TMP/state"; mkdir -p "$TMP/audit" "$TMP/state/sqlite-backups"
 printf 'active\n' >"$TMP/service-state"; printf 'SHARED_SECRET=unchanged\n' >"$TMP/go.env"
