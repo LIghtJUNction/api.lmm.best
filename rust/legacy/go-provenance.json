@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "legacy_revision": {
+    "commit": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9",
+    "commit_content_sha256": "8b71bbfd1e4e5057880bad2b81972a3fbb6b23cb46a710b162b13e255da557bb",
+    "tree": "ceb65907e5bd0ecdfc6dd2a4cb2fe5367f7f6b1e",
+    "tree_content_sha256": "82f5e0aa9c2de860bf3080f73cfe6dc7c3cdd036af8b31d22982ef0116fb0cfc",
+    "git_object_format": "sha1"
+  },
+  "archive": {
+    "selection": "Every tracked blob at legacy_revision whose path ends in .go or whose basename is go.mod or go.sum.",
+    "manifest": "rust/legacy/go-source-blobs.tsv",
+    "manifest_sha256": "7e1916b6ad4af2764f0813c5da2e7cd369fe878f13474a9c4f2f662d98ba8a66",
+    "file_count": 781,
+    "byte_count": 5016754,
+    "content_aggregate_sha256": "cceceafa2325e37259e43a03c7b8d7d68e11124c579bb12961e047ba35e87783"
+  },
+  "subsets": {
+    "model_go_all": {
+      "selection": "model/*.go",
+      "file_count": 71,
+      "byte_count": 621752,
+      "content_aggregate_sha256": "448752858913210db6056b6c8a1aaba47af7829fb0678f1ce4116af7812fea20"
+    },
+    "model_go_runtime": {
+      "selection": "model/*.go excluding *_test.go",
+      "file_count": 48,
+      "byte_count": 473270,
+      "content_aggregate_sha256": "92579488068a9623d9afd05587a73218a6a369df47a3b924c4b4faf907b9e92f"
+    },
+    "module_inputs": {
+      "paths": [
+        "go.mod",
+        "go.sum",
+        "relaykit/go.mod",
+        "relaykit/go.sum"
+      ],
+      "file_count": 4,
+      "byte_count": 320779,
+      "content_aggregate_sha256": "59ed876ceb7ebe9db2fee8ad7630cacbfa4f9904575e48bd2798a2e971a7b738"
+    },
+    "root_module_inputs": {
+      "paths": [
+        "go.mod",
+        "go.sum"
+      ],
+      "content_aggregate_sha256": "4a172126c946cc626b68436a2ec3a8b140387abbfa5a8afdc9bf1418902512fe"
+    }
+  },
+  "frozen_contracts": {
+    "manifest": "rust/legacy/contract-assets.tsv",
+    "manifest_sha256": "cbe6cb1beed9477615c45d24df45819e9e5b94eb6b3eec462975cd8fe9b6070b",
+    "file_count": 42,
+    "byte_count": 153705,
+    "content_aggregate_sha256": "06e4398a4dcbbac26cd62234ef9de3d19ce877afad86b1c00a15eaee7905ac88",
+    "relayconvert_golden_count": 36
+  },
+  "aggregate_format": "SHA-256 of the ordered sha256sum-style lines '<content-sha256>  <path>'; frozen contract lines append ' -> <frozen-path>'."
+}
