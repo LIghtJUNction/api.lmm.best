@@ -50,11 +50,20 @@ This foundation is deliberately not a production API cutover. Production busines
 
 The verified SQLite-to-PostgreSQL copier and autonomous coordinator now exist,
 but production has not been migrated. The coordinator stops the Go writer,
-backs up and verifies SQLite, copies into a fresh versioned schema, atomically
-publishes PG+Valkey configuration, and runs public plus authenticated canaries.
-Before its durable first-PG-write marker it may automatically restore SQLite;
-after that marker, automatic SQLite rollback is permanently forbidden. See
+backs up and verifies SQLite, copies into a fresh versioned schema, durably
+marks the forward-only boundary before publishing PG+Valkey configuration, and
+runs public plus authenticated canaries. A strict journal, immutable candidate
+hash, `--reconcile-only` path, and systemd boot gate make process death and
+reboot idempotently recoverable without relying on the initiating shell. Before
+the marker it restores the exact saved SQLite environment; marker or matching
+candidate-hash evidence permits only forward PostgreSQL recovery. See
 `docs/postgresql-cutover.md` for the exact state machine and remaining rehearsal
 and approval gates.
+
+That reliability is not zero downtime for the one-time database cutover.
+Systemd detachment survives SSH/API control-channel loss, but the SQLite freeze
+stops the sole Go process and disconnects active HTTP, SSE, and WebSocket
+connections. Production stays prohibited until the isolated rehearsal passes
+and an operator explicitly approves the maintenance window.
 
 Before business traffic moves to Rust, route/auth/quota/billing/streaming parity, expand/contract migrations compatible with N and N-1, singleton ownership for background jobs, authenticated canaries, and graceful draining/reconnection of SSE and WebSocket clients remain mandatory. nginx must not automatically retry non-idempotent requests.

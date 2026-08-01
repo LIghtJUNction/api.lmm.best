@@ -60,6 +60,14 @@ jobs:
       - name: Verify Go-to-Rust route ownership contract
         run: rust/scripts/check-go-route-manifest.sh
 
+      - name: Verify backend cutover crash reconciliation
+        run: |
+          bash -n deploy/backend-cutover/*.sh
+          shellcheck deploy/backend-cutover/*.sh
+          bash deploy/backend-cutover/test-prepare-candidate-env.sh
+          bash deploy/backend-cutover/test-cutover.sh
+          bash deploy/backend-cutover/test-install-lmm-api-cutover.sh
+
   rust:
     name: Rust migration workspace
     if: github.event.action != 'closed' || github.event.pull_request.merged == true

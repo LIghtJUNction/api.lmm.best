@@ -67,11 +67,22 @@ Success and failure reports are created with mode `0600`, written through a same
 
 The autonomous transaction is now implemented under `deploy/backend-cutover/`
 and documented in `docs/postgresql-cutover.md`. It provides write freeze,
-offline backup and verification, environment publication, authenticated
-canaries, and an explicit durable PostgreSQL-write boundary.
+offline backup and verification, a root-owned hash-verified candidate artifact,
+a forward-only PostgreSQL-write boundary written before PostgreSQL environment
+publication, authenticated canaries, an idempotent manual reconciler, and a
+systemd boot gate. A killed coordinator restores the exact saved SQLite
+environment only before the boundary; marker-, journal-, or candidate-hash
+evidence of possible PostgreSQL activation permits only forward reconciliation.
 
 Production remains on SQLite until that transaction passes a complete isolated
 ArchDmit rehearsal and receives explicit operator approval. The migration CLI
 itself still only creates a fresh isolated/versioned schema or verifies one; it
 does not stop a service, publish configuration, or switch traffic without the
 separate cutover coordinator.
+
+This one-time offline source freeze is bounded maintenance downtime, not a
+zero-downtime migration. Detaching it into systemd survives loss of the
+initiating SSH/API channel, but stopping the sole Go process disconnects active
+HTTP, SSE, and WebSocket clients. Production execution remains prohibited until
+the full isolated rehearsal and explicit operator approval described in the
+cutover runbook are complete.
