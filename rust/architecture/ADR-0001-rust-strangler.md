@@ -56,3 +56,10 @@ Implementation does not imply route ownership. The production `/api/` prefix
 continues to select Go until production data is in PostgreSQL, differential
 responses pass, and the Go global API rate-limit semantics are implemented at
 the Rust boundary.
+
+The Rust boundary implements that limiter as an application port backed by a
+Valkey adapter using the same atomic fixed-window Lua script and v2 key
+namespace as Go. Rate limiting is intentionally fail-closed even though public
+content caching is fail-open: cache loss changes latency, while bypassing a
+security/abuse-control decision changes policy. During partial ownership both
+backends must share the dedicated Valkey database and trusted-proxy boundary.
