@@ -18,27 +18,45 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
-const PROTOCOLS = ['OpenAI', 'Claude', 'Gemini', 'Rerank'] as const
+const PROTOCOLS = [
+  { name: 'OpenAI', endpoint: '/v1/chat/completions' },
+  { name: 'Claude', endpoint: '/v1/messages' },
+  { name: 'Gemini', endpoint: '/v1beta/models' },
+  { name: 'Rerank', endpoint: '/v1/rerank' },
+] as const
 
 export function Stats() {
   const { t } = useTranslation()
 
   return (
     <aside
-      className='bg-[#141413] px-5 py-8 text-[#FAF9F5] sm:px-8'
+      className='border-y-2 border-[#141413] bg-[#BCD1CA] px-5 text-[#141413] sm:px-8 dark:border-[#FAF9F5]'
       aria-label={t('API Endpoints')}
     >
-      <div className='mx-auto flex max-w-6xl flex-col gap-5 md:flex-row md:items-center md:justify-between'>
-        <p className='max-w-md font-serif text-2xl leading-tight'>
-          {t('API Endpoints')}
-        </p>
+      <div className='mx-auto grid max-w-7xl lg:grid-cols-[15rem_1fr]'>
+        <div className='flex items-center border-b border-[#141413]/35 py-6 lg:border-r lg:border-b-0 lg:pr-8'>
+          <div>
+            <p className='text-[0.6875rem] font-semibold tracking-[0.2em] uppercase'>
+              {t('Available Models')}
+            </p>
+            <p className='mt-1 font-serif text-2xl leading-tight'>
+              {t('API Endpoints')}
+            </p>
+          </div>
+        </div>
         <ul
-          className='flex flex-wrap gap-x-6 gap-y-2'
+          className='grid sm:grid-cols-2 lg:grid-cols-4'
           aria-label={t('Available Models')}
         >
           {PROTOCOLS.map((protocol) => (
-            <li key={protocol} className='text-sm text-[#FAF9F5]/75'>
-              {protocol}
+            <li
+              key={protocol.name}
+              className='border-b border-[#141413]/35 py-5 last:border-b-0 sm:odd:border-r sm:odd:pr-5 sm:even:pl-5 lg:border-r lg:border-b-0 lg:px-5 lg:last:border-r-0 lg:last:pr-0 sm:[&:nth-last-child(-n+2)]:border-b-0'
+            >
+              <span className='block font-serif text-lg'>{protocol.name}</span>
+              <code className='mt-1 block overflow-hidden text-[0.6875rem] text-ellipsis whitespace-nowrap text-[#141413]/65'>
+                {protocol.endpoint}
+              </code>
             </li>
           ))}
         </ul>

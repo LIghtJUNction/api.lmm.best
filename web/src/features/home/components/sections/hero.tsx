@@ -31,7 +31,7 @@ interface HeroProps {
 }
 
 const OUTLINE_CTA_CLASS =
-  'border-[#141413]/35 bg-[#FAF9F5] text-[#141413] hover:border-[#141413] hover:bg-[#E3DACC] hover:text-[#141413] dark:border-[#141413]/35 dark:bg-[#FAF9F5] dark:text-[#141413] dark:hover:border-[#141413] dark:hover:bg-[#E3DACC] dark:hover:text-[#141413]'
+  'border-[#141413]/45 bg-transparent text-[#141413] hover:border-[#141413] hover:bg-[#BCD1CA] hover:text-[#141413] dark:border-[#FAF9F5]/45 dark:text-[#FAF9F5] dark:hover:border-[#FAF9F5] dark:hover:bg-[#BCD1CA] dark:hover:text-[#141413]'
 
 function DocsLink({ href, label }: { href: string; label: string }) {
   const isExternal = /^https?:\/\//i.test(href)
@@ -88,37 +88,40 @@ export function Hero({ isAuthenticated = false }: HeroProps) {
     `https://docs.newapi.pro/${docsLang || 'en'}/docs`
   return (
     <section
-      className='flex min-h-[calc(100svh-var(--app-header-height))] items-center overflow-hidden bg-[#FAF9F5] px-5 py-16 text-[#141413] sm:px-8 sm:py-24'
+      className='relative overflow-hidden bg-[#FAF9F5] px-5 pt-28 pb-14 text-[#141413] sm:px-8 sm:pt-32 sm:pb-20 lg:pt-36 lg:pb-24 dark:bg-[#141413] dark:text-[#FAF9F5]'
       aria-labelledby='home-hero-title'
     >
-      <div className='mx-auto grid w-full max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,0.85fr)_minmax(25rem,1.15fr)] lg:gap-16 xl:gap-24'>
-        <div className='max-w-2xl'>
-          <div className='landing-animate-fade-up mb-7 flex items-center gap-3 opacity-0'>
+      <div className='mx-auto grid w-full max-w-7xl items-center gap-14 lg:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)] lg:gap-12 xl:gap-20'>
+        <div className='max-w-[46rem]'>
+          <div className='landing-animate-fade-up mb-6 flex items-center gap-3 opacity-0 sm:mb-8'>
             <span
               className='h-px w-9 shrink-0 bg-[#141413]'
               aria-hidden='true'
             />
-            <p className='text-xs font-semibold tracking-[0.18em] uppercase'>
+            <p className='text-[0.6875rem] font-semibold tracking-[0.2em] uppercase dark:text-[#FAF9F5]'>
               {t('AI Application Infrastructure Foundation')}
             </p>
           </div>
           <h1
             id='home-hero-title'
             lang='en'
-            className='landing-animate-fade-up max-w-[12ch] font-serif text-[clamp(3.25rem,7vw,5.75rem)] leading-[0.92] font-medium tracking-[-0.055em] text-balance opacity-0 [animation-delay:60ms]'
+            className='landing-animate-fade-up font-serif text-[clamp(3.3rem,7vw,7rem)] leading-[0.84] font-medium tracking-[-0.065em] opacity-0 [animation-delay:60ms]'
           >
-            Token Not Included
+            <span className='block whitespace-nowrap'>Token Not</span>
+            <span className='block whitespace-nowrap'>
+              Included<span className='text-[#6F9589]'>.</span>
+            </span>
           </h1>
-          <p className='landing-animate-fade-up mt-8 max-w-[34rem] text-base leading-7 text-pretty text-[#141413]/70 opacity-0 [animation-delay:120ms] sm:text-lg'>
+          <p className='landing-animate-fade-up mt-7 max-w-[38rem] border-l-2 border-[#141413] pl-5 text-base leading-7 text-pretty text-[#141413]/72 opacity-0 [animation-delay:120ms] sm:mt-9 sm:text-lg dark:border-[#FAF9F5] dark:text-[#FAF9F5]/72'>
             {t(
               'Access a vast selection of models via a standard, unified API protocol. Power AI applications, manage digital assets, and connect the Future.'
             )}
           </p>
 
-          <div className='landing-animate-fade-up mt-10 flex flex-col gap-3 opacity-0 [animation-delay:180ms] min-[420px]:flex-row min-[420px]:flex-wrap'>
+          <div className='landing-animate-fade-up mt-8 flex flex-col gap-3 opacity-0 [animation-delay:180ms] min-[420px]:flex-row min-[420px]:flex-wrap sm:mt-10'>
             <Button
               size='lg'
-              className='w-full border-[#141413] bg-[#141413] text-[#FAF9F5] hover:bg-[#D97757] hover:text-[#141413] min-[420px]:w-auto'
+              className='w-full border-[#141413] bg-[#141413] text-[#FAF9F5] hover:bg-[#BCD1CA] hover:text-[#141413] min-[420px]:w-auto dark:border-[#FAF9F5] dark:bg-[#FAF9F5] dark:text-[#141413] dark:hover:bg-[#BCD1CA]'
               render={<Link to={isAuthenticated ? '/dashboard' : '/sign-up'} />}
             >
               {isAuthenticated ? t('Go to Dashboard') : t('Get Started')}

@@ -59,12 +59,12 @@ export function Home() {
     return (
       <PublicLayout showMainContainer={false}>
         <main
-          className='flex min-h-[calc(100svh-var(--app-header-height))] items-center bg-[#FAF9F5] px-5 py-16 sm:px-8 sm:py-24'
+          className='flex min-h-[42rem] items-center bg-[#FAF9F5] px-5 pt-28 pb-14 sm:px-8 sm:pt-32 sm:pb-20 dark:bg-[#141413]'
           aria-busy='true'
           aria-live='polite'
         >
           <span className='sr-only'>{t('Loading...')}</span>
-          <div className='mx-auto grid w-full max-w-6xl items-center gap-14 lg:grid-cols-[minmax(0,0.85fr)_minmax(25rem,1.15fr)] lg:gap-16 xl:gap-24'>
+          <div className='mx-auto grid w-full max-w-7xl items-center gap-14 lg:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)] lg:gap-12 xl:gap-20'>
             <div className='max-w-2xl'>
               <Skeleton className='mb-7 h-3 w-56 bg-[#141413]/10' />
               <Skeleton className='h-28 w-full max-w-lg rounded-3xl bg-[#141413]/10 sm:h-40' />
