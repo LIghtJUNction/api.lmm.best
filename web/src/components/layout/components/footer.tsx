@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { cn } from '@/lib/utils'
+import { normalizeInterfaceLanguage } from '@/i18n/languages'
 
 interface FooterLink {
   text: string
@@ -46,6 +47,16 @@ const NEW_API_FOOTER_ATTRIBUTION_KEY = [
   'new' + 'api',
   'projectAttributionSuffix',
 ].join('.')
+
+const docsLanguageByInterfaceLanguage: Record<string, 'en' | 'ja' | 'zh'> = {
+  en: 'en',
+  fr: 'en',
+  ja: 'ja',
+  ru: 'en',
+  vi: 'en',
+  zhCN: 'zh',
+  zhTW: 'zh',
+}
 
 function FooterLinkItem(props: { link: FooterLink }) {
   const { t } = useTranslation()
@@ -144,13 +155,17 @@ function ProjectAttribution(props: { currentYear: number; inline?: boolean }) {
 }
 
 export function Footer(props: FooterProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const {
     systemName,
     logo: systemLogo,
     footerHtml,
     demoSiteEnabled,
   } = useSystemConfig()
+  const docsLang = docsLanguageByInterfaceLanguage[
+    normalizeInterfaceLanguage(i18n.resolvedLanguage || i18n.language)
+  ]
+  const docsBaseUrl = `https://docs.newapi.pro/${docsLang || 'en'}/docs`
 
   const displayLogo = systemLogo || props.logo || '/logo.png'
   const displayName = systemName || props.name || 'LMM API'
@@ -164,15 +179,15 @@ export function Footer(props: FooterProps) {
         links: [
           {
             text: t('footer.columns.about.links.aboutProject'),
-            href: 'https://docs.newapi.pro/wiki/project-introduction/',
+            href: `${docsBaseUrl}/guide/wiki/basic-concepts/project-introduction`,
           },
           {
             text: t('footer.columns.about.links.contact'),
-            href: 'https://docs.newapi.pro/support/community-interaction/',
+            href: `${docsBaseUrl}/support/community-interaction`,
           },
           {
             text: t('footer.columns.about.links.features'),
-            href: 'https://docs.newapi.pro/wiki/features-introduction/',
+            href: `${docsBaseUrl}/guide/wiki/basic-concepts/features-introduction`,
           },
         ],
       },
@@ -181,15 +196,15 @@ export function Footer(props: FooterProps) {
         links: [
           {
             text: t('footer.columns.docs.links.quickStart'),
-            href: 'https://docs.newapi.pro/getting-started/',
+            href: `${docsBaseUrl}/guide/home`,
           },
           {
             text: t('footer.columns.docs.links.installation'),
-            href: 'https://docs.newapi.pro/installation/',
+            href: `${docsBaseUrl}/installation`,
           },
           {
             text: t('footer.columns.docs.links.apiDocs'),
-            href: 'https://docs.newapi.pro/api/',
+            href: `${docsBaseUrl}/api`,
           },
         ],
       },
@@ -211,7 +226,7 @@ export function Footer(props: FooterProps) {
         ],
       },
     ],
-    [t]
+    [t, docsBaseUrl]
   )
 
   const displayColumns = props.columns ?? fallbackColumns
