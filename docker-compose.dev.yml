@@ -1,78 +1,88 @@
-# Frontend Development - Backend built from local source
-#
-# Usage:
-#   1. docker compose -f docker-compose.dev.yml up -d
-#   2. make dev-web
-#   3. Open http://localhost:5173 (Rsbuild dev server, API auto-proxied to :3000)
-#
-# Rebuild backend after Go code changes:
-#   docker compose -f docker-compose.dev.yml up -d --build new-api
-#
-# Stop:
-#   docker compose -f docker-compose.dev.yml down
-#
-# Reset data:
-#   docker compose -f docker-compose.dev.yml down -v
-
+# Rust backend for frontend development. PostgreSQL and Valkey must already exist and the
+# versioned application schema must already have been installed by lmm-db-migrate.
 services:
-  new-api:
+  postgres-preflight:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        result="$$(psql -XAt -v ON_ERROR_STOP=1 \
+          --set=schema="$$LMM_DATABASE_SCHEMA" \
+          --set=contract="$$LMM_SCHEMA_CONTRACT" \
+          -c "SELECT (current_setting('server_version_num')::int BETWEEN 180000 AND 189999 AND current_schema() = :'schema' AND EXISTS (SELECT 1 FROM :\"schema\".lmm_schema_contract WHERE singleton AND :'contract'::bigint BETWEEN min_reader_version AND max_reader_version AND :'contract'::bigint BETWEEN min_writer_version AND max_writer_version))::int")"
+        [ "$$result" = 1 ]
+    environment:
+      PGDATABASE: ${DATABASE_URL:?set the complete migrated PostgreSQL DATABASE_URL in .env}
+      LMM_DATABASE_SCHEMA: ${LMM_DATABASE_SCHEMA:?set a versioned LMM_DATABASE_SCHEMA in .env}
+      LMM_SCHEMA_CONTRACT: ${LMM_SCHEMA_CONTRACT:?set LMM_SCHEMA_CONTRACT in .env}
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  valkey-preflight:
+    image: valkey/valkey:8-alpine@sha256:a038175878d66b9d274fbf8be73c0305e93798b83917647f167e18cef3c71eec
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        result="$$(valkey-cli --no-auth-warning -u "$$VALKEY_URL" PING)"
+        [ "$$result" = PONG ]
+    environment:
+      VALKEY_URL: ${VALKEY_URL:?set the complete dedicated Valkey URL in .env}
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  lmm-api-rs:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    image: new-api-dev:local
-    container_name: new-api-dev
+      args:
+        LMM_BUILD_REVISION: ${LMM_BUILD_REVISION:-development}
+    image: lmm-api-rs-dev:local
     restart: unless-stopped
+    init: true
+    stop_grace_period: 45s
     ports:
-      - "3000:3000"
-    volumes:
-      - dev_data:/data
+      - "${LMM_API_BIND_ADDRESS:-127.0.0.1}:${LMM_API_PORT:-3000}:3000"
     environment:
-      - SQL_DSN=postgresql://root:123456@postgres:5432/new-api
-      - REDIS_CONN_STRING=redis://redis
-      - TZ=Asia/Shanghai
-      - BATCH_UPDATE_ENABLED=true
-      # Local HTTP dev mode: keep Secure=false and leave TRUSTED_URL unset. This disables the refresh/logout OriginGuard so the :5173 -> :3000 dev proxy works.
-      - SESSION_COOKIE_SECURE=false
-      # For HTTPS only: set Secure=true and list every exact trusted HTTPS browser Origin. This does not configure relay CORS.
-      # - SESSION_COOKIE_SECURE=true
-      # - SESSION_COOKIE_TRUSTED_URL=https://example.com,https://admin.example.com
+      DATABASE_URL: ${DATABASE_URL:?set the complete migrated PostgreSQL DATABASE_URL in .env}
+      VALKEY_URL: ${VALKEY_URL:?set the complete dedicated Valkey URL in .env}
+      LMM_DATABASE_SCHEMA: ${LMM_DATABASE_SCHEMA:?set a versioned LMM_DATABASE_SCHEMA in .env}
+      LMM_SCHEMA_CONTRACT: ${LMM_SCHEMA_CONTRACT:?set LMM_SCHEMA_CONTRACT in .env}
+      LMM_RS_LISTEN_ADDR: 0.0.0.0:3000
+      LMM_RS_SLOT: ${LMM_RS_SLOT:-blue}
+      LMM_DEPENDENCY_TIMEOUT_SECONDS: ${LMM_DEPENDENCY_TIMEOUT_SECONDS:-2}
+      LMM_DRAIN_TIMEOUT_SECONDS: ${LMM_DRAIN_TIMEOUT_SECONDS:-30}
+      LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS: ${LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS:-5}
+      GLOBAL_API_RATE_LIMIT_ENABLE: ${GLOBAL_API_RATE_LIMIT_ENABLE:-true}
+      GLOBAL_API_RATE_LIMIT: ${GLOBAL_API_RATE_LIMIT:-360}
+      GLOBAL_API_RATE_LIMIT_DURATION: ${GLOBAL_API_RATE_LIMIT_DURATION:-180}
+      TZ: ${TZ:-Asia/Shanghai}
     depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_healthy
-    networks:
-      - dev-network
-
-  redis:
-    image: redis:7-alpine
-    container_name: new-api-dev-redis
-    restart: unless-stopped
-    networks:
-      - dev-network
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: new-api-dev-pg
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: root
-      POSTGRES_PASSWORD: 123456
-      POSTGRES_DB: new-api
-    volumes:
-      - dev_pg_data:/var/lib/postgresql/data
-    networks:
-      - dev-network
+      postgres-preflight:
+        condition: service_completed_successfully
+      valkey-preflight:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U root -d new-api"]
-      interval: 5s
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/readyz"]
+      interval: 10s
       timeout: 3s
+      start_period: 10s
       retries: 5
-
-volumes:
-  dev_data:
-  dev_pg_data:
-
-networks:
-  dev-network:
-    driver: bridge
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

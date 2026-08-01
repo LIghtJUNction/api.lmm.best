@@ -1,9 +1,11 @@
 //! Auditable primitives for the SQLite to PostgreSQL migration.
 
 pub mod canonical;
+pub mod contract;
 pub mod inspect;
 pub mod manifest;
 pub mod migrate;
+pub mod release;
 pub mod report;
 
 use thiserror::Error;
@@ -29,6 +31,12 @@ pub enum MigrationError {
     /// PostgreSQL baseline, copy, or verification failed.
     #[error("PostgreSQL migration failed: {0}")]
     Postgres(#[from] postgres::Error),
+    /// The application schema contract or release ledger was unsafe or inconsistent.
+    #[error("schema contract failed: {0}")]
+    Contract(#[from] contract::ContractError),
+    /// Required release metadata was absent, malformed, or ambiguous.
+    #[error("release binding failed: {0}")]
+    ReleaseBinding(#[from] release::ReleaseBindingError),
 }
 
 impl MigrationError {
@@ -42,6 +50,8 @@ impl MigrationError {
             Self::Manifest(_) => "contract",
             Self::Canonical(_) => "conversion",
             Self::Postgres(_) => "postgresql",
+            Self::Contract(_) => "schema_contract",
+            Self::ReleaseBinding(_) => "release_binding",
         }
     }
 }

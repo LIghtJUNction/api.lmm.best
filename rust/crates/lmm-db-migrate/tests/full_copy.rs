@@ -2,10 +2,14 @@ use std::{fs, path::Path, process::Command};
 
 use lmm_db_migrate::{
     manifest::{Converter, Manifest},
-    migrate::{RehearseOptions, rehearse, verify},
+    migrate::{RehearseOptions, VerifyOptions, rehearse, verify},
+    release::{
+        CompatibilityRange, MANDATORY_COMPONENT_NAMES, ReleaseBinding, Sha256Digest, Version,
+    },
 };
 use postgres::{Client, NoTls};
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 
 #[test]
 #[ignore = "requires native PostgreSQL from rehearse-postgres.sh"]
@@ -15,62 +19,60 @@ fn full_copy_should_verify_all_tables_and_rollback_both_fault_phases() {
     let manifest_path = crate_dir.join("schema/table-map.json");
     let baseline = crate_dir.join("schema/postgresql-baseline.sql");
     let catalog_sql = crate_dir.join("schema/export-postgres-catalog.sql");
+    let contract_migration = crate_dir.join("../../migrations/0001_schema_contract.sql");
+    let release = release_binding(&contract_migration, "full-copy-release");
     let manifest = Manifest::load(&manifest_path).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let sqlite = directory.path().join("all-tables.db");
     create_sqlite_fixture(&sqlite, &manifest);
+    let fixtures = RehearseFixtures {
+        sqlite: &sqlite,
+        manifest: &manifest,
+        baseline: &baseline,
+        catalog_sql: &catalog_sql,
+        contract_migration: &contract_migration,
+        release: &release,
+    };
 
-    let report = rehearse(&options(
-        &sqlite,
-        &manifest,
-        &baseline,
-        &catalog_sql,
-        "lmm_copy_success",
-        &database_url,
-    ))
-    .unwrap();
+    let report = rehearse(&options(&fixtures, "lmm_copy_success", &database_url)).unwrap();
     assert_eq!(report.table_count, 34);
     assert_eq!(report.sequence_count, 29);
     assert_eq!(report.financial_aggregates.len(), 15);
-    assert!(verify(&sqlite, &manifest, "lmm_copy_success", &database_url).is_ok());
-    assert_cli_success_audit(&sqlite, directory.path(), &database_url);
-    assert_independent_oracle(&sqlite, &database_url);
     assert!(
-        rehearse(&options(
-            &sqlite,
-            &manifest,
-            &baseline,
-            &catalog_sql,
-            "lmm_copy_success",
-            &database_url
-        ))
-        .is_err()
+        verify(&VerifyOptions {
+            sqlite: &sqlite,
+            manifest: &manifest,
+            schema: "lmm_copy_success",
+            database_url: &database_url,
+            release: &release,
+        })
+        .is_ok()
     );
-
-    let mut copy_fault = options(
+    assert_cli_success_audit(
         &sqlite,
-        &manifest,
-        &baseline,
-        &catalog_sql,
-        "lmm_copy_fault",
+        directory.path(),
         &database_url,
+        &contract_migration,
     );
+    assert_independent_oracle(&sqlite, &database_url);
+    assert!(rehearse(&options(&fixtures, "lmm_copy_success", &database_url)).is_err());
+
+    let mut copy_fault = options(&fixtures, "lmm_copy_fault", &database_url);
     copy_fault.fault_after_table = Some("channels");
     assert!(rehearse(&copy_fault).is_err());
     assert!(!schema_exists(&database_url, "lmm_copy_fault"));
 
-    let mut verify_fault = options(
-        &sqlite,
-        &manifest,
-        &baseline,
-        &catalog_sql,
-        "lmm_verify_fault",
-        &database_url,
-    );
+    let mut verify_fault = options(&fixtures, "lmm_verify_fault", &database_url);
     verify_fault.fault_before_verify = true;
     assert!(rehearse(&verify_fault).is_err());
     assert!(!schema_exists(&database_url, "lmm_verify_fault"));
-    assert_sensitive_failures_are_redacted(&sqlite, directory.path(), crate_dir, &database_url);
+    assert_sensitive_failures_are_redacted(
+        &sqlite,
+        directory.path(),
+        crate_dir,
+        &database_url,
+        &contract_migration,
+    );
 }
 
 #[cfg(unix)]
@@ -79,6 +81,7 @@ fn assert_sensitive_failures_are_redacted(
     directory: &Path,
     crate_dir: &Path,
     database_url: &str,
+    contract_migration: &Path,
 ) {
     let cases = [
         (
@@ -104,7 +107,8 @@ fn assert_sensitive_failures_are_redacted(
         connection.execute_batch(mutation).unwrap();
         connection.close().unwrap();
         let report = directory.join(format!("{name}.json"));
-        let output = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"));
+        command
             .args(["rehearse", "--sqlite"])
             .arg(&sqlite)
             .args(["--manifest"])
@@ -113,11 +117,13 @@ fn assert_sensitive_failures_are_redacted(
             .arg(crate_dir.join("schema/postgresql-baseline.sql"))
             .args(["--catalog-sql"])
             .arg(crate_dir.join("schema/export-postgres-catalog.sql"))
+            .args(["--contract-migration"])
+            .arg(contract_migration)
             .args(["--schema", schema, "--report"])
             .arg(&report)
-            .env("LMM_MIGRATE_DATABASE_URL", database_url)
-            .output()
-            .unwrap();
+            .env("LMM_MIGRATE_DATABASE_URL", database_url);
+        add_release_arguments(&mut command, contract_migration, "full-copy-release");
+        let output = command.output().unwrap();
         assert!(!output.status.success());
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.starts_with("migration failed: stage=rehearse error_category="));
@@ -129,19 +135,27 @@ fn assert_sensitive_failures_are_redacted(
     }
 }
 
-fn options<'a>(
+struct RehearseFixtures<'a> {
     sqlite: &'a Path,
     manifest: &'a Manifest,
     baseline: &'a Path,
     catalog_sql: &'a Path,
+    contract_migration: &'a Path,
+    release: &'a ReleaseBinding,
+}
+
+fn options<'a>(
+    fixtures: &'a RehearseFixtures<'a>,
     schema: &'a str,
     database_url: &'a str,
 ) -> RehearseOptions<'a> {
     RehearseOptions {
-        sqlite,
-        manifest,
-        baseline,
-        catalog_sql,
+        sqlite: fixtures.sqlite,
+        manifest: fixtures.manifest,
+        baseline: fixtures.baseline,
+        catalog_sql: fixtures.catalog_sql,
+        contract_migration: fixtures.contract_migration,
+        release: fixtures.release,
         schema,
         database_url,
         fault_after_table: None,
@@ -316,20 +330,26 @@ fn assert_independent_oracle(sqlite: &Path, database_url: &str) {
 }
 
 #[cfg(unix)]
-fn assert_cli_success_audit(sqlite: &Path, directory: &Path, database_url: &str) {
+fn assert_cli_success_audit(
+    sqlite: &Path,
+    directory: &Path,
+    database_url: &str,
+    contract_migration: &Path,
+) {
     use std::os::unix::fs::PermissionsExt;
     let report = directory.join("success.json");
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let output = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"));
+    command
         .args(["verify", "--sqlite"])
         .arg(sqlite)
         .args(["--manifest"])
         .arg(crate_dir.join("schema/table-map.json"))
         .args(["--schema", "lmm_copy_success", "--report"])
         .arg(&report)
-        .env("LMM_MIGRATE_DATABASE_URL", database_url)
-        .output()
-        .unwrap();
+        .env("LMM_MIGRATE_DATABASE_URL", database_url);
+    add_release_arguments(&mut command, contract_migration, "full-copy-release");
+    let output = command.output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -381,13 +401,77 @@ fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
+fn release_binding(contract_migration: &Path, release_id: &str) -> ReleaseBinding {
+    let contract_sha256 = contract_sha256(contract_migration);
+    ReleaseBinding::new(
+        Version::new(1, "contract_id").expect("valid contract version"),
+        contract_sha256.parse().expect("valid contract digest"),
+        CompatibilityRange::new(
+            Version::new(1, "reader").expect("valid reader version"),
+            Version::new(1, "reader").expect("valid reader version"),
+            "reader",
+        )
+        .expect("valid reader range"),
+        CompatibilityRange::new(
+            Version::new(1, "writer").expect("valid writer version"),
+            Version::new(1, "writer").expect("valid writer version"),
+            "writer",
+        )
+        .expect("valid writer range"),
+        release_id.parse().expect("valid release identifier"),
+        Sha256Digest::parse(&"b".repeat(64), "release").expect("valid release digest"),
+        MANDATORY_COMPONENT_NAMES.iter().map(|name| {
+            format!("{name}={}", "c".repeat(64))
+                .parse()
+                .expect("valid component")
+        }),
+    )
+    .expect("complete release binding")
+}
+
+fn contract_sha256(contract_migration: &Path) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(fs::read(contract_migration).expect("contract migration is readable"))
+    )
+}
+
+fn add_release_arguments(command: &mut Command, contract_migration: &Path, release_id: &str) {
+    command.args([
+        "--contract-id",
+        "1",
+        "--contract-sha256",
+        &contract_sha256(contract_migration),
+        "--min-reader-version",
+        "1",
+        "--max-reader-version",
+        "1",
+        "--min-writer-version",
+        "1",
+        "--max-writer-version",
+        "1",
+        "--release-id",
+        release_id,
+        "--release-sha256",
+        &"b".repeat(64),
+    ]);
+    for name in MANDATORY_COMPONENT_NAMES {
+        command
+            .arg("--component-sha256")
+            .arg(format!("{name}={}", "c".repeat(64)));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_failure_should_publish_private_non_sensitive_audit() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let report = directory.path().join("failure.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"))
+    let contract_migration =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations/0001_schema_contract.sql");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"));
+    command
         .args([
             "rehearse",
             "--sqlite",
@@ -398,14 +482,14 @@ fn cli_failure_should_publish_private_non_sensitive_audit() {
             "/not/used",
             "--catalog-sql",
             "/not/used",
-            "--schema",
-            "safe",
-            "--report",
+            "--contract-migration",
         ])
+        .arg(&contract_migration)
+        .args(["--schema", "safe", "--report"])
         .arg(&report)
-        .env_remove("LMM_MIGRATE_DATABASE_URL")
-        .output()
-        .unwrap();
+        .env_remove("LMM_MIGRATE_DATABASE_URL");
+    add_release_arguments(&mut command, &contract_migration, "failure-release");
+    let output = command.output().unwrap();
     assert!(!output.status.success());
     let audit = fs::read_to_string(&report).unwrap();
     assert_eq!(

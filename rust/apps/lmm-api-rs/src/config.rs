@@ -1,5 +1,10 @@
 use lmm_application::ValkeyReadinessPolicy;
-use std::{env, net::SocketAddr, time::Duration};
+use std::{
+    env, fs,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use thiserror::Error;
 #[derive(Clone)]
 pub struct Config {
@@ -14,6 +19,7 @@ pub struct Config {
     pub valkey_readiness_policy: ValkeyReadinessPolicy,
     pub global_api_rate_limit: u64,
     pub global_api_rate_limit_window: Duration,
+    pub web_dist_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Config {
@@ -34,6 +40,7 @@ impl std::fmt::Debug for Config {
                 "global_api_rate_limit_window",
                 &self.global_api_rate_limit_window,
             )
+            .field("web_dist_dir", &self.web_dist_dir)
             .finish()
     }
 }
@@ -64,8 +71,30 @@ impl Config {
             ),
             global_api_rate_limit: positive_integer("GLOBAL_API_RATE_LIMIT", 360)?,
             global_api_rate_limit_window: positive_seconds("GLOBAL_API_RATE_LIMIT_DURATION", 180)?,
+            web_dist_dir: web_dist_dir()?,
         })
     }
+}
+
+fn web_dist_dir() -> Result<Option<PathBuf>, ConfigError> {
+    env::var_os("LMM_WEB_DIST_DIR")
+        .map(PathBuf::from)
+        .map_or(Ok(None), |path| validate_web_dist_dir(&path).map(Some))
+}
+
+fn validate_web_dist_dir(path: &Path) -> Result<PathBuf, ConfigError> {
+    let root = fs::canonicalize(path).map_err(|_| ConfigError::Invalid("LMM_WEB_DIST_DIR"))?;
+    if !root.is_dir() {
+        return Err(ConfigError::Invalid("LMM_WEB_DIST_DIR"));
+    }
+
+    let index = fs::canonicalize(root.join("index.html"))
+        .map_err(|_| ConfigError::Invalid("LMM_WEB_DIST_DIR"))?;
+    if !index.is_file() || !index.starts_with(&root) {
+        return Err(ConfigError::Invalid("LMM_WEB_DIST_DIR"));
+    }
+
+    Ok(root)
 }
 fn validated_slot(value: String) -> Result<String, ConfigError> {
     match value.as_str() {
@@ -112,9 +141,10 @@ fn boolean(name: &'static str, default: bool) -> Result<bool, ConfigError> {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, validate_web_dist_dir};
     use lmm_application::ValkeyReadinessPolicy;
-    use std::{net::SocketAddr, time::Duration};
+    use std::{fs, net::SocketAddr, time::Duration};
+    use uuid::Uuid;
 
     #[test]
     fn debug_should_redact_connection_urls() {
@@ -130,8 +160,33 @@ mod tests {
             valkey_readiness_policy: ValkeyReadinessPolicy::RequiredForRateLimiting,
             global_api_rate_limit: 360,
             global_api_rate_limit_window: Duration::from_secs(180),
+            web_dist_dir: None,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("secret"));
+    }
+
+    #[test]
+    fn web_dist_validation_should_require_an_index_file() {
+        let root = std::env::temp_dir().join(format!("lmm-web-dist-{}", Uuid::new_v4()));
+        fs::create_dir(&root).expect("fixture directory is created");
+
+        let error = validate_web_dist_dir(&root).expect_err("missing index must fail");
+        assert!(matches!(
+            error,
+            super::ConfigError::Invalid("LMM_WEB_DIST_DIR")
+        ));
+
+        fs::remove_dir(&root).expect("fixture directory is removed");
+    }
+
+    #[test]
+    fn web_dist_validation_should_reject_a_missing_configured_directory() {
+        let missing = std::env::temp_dir().join(format!("lmm-web-missing-{}", Uuid::new_v4()));
+        let error = validate_web_dist_dir(&missing).expect_err("missing directory must fail");
+        assert!(matches!(
+            error,
+            super::ConfigError::Invalid("LMM_WEB_DIST_DIR")
+        ));
     }
 }

@@ -41,6 +41,66 @@ jobs:
           fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 0 || 1 }}
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - name: Require complete Rust production parity
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          bash rust/scripts/check-go-route-manifest.sh
+          legacy=rust/routes/legacy-go-routes.tsv
+          implemented=rust/routes/rust-implemented-routes.tsv
+          ownership=rust/routes/ownership.tsv
+          parity_tmp="$(mktemp -d "${RUNNER_TEMP}/lmm-route-parity.XXXXXX")"
+          trap 'rm -rf "$parity_tmp"' EXIT
+
+          awk -F '\t' 'NF == 3 { print $1 "\t" $2 }' "$legacy" | sort -u > "$parity_tmp/legacy"
+          awk -F '\t' '$0 !~ /^#/ && NF == 3 { print $1 "\t" $2 }' "$implemented" | sort -u > "$parity_tmp/implemented"
+          legacy_count="$(wc -l < "$parity_tmp/legacy")"
+          implemented_count="$(wc -l < "$parity_tmp/implemented")"
+          missing_count="$(comm -23 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
+          extra_count="$(comm -13 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
+
+          if [[ "$legacy_count" -ne 356 || "$implemented_count" -ne 356 ||
+                "$missing_count" -ne 0 || "$extra_count" -ne 0 ]]; then
+            echo "::error::Docker publish blocked: Rust route coverage is incomplete (implemented=${implemented_count}/356, missing=${missing_count}, extra=${extra_count})"
+            exit 1
+          fi
+
+          awk -F '\t' '
+            FNR == NR {
+              if ($0 ~ /^#/ || NF == 0) next
+              priority[++rules] = $1 + 0
+              kind[rules] = $2
+              pattern[rules] = $3
+              owner[rules] = $4
+              next
+            }
+            {
+              path = $2
+              best = -1
+              winners = 0
+              for (rule = 1; rule <= rules; rule++) {
+                applies = (kind[rule] == "exact" && path == pattern[rule]) ||
+                          (kind[rule] == "prefix" && index(path, pattern[rule]) == 1)
+                if (!applies) continue
+                if (priority[rule] > best) {
+                  best = priority[rule]
+                  winners = 1
+                  winner = rule
+                } else if (priority[rule] == best) {
+                  winners++
+                }
+              }
+              if (winners != 1 || owner[winner] != "rust") failures++
+              else rust_owned++
+            }
+            END {
+              if (rust_owned != 356) failures++
+              if (failures) print "Docker publish blocked: all 356 routes must be unambiguously Rust-owned" > "/dev/stderr"
+              exit failures != 0
+            }
+          ' "$ownership" "$legacy"
+          echo "Docker publish parity gate passed: 356/356 routes are implemented and Rust-owned."
+
       - name: Resolve tag & write VERSION
         id: version
         run: |
@@ -53,8 +113,10 @@ jobs:
           else
             TAG=${GITHUB_REF#refs/tags/}
           fi
+          REVISION=$(git rev-parse HEAD)
           echo "TAG=${TAG}" >> $GITHUB_ENV
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "revision=${REVISION}" >> $GITHUB_OUTPUT
           echo "${TAG}" > VERSION
           echo "Building tag: ${TAG} for ${{ matrix.arch }}"
 
@@ -78,6 +140,8 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          build-args: |
+            LMM_BUILD_REVISION=${{ steps.version.outputs.revision }}
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
@@ -137,7 +201,7 @@ jobs:
             calciumion/new-api:latest-arm64
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign manifests with cosign
         run: |

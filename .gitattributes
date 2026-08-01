@@ -1,8 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# Go files
-*.go text eol=lf
+# Rust files
+*.rs text eol=lf
 
 # Config files
 *.json text eol=lf
@@ -35,7 +35,7 @@
 # GitHub Linguist - Language Detection
 # ============================================
 # Keep frontend TypeScript logic visible while excluding the TSX view layer,
-# whose markup-heavy files otherwise outweigh the primary Go service by bytes.
+# whose markup-heavy files otherwise outweigh the primary Rust service by bytes.
 web/**/*.tsx -linguist-detectable
 electron/** linguist-vendored
 
