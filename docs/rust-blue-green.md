@@ -100,6 +100,10 @@ Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只�
 
 Rust 已实现与 Go `GlobalAPIRateLimit` 对齐的 Valkey 固定窗口：沿用 `GLOBAL_API_RATE_LIMIT_*` 配置、`rateLimit:v2:ip:GA:<ip>` key、Lua 原子 INCR/EXPIRE/TTL 修复、429 空 body 与 `Retry-After`，Valkey 检查失败时按 Go 行为 fail-closed 返回空 500。客户端 IP 只在连接 peer 为 loopback nginx 时读取 `X-Real-IP`。实际 route ownership 切换前，Go 与 Rust 必须共同使用专用 Valkey 6380，否则跨后端请求会得到两份独立额度。
 
+commit `825a3bfe15878b125daa57b478b784a4e7847c62` 在真实 Valkey 6380 上用隔离 IP 和临时 `2/37s` 配置验证了 `200, 200, 429`，第三次空 body 且 `Retry-After=37`，对应共享 key 计数为 3。测试 key 随后删除，配置原子恢复为 `360/180s`，同一 artifact 再切换到 green。生产 Go 全程 PID 不变且 `NRestarts=0`。
+
+生产 Go 的 `/etc/lmm-api/lmm-api.env` 当前没有 `REDIS_CONN_STRING`，因此仍使用进程内 global API limiter。不得在这一状态下把部分 `/api` ownership 交给 Rust，否则客户端可在两个后端各获得一份额度。也不得仅为接入 Valkey 在交互会话中重启唯一 Go 进程；Go 接入专用 6380 必须进入可脱离控制连接运行、具备健康验证与完整回滚的后端/PG 切换事务。
+
 2026-08-01 将 commit `883526b1a553697b5c3ce02dbf5ea7ab8fd3c7e5` 发布到内部 blue slot 后，使用从 Go TLS 响应复制到隔离 rehearsal PG 的三项内容逐项比较规范化 JSON，三条路径全部一致。真实 Valkey 6380 上三个 versioned key 均建立且 TTL 为 5 秒。生产 `/api/status` 保持 200，公网内部探针保持 403，Go PID 与 `NRestarts=0` 未变化。演练同时确认 rehearsal schema 对象必须由应用 role 拥有或显式授予最小权限；readiness 的 `SELECT 1` 不能替代业务表权限 canary。
 
 commit `ba44b924e949dd52c780097ea8f9edb2001d864d` 增加 `options` 最小读权限 canary 后，隔离环境临时撤销权限会使候选 green 持续返回 503，部署事务自动保留旧 blue/3100；恢复应用 role 所有权后，同一 artifact 正常切换到 green，durable result 为 `SUCCESS active=green previous=blue`。整个故障注入期间 Go PID 与 `NRestarts=0` 未变化。
