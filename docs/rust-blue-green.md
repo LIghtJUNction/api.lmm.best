@@ -8,7 +8,7 @@
 - artifact 安装到 `/opt/lmm-api-rs/releases/<revision>/`；slot 的 `current` 符号链接用同文件系统 `rename(2)` 原子替换。
 - 部署程序与 nginx 资产固定安装到 `/usr/lib/lmm-api-rs/deploy/`，`/usr/local/sbin` 仅提供符号链接入口；transient unit 不依赖调用者当前目录。
 - PostgreSQL migrator 是独立事务，绝不放在应用 `ExecStartPre`、应用启动或蓝绿切换脚本里。
-- `/readyz` 必须验证 PostgreSQL 与 schema contract；Valkey 是可选加速层，故障时返回 HTTP 200 的 `degraded`，不能阻止实例接流。`/livez` 只证明进程存活。
+- `/readyz` 必须验证 PostgreSQL 与 schema contract，并发执行全部检查且不短路。启用 fail-closed 全局 API 限流时，Valkey 也是 required dependency，故障必须返回 HTTP 503；关闭限流时 Valkey 才只是 cache acceleration，故障返回 HTTP 200 的 `degraded`。`/livez` 只证明进程存活。
 - nginx upstream include 先写 `.next`，经 `mv -T` 原子替换，再执行 `nginx -t` 与 reload。失败时恢复审计目录保存的旧 include。
 - nginx 不配置对非幂等请求的重试。当前 route ownership include 只提供三个仅 loopback 可访问的 GET/HEAD 内部探针。
 - 每次事务用 `flock` 串行化，并在 `/var/log/lmm-api-rs/deployments/<UTC>-<revision>/` 保存不含连接串的 hash、探针结果、切换前配置与结果。
@@ -94,11 +94,11 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 
 ## 当前 Rust 业务迁移状态
 
-Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只读垂直切片，用于 direct differential testing。实现按 domain content kind → application repository/cache ports → SQLx PostgreSQL 与 Redis/Valkey adapters → Axum transport 分层。Valkey 使用 `lmm:public-content:v1:*` 短 TTL cache-aside；miss 或故障回源 PostgreSQL，缓存写失败不影响响应，PG 始终是唯一权威来源。
+Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只读垂直切片，用于 direct differential testing。实现按 domain content kind → application repository/cache ports → SQLx PostgreSQL 与 Redis/Valkey adapters → Axum transport 分层。Valkey 使用 `lmm:public-content:v1:*` 短 TTL cache-aside；miss、失败或 `LMM_DEPENDENCY_TIMEOUT_SECONDS` 超时均回源 PostgreSQL，PG read 也受同一 deadline 约束，缓存写超时/失败不影响成功响应，PG 始终是唯一权威来源。
 
 这些路径尚未加入 nginx Rust ownership。生产 `/api/` 仍全部进入 Go；在生产 PG 切换、差分测试和 Rust 全局 API rate limit 完成前不得改变这一点。
 
-Rust 已实现与 Go `GlobalAPIRateLimit` 对齐的 Valkey 固定窗口：沿用 `GLOBAL_API_RATE_LIMIT_*` 配置、`rateLimit:v2:ip:GA:<ip>` key、Lua 原子 INCR/EXPIRE/TTL 修复、429 空 body 与 `Retry-After`，Valkey 检查失败时按 Go 行为 fail-closed 返回空 500。客户端 IP 只在连接 peer 为 loopback nginx 时读取 `X-Real-IP`。实际 route ownership 切换前，Go 与 Rust 必须共同使用专用 Valkey 6380，否则跨后端请求会得到两份独立额度。
+Rust 已实现与 Go `GlobalAPIRateLimit` 对齐的 Valkey 固定窗口：沿用 `GLOBAL_API_RATE_LIMIT_*` 配置、`rateLimit:v2:ip:GA:<ip>` key、Lua 原子 INCR/EXPIRE/TTL 修复、429 空 body 与 `Retry-After`。启用时，`LMM_DEPENDENCY_TIMEOUT_SECONDS` 覆盖完整的 Valkey connect + Lua operation；连接、命令或超时失败都按 Go 行为 fail-closed 返回空 500。关闭时在任何 Valkey I/O 前直接放行。客户端 IP 只在连接 peer 为 loopback nginx 时读取 `X-Real-IP`。实际 route ownership 切换前，Go 与 Rust 必须共同使用专用 Valkey 6380，否则跨后端请求会得到两份独立额度。自动化测试用 pending future 的毫秒级 seam 验证 deadline；真实 half-open Valkey 仍须在 staging 故障注入验证，不能把单元测试当作网络集成证明。
 
 commit `825a3bfe15878b125daa57b478b784a4e7847c62` 在真实 Valkey 6380 上用隔离 IP 和临时 `2/37s` 配置验证了 `200, 200, 429`，第三次空 body 且 `Retry-After=37`，对应共享 key 计数为 3。测试 key 随后删除，配置原子恢复为 `360/180s`，同一 artifact 再切换到 green。生产 Go 全程 PID 不变且 `NRestarts=0`。
 

@@ -15,9 +15,7 @@ use tokio::{net::TcpListener, sync::watch};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     lmm_observability::init()?;
     let config = Config::from_env()?;
-    let pg = PgPoolOptions::new()
-        .acquire_timeout(config.dependency_timeout)
-        .connect_lazy(&config.database_url)?;
+    let pg = PgPoolOptions::new().connect_lazy(&config.database_url)?;
     let valkey = redis::Client::open(config.valkey_url.as_str())?;
     let probe = InfrastructureProbe::new(
         pg.clone(),
@@ -32,11 +30,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         http::router(AppState {
             readiness: Arc::new(probe),
+            valkey_readiness_policy: config.valkey_readiness_policy,
             global_api_rate_limiter: Arc::new(ValkeyGlobalApiRateLimiter::new(
                 valkey.clone(),
-                config.global_api_rate_limit_enabled,
+                config.valkey_readiness_policy,
                 config.global_api_rate_limit,
                 config.global_api_rate_limit_window,
+                config.dependency_timeout,
             )),
             public_content: Arc::new(lmm_application::PublicContentService::new(
                 Arc::new(PgPublicContentRepository::new(pg)),
@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     valkey,
                     config.public_content_cache_ttl,
                 )),
+                config.dependency_timeout,
             )),
             slot: config.slot.clone(),
         })
