@@ -13,7 +13,8 @@ use axum::{
     routing::get,
 };
 use lmm_application::{
-    GlobalApiRateLimiter, PublicContentService, RateLimitOutcome, ReadinessProbe, check_readiness,
+    GlobalApiRateLimiter, PublicContentService, RateLimitOutcome, ReadinessProbe,
+    ValkeyReadinessPolicy, check_readiness,
 };
 use lmm_contracts::{
     BuildResponse, ErrorBody, ErrorEnvelope, HealthResponse, LegacySuccessEnvelope,
@@ -28,6 +29,7 @@ const REAL_IP_HEADER: HeaderName = HeaderName::from_static("x-real-ip");
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
+    pub valkey_readiness_policy: ValkeyReadinessPolicy,
     pub global_api_rate_limiter: Arc<dyn GlobalApiRateLimiter>,
     pub public_content: Arc<PublicContentService>,
     pub slot: String,
@@ -116,7 +118,7 @@ async fn livez() -> Json<HealthResponse> {
 }
 
 async fn readyz(State(state): State<AppState>, request: Request) -> Response {
-    let report = check_readiness(state.readiness.as_ref()).await;
+    let report = check_readiness(state.readiness.as_ref(), state.valkey_readiness_policy).await;
     for failure in &report.required_failures {
         tracing::warn!(
             dependency = failure.dependency,
@@ -313,7 +315,7 @@ mod tests {
     use lmm_application::{
         GlobalApiRateLimiter, ProbeError, PublicContentCache, PublicContentCacheError,
         PublicContentError, PublicContentRepository, PublicContentService, RateLimitError,
-        RateLimitOutcome, ReadinessProbe,
+        RateLimitOutcome, ReadinessProbe, ValkeyReadinessPolicy,
     };
     use lmm_domain::PublicContentKind;
     use serde_json::Value;
@@ -401,12 +403,26 @@ mod tests {
         failing: Option<&'static str>,
         global_api_rate_limiter: Arc<dyn GlobalApiRateLimiter>,
     ) -> AppState {
+        state_with_rate_limiter_and_policy(
+            failing,
+            global_api_rate_limiter,
+            ValkeyReadinessPolicy::RequiredForRateLimiting,
+        )
+    }
+
+    fn state_with_rate_limiter_and_policy(
+        failing: Option<&'static str>,
+        global_api_rate_limiter: Arc<dyn GlobalApiRateLimiter>,
+        valkey_readiness_policy: ValkeyReadinessPolicy,
+    ) -> AppState {
         AppState {
             readiness: Arc::new(MockProbe(failing)),
+            valkey_readiness_policy,
             global_api_rate_limiter,
             public_content: Arc::new(PublicContentService::new(
                 Arc::new(MockContentRepository(Some("configured content".to_owned()))),
                 Arc::new(MissingCache),
+                std::time::Duration::from_secs(1),
             )),
             slot: "blue".to_owned(),
         }
@@ -441,6 +457,23 @@ mod tests {
         client_id: Option<&str>,
         failing: Option<&'static str>,
     ) -> (StatusCode, String, Value) {
+        call_with_policy(
+            method,
+            uri,
+            client_id,
+            failing,
+            ValkeyReadinessPolicy::RequiredForRateLimiting,
+        )
+        .await
+    }
+
+    async fn call_with_policy(
+        method: &str,
+        uri: &str,
+        client_id: Option<&str>,
+        failing: Option<&'static str>,
+        valkey_readiness_policy: ValkeyReadinessPolicy,
+    ) -> (StatusCode, String, Value) {
         let mut builder = Request::builder().method(method).uri(uri);
         if let Some(value) = client_id {
             builder = builder.header("x-request-id", value);
@@ -451,10 +484,14 @@ mod tests {
                 .parse::<SocketAddr>()
                 .expect("test socket address is valid"),
         ));
-        let response = router(state(failing))
-            .oneshot(request)
-            .await
-            .expect("router is infallible");
+        let response = router(state_with_rate_limiter_and_policy(
+            failing,
+            Arc::new(AllowAllRateLimiter),
+            valkey_readiness_policy,
+        ))
+        .oneshot(request)
+        .await
+        .expect("router is infallible");
         let status = response.status();
         let id = response
             .headers()
@@ -519,8 +556,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn valkey_failure_should_degrade_without_rejecting_traffic() {
+    async fn valkey_failure_should_reject_traffic_when_rate_limiting_is_enabled() {
         let (status, _, body) = call("GET", "/readyz", None, Some("valkey")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "not_ready");
+    }
+
+    #[tokio::test]
+    async fn valkey_failure_should_degrade_when_rate_limiting_is_disabled() {
+        let (status, _, body) = call_with_policy(
+            "GET",
+            "/readyz",
+            None,
+            Some("valkey"),
+            ValkeyReadinessPolicy::OptionalCacheOnly,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "degraded");
     }
