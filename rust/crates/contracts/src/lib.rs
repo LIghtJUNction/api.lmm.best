@@ -31,4 +31,6 @@ pub struct BuildResponse {
     pub version: &'static str,
     /// Source revision injected by the native package build.
     pub revision: &'static str,
+    /// Runtime blue/green slot identity.
+    pub slot: String,
 }

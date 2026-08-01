@@ -56,6 +56,8 @@ snapshot() {
     etc/nginx/lmm-api-mime.types \
     etc/nginx/lmm-api-http-map.conf \
     etc/nginx/lmm-api-locations.conf \
+    etc/nginx/conf.d/lmm-api-rs-active-upstream.conf \
+    etc/nginx/snippets/lmm-api-rs-probe-locations.conf \
     etc/nginx/conf.d/new-api.conf; do
     if [[ -e $root/$target || -L $root/$target ]]; then
       stat -c "$target %F %a %u %g" "$root/$target"
@@ -115,5 +117,15 @@ grep -Fq 'unsafe existing target' "$root/output"
 root=$(setup_case double-failure)
 run_failure "$root" "$root/output" env MOCK_RELOAD_FAIL_COUNTS=1 MOCK_NGINX_FAIL_COUNTS=2
 grep -Fq 'candidate failed (43) and restore verification failed (42)' "$root/output"
+
+# An active Rust upstream is transaction-owned and must survive a general nginx update.
+root=$(setup_case active-rust-upstream)
+cat >"$root/etc/nginx/conf.d/lmm-api-rs-active-upstream.conf" <<'EOF'
+upstream lmm_api_rs_active { server 127.0.0.1:3101; }
+EOF
+active_hash=$(sha256sum "$root/etc/nginx/conf.d/lmm-api-rs-active-upstream.conf")
+env PATH="$root/mock-bin:$PATH" MOCK_STATE="$root/state" \
+  LMM_NGINX_TEST_MODE=1 LMM_NGINX_TEST_ROOT="$root" "$installer" install >/dev/null 2>&1
+[[ $active_hash == "$(sha256sum "$root/etc/nginx/conf.d/lmm-api-rs-active-upstream.conf")" ]]
 
 printf 'nginx installer failure-injection tests passed\n'
