@@ -33,8 +33,8 @@ export function CTA({ isAuthenticated = false }: CTAProps) {
   if (isAuthenticated) return null
 
   return (
-    <section className='bg-[#D97757] px-5 py-20 text-[#141413] sm:px-8 sm:py-28'>
-      <AnimateInView className='mx-auto grid max-w-6xl gap-8 border-y-2 border-[#141413] py-10 md:grid-cols-[1fr_auto] md:items-end'>
+    <section className='bg-[#BCD1CA] px-5 py-20 text-[#141413] sm:px-8 sm:py-28'>
+      <AnimateInView className='mx-auto grid max-w-7xl gap-8 border-y-2 border-[#141413] py-10 md:grid-cols-[1fr_auto] md:items-end'>
         <div>
           <p className='mb-4 text-xs font-semibold tracking-[0.18em] uppercase'>
             {t('Open Source')}

@@ -48,8 +48,8 @@ export function HowItWorks() {
   const { t } = useTranslation()
 
   return (
-    <section className='bg-[#E3DACC] px-5 py-20 text-[#141413] sm:px-8 sm:py-28'>
-      <div className='mx-auto max-w-6xl'>
+    <section className='bg-[#F0EEE6] px-5 py-20 text-[#141413] sm:px-8 sm:py-28 dark:bg-[#22221F] dark:text-[#FAF9F5]'>
+      <div className='mx-auto max-w-7xl'>
         <AnimateInView className='mb-14 max-w-2xl'>
           <p className='mb-4 text-xs font-semibold tracking-[0.18em] uppercase'>
             {t('How It Works')}
@@ -67,7 +67,7 @@ export function HowItWorks() {
                 key={step.number}
                 delay={index * 100}
                 as='li'
-                className='relative border-t-2 border-[#141413] pt-6'
+                className='relative border-t-2 border-[#141413] pt-6 dark:border-[#FAF9F5]'
               >
                 <div className='mb-12 flex items-center justify-between'>
                   <span className='font-mono text-sm'>0{step.number}</span>
@@ -80,7 +80,7 @@ export function HowItWorks() {
                 <h3 className='font-serif text-2xl font-medium'>
                   {t(step.title)}
                 </h3>
-                <p className='mt-3 text-sm leading-6 text-[#141413]/65'>
+                <p className='mt-3 text-sm leading-6 text-[#141413]/65 dark:text-[#FAF9F5]/65'>
                   {t(step.description)}
                 </p>
               </AnimateInView>

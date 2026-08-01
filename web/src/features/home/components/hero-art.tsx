@@ -32,12 +32,11 @@ import { normalizePointerPosition } from '../lib/hero-parallax'
 
 const POINTER_TRAVEL = 8
 const SPRING = { damping: 27, mass: 1, stiffness: 180 }
-const HERO_ART_SHELL_CLASS =
-  'mx-auto w-full max-w-xl overflow-hidden rounded-[2.5rem_1.5rem_3rem_1.75rem] border-2 border-[#141413] bg-[#BCD1CA] p-2 sm:p-3 lg:justify-self-end'
+const HERO_ART_SHELL_CLASS = 'mx-auto w-full max-w-[34rem] lg:justify-self-end'
 const HERO_ART_MEDIA_CLASS =
-  'overflow-hidden rounded-[2rem_1.125rem_2.5rem_1.25rem]'
+  'overflow-hidden bg-[#BCD1CA] [clip-path:polygon(8%_4%,88%_0%,100%_13%,96%_86%,82%_100%,9%_95%,0%_78%,3%_16%)]'
 const HERO_ART_CAPTION_CLASS =
-  'flex items-center gap-3 border-t-2 border-[#141413] px-3 pt-3 pb-1 text-xs leading-5 font-semibold tracking-[0.08em] uppercase sm:px-4'
+  'mt-5 grid grid-cols-[3rem_1fr] items-start gap-3 text-[0.6875rem] leading-5 font-semibold tracking-[0.09em] uppercase text-[#141413]/72 dark:text-[#FAF9F5]/72'
 
 interface HeroArtProps {
   caption: string
@@ -125,7 +124,7 @@ export function HeroArt({ caption }: HeroArtProps) {
               width={1448}
               height={1086}
               alt=''
-              className='aspect-4/3 w-full scale-[1.035] object-cover'
+              className='aspect-4/3 w-full scale-[1.015] object-cover'
               decoding='async'
               loading='eager'
               fetchPriority='high'
@@ -135,7 +134,7 @@ export function HeroArt({ caption }: HeroArtProps) {
       </motion.div>
       <figcaption className={HERO_ART_CAPTION_CLASS}>
         <span
-          className='size-2 shrink-0 rounded-full bg-[#141413]'
+          className='mt-2 h-0.5 w-full bg-[#141413] dark:bg-[#FAF9F5]'
           aria-hidden='true'
         />
         <span>{caption}</span>
@@ -148,10 +147,10 @@ export function HeroArtSkeleton() {
   return (
     <div className={HERO_ART_SHELL_CLASS} aria-hidden='true'>
       <div className={HERO_ART_MEDIA_CLASS}>
-        <Skeleton className='aspect-4/3 w-full rounded-none bg-[#FAF9F5]/70' />
+        <Skeleton className='aspect-4/3 w-full rounded-none bg-[#BCD1CA]/60' />
       </div>
       <div className={HERO_ART_CAPTION_CLASS}>
-        <Skeleton className='size-2 shrink-0 rounded-full bg-[#141413]/15' />
+        <Skeleton className='mt-2 h-0.5 w-full rounded-none bg-[#141413]/15' />
         <Skeleton className='h-5 w-56 max-w-[75%] bg-[#141413]/15' />
       </div>
     </div>

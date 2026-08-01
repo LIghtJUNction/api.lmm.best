@@ -46,25 +46,25 @@ export function Features() {
   const { t } = useTranslation()
 
   return (
-    <section className='bg-[#FAF9F5] px-5 py-20 text-[#141413] sm:px-8 sm:py-28'>
-      <div className='mx-auto max-w-6xl'>
-        <AnimateInView className='mb-12 grid gap-5 border-t-2 border-[#141413] pt-6 md:grid-cols-2'>
+    <section className='bg-[#FAF9F5] px-5 py-16 text-[#141413] sm:px-8 sm:py-20 dark:bg-[#141413] dark:text-[#FAF9F5]'>
+      <div className='mx-auto max-w-7xl'>
+        <div className='mb-10 grid gap-6 border-t-2 border-[#141413] pt-6 sm:mb-12 md:grid-cols-[15rem_1fr] dark:border-[#FAF9F5]'>
           <p className='text-xs font-semibold tracking-[0.18em] uppercase'>
             {t('Core Features')}
           </p>
-          <h2 className='max-w-[18ch] font-serif text-4xl leading-none font-medium tracking-[-0.04em] sm:text-5xl'>
+          <h2 className='max-w-[22ch] font-serif text-4xl leading-[0.95] font-medium tracking-[-0.04em] sm:text-5xl'>
             {t('Built for developers,')} {t('designed for scale')}
           </h2>
-        </AnimateInView>
+        </div>
 
-        <div className='grid border-y-2 border-[#141413] md:grid-cols-3'>
+        <div className='grid border-y-2 border-[#141413] md:grid-cols-3 dark:border-[#FAF9F5]'>
           {FEATURES.map((feature, index) => {
             const Icon = feature.icon
             return (
               <AnimateInView
                 key={feature.number}
                 delay={index * 90}
-                className='group flex min-h-72 flex-col gap-8 border-b border-[#141413]/30 py-8 last:border-b-0 md:border-r md:border-b-0 md:px-8 md:first:pl-0 md:last:border-r-0 md:last:pr-0'
+                className='group flex min-h-60 flex-col gap-8 border-b border-[#141413]/30 py-7 last:border-b-0 md:min-h-64 md:border-r md:border-b-0 md:px-8 md:first:pl-0 md:last:border-r-0 md:last:pr-0 dark:border-[#FAF9F5]/30'
               >
                 <div className='flex items-center justify-between'>
                   <span className='font-mono text-xs'>{feature.number}</span>
@@ -78,7 +78,7 @@ export function Features() {
                   <h3 className='font-serif text-2xl font-medium'>
                     {t(feature.title)}
                   </h3>
-                  <p className='mt-3 max-w-sm text-sm leading-6 text-[#141413]/65'>
+                  <p className='mt-3 max-w-sm text-sm leading-6 text-[#141413]/65 dark:text-[#FAF9F5]/65'>
                     {t(feature.description)}
                   </p>
                 </div>
