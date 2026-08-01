@@ -3,6 +3,7 @@ use thiserror::Error;
 #[derive(Clone)]
 pub struct Config {
     pub listen_addr: SocketAddr,
+    pub slot: String,
     pub database_url: String,
     pub valkey_url: String,
     pub schema_contract: i64,
@@ -15,6 +16,7 @@ impl std::fmt::Debug for Config {
         formatter
             .debug_struct("Config")
             .field("listen_addr", &self.listen_addr)
+            .field("slot", &self.slot)
             .field("database_url", &"[REDACTED]")
             .field("valkey_url", &"[REDACTED]")
             .field("schema_contract", &self.schema_contract)
@@ -33,6 +35,7 @@ pub enum ConfigError {
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         Ok(Self {
+            slot: validated_slot(read("LMM_RS_SLOT")?)?,
             listen_addr: read("LMM_RS_LISTEN_ADDR")?
                 .parse()
                 .map_err(|_| ConfigError::Invalid("LMM_RS_LISTEN_ADDR"))?,
@@ -44,6 +47,12 @@ impl Config {
             dependency_timeout: seconds("LMM_DEPENDENCY_TIMEOUT_SECONDS", 2)?,
             drain_timeout: seconds("LMM_DRAIN_TIMEOUT_SECONDS", 30)?,
         })
+    }
+}
+fn validated_slot(value: String) -> Result<String, ConfigError> {
+    match value.as_str() {
+        "blue" | "green" => Ok(value),
+        _ => Err(ConfigError::Invalid("LMM_RS_SLOT")),
     }
 }
 fn read(name: &'static str) -> Result<String, ConfigError> {
@@ -66,6 +75,7 @@ mod tests {
     fn debug_should_redact_connection_urls() {
         let config = Config {
             listen_addr: SocketAddr::from(([127, 0, 0, 1], 3001)),
+            slot: "green".to_owned(),
             database_url: "postgres://secret@localhost/database".to_owned(),
             valkey_url: "redis://:secret@localhost".to_owned(),
             schema_contract: 1,

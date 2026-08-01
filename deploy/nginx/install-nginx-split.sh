@@ -14,6 +14,8 @@ readonly MIME_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-mime.types
 readonly MAP_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-http-map.conf
 readonly LOCATIONS_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-locations.conf
 readonly SERVER_TARGET=$ROOT_PREFIX/etc/nginx/conf.d/new-api.conf
+readonly RUST_UPSTREAM_TARGET=$ROOT_PREFIX/etc/nginx/conf.d/lmm-api-rs-active-upstream.conf
+readonly RUST_PROBES_TARGET=$ROOT_PREFIX/etc/nginx/snippets/lmm-api-rs-probe-locations.conf
 INSTALL_OWNER=root
 INSTALL_GROUP=root
 if [[ ${LMM_NGINX_TEST_MODE:-} == 1 ]]; then
@@ -29,14 +31,18 @@ declare -Ar SOURCES=(
   [map]="$SCRIPT_DIR/http-map.conf"
   [locations]="$SCRIPT_DIR/lmm-api-locations.conf"
   [server]="$SCRIPT_DIR/new-api.conf"
+  [rust_upstream]="$SCRIPT_DIR/../backend-rust/nginx/lmm-api-rs-upstream.conf"
+  [rust_probes]="$SCRIPT_DIR/../backend-rust/nginx/lmm-api-rs-probe-locations.conf"
 )
 declare -Ar TARGETS=(
   [mime]="$MIME_TARGET"
   [map]="$MAP_TARGET"
   [locations]="$LOCATIONS_TARGET"
   [server]="$SERVER_TARGET"
+  [rust_upstream]="$RUST_UPSTREAM_TARGET"
+  [rust_probes]="$RUST_PROBES_TARGET"
 )
-readonly -a KEYS=(mime map locations server)
+readonly -a KEYS=(mime map locations rust_upstream rust_probes server)
 
 log() { printf '[lmm-api-nginx] %s\n' "$*" >&2; }
 die() { log "$*"; exit 1; }
@@ -73,6 +79,11 @@ capture_backup() {
 deploy_candidate() {
   local key
   for key in "${KEYS[@]}"; do
+    # The Rust deploy transaction owns an already-active upstream. This nginx
+    # installer only supplies the disabled bootstrap file when it is absent.
+    if [[ $key == rust_upstream && -e ${TARGETS[$key]} ]]; then
+      continue
+    fi
     atomic_install "${SOURCES[$key]}" "${TARGETS[$key]}" || return
   done
   nginx -t || return
@@ -84,7 +95,7 @@ restore_backup() {
   local backup=$1 key state mode owner group target
   [[ -f $backup/manifest ]] || return 1
   while read -r key state mode owner group; do
-    case $key in mime|map|locations|server) ;; *) return 1 ;; esac
+    case $key in mime|map|locations|rust_upstream|rust_probes|server) ;; *) return 1 ;; esac
     target=${TARGETS[$key]}
     case $state in
       present)
@@ -110,6 +121,8 @@ for key in "${KEYS[@]}"; do
 done
 
 install -d -o "$(id -u)" -g "$(id -g)" -m 0750 "$BACKUP_ROOT" "$(dirname -- "$LOCK")"
+install -d -o "$INSTALL_OWNER" -g "$INSTALL_GROUP" -m 0755 \
+  "$ROOT_PREFIX/etc/nginx/conf.d" "$ROOT_PREFIX/etc/nginx/snippets"
 exec 9>"$LOCK"
 flock -n 9 || die 'another nginx deployment is running'
 systemctl is-active --quiet nginx || die 'nginx must be active before deployment'

@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         http::router(AppState {
             readiness: Arc::new(probe),
+            slot: config.slot.clone(),
         }),
     )
     .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))

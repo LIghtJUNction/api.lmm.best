@@ -20,6 +20,7 @@ const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
+    pub slot: String,
 }
 
 #[derive(Clone, Default)]
@@ -122,10 +123,11 @@ async fn readyz(State(state): State<AppState>, request: Request) -> Response {
     }
 }
 
-async fn build() -> Json<BuildResponse> {
+async fn build(State(state): State<AppState>) -> Json<BuildResponse> {
     Json(BuildResponse {
         version: env!("CARGO_PKG_VERSION"),
         revision: option_env!("LMM_BUILD_REVISION").unwrap_or("unknown"),
+        slot: state.slot,
     })
 }
 
@@ -241,6 +243,7 @@ mod tests {
         let request = builder.body(Body::empty()).expect("test request is valid");
         let response = router(AppState {
             readiness: Arc::new(MockProbe(failing)),
+            slot: "blue".to_owned(),
         })
         .oneshot(request)
         .await
@@ -291,12 +294,19 @@ mod tests {
             .expect("test request is valid");
         let response = router(AppState {
             readiness: Arc::new(MockProbe(None)),
+            slot: "blue".to_owned(),
         })
         .oneshot(request)
         .await
         .expect("router is infallible");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(response.headers()["content-type"], "application/json");
+    }
+
+    #[tokio::test]
+    async fn build_should_report_runtime_slot_identity() {
+        let (_, _, body) = call("GET", "/_internal/build", None, None).await;
+        assert_eq!(body["slot"], "blue");
     }
 
     #[tokio::test]
