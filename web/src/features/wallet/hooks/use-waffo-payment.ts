@@ -21,6 +21,11 @@ import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
 import { requestWaffoPayment, isApiSuccess } from '../api'
+import {
+  cancelPaymentCheckout,
+  redirectToPaymentCheckout,
+  reservePaymentCheckout,
+} from '../lib'
 
 function getPaymentUrl(data: unknown): string | null {
   if (!data || typeof data !== 'object') {
@@ -50,9 +55,11 @@ export function useWaffoPayment() {
 
   const processWaffoPayment = useCallback(
     async (topupAmount: number, payMethodIndex?: number) => {
-      setProcessing(true)
+      let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
 
       try {
+        setProcessing(true)
+        checkout = reservePaymentCheckout()
         const response = await requestWaffoPayment({
           amount: Math.floor(topupAmount),
           pay_method_index: payMethodIndex,
@@ -62,15 +69,21 @@ export function useWaffoPayment() {
           const paymentUrl = getPaymentUrl(response.data)
 
           if (paymentUrl) {
-            window.open(paymentUrl, '_blank')
+            if (!redirectToPaymentCheckout(checkout, paymentUrl)) {
+              cancelPaymentCheckout(checkout)
+              toast.error(i18next.t('Invalid payment redirect URL'))
+              return false
+            }
             toast.success(i18next.t('Redirecting to payment page...'))
             return true
           }
         }
 
+        cancelPaymentCheckout(checkout)
         toast.error(getErrorMessage(response.message, response.data))
         return false
       } catch {
+        if (checkout) cancelPaymentCheckout(checkout)
         toast.error(i18next.t('Payment request failed'))
         return false
       } finally {

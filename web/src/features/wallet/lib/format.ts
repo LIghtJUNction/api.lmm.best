@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { formatLocalCurrencyAmount, getCurrencyDisplay } from '@/lib/currency'
+
 import { DEFAULT_DISCOUNT_RATE } from '../constants'
 
 // ============================================================================
@@ -59,6 +61,70 @@ export function formatCurrency(amount: number | string): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: Math.abs(numeric) >= 1 ? 2 : 4,
   }).format(numeric)
+}
+
+/**
+ * The currency code or configured label for money charged by a payment method.
+ *
+ * Token-only balance displays still charge a real currency, which defaults to
+ * USD. A custom configured display has no ISO code available, so its configured
+ * symbol is repeated to keep the amount distinguishable from credits.
+ */
+export function getPaymentCurrencyLabel(): string {
+  const { config } = getCurrencyDisplay()
+
+  if (config.quotaDisplayType === 'TOKENS') {
+    return 'USD'
+  }
+
+  if (config.quotaDisplayType === 'CUSTOM') {
+    return config.customCurrencySymbol
+  }
+
+  return config.quotaDisplayType
+}
+
+/** API top-up credits are stored and granted in system USD. */
+export function getCreditCurrencyLabel(): string {
+  return 'USD'
+}
+
+/** Format an API credit amount stored and granted in system USD. */
+export function formatCreditBalance(amount: number): string {
+  const formatted = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    currencyDisplay: 'narrowSymbol',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.abs(amount) >= 1 ? 2 : 4,
+  }).format(amount)
+
+  return `${formatted} ${getCreditCurrencyLabel()}`
+}
+
+/** Format the local-currency amount that will actually be charged. */
+export function formatPaymentAmount(amount: number): string {
+  return `${formatLocalCurrencyAmount(amount, {
+    abbreviate: false,
+    digitsLarge: 2,
+    digitsSmall: 2,
+  })} ${getPaymentCurrencyLabel()}`
+}
+
+/** Format a system-USD credit value without repeating its unit label. */
+export function formatCreditValue(amount: number): string {
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: Math.abs(amount) >= 1 ? 2 : 4,
+  }).format(amount)
+}
+
+/** Format a local payment value with its symbol, but without its code suffix. */
+export function formatPaymentMoney(amount: number): string {
+  return formatLocalCurrencyAmount(amount, {
+    abbreviate: false,
+    digitsLarge: 2,
+    digitsSmall: 2,
+  })
 }
 
 /**
