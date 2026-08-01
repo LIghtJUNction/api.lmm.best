@@ -71,14 +71,13 @@ export function Hero({ isAuthenticated = false }: HeroProps) {
   const { t, i18n } = useTranslation()
   const { status } = useStatus()
   const docsLangByInterfaceLanguage: Record<string, 'en' | 'ja' | 'zh'> = {
-    'en-US': 'en',
     en: 'en',
-    'en-UK': 'en',
-    'zh-CN': 'zh',
-    zh: 'zh',
-    'zh-TW': 'zh',
+    fr: 'en',
+    ru: 'en',
+    vi: 'en',
     ja: 'ja',
-    'ja-JP': 'ja',
+    zhCN: 'zh',
+    zhTW: 'zh',
   }
   const docsLang =
     docsLangByInterfaceLanguage[
