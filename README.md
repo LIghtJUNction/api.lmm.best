@@ -91,30 +91,6 @@ go build -o new-api .
 
 The Go binary embeds `web/dist`, so build the frontend before compiling the final executable. For available development and quality commands, see [`web/package.json`](./web/package.json) and the root [`makefile`](./makefile).
 
-## Optional FastPay payment gateway
-
-The self-hosted payment component is maintained as the
-[`api-lmm-best-pay`](./api-lmm-best-pay) Git submodule. It is a separate Rust/Axum service with
-SQLite storage and Vue merchant/admin frontends; the main AI gateway does not embed its database or
-private keys.
-
-```bash
-git submodule update --init --recursive
-cd api-lmm-best-pay
-cargo test --workspace --all-targets --locked
-```
-
-FastPay accepts merchant requests signed with Ed25519. A merchant can generate the key pair inside
-the browser: the private key remains in page memory and is copied or downloaded locally, while only
-the public key is registered with FastPay. Phone payment notifications use an independent
-HMAC-SHA256 listener secret.
-
-In the current production layout, nginx exposes FastPay under
-`https://api.lmm.best:9443/fastpay-server/` and proxies to a loopback-only Rust service. Keep its
-systemd CPU quota enabled so payment processing cannot starve the AI API relay. Deployment,
-SmsForwarder setup, backup, and `-bin` Arch package instructions are maintained in the
-[FastPay README](./api-lmm-best-pay/README.md).
-
 ## Configuration and production safety
 
 Start from [`.env.example`](./.env.example) and the comments in [`docker-compose.yml`](./docker-compose.yml). Important settings include:

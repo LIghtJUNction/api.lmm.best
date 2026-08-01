@@ -160,29 +160,6 @@ docker run --name new-api -d --restart always \
 
 ---
 
-## 💳 可选的 FAST 易支付网关
-
-自托管支付组件通过 Git 子模块 [`api-lmm-best-pay`](./api-lmm-best-pay) 维护。它是独立的
-Rust/Axum 服务，使用 SQLite，并包含商户端与管理端 Vue 前端；主 AI 网关不会保存其
-数据库或商户私钥。
-
-```bash
-git submodule update --init --recursive
-cd api-lmm-best-pay
-cargo test --workspace --all-targets --locked
-```
-
-商户请求使用 Ed25519 签名。商户可在浏览器本地生成密钥对：私钥只存在于当前页面
-内存，由商户立即复制或下载；FastPay 只接收公钥。手机收款通知使用独立的
-HMAC-SHA256 监听 Secret，不与商户签名私钥混用。
-
-当前生产环境由 nginx 在 `https://api.lmm.best:9443/fastpay-server/` 对外提供服务，
-Rust 服务只监听回环地址。必须保留 systemd CPU 配额，避免支付服务抢占 AI API 中转
-所需资源。部署、SmsForwarder 手机监听、备份和免编译 `-bin` Arch 包说明见
-[支付网关 README](./api-lmm-best-pay/README.md)。
-
----
-
 ## 📚 文档
 
 <div align="center">

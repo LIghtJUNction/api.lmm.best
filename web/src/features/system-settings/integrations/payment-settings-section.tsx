@@ -1304,7 +1304,7 @@ export function PaymentSettingsSection({
                         <FormLabel>{t('FastPay API Address')}</FormLabel>
                         <FormControl>
                           <Input
-                            placeholder='https://api.lmm.best:9443/fastpay-server'
+                            placeholder='https://pay.example.com/fastpay-server'
                             autoComplete='off'
                             {...field}
                             onChange={(event) =>
