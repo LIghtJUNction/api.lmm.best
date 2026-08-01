@@ -994,6 +994,7 @@ dependencies = [
  "http",
  "lmm-application",
  "lmm-contracts",
+ "lmm-domain",
  "lmm-observability",
  "redis",
  "serde_json",
@@ -1011,6 +1012,7 @@ name = "lmm-application"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "lmm-domain",
  "thiserror",
  "tokio",
 ]

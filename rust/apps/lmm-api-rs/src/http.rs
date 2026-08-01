@@ -11,8 +11,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use lmm_application::{ReadinessProbe, check_readiness};
-use lmm_contracts::{BuildResponse, ErrorBody, ErrorEnvelope, HealthResponse};
+use lmm_application::{PublicContentService, ReadinessProbe, check_readiness};
+use lmm_contracts::{
+    BuildResponse, ErrorBody, ErrorEnvelope, HealthResponse, LegacySuccessEnvelope,
+};
+use lmm_domain::PublicContentKind;
 use uuid::Uuid;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -20,6 +23,7 @@ const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
+    pub public_content: Arc<PublicContentService>,
     pub slot: String,
 }
 
@@ -43,6 +47,9 @@ pub fn router(state: AppState) -> Router {
         .route("/livez", get(livez))
         .route("/readyz", get(readyz))
         .route("/_internal/build", get(build))
+        .route("/api/notice", get(notice))
+        .route("/api/about", get(about))
+        .route("/api/home_page_content", get(home_page_content))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed);
     #[cfg(test)]
@@ -131,6 +138,38 @@ async fn build(State(state): State<AppState>) -> Json<BuildResponse> {
     })
 }
 
+async fn notice(State(state): State<AppState>, request: Request) -> Response {
+    public_content(state, request, PublicContentKind::Notice).await
+}
+
+async fn about(State(state): State<AppState>, request: Request) -> Response {
+    public_content(state, request, PublicContentKind::About).await
+}
+
+async fn home_page_content(State(state): State<AppState>, request: Request) -> Response {
+    public_content(state, request, PublicContentKind::HomePage).await
+}
+
+async fn public_content(state: AppState, request: Request, kind: PublicContentKind) -> Response {
+    match state.public_content.read(kind).await {
+        Ok(data) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data,
+        })
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "authoritative public content read failed");
+            error_from_request(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "content_unavailable",
+                "public content is temporarily unavailable",
+                &request,
+            )
+        }
+    }
+}
+
 async fn not_found(request: Request) -> Response {
     error_from_request(
         StatusCode::NOT_FOUND,
@@ -200,12 +239,59 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
-    use lmm_application::{ProbeError, ReadinessProbe};
+    use lmm_application::{
+        ProbeError, PublicContentCache, PublicContentCacheError, PublicContentError,
+        PublicContentRepository, PublicContentService, ReadinessProbe,
+    };
+    use lmm_domain::PublicContentKind;
     use serde_json::Value;
     use std::sync::Arc;
     use tower::ServiceExt;
 
     struct MockProbe(Option<&'static str>);
+
+    struct MockContentRepository(Option<String>);
+
+    struct MissingCache;
+
+    #[async_trait]
+    impl PublicContentCache for MissingCache {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentCacheError> {
+            Ok(None)
+        }
+
+        async fn put(
+            &self,
+            _kind: PublicContentKind,
+            _value: &str,
+        ) -> Result<(), PublicContentCacheError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PublicContentRepository for MockContentRepository {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn state(failing: Option<&'static str>) -> AppState {
+        AppState {
+            readiness: Arc::new(MockProbe(failing)),
+            public_content: Arc::new(PublicContentService::new(
+                Arc::new(MockContentRepository(Some("configured content".to_owned()))),
+                Arc::new(MissingCache),
+            )),
+            slot: "blue".to_owned(),
+        }
+    }
 
     #[async_trait]
     impl ReadinessProbe for MockProbe {
@@ -241,13 +327,10 @@ mod tests {
             builder = builder.header("x-request-id", value);
         }
         let request = builder.body(Body::empty()).expect("test request is valid");
-        let response = router(AppState {
-            readiness: Arc::new(MockProbe(failing)),
-            slot: "blue".to_owned(),
-        })
-        .oneshot(request)
-        .await
-        .expect("router is infallible");
+        let response = router(state(failing))
+            .oneshot(request)
+            .await
+            .expect("router is infallible");
         let status = response.status();
         let id = response
             .headers()
@@ -292,13 +375,10 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from("{"))
             .expect("test request is valid");
-        let response = router(AppState {
-            readiness: Arc::new(MockProbe(None)),
-            slot: "blue".to_owned(),
-        })
-        .oneshot(request)
-        .await
-        .expect("router is infallible");
+        let response = router(state(None))
+            .oneshot(request)
+            .await
+            .expect("router is infallible");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(response.headers()["content-type"], "application/json");
     }
@@ -314,5 +394,16 @@ mod tests {
         let (status, _, body) = call("GET", "/readyz", None, Some("valkey")).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "degraded");
+    }
+
+    #[tokio::test]
+    async fn public_content_should_match_the_go_success_envelope() {
+        for uri in ["/api/notice", "/api/about", "/api/home_page_content"] {
+            let (status, _, body) = call("GET", uri, None, None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["success"], true);
+            assert_eq!(body["message"], "");
+            assert_eq!(body["data"], "configured content");
+        }
     }
 }

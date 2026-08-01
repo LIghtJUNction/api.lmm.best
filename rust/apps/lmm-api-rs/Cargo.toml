@@ -10,6 +10,7 @@ axum.workspace = true
 http.workspace = true
 lmm-application = { path = "../../crates/application" }
 lmm-contracts = { path = "../../crates/contracts" }
+lmm-domain = { path = "../../crates/domain" }
 lmm-observability = { path = "../../crates/observability" }
 redis.workspace = true
 sqlx.workspace = true

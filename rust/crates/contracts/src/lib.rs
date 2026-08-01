@@ -34,3 +34,14 @@ pub struct BuildResponse {
     /// Runtime blue/green slot identity.
     pub slot: String,
 }
+
+/// Success envelope retained while routes cross the Go-to-Rust migration boundary.
+#[derive(Debug, Serialize)]
+pub struct LegacySuccessEnvelope<T> {
+    /// Legacy success flag.
+    pub success: bool,
+    /// Legacy message field; successful reads use an empty string.
+    pub message: &'static str,
+    /// Route payload.
+    pub data: T,
+}

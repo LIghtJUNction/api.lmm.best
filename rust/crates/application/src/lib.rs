@@ -1,7 +1,66 @@
 #![deny(missing_docs)]
 //! Application ports used to keep infrastructure replaceable and testable.
 use async_trait::async_trait;
+use lmm_domain::PublicContentKind;
+use std::sync::Arc;
 use thiserror::Error;
+
+/// Safe failure returned when public content cannot be read from authoritative storage.
+#[derive(Debug, Error)]
+#[error("public content read failed")]
+pub struct PublicContentError;
+
+/// Optional cache failure. Callers must fall back to PostgreSQL.
+#[derive(Debug, Error)]
+#[error("public content cache failed")]
+pub struct PublicContentCacheError;
+
+/// Authoritative storage port for public content.
+#[async_trait]
+pub trait PublicContentRepository: Send + Sync {
+    /// Reads a content value. A missing or SQL `NULL` value is represented as `None`.
+    async fn get(&self, kind: PublicContentKind) -> Result<Option<String>, PublicContentError>;
+}
+
+/// Non-authoritative cache port for public content.
+#[async_trait]
+pub trait PublicContentCache: Send + Sync {
+    /// Returns a cached value or `None` on a cache miss.
+    async fn get(&self, kind: PublicContentKind)
+    -> Result<Option<String>, PublicContentCacheError>;
+    /// Stores a value with the adapter's bounded TTL.
+    async fn put(
+        &self,
+        kind: PublicContentKind,
+        value: &str,
+    ) -> Result<(), PublicContentCacheError>;
+}
+
+/// Read-only public-content use case.
+pub struct PublicContentService {
+    repository: Arc<dyn PublicContentRepository>,
+    cache: Arc<dyn PublicContentCache>,
+}
+
+impl PublicContentService {
+    /// Creates the use case around an authoritative repository.
+    pub fn new(
+        repository: Arc<dyn PublicContentRepository>,
+        cache: Arc<dyn PublicContentCache>,
+    ) -> Self {
+        Self { repository, cache }
+    }
+
+    /// Returns the legacy-compatible value; Go defaults absent options to an empty string.
+    pub async fn read(&self, kind: PublicContentKind) -> Result<String, PublicContentError> {
+        if let Ok(Some(value)) = self.cache.get(kind).await {
+            return Ok(value);
+        }
+        let value = self.repository.get(kind).await?.unwrap_or_default();
+        let _ = self.cache.put(kind, &value).await;
+        Ok(value)
+    }
+}
 
 /// A dependency readiness failure without credentials or topology details.
 #[derive(Debug, Error)]
@@ -45,8 +104,16 @@ pub async fn check_readiness(probe: &dyn ReadinessProbe) -> ReadinessReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProbeError, ReadinessProbe, check_readiness};
+    use super::{
+        ProbeError, PublicContentCache, PublicContentCacheError, PublicContentError,
+        PublicContentRepository, PublicContentService, ReadinessProbe, check_readiness,
+    };
     use async_trait::async_trait;
+    use lmm_domain::PublicContentKind;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     struct MockProbe {
         failing: Option<&'static str>,
@@ -91,5 +158,122 @@ mod tests {
         .await;
         assert_eq!(report.degraded[0].dependency, "valkey");
         assert!(report.required_failures.is_empty());
+    }
+
+    struct MockContentRepository(Option<String>);
+
+    struct MissingCache;
+
+    struct HitCache(&'static str);
+
+    struct CountingRepository {
+        reads: AtomicUsize,
+        value: &'static str,
+    }
+
+    #[async_trait]
+    impl PublicContentCache for MissingCache {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentCacheError> {
+            Ok(None)
+        }
+
+        async fn put(
+            &self,
+            _kind: PublicContentKind,
+            _value: &str,
+        ) -> Result<(), PublicContentCacheError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PublicContentCache for HitCache {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentCacheError> {
+            Ok(Some(self.0.to_owned()))
+        }
+
+        async fn put(
+            &self,
+            _kind: PublicContentKind,
+            _value: &str,
+        ) -> Result<(), PublicContentCacheError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PublicContentRepository for CountingRepository {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentError> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            Ok(Some(self.value.to_owned()))
+        }
+    }
+
+    #[async_trait]
+    impl PublicContentRepository for MockContentRepository {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_public_content_should_match_the_go_empty_default() {
+        let service = PublicContentService::new(
+            Arc::new(MockContentRepository(None)),
+            Arc::new(MissingCache),
+        );
+        assert_eq!(
+            service
+                .read(PublicContentKind::Notice)
+                .await
+                .expect("read succeeds"),
+            ""
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_hit_should_not_read_postgres() {
+        let repository = Arc::new(CountingRepository {
+            reads: AtomicUsize::new(0),
+            value: "postgres",
+        });
+        let service = PublicContentService::new(repository.clone(), Arc::new(HitCache("valkey")));
+        assert_eq!(
+            service
+                .read(PublicContentKind::About)
+                .await
+                .expect("cache read succeeds"),
+            "valkey"
+        );
+        assert_eq!(repository.reads.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn cache_miss_should_read_authoritative_postgres() {
+        let repository = Arc::new(CountingRepository {
+            reads: AtomicUsize::new(0),
+            value: "postgres",
+        });
+        let service = PublicContentService::new(repository.clone(), Arc::new(MissingCache));
+        assert_eq!(
+            service
+                .read(PublicContentKind::HomePage)
+                .await
+                .expect("postgres fallback succeeds"),
+            "postgres"
+        );
+        assert_eq!(repository.reads.load(Ordering::Relaxed), 1);
     }
 }

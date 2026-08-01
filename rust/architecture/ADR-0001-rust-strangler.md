@@ -42,3 +42,17 @@ blue. The edge does not retry non-idempotent requests.
   durable outbox/invalidation patterns preserve PG authority instead.
 - Schema compatibility is machine-checkable rather than inferred from process
   startup.
+
+## First read-only vertical slice
+
+The first implemented business slice is public content: notice, about, and
+home-page content. Domain code identifies the content kind, application code
+defines PostgreSQL and Valkey ports plus cache-aside behavior, and the binary
+contains the concrete SQLx/Redis adapters and Axum transport. PostgreSQL
+`options` remains authoritative; Valkey keys use the
+`lmm:public-content:v1:*` namespace and a short configurable TTL.
+
+Implementation does not imply route ownership. The production `/api/` prefix
+continues to select Go until production data is in PostgreSQL, differential
+responses pass, and the Go global API rate-limit semantics are implemented at
+the Rust boundary.
