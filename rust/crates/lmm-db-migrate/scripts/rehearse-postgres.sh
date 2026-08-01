@@ -79,3 +79,8 @@ LMM_TEST_PG_DATABASE=lmm_rehearsal \
   cargo test --manifest-path "${crate_dir}/../../Cargo.toml" \
     -p lmm-db-migrate --test postgres_equivalence --locked -- \
     --ignored --exact --nocapture sqlite_and_postgres_should_have_identical_canonical_table_hashes
+
+LMM_TEST_DATABASE_URL="postgresql://postgres@/lmm_rehearsal?host=${rehearsal_dir}&port=${port}" \
+  cargo test --manifest-path "${crate_dir}/../../Cargo.toml" \
+    -p lmm-db-migrate --test full_copy --locked -- \
+    --ignored --exact --nocapture full_copy_should_verify_all_tables_and_rollback_both_fault_phases

@@ -13,6 +13,14 @@ use serde::Serialize;
 
 use crate::MigrationError;
 
+/// Failure-only audit record. It never includes error text, DSNs, or row data.
+#[derive(Debug, Serialize)]
+pub struct FailureAudit<'a> {
+    pub status: &'static str,
+    pub stage: &'a str,
+    pub error_category: &'static str,
+}
+
 /// Serializes a report into a same-directory temporary file, fsyncs it, and
 /// publishes it with an atomic rename. DSNs are absent from the report types.
 pub fn write_atomic<T: Serialize>(path: &Path, report: &T) -> Result<(), MigrationError> {

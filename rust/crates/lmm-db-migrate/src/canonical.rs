@@ -53,9 +53,9 @@ pub fn canonical_bool(value: Option<i64>) -> Result<CanonicalValue, MigrationErr
         None => Ok(CanonicalValue::Null),
         Some(0) => Ok(CanonicalValue::Bool(false)),
         Some(1) => Ok(CanonicalValue::Bool(true)),
-        Some(other) => Err(MigrationError::Canonical(format!(
-            "boolean integer must be 0 or 1, got {other}"
-        ))),
+        Some(_) => Err(MigrationError::Canonical(
+            "boolean integer must be 0 or 1".into(),
+        )),
     }
 }
 
@@ -104,7 +104,7 @@ pub fn canonical_timestamp(value: Option<&str>) -> Result<CanonicalValue, Migrat
                 .map(|timestamp| timestamp.and_utc())
                 .ok()
         })
-        .ok_or_else(|| MigrationError::Canonical(format!("invalid GORM timestamp {value:?}")))?;
+        .ok_or_else(|| MigrationError::Canonical("invalid GORM timestamp".into()))?;
     Ok(CanonicalValue::Timestamp(
         parsed.to_rfc3339_opts(SecondsFormat::Micros, true),
     ))
@@ -129,13 +129,13 @@ pub fn canonical_decimal(
         || fraction.len() > scale
     {
         return Err(MigrationError::Canonical(format!(
-            "invalid decimal({precision},{scale}) value {value:?}"
+            "invalid decimal({precision},{scale}) value"
         )));
     }
     let significant_whole = whole.trim_start_matches('0');
     if significant_whole.len() > precision.saturating_sub(scale) {
         return Err(MigrationError::Canonical(format!(
-            "decimal({precision},{scale}) overflow for {value:?}"
+            "decimal({precision},{scale}) overflow"
         )));
     }
     let whole = if significant_whole.is_empty() {
@@ -192,6 +192,43 @@ pub fn table_hash<'a>(
         hasher.update(hash.as_bytes());
     }
     (rows.len() as u64, hasher.finalize())
+}
+
+/// Incrementally computes the same table hash without retaining table rows.
+pub struct TableHasher {
+    expected_count: u64,
+    count: u64,
+    hasher: blake3::Hasher,
+}
+
+impl TableHasher {
+    #[must_use]
+    pub fn new(table: &str, expected_count: u64) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"lmm-db-table-v1\0");
+        hasher.update(&(table.len() as u64).to_be_bytes());
+        hasher.update(table.as_bytes());
+        hasher.update(&expected_count.to_be_bytes());
+        Self {
+            expected_count,
+            count: 0,
+            hasher,
+        }
+    }
+
+    pub fn update(&mut self, values: &[CanonicalValue]) {
+        let hash = row_hash(values);
+        self.hasher
+            .update(&(hash.as_bytes().len() as u64).to_be_bytes());
+        self.hasher.update(hash.as_bytes());
+        self.count += 1;
+    }
+
+    #[must_use]
+    pub fn finish(self) -> (u64, blake3::Hash) {
+        debug_assert_eq!(self.count, self.expected_count);
+        (self.count, self.hasher.finalize())
+    }
 }
 
 #[cfg(test)]
@@ -274,5 +311,19 @@ mod tests {
         assert_ne!(forward, reverse);
         assert_ne!(forward, renamed);
         assert_ne!(forward, shortened);
+    }
+
+    #[test]
+    fn incremental_table_hasher_should_match_table_hash() {
+        let rows = [
+            vec![CanonicalValue::Integer(1), CanonicalValue::Text("a".into())],
+            vec![CanonicalValue::Integer(2), CanonicalValue::Text("b".into())],
+        ];
+        let expected = table_hash("fixture", rows.iter().map(Vec::as_slice));
+        let mut actual = TableHasher::new("fixture", rows.len() as u64);
+        for row in &rows {
+            actual.update(row);
+        }
+        assert_eq!(actual.finish(), expected);
     }
 }
