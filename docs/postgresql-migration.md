@@ -63,8 +63,15 @@ COPY, catalog, sequence, or verification failure rolls back the complete target 
 
 Success and failure reports are created with mode `0600`, written through a same-directory temporary file, fsynced, atomically renamed, and followed by a parent-directory fsync. Reports contain no DSN, row value, primary-key value, financial value, or underlying error text. Failure reports contain only a stable stage and error category. Standard error uses the same classifications and does not print conversion values or PostgreSQL/SQLite error details.
 
-## Remaining production gates
+## Production cutover transaction
 
-This tooling deliberately stops before production cutover. Production remains on SQLite until a separately reviewed procedure provides a write freeze or change-capture/catch-up mechanism, authenticated read/write application canaries, rollback criteria, autonomous blue/green routing, connection drain, and an explicit operator approval gate.
+The autonomous transaction is now implemented under `deploy/backend-cutover/`
+and documented in `docs/postgresql-cutover.md`. It provides write freeze,
+offline backup and verification, environment publication, authenticated
+canaries, and an explicit durable PostgreSQL-write boundary.
 
-`rehearse` creates only an isolated schema and `verify` is read-only. Neither command stops the service, changes application configuration, or switches traffic.
+Production remains on SQLite until that transaction passes a complete isolated
+ArchDmit rehearsal and receives explicit operator approval. The migration CLI
+itself still only creates a fresh isolated/versioned schema or verifies one; it
+does not stop a service, publish configuration, or switch traffic without the
+separate cutover coordinator.
