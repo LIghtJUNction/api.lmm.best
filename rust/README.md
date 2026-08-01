@@ -12,6 +12,11 @@ Required environment variable names are `LMM_RS_LISTEN_ADDR`, `DATABASE_URL`,
 `LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS`. Values and credentials must come from
 systemd credentials/environment files and must not be committed.
 
+The public `/api` migration boundary also consumes the Go-compatible
+`GLOBAL_API_RATE_LIMIT_ENABLE`, `GLOBAL_API_RATE_LIMIT`, and
+`GLOBAL_API_RATE_LIMIT_DURATION` settings (defaults: enabled, 360 requests,
+180 seconds).
+
 Validation:
 
 ```bash
@@ -33,5 +38,14 @@ The public-content slice reads Valkey first using versioned, bounded-TTL keys,
 then falls back to the authoritative PostgreSQL `options` table on a cache miss
 or cache failure. Missing and SQL `NULL` values preserve the Go behavior of an
 empty string. Cache writes are best-effort and never change request success.
-Production ownership cannot move until the final PostgreSQL migration and the
-existing Go `GlobalAPIRateLimit` contract have Rust equivalents.
+Production ownership cannot move until the final PostgreSQL migration and a
+shared-Valkey differential rehearsal prove the Go and Rust limiter boundaries
+operate as one policy.
+
+The Rust global API limiter now uses the same Valkey fixed-window Lua behavior,
+`rateLimit:v2:ip:GA:<client-ip>` namespace, empty 429 response, and
+`Retry-After` semantics as Go. Valkey errors fail closed with the same empty
+500 response. Only a loopback peer may supply `X-Real-IP`; other peers are
+keyed by their socket address and cannot spoof the proxy header. Partial route
+ownership still requires Go and Rust to use the same dedicated Valkey instance
+so one client cannot receive independent allowances from each backend.

@@ -5,24 +5,30 @@ use std::sync::{
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    body::Body,
+    extract::{ConnectInfo, Request, State},
     http::{HeaderName, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
-use lmm_application::{PublicContentService, ReadinessProbe, check_readiness};
+use lmm_application::{
+    GlobalApiRateLimiter, PublicContentService, RateLimitOutcome, ReadinessProbe, check_readiness,
+};
 use lmm_contracts::{
     BuildResponse, ErrorBody, ErrorEnvelope, HealthResponse, LegacySuccessEnvelope,
 };
 use lmm_domain::PublicContentKind;
+use std::net::{IpAddr, SocketAddr};
 use uuid::Uuid;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+const REAL_IP_HEADER: HeaderName = HeaderName::from_static("x-real-ip");
 
 #[derive(Clone)]
 pub struct AppState {
     pub readiness: Arc<dyn ReadinessProbe>,
+    pub global_api_rate_limiter: Arc<dyn GlobalApiRateLimiter>,
     pub public_content: Arc<PublicContentService>,
     pub slot: String,
 }
@@ -40,6 +46,9 @@ impl Drop for InflightGuard {
 
 #[derive(Clone)]
 struct ServerRequestId(String);
+
+#[derive(Clone)]
+struct PreserveLegacyEmptyError;
 
 pub fn router(state: AppState) -> Router {
     let inflight = Inflight::default();
@@ -83,7 +92,11 @@ async fn request_boundary(
             .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("application/json"));
-        if !is_json {
+        let preserve_empty = response
+            .extensions()
+            .get::<PreserveLegacyEmptyError>()
+            .is_some();
+        if !is_json && !preserve_empty {
             response = error_response(
                 response.status(),
                 status_code(response.status()),
@@ -151,6 +164,13 @@ async fn home_page_content(State(state): State<AppState>, request: Request) -> R
 }
 
 async fn public_content(state: AppState, request: Request, kind: PublicContentKind) -> Response {
+    let Some(client_ip) = canonical_client_ip(&request) else {
+        tracing::error!("request peer address is unavailable for global API rate limiting");
+        return legacy_empty_response(StatusCode::INTERNAL_SERVER_ERROR, None);
+    };
+    if let Some(response) = enforce_global_api_rate_limit(&state, &client_ip).await {
+        return response;
+    }
     match state.public_content.read(kind).await {
         Ok(data) => Json(LegacySuccessEnvelope {
             success: true,
@@ -168,6 +188,56 @@ async fn public_content(state: AppState, request: Request, kind: PublicContentKi
             )
         }
     }
+}
+
+async fn enforce_global_api_rate_limit(state: &AppState, client_ip: &str) -> Option<Response> {
+    match state.global_api_rate_limiter.check(client_ip).await {
+        Ok(RateLimitOutcome::Allowed) => None,
+        Ok(RateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => Some(legacy_empty_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            retry_after_seconds,
+        )),
+        Err(error) => {
+            tracing::error!(%error, client_ip, "global API rate limit check failed closed");
+            Some(legacy_empty_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ))
+        }
+    }
+}
+
+fn canonical_client_ip(request: &Request) -> Option<String> {
+    let peer_ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()?
+        .0
+        .ip();
+    if peer_ip.is_loopback() {
+        if let Some(forwarded_ip) = request
+            .headers()
+            .get(&REAL_IP_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<IpAddr>().ok())
+        {
+            return Some(forwarded_ip.to_string());
+        }
+    }
+    Some(peer_ip.to_string())
+}
+
+fn legacy_empty_response(status: StatusCode, retry_after_seconds: Option<u64>) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    if let Some(seconds) = retry_after_seconds.filter(|seconds| *seconds > 0) {
+        if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+    }
+    response.extensions_mut().insert(PreserveLegacyEmptyError);
+    response
 }
 
 async fn not_found(request: Request) -> Response {
@@ -237,15 +307,20 @@ mod tests {
     use async_trait::async_trait;
     use axum::{
         body::Body,
+        extract::ConnectInfo,
         http::{Request, StatusCode},
     };
     use lmm_application::{
-        ProbeError, PublicContentCache, PublicContentCacheError, PublicContentError,
-        PublicContentRepository, PublicContentService, ReadinessProbe,
+        GlobalApiRateLimiter, ProbeError, PublicContentCache, PublicContentCacheError,
+        PublicContentError, PublicContentRepository, PublicContentService, RateLimitError,
+        RateLimitOutcome, ReadinessProbe,
     };
     use lmm_domain::PublicContentKind;
     use serde_json::Value;
-    use std::sync::Arc;
+    use std::{
+        net::SocketAddr,
+        sync::{Arc, Mutex},
+    };
     use tower::ServiceExt;
 
     struct MockProbe(Option<&'static str>);
@@ -253,6 +328,42 @@ mod tests {
     struct MockContentRepository(Option<String>);
 
     struct MissingCache;
+
+    struct AllowAllRateLimiter;
+
+    #[derive(Clone, Copy)]
+    enum MockLimitMode {
+        Reject(u64),
+        Fail,
+    }
+
+    struct MockRateLimiter {
+        mode: MockLimitMode,
+        client_ips: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl GlobalApiRateLimiter for AllowAllRateLimiter {
+        async fn check(&self, _client_ip: &str) -> Result<RateLimitOutcome, RateLimitError> {
+            Ok(RateLimitOutcome::Allowed)
+        }
+    }
+
+    #[async_trait]
+    impl GlobalApiRateLimiter for MockRateLimiter {
+        async fn check(&self, client_ip: &str) -> Result<RateLimitOutcome, RateLimitError> {
+            self.client_ips
+                .lock()
+                .expect("test mutex is healthy")
+                .push(client_ip.to_owned());
+            match self.mode {
+                MockLimitMode::Reject(retry_after_seconds) => Ok(RateLimitOutcome::Rejected {
+                    retry_after_seconds: Some(retry_after_seconds),
+                }),
+                MockLimitMode::Fail => Err(RateLimitError),
+            }
+        }
+    }
 
     #[async_trait]
     impl PublicContentCache for MissingCache {
@@ -283,8 +394,16 @@ mod tests {
     }
 
     fn state(failing: Option<&'static str>) -> AppState {
+        state_with_rate_limiter(failing, Arc::new(AllowAllRateLimiter))
+    }
+
+    fn state_with_rate_limiter(
+        failing: Option<&'static str>,
+        global_api_rate_limiter: Arc<dyn GlobalApiRateLimiter>,
+    ) -> AppState {
         AppState {
             readiness: Arc::new(MockProbe(failing)),
+            global_api_rate_limiter,
             public_content: Arc::new(PublicContentService::new(
                 Arc::new(MockContentRepository(Some("configured content".to_owned()))),
                 Arc::new(MissingCache),
@@ -326,7 +445,12 @@ mod tests {
         if let Some(value) = client_id {
             builder = builder.header("x-request-id", value);
         }
-        let request = builder.body(Body::empty()).expect("test request is valid");
+        let mut request = builder.body(Body::empty()).expect("test request is valid");
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345"
+                .parse::<SocketAddr>()
+                .expect("test socket address is valid"),
+        ));
         let response = router(state(failing))
             .oneshot(request)
             .await
@@ -369,12 +493,17 @@ mod tests {
 
     #[tokio::test]
     async fn extractor_rejection_should_use_the_json_envelope() {
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method("POST")
             .uri("/_test/json")
             .header("content-type", "application/json")
             .body(Body::from("{"))
             .expect("test request is valid");
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345"
+                .parse::<SocketAddr>()
+                .expect("test socket address is valid"),
+        ));
         let response = router(state(None))
             .oneshot(request)
             .await
@@ -405,5 +534,72 @@ mod tests {
             assert_eq!(body["message"], "");
             assert_eq!(body["data"], "configured content");
         }
+    }
+
+    async fn limited_response(
+        limiter: Arc<dyn GlobalApiRateLimiter>,
+        peer: &str,
+        real_ip: &str,
+    ) -> axum::response::Response {
+        let mut request = Request::builder()
+            .method("GET")
+            .uri("/api/notice")
+            .header("x-real-ip", real_ip)
+            .body(Body::empty())
+            .expect("test request is valid");
+        request.extensions_mut().insert(ConnectInfo(
+            peer.parse::<SocketAddr>()
+                .expect("test socket address is valid"),
+        ));
+        router(state_with_rate_limiter(None, limiter))
+            .oneshot(request)
+            .await
+            .expect("router is infallible")
+    }
+
+    #[tokio::test]
+    async fn rate_limit_should_match_go_empty_429_and_trust_only_loopback_proxy() {
+        let limiter = Arc::new(MockRateLimiter {
+            mode: MockLimitMode::Reject(37),
+            client_ips: Mutex::new(Vec::new()),
+        });
+        let response = limited_response(limiter.clone(), "127.0.0.1:12345", "192.0.2.10").await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()["retry-after"], "37");
+        assert!(response.headers().get("content-type").is_none());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body is readable");
+        assert!(body.is_empty());
+        assert_eq!(
+            limiter.client_ips.lock().expect("test mutex is healthy")[0],
+            "192.0.2.10"
+        );
+
+        let untrusted = Arc::new(MockRateLimiter {
+            mode: MockLimitMode::Reject(37),
+            client_ips: Mutex::new(Vec::new()),
+        });
+        let _ = limited_response(untrusted.clone(), "198.51.100.20:12345", "192.0.2.99").await;
+        assert_eq!(
+            untrusted.client_ips.lock().expect("test mutex is healthy")[0],
+            "198.51.100.20"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_backend_failure_should_match_go_empty_500() {
+        let limiter = Arc::new(MockRateLimiter {
+            mode: MockLimitMode::Fail,
+            client_ips: Mutex::new(Vec::new()),
+        });
+        let response = limited_response(limiter, "127.0.0.1:12345", "192.0.2.30").await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(response.headers().get("retry-after").is_none());
+        assert!(response.headers().get("content-type").is_none());
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body is readable");
+        assert!(body.is_empty());
     }
 }

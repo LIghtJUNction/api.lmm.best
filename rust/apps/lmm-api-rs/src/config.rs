@@ -10,6 +10,9 @@ pub struct Config {
     pub dependency_timeout: Duration,
     pub drain_timeout: Duration,
     pub public_content_cache_ttl: Duration,
+    pub global_api_rate_limit_enabled: bool,
+    pub global_api_rate_limit: u64,
+    pub global_api_rate_limit_window: Duration,
 }
 
 impl std::fmt::Debug for Config {
@@ -24,6 +27,15 @@ impl std::fmt::Debug for Config {
             .field("dependency_timeout", &self.dependency_timeout)
             .field("drain_timeout", &self.drain_timeout)
             .field("public_content_cache_ttl", &self.public_content_cache_ttl)
+            .field(
+                "global_api_rate_limit_enabled",
+                &self.global_api_rate_limit_enabled,
+            )
+            .field("global_api_rate_limit", &self.global_api_rate_limit)
+            .field(
+                "global_api_rate_limit_window",
+                &self.global_api_rate_limit_window,
+            )
             .finish()
     }
 }
@@ -49,6 +61,9 @@ impl Config {
             dependency_timeout: seconds("LMM_DEPENDENCY_TIMEOUT_SECONDS", 2)?,
             drain_timeout: seconds("LMM_DRAIN_TIMEOUT_SECONDS", 30)?,
             public_content_cache_ttl: positive_seconds("LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS", 5)?,
+            global_api_rate_limit_enabled: boolean("GLOBAL_API_RATE_LIMIT_ENABLE", true)?,
+            global_api_rate_limit: positive_integer("GLOBAL_API_RATE_LIMIT", 360)?,
+            global_api_rate_limit_window: positive_seconds("GLOBAL_API_RATE_LIMIT_DURATION", 180)?,
         })
     }
 }
@@ -76,6 +91,24 @@ fn positive_seconds(name: &'static str, default: u64) -> Result<Duration, Config
         Ok(value)
     }
 }
+fn positive_integer(name: &'static str, default: u64) -> Result<u64, ConfigError> {
+    let value = env::var(name).map_or_else(
+        |_| Ok(default),
+        |raw| raw.parse().map_err(|_| ConfigError::Invalid(name)),
+    )?;
+    if value == 0 {
+        Err(ConfigError::Invalid(name))
+    } else {
+        Ok(value)
+    }
+}
+fn boolean(name: &'static str, default: bool) -> Result<bool, ConfigError> {
+    env::var(name).map_or(Ok(default), |raw| match raw.as_str() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        _ => Err(ConfigError::Invalid(name)),
+    })
+}
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +126,9 @@ mod tests {
             dependency_timeout: Duration::from_secs(2),
             drain_timeout: Duration::from_secs(30),
             public_content_cache_ttl: Duration::from_secs(5),
+            global_api_rate_limit_enabled: true,
+            global_api_rate_limit: 360,
+            global_api_rate_limit_window: Duration::from_secs(180),
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("secret"));

@@ -15,6 +15,30 @@ pub struct PublicContentError;
 #[error("public content cache failed")]
 pub struct PublicContentCacheError;
 
+/// Outcome of one global API fixed-window rate-limit check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RateLimitOutcome {
+    /// Request is within the configured window allowance.
+    Allowed,
+    /// Request exceeded the allowance.
+    Rejected {
+        /// Remaining fixed-window lifetime in seconds, when Valkey reports one.
+        retry_after_seconds: Option<u64>,
+    },
+}
+
+/// Fail-closed Valkey rate-limit error.
+#[derive(Debug, Error)]
+#[error("global API rate limit check failed")]
+pub struct RateLimitError;
+
+/// Global API rate-limit port.
+#[async_trait]
+pub trait GlobalApiRateLimiter: Send + Sync {
+    /// Atomically consumes one request for a canonical client IP.
+    async fn check(&self, client_ip: &str) -> Result<RateLimitOutcome, RateLimitError>;
+}
+
 /// Authoritative storage port for public content.
 #[async_trait]
 pub trait PublicContentRepository: Send + Sync {

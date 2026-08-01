@@ -2,10 +2,12 @@ mod config;
 mod http;
 mod probes;
 mod public_content;
+mod rate_limit;
 use config::Config;
 use http::AppState;
 use probes::InfrastructureProbe;
 use public_content::{PgPublicContentRepository, ValkeyPublicContentCache};
+use rate_limit::ValkeyGlobalApiRateLimiter;
 use sqlx::postgres::PgPoolOptions;
 use std::{future::IntoFuture, io, sync::Arc};
 use tokio::{net::TcpListener, sync::watch};
@@ -30,6 +32,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         http::router(AppState {
             readiness: Arc::new(probe),
+            global_api_rate_limiter: Arc::new(ValkeyGlobalApiRateLimiter::new(
+                valkey.clone(),
+                config.global_api_rate_limit_enabled,
+                config.global_api_rate_limit,
+                config.global_api_rate_limit_window,
+            )),
             public_content: Arc::new(lmm_application::PublicContentService::new(
                 Arc::new(PgPublicContentRepository::new(pg)),
                 Arc::new(ValkeyPublicContentCache::new(
@@ -38,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )),
             )),
             slot: config.slot.clone(),
-        }),
+        })
+        .into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
     .into_future();
