@@ -54,6 +54,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
 import { cn } from '@/lib/utils'
 
 import {
@@ -64,6 +65,7 @@ import {
   formatCreditBalance,
   formatCreditValue,
   formatPaymentAmount,
+  formatPaymentSettlementRate,
   formatSettlementAmount,
   getPaymentSettlementUnit,
   isWaffoPancakeCurrencySupported,
@@ -178,6 +180,16 @@ export function RechargeFormCard({
     selectedPaymentMethod ??
     topupInfo?.pay_methods?.find((method) => method.type === defaultPaymentType)
   const settlementUnit = getPaymentSettlementUnit(effectivePaymentMethod)
+  const selectedPaymentMethodName =
+    effectivePaymentMethod?.name ?? t('Payment Method')
+  const shouldShowSettlementRule = (paymentMethod: PaymentMethod) =>
+    !usesDedicatedPaymentPricing(paymentMethod.type)
+  const getSettlementRule = (paymentMethod: PaymentMethod) => {
+    const configuredRate = formatPaymentSettlementRate(paymentMethod)
+    if (configuredRate) return configuredRate
+
+    return t('Global settlement')
+  }
   const formatSelectedPaymentAmount = (amount: number) =>
     settlementUnit
       ? formatSettlementAmount(amount, settlementUnit.label)
@@ -356,8 +368,9 @@ export function RechargeFormCard({
                             <div className='text-muted-foreground mt-1.5 flex w-full min-w-0 flex-col gap-0.5 text-xs sm:mt-2'>
                               <span>
                                 {t(
-                                  'Pay {{amount}} (original payment {{original}})',
+                                  'Estimated actual payment via {{method}}: {{amount}} (original payment {{original}})',
                                   {
+                                    method: selectedPaymentMethodName,
                                     amount: payment,
                                     original: originalPayment,
                                   }
@@ -413,9 +426,14 @@ export function RechargeFormCard({
                     <div className='bg-muted flex min-h-9 min-w-0 items-center justify-between gap-2 rounded-md border px-3 lg:min-w-52'>
                       <div className='flex min-w-0 flex-col gap-1 py-1'>
                         <span className='text-muted-foreground text-xs'>
-                          {t('Amount due: {{amount}} (actual payment)', {
-                            amount: formatSelectedPaymentAmount(paymentAmount),
-                          })}
+                          {t(
+                            'Selected method: {{method}} · Amount due: {{amount}} (actual payment)',
+                            {
+                              method: selectedPaymentMethodName,
+                              amount:
+                                formatSelectedPaymentAmount(paymentAmount),
+                            }
+                          )}
                         </span>
                         <div className='flex flex-wrap gap-1'>
                           <Badge variant='secondary'>
@@ -462,6 +480,9 @@ export function RechargeFormCard({
                         const disabledLabel = disabled
                           ? `${t('Minimum:')} ${minTopup}`
                           : undefined
+                        const settlementRule = shouldShowSettlementRule(method)
+                          ? getSettlementRule(method)
+                          : null
 
                         const button = (
                           <Button
@@ -498,6 +519,11 @@ export function RechargeFormCard({
                               {disabledLabel && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
                                   {disabledLabel}
+                                </span>
+                              )}
+                              {settlementRule && (
+                                <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
+                                  {settlementRule}
                                 </span>
                               )}
                             </span>

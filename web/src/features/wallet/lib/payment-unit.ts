@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
+
 import type { PaymentMethod } from '../types'
 
 const SETTLEMENT_UNIT_PATTERN = /^[A-Za-z0-9._-]{1,16}$/
@@ -33,6 +35,8 @@ export type PaymentSettlementUnit = {
 export function getPaymentSettlementUnit(
   paymentMethod?: PaymentMethod
 ): PaymentSettlementUnit | null {
+  if (usesDedicatedPaymentPricing(paymentMethod?.type)) return null
+
   const label = paymentMethod?.settlement_unit
   if (!label || !SETTLEMENT_UNIT_PATTERN.test(label)) return null
 
@@ -52,6 +56,28 @@ export function getPaymentSettlementUnit(
     return null
   }
   return { label, unitPrice: rawPrice }
+}
+
+/**
+ * Formats the configured rate itself, not a calculated monetary amount. String
+ * rates are kept byte-for-byte so small valid decimals never render as zero.
+ */
+export function formatPaymentSettlementRate(
+  paymentMethod?: PaymentMethod
+): string | null {
+  const settlementUnit = getPaymentSettlementUnit(paymentMethod)
+  if (!settlementUnit) return null
+
+  const rawPrice = paymentMethod?.unit_price
+  const price =
+    typeof rawPrice === 'string'
+      ? rawPrice
+      : new Intl.NumberFormat('en-US', {
+          maximumFractionDigits: 20,
+          useGrouping: false,
+        }).format(settlementUnit.unitPrice)
+
+  return `${price} ${settlementUnit.label} / USD`
 }
 
 export function formatSettlementAmount(amount: number, unit: string): string {

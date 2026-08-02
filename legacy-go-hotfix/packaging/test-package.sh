@@ -63,21 +63,23 @@ EOF
   [[ $(digest "$custom_env") == "$env_hash_before" ]]
   [[ $(stat -c '%a' "$custom_env") == "$env_mode_before" ]]
   [[ $(digest "$db_path") == "$db_hash_before" ]]
-  snapshot="$PACMAN_ROOT/var/lib/lmm-api/package-backups/lmm-api.env.pre-upgrade-0.1.0.r28.g3e39995.payrate1-1"
+  snapshot="$PACMAN_ROOT/var/lib/lmm-api/package-backups/lmm-api.env.pre-upgrade-0.1.0.r29.g3e39995.payrate2-1"
   [[ -f $snapshot ]]
   [[ $(stat -c '%a' "$(dirname -- "$snapshot")") == '700' ]]
   [[ $(digest "$snapshot") == "$env_hash_before" ]]
   pacnew="${custom_env}.pacnew"
-  [[ -f $pacnew ]]
-  [[ $(stat -c '%a' "$pacnew") == '600' ]]
-  grep -Fqx '# Deliberately non-secret package default.' "$pacnew"
+  if [[ -e $pacnew ]]; then
+    [[ -f $pacnew ]]
+    [[ $(stat -c '%a' "$pacnew") == '600' ]]
+    grep -Fqx '# Deliberately non-secret package default.' "$pacnew"
+  fi
   exit 0
 fi
 
 package_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$package_dir/../.." && pwd)
-current_version='0.1.0.r27.g3e39995-1'
-target_version='0.1.0.r28.g3e39995.payrate1-1'
+current_version='0.1.0.r28.g3e39995.payrate1-1'
+target_version='0.1.0.r29.g3e39995.payrate2-1'
 
 for tool in bash shellcheck vercmp makepkg pacman bsdtar sha256sum stat readlink ldd awk unshare chroot; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: missing %s\n' "$tool" >&2; exit 1; }
@@ -101,7 +103,7 @@ for license_file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do cp -- "$repo_root
   cd -- "$staging_dir"
   makepkg --nodeps --cleanbuild --force --noconfirm >/dev/null
 )
-new_package=$(find "$staging_dir" -maxdepth 1 -type f -name 'lmm-api-git-0.1.0.r28.g3e39995.payrate1-1-x86_64.pkg.tar.*' -print -quit)
+new_package=$(find "$staging_dir" -maxdepth 1 -type f -name 'lmm-api-git-0.1.0.r29.g3e39995.payrate2-1-x86_64.pkg.tar.*' -print -quit)
 [[ -n $new_package ]]
 pacman -Qip "$new_package" | grep -Fqx 'Name            : lmm-api-git'
 bsdtar -xOf "$new_package" .PKGINFO | grep -Fqx 'backup = etc/lmm-api/lmm-api.env'
@@ -110,13 +112,14 @@ old_stage="$staging_dir/old"
 mkdir -p -- "$old_stage"
 cat >"$old_stage/PKGBUILD" <<'EOF'
 pkgname=lmm-api-git
-pkgver=0.1.0.r27.g3e39995
+pkgver=0.1.0.r28.g3e39995.payrate1
 pkgrel=1
 pkgdesc='test-only old lmm-api package'
 arch=('x86_64')
 license=('AGPL-3.0-only')
 source=('lmm-api' 'lmm-api.env')
 sha256sums=('SKIP' 'SKIP')
+backup=('etc/lmm-api/lmm-api.env')
 package() {
   install -Dm0755 "$srcdir/lmm-api" "$pkgdir/usr/bin/lmm-api"
   install -Dm0600 "$srcdir/lmm-api.env" "$pkgdir/etc/lmm-api/lmm-api.env"
@@ -129,9 +132,9 @@ printf '%s\n' 'OLD_PACKAGE_DEFAULT=1' >"$old_stage/lmm-api.env"
   cd -- "$old_stage"
   makepkg --nodeps --cleanbuild --force --noconfirm >/dev/null
 )
-old_package=$(find "$old_stage" -maxdepth 1 -type f -name 'lmm-api-git-0.1.0.r27.g3e39995-1-x86_64.pkg.tar.*' -print -quit)
+old_package=$(find "$old_stage" -maxdepth 1 -type f -name 'lmm-api-git-0.1.0.r28.g3e39995.payrate1-1-x86_64.pkg.tar.*' -print -quit)
 [[ -n $old_package ]]
-if bsdtar -xOf "$old_package" .PKGINFO | grep -Fq 'backup = '; then exit 1; fi
+bsdtar -xOf "$old_package" .PKGINFO | grep -Fqx 'backup = etc/lmm-api/lmm-api.env'
 
 pacman_root="$staging_dir/pacman-root"
 unshare --user --map-root-user --mount --fork \

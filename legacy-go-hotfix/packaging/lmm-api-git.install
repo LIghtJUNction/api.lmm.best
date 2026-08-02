@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Pacman hook for the one-time upgrade from the old package, which did not
-# mark /etc/lmm-api/lmm-api.env as a backup file. These hooks only preserve
-# that configuration. They do not restart services or access SQLite.
+# Pacman hook that snapshots and restores /etc/lmm-api/lmm-api.env around every
+# package upgrade. These hooks only preserve that configuration. They do not
+# restart services or access SQLite.
 
 set -u
 

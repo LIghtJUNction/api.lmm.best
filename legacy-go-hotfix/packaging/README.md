@@ -5,10 +5,11 @@
 downloads sources, restarts `lmm-api.service`, or accesses the SQLite database.
 
 The package declares `etc/lmm-api/lmm-api.env` as a pacman `backup` file. The
-currently installed r27 package did not have that metadata, so the install hook
-also snapshots the existing file before its first upgrade and restores it after
-package extraction. A snapshot contains credentials and must be treated as a
-secret. It is stored root-only at:
+install hook snapshots the existing file before every package upgrade and
+restores it after package extraction. This preserves the production-style
+`0600` environment file even when pacman chooses a different ordinary backup
+resolution for the packaged template. A snapshot contains credentials and must
+be treated as a secret. It is stored root-only at:
 
 `/var/lib/lmm-api/package-backups/lmm-api.env.pre-upgrade-<version>`
 
@@ -17,10 +18,11 @@ and are separate from the complete rollback bundles below. Review and remove
 older env-only copies manually as root only after a complete rollback bundle is
 verified. Do not copy snapshots into the repository or build output.
 
-On the first r27-to-hotfix upgrade pacman creates `lmm-api.env.pacnew`: it is
-the non-secret package template, while the original env is restored from the
-snapshot. Inspect it, verify it contains no site configuration, then remove it
-manually; later package upgrades retain ordinary pacman `.pacnew` semantics.
+Pacman may create `lmm-api.env.pacnew` when its normal backup-file rules call
+for it. Its presence is intentionally not required for a successful upgrade:
+the original configured environment is restored from the hook snapshot either
+way. If a `.pacnew` is created, inspect it, verify it contains no site
+configuration, and remove or merge it manually as appropriate.
 
 Before `pacman -U`, run `backup-server-state.sh --destination /root/rollback/lmm-api`.
 It snapshots the binary, unit, env, unit drop-ins, package metadata/integrity,
