@@ -37,7 +37,9 @@ import { DEFAULT_DISCOUNT_RATE } from '../../constants'
 import {
   formatCreditBalance,
   formatPaymentAmount,
+  formatSettlementAmount,
   getPaymentIcon,
+  getPaymentSettlementUnit,
 } from '../../lib'
 import type { PaymentMethod } from '../../types'
 
@@ -68,6 +70,11 @@ export function PaymentConfirmDialog({
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
+  const settlementUnit = getPaymentSettlementUnit(paymentMethod)
+  const formatSelectedPaymentAmount = (amount: number) =>
+    settlementUnit
+      ? formatSettlementAmount(amount, settlementUnit.label)
+      : formatPaymentAmount(amount)
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -109,11 +116,11 @@ export function PaymentConfirmDialog({
             ) : (
               <div className='flex items-baseline gap-2'>
                 <span className='text-2xl font-semibold'>
-                  {formatPaymentAmount(paymentAmount)}
+                  {formatSelectedPaymentAmount(paymentAmount)}
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>
-                    {formatPaymentAmount(originalAmount)}
+                    {formatSelectedPaymentAmount(originalAmount)}
                   </span>
                 )}
               </div>
@@ -125,9 +132,21 @@ export function PaymentConfirmDialog({
               <div className='flex items-center justify-between text-sm'>
                 <span className='text-muted-foreground'>{t('You save')}</span>
                 <Badge variant='secondary'>
-                  {formatPaymentAmount(discountAmount)}
+                  {formatSelectedPaymentAmount(discountAmount)}
                 </Badge>
               </div>
+            </div>
+          )}
+
+          {settlementUnit && !calculating && (
+            <div className='bg-muted/50 rounded-lg border p-3 text-sm'>
+              {t('Top up {{amount}} USD; pay {{payment}} {{unit}}', {
+                amount: topupAmount,
+                payment: new Intl.NumberFormat(undefined, {
+                  maximumFractionDigits: paymentAmount >= 1 ? 2 : 4,
+                }).format(paymentAmount),
+                unit: settlementUnit.label,
+              })}
             </div>
           )}
 

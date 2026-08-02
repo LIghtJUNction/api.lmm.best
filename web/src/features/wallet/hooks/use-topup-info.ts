@@ -72,6 +72,15 @@ function parsePaymentMethods(
         type,
         color: typeof item.color === 'string' ? item.color : undefined,
         icon: typeof item.icon === 'string' ? item.icon : undefined,
+        settlement_unit:
+          typeof item.settlement_unit === 'string'
+            ? item.settlement_unit
+            : undefined,
+        unit_price:
+          typeof item.unit_price === 'string' ||
+          typeof item.unit_price === 'number'
+            ? item.unit_price
+            : undefined,
         min_topup:
           type === 'stripe' && normalizedMinTopup <= 0
             ? stripeMinTopup
@@ -182,6 +191,10 @@ export function useTopupInfo() {
 
       const processedData: TopupInfo = {
         ...response.data,
+        topup_group_ratio: (() => {
+          const ratio = Number(response.data.topup_group_ratio)
+          return Number.isFinite(ratio) && ratio > 0 ? ratio : 1
+        })(),
         pay_methods: parsePaymentMethods(
           response.data.pay_methods,
           response.data.stripe_min_topup

@@ -23,6 +23,42 @@ import { PAYMENT_TYPES } from '../constants'
 import { requestPaymentAmount } from './use-payment'
 
 describe('payment amount routing', () => {
+  test('sends the selected regular gateway to the amount endpoint', async () => {
+    const requests: Array<{ amount: number; payment_method?: string }> = []
+
+    await requestPaymentAmount(10, 'epay', {
+      regular: async (request) => {
+        requests.push(request)
+        return { success: true, data: '100' }
+      },
+      stripe: async () => ({ success: true, data: '0' }),
+      waffo: async () => ({ success: true, data: '0' }),
+      waffoPancake: async () => ({ success: true, data: '0' }),
+    })
+
+    assert.deepEqual(requests, [{ amount: 10, payment_method: 'epay' }])
+  })
+
+  test('does not add a regular gateway field when calculators share a function', async () => {
+    const requests: Array<{ amount: number; payment_method?: string }> = []
+    const sharedCalculator = async (request: {
+      amount: number
+      payment_method?: string
+    }) => {
+      requests.push(request)
+      return { success: true, data: '1' }
+    }
+
+    await requestPaymentAmount(10, PAYMENT_TYPES.STRIPE, {
+      regular: sharedCalculator,
+      stripe: sharedCalculator,
+      waffo: sharedCalculator,
+      waffoPancake: sharedCalculator,
+    })
+
+    assert.deepEqual(requests, [{ amount: 10 }])
+  })
+
   test('uses the dedicated Waffo amount calculator', async () => {
     const calls: string[] = []
     const amount = await requestPaymentAmount(120, PAYMENT_TYPES.WAFFO, {

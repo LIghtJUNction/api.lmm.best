@@ -1,0 +1,58 @@
+# Maintainer: LMM API maintainers
+#
+# This package is intentionally a local, prebuilt-binary hotfix package. It
+# does not clone, fetch, compile, migrate a database, or restart a service.
+
+pkgname=lmm-api-git
+pkgver=0.1.0.r28.g3e39995.payrate1
+pkgrel=1
+pkgdesc='LMM API model management and distribution system (local Go hotfix)'
+arch=('x86_64')
+url='https://github.com/LIghtJUNction/api.lmm.best'
+license=('AGPL-3.0-only')
+depends=('ca-certificates' 'tzdata')
+provides=(
+  "lmm-api=${pkgver}"
+  "new-api=${pkgver}"
+)
+conflicts=('lmm-api' 'new-api' 'new-api-git')
+replaces=('new-api-git')
+backup=('etc/lmm-api/lmm-api.env')
+install=lmm-api-git.install
+options=('!strip')
+source=(
+  'lmm-api'
+  'lmm-api.service'
+  'lmm-api.env'
+  'lmm-api-git.install'
+  'LICENSE'
+  'NOTICE'
+  'THIRD-PARTY-LICENSES.md'
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+
+package() {
+  install -Dm0755 "$srcdir/lmm-api" "$pkgdir/usr/bin/lmm-api"
+  install -Dm0644 "$srcdir/lmm-api.service" \
+    "$pkgdir/usr/lib/systemd/system/lmm-api.service"
+
+  # The package has a deliberately empty, non-secret default. During an
+  # upgrade from the legacy package, lmm-api-git.install snapshots and restores
+  # the already configured file before an operator restarts the service.
+  install -Dm0600 "$srcdir/lmm-api.env" "$pkgdir/etc/lmm-api/lmm-api.env"
+
+  install -Dm0644 "$srcdir/LICENSE" \
+    "$pkgdir/usr/share/licenses/lmm-api/LICENSE"
+  install -Dm0644 "$srcdir/NOTICE" \
+    "$pkgdir/usr/share/licenses/lmm-api/NOTICE"
+  install -Dm0644 "$srcdir/THIRD-PARTY-LICENSES.md" \
+    "$pkgdir/usr/share/licenses/lmm-api/THIRD-PARTY-LICENSES.md"
+}
