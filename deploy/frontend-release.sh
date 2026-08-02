@@ -38,7 +38,7 @@ validate_tree() {
   done < <(grep -oE "(src|href)=[\"'][^\"']+[\"']" "$tree/index.html" | sed -E "s/^[^=]+=[\"'](.*)[\"']$/\\1/")
 }
 
-root=$DEFAULT_ROOT keep=$DEFAULT_KEEP source= release= dry_run=0
+root=$DEFAULT_ROOT keep=$DEFAULT_KEEP source='' release='' dry_run=0
 [[ $# -gt 0 ]] || { usage; exit 2; }
 action=$1; shift
 while [[ $# -gt 0 ]]; do
@@ -165,6 +165,6 @@ esac
 if (( ! dry_run )); then
   current=$(basename -- "$(readlink -- "$root/current")")
   mapfile -t stale < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' | sort -nr | awk -v keep="$keep" -v current="$current" '$2 != current { seen++; if (seen >= keep) print $2 }')
-  for old in "${stale[@]}"; do rm -rf -- "$releases/$old"; done
+  for old in "${stale[@]}"; do rm -rf -- "${releases:?}/$old"; done
   printf 'current=%s\n' "$current"
 fi
