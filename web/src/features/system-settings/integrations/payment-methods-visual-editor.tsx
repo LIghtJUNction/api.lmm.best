@@ -37,6 +37,7 @@ import {
   PaymentMethodDialog,
   type PaymentMethodData,
 } from './payment-method-dialog'
+import { isValidPaymentMethodData } from './payment-method-validation'
 
 type PaymentMethodsVisualEditorProps = {
   value: string
@@ -45,6 +46,7 @@ type PaymentMethodsVisualEditorProps = {
 
 const PAYMENT_TYPE_ICON_NAMES: Record<string, string> = {
   alipay: 'SiAlipay',
+  epay: 'SiLinux',
   stripe: 'SiStripe',
   waffo_pancake: 'LuCreditCard',
   wxpay: 'SiWechat',
@@ -98,6 +100,16 @@ export function PaymentMethodsVisualEditor({
       },
     },
     {
+      name: 'LINUX DO Credit',
+      template: {
+        icon: getDefaultIconName('epay'),
+        name: 'LINUX DO Credit',
+        settlement_unit: 'LDC',
+        type: 'epay',
+        unit_price: '10',
+      },
+    },
+    {
       name: t('Custom Epay method'),
       template: {
         icon: 'LuCreditCard',
@@ -119,18 +131,7 @@ export function PaymentMethodsVisualEditor({
       context: 'payment methods',
     })
 
-    return parsed.filter(
-      (item): item is PaymentMethodData =>
-        typeof item === 'object' &&
-        item !== null &&
-        'name' in item &&
-        'type' in item &&
-        typeof item.name === 'string' &&
-        typeof item.type === 'string' &&
-        (!('icon' in item) || typeof item.icon === 'string') &&
-        (!('min_topup' in item) || typeof item.min_topup === 'string') &&
-        (!('color' in item) || typeof item.color === 'string')
-    )
+    return parsed.filter(isValidPaymentMethodData)
   }, [value])
 
   const filteredMethods = useMemo(() => {
@@ -360,6 +361,20 @@ export function PaymentMethodsVisualEditor({
                   ),
               },
               {
+                id: 'settlement',
+                header: t('Settlement'),
+                cell: (method) =>
+                  method.settlement_unit ? (
+                    <span className='font-mono text-sm'>
+                      {method.unit_price
+                        ? `${method.unit_price} ${method.settlement_unit}/USD`
+                        : method.settlement_unit}
+                    </span>
+                  ) : (
+                    <span className='text-muted-foreground text-sm'>—</span>
+                  ),
+              },
+              {
                 id: 'actions',
                 header: t('Actions'),
                 className: 'text-right',
@@ -386,6 +401,8 @@ export function PaymentMethodsVisualEditor({
                 method.name,
                 method.icon,
                 method.min_topup,
+                method.settlement_unit,
+                method.unit_price,
                 method.color,
               ]
                 .filter(Boolean)
@@ -453,6 +470,18 @@ export function PaymentMethodsVisualEditor({
                           {t('Min Top-up:')}
                         </span>
                         <span className='font-mono'>{method.min_topup}</span>
+                      </div>
+                    )}
+                    {method.settlement_unit && (
+                      <div className='flex items-center gap-2'>
+                        <span className='text-muted-foreground min-w-20'>
+                          {t('Settlement:')}
+                        </span>
+                        <span className='font-mono'>
+                          {method.unit_price
+                            ? `${method.unit_price} ${method.settlement_unit}/USD`
+                            : method.settlement_unit}
+                        </span>
                       </div>
                     )}
                   </div>

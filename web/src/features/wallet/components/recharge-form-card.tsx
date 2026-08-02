@@ -58,11 +58,14 @@ import { cn } from '@/lib/utils'
 
 import {
   getPaymentIcon,
+  getDefaultPaymentType,
   getMinTopupAmount,
   calculatePresetPricing,
   formatCreditBalance,
   formatCreditValue,
   formatPaymentAmount,
+  formatSettlementAmount,
+  getPaymentSettlementUnit,
   isWaffoPancakeCurrencySupported,
 } from '../lib'
 import type {
@@ -82,6 +85,7 @@ interface RechargeFormCardProps {
   topupAmount: number
   onTopupAmountChange: (amount: number) => void
   paymentAmount: number
+  selectedPaymentMethod?: PaymentMethod
   calculating: boolean
   onPaymentMethodSelect: (method: PaymentMethod) => void
   paymentLoading: string | null
@@ -111,6 +115,7 @@ export function RechargeFormCard({
   topupAmount,
   onTopupAmountChange,
   paymentAmount,
+  selectedPaymentMethod,
   calculating,
   onPaymentMethodSelect,
   paymentLoading,
@@ -160,6 +165,7 @@ export function RechargeFormCard({
   const hasWaffoPaymentMethods =
     Array.isArray(waffoPayMethods) && waffoPayMethods.length > 0
   const minTopup = getMinTopupAmount(topupInfo)
+  const topupGroupRatio = topupInfo?.topup_group_ratio ?? 1
   const redemptionEnabled = topupInfo?.enable_redemption !== false
   const customDiscount = topupInfo?.discount?.[topupAmount] || 1
   const customHasDiscount = customDiscount > 0 && customDiscount < 1
@@ -167,6 +173,19 @@ export function RechargeFormCard({
     ? paymentAmount / customDiscount
     : paymentAmount
   const customDiscountAmount = customOriginalPayment - paymentAmount
+  const defaultPaymentType = getDefaultPaymentType(topupInfo)
+  const effectivePaymentMethod =
+    selectedPaymentMethod ??
+    topupInfo?.pay_methods?.find((method) => method.type === defaultPaymentType)
+  const settlementUnit = getPaymentSettlementUnit(effectivePaymentMethod)
+  const formatSelectedPaymentAmount = (amount: number) =>
+    settlementUnit
+      ? formatSettlementAmount(amount, settlementUnit.label)
+      : formatPaymentAmount(amount)
+  const formatPresetPaymentAmount = (amount: number) =>
+    settlementUnit
+      ? formatSettlementAmount(amount, settlementUnit.label)
+      : formatPaymentAmount(amount)
   const pancakeCurrencySupported = isWaffoPancakeCurrencySupported()
 
   if (loading) {
@@ -262,26 +281,39 @@ export function RechargeFormCard({
                           preset.discount ||
                           topupInfo?.discount?.[preset.value] ||
                           1.0
+                        const defaultPricing = calculatePresetPricing(
+                          preset.value,
+                          priceRatio * topupGroupRatio,
+                          discount
+                        )
+                        const configuredSettlementPrice = settlementUnit
+                          ? calculatePresetPricing(
+                              preset.value,
+                              settlementUnit.unitPrice * topupGroupRatio,
+                              discount
+                            )
+                          : null
                         const {
                           originalPrice,
                           actualPrice,
                           savedAmount,
                           hasDiscount,
-                        } = calculatePresetPricing(
-                          preset.value,
-                          priceRatio,
-                          discount
-                        )
+                        } = configuredSettlementPrice
+                          ? {
+                              ...configuredSettlementPrice,
+                              hasDiscount: discount < 1,
+                            }
+                          : defaultPricing
                         const credits = formatCreditBalance(preset.value)
-                        const payment = formatPaymentAmount(actualPrice)
+                        const payment = formatPresetPaymentAmount(actualPrice)
                         const originalPayment =
-                          formatPaymentAmount(originalPrice)
+                          formatPresetPaymentAmount(originalPrice)
                         const discountPercent = Math.round((1 - discount) * 100)
                         const discountSummary = hasDiscount
                           ? `${t('Platform discount {{percent}}%', {
                               percent: discountPercent,
                             })}. ${t('Discount applied {{amount}}', {
-                              amount: formatPaymentAmount(savedAmount),
+                              amount: formatPresetPaymentAmount(savedAmount),
                             })}`
                           : t('Platform discount {{percent}}%', { percent: 0 })
                         return (
@@ -334,7 +366,8 @@ export function RechargeFormCard({
                               {hasDiscount && savedAmount > 0 && (
                                 <span>
                                   {t('Discount applied {{amount}}', {
-                                    amount: formatPaymentAmount(savedAmount),
+                                    amount:
+                                      formatPresetPaymentAmount(savedAmount),
                                   })}
                                 </span>
                               )}
@@ -381,7 +414,7 @@ export function RechargeFormCard({
                       <div className='flex min-w-0 flex-col gap-1 py-1'>
                         <span className='text-muted-foreground text-xs'>
                           {t('Amount due: {{amount}} (actual payment)', {
-                            amount: formatPaymentAmount(paymentAmount),
+                            amount: formatSelectedPaymentAmount(paymentAmount),
                           })}
                         </span>
                         <div className='flex flex-wrap gap-1'>
@@ -394,7 +427,9 @@ export function RechargeFormCard({
                             <Badge variant='outline'>
                               {t('Discount applied {{amount}}', {
                                 amount:
-                                  formatPaymentAmount(customDiscountAmount),
+                                  formatSelectedPaymentAmount(
+                                    customDiscountAmount
+                                  ),
                               })}
                             </Badge>
                           )}

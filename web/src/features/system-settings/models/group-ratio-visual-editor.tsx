@@ -94,6 +94,32 @@ type RegistryEntry = {
   ratio: number
 }
 
+type GroupOverride = {
+  targetGroup: string
+  ratio: number | null
+}
+
+type RatioMapParseResult = {
+  map: Record<string, number>
+  isValid: boolean
+}
+
+type UsableMapParseResult = {
+  map: Record<string, string>
+  isValid: boolean
+}
+
+type NestedRatioMapParseResult = {
+  map: Record<string, Record<string, number>>
+  isValid: boolean
+  invalidUserGroups: Set<string>
+}
+
+type AutoGroupsParseResult = {
+  groups: string[]
+  isValid: boolean
+}
+
 const sectionCardClassName =
   'relative shadow-sm ring-0 before:pointer-events-none before:absolute before:inset-0 before:rounded-xl before:border before:border-border/90'
 const sectionHeaderClassName = 'border-b bg-muted/20'
@@ -106,30 +132,176 @@ function createGroupPricingId() {
 
 function normalizeRatio(value: unknown): number {
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : 1
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function parseJsonValue(value: string): { value: unknown; isValid: boolean } {
+  if (value.trim() === '') return { value: {}, isValid: true }
+  try {
+    return { value: JSON.parse(value), isValid: true }
+  } catch {
+    return { value: undefined, isValid: false }
+  }
+}
+
+function parseRatioMapResult(value: string): RatioMapParseResult {
+  const parsed = parseJsonValue(value)
+  if (!parsed.isValid || !isPlainObject(parsed.value)) {
+    return { map: {}, isValid: false }
+  }
+
+  const map: Record<string, number> = {}
+  let isValid = true
+  for (const [name, ratio] of Object.entries(parsed.value)) {
+    if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio < 0) {
+      isValid = false
+      continue
+    }
+    map[name] = ratio
+  }
+  return { map, isValid }
+}
+
+function parseUsableMapResult(value: string): UsableMapParseResult {
+  const parsed = parseJsonValue(value)
+  if (!parsed.isValid || !isPlainObject(parsed.value)) {
+    return { map: {}, isValid: false }
+  }
+
+  const map: Record<string, string> = {}
+  let isValid = true
+  for (const [name, description] of Object.entries(parsed.value)) {
+    if (typeof description !== 'string') {
+      isValid = false
+      continue
+    }
+    map[name] = description
+  }
+  return { map, isValid }
+}
+
+function parseNestedRatioMapResult(value: string): NestedRatioMapParseResult {
+  const parsed = parseJsonValue(value)
+  if (!parsed.isValid || !isPlainObject(parsed.value)) {
+    return { map: {}, isValid: false, invalidUserGroups: new Set() }
+  }
+
+  const map: Record<string, Record<string, number>> = {}
+  const invalidUserGroups = new Set<string>()
+  let isValid = true
+  for (const [userGroup, rawOverrides] of Object.entries(parsed.value)) {
+    if (!isPlainObject(rawOverrides)) {
+      isValid = false
+      invalidUserGroups.add(userGroup)
+      continue
+    }
+    const overrides: Record<string, number> = {}
+    for (const [targetGroup, ratio] of Object.entries(rawOverrides)) {
+      if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio < 0) {
+        isValid = false
+        invalidUserGroups.add(userGroup)
+        continue
+      }
+      overrides[targetGroup] = ratio
+    }
+    map[userGroup] = overrides
+  }
+  return { map, isValid, invalidUserGroups }
+}
+
+function parseAutoGroupsResult(value: string): AutoGroupsParseResult {
+  if (value.trim() === '') return { groups: [], isValid: true }
+  const parsed = parseJsonValue(value)
+  if (!parsed.isValid || !Array.isArray(parsed.value)) {
+    return { groups: [], isValid: false }
+  }
+  if (!parsed.value.every((group) => typeof group === 'string')) {
+    return { groups: [], isValid: false }
+  }
+  return { groups: parsed.value, isValid: true }
+}
+
+function stableNameCompare(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
+}
+
+function compareEffectiveRatio(
+  left: Pick<RegistryEntry, 'name' | 'ratio'>,
+  right: Pick<RegistryEntry, 'name' | 'ratio'>
+): number {
+  if (left.ratio !== right.ratio) return left.ratio - right.ratio
+  return stableNameCompare(left.name, right.name)
+}
+
+function buildOptimizedAutoGroups(
+  registry: RegistryEntry[],
+  userGroupOverrides?: Record<string, number>
+): string[] {
+  const knownGroups = new Map<string, RegistryEntry>()
+  for (const entry of registry) {
+    const name = entry.name.trim()
+    if (!name || knownGroups.has(name)) continue
+    const override = parseOverrideRatio(userGroupOverrides?.[name])
+    knownGroups.set(name, {
+      name,
+      ratio: override ?? normalizeRatio(entry.ratio),
+    })
+  }
+
+  return [...knownGroups.values()]
+    .sort(compareEffectiveRatio)
+    .map((entry) => entry.name)
+}
+
+function parseOverrideRatio(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function isValidRequiredRatio(value: string): boolean {
+  const parsed = Number(value)
+  return value.trim() !== '' && Number.isFinite(parsed) && parsed >= 0
+}
+
+function isValidOptionalRatio(value: string): boolean {
+  return value.trim() === '' || isValidRequiredRatio(value)
+}
+
+function compareOverrides(left: GroupOverride, right: GroupOverride): number {
+  if (left.ratio === null && right.ratio !== null) return 1
+  if (left.ratio !== null && right.ratio === null) return -1
+  if (
+    left.ratio !== null &&
+    right.ratio !== null &&
+    left.ratio !== right.ratio
+  ) {
+    return left.ratio - right.ratio
+  }
+  return stableNameCompare(left.targetGroup, right.targetGroup)
 }
 
 function parseRatioMap(value: string): Record<string, number> {
-  return safeJsonParse<Record<string, number>>(value, {
-    fallback: {},
-    silent: true,
-  })
+  return parseRatioMapResult(value).map
 }
 
 function parseUsableMap(value: string): Record<string, string> {
-  return safeJsonParse<Record<string, string>>(value, {
-    fallback: {},
-    silent: true,
-  })
+  return parseUsableMapResult(value).map
 }
 
 function parseNestedRatioMap(
   value: string
 ): Record<string, Record<string, number>> {
-  return safeJsonParse<Record<string, Record<string, number>>>(value, {
-    fallback: {},
-    silent: true,
-  })
+  return parseNestedRatioMapResult(value).map
 }
 
 function buildGroupPricingRows(
@@ -146,14 +318,24 @@ function buildGroupPricingRows(
     ...Object.keys(topupMap),
   ])
 
-  return [...names].map((name) => ({
-    _id: createGroupPricingId(),
-    name,
-    ratio: String(normalizeRatio(ratioMap[name])),
-    topupRatio: Object.hasOwn(topupMap, name) ? String(topupMap[name]) : '',
-    selectable: Object.hasOwn(usableMap, name),
-    description: String(usableMap[name] ?? ''),
-  }))
+  return [...names]
+    .filter((name) => name.trim() !== '')
+    .map((name) => {
+      const topupRatio = Number(topupMap[name])
+      return {
+        _id: createGroupPricingId(),
+        name,
+        ratio: String(normalizeRatio(ratioMap[name])),
+        topupRatio:
+          Object.hasOwn(topupMap, name) &&
+          Number.isFinite(topupRatio) &&
+          topupRatio >= 0
+            ? String(topupRatio)
+            : '',
+        selectable: Object.hasOwn(usableMap, name),
+        description: String(usableMap[name] ?? ''),
+      }
+    })
 }
 
 function serializeGroupPricingRows(rows: GroupPricingRow[]) {
@@ -169,7 +351,7 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
       userUsableGroups[name] = row.description
     }
     const topup = row.topupRatio.trim()
-    if (topup !== '' && Number.isFinite(Number(topup))) {
+    if (topup !== '' && Number.isFinite(Number(topup)) && Number(topup) >= 0) {
       topupGroupRatio[name] = Number(topup)
     }
   }
@@ -179,6 +361,28 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
     UserUsableGroups: JSON.stringify(userUsableGroups, null, 2),
     TopupGroupRatio: JSON.stringify(topupGroupRatio, null, 2),
   }
+}
+
+function getGroupPricingValidation(rows: GroupPricingRow[]) {
+  const names = new Set<string>()
+  const duplicateNames = new Set<string>()
+  let hasInvalidRatio = false
+
+  for (const row of rows) {
+    const name = row.name.trim()
+    if (name) {
+      if (names.has(name)) duplicateNames.add(name)
+      names.add(name)
+    }
+    if (
+      !isValidRequiredRatio(row.ratio) ||
+      !isValidOptionalRatio(row.topupRatio)
+    ) {
+      hasInvalidRatio = true
+    }
+  }
+
+  return { duplicateNames: [...duplicateNames], hasInvalidRatio }
 }
 
 function groupPricingSignature(rows: GroupPricingRow[]): string {
@@ -262,21 +466,50 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 }: GroupRatioVisualEditorProps) {
   const { t } = useTranslation()
   const [detailGroup, setDetailGroup] = useState<string | null>(null)
+  const [optimizationUserGroup, setOptimizationUserGroup] = useState<
+    string | null
+  >(null)
+  const groupRatioResult = useMemo(
+    () => parseRatioMapResult(groupRatio),
+    [groupRatio]
+  )
+  const topupGroupRatioResult = useMemo(
+    () => parseRatioMapResult(topupGroupRatio),
+    [topupGroupRatio]
+  )
+  const userUsableGroupsResult = useMemo(
+    () => parseUsableMapResult(userUsableGroups),
+    [userUsableGroups]
+  )
+  const groupGroupRatioResult = useMemo(
+    () => parseNestedRatioMapResult(groupGroupRatio),
+    [groupGroupRatio]
+  )
+  const autoGroupsResult = useMemo(
+    () => parseAutoGroupsResult(autoGroups),
+    [autoGroups]
+  )
 
   const registry = useMemo<RegistryEntry[]>(() => {
-    const ratioMap = parseRatioMap(groupRatio)
-    const usableMap = parseUsableMap(userUsableGroups)
-    const topupMap = parseRatioMap(topupGroupRatio)
+    const ratioMap = groupRatioResult.map
+    const usableMap = userUsableGroupsResult.map
+    const topupMap = topupGroupRatioResult.map
     const names = new Set([
       ...Object.keys(ratioMap),
       ...Object.keys(usableMap),
       ...Object.keys(topupMap),
     ])
-    return [...names].map((name) => ({
-      name,
-      ratio: normalizeRatio(ratioMap[name]),
-    }))
-  }, [groupRatio, userUsableGroups, topupGroupRatio])
+    return [...names]
+      .filter((name) => name.trim() !== '')
+      .map((name) => ({
+        name,
+        ratio: normalizeRatio(ratioMap[name]),
+      }))
+  }, [
+    groupRatioResult.map,
+    topupGroupRatioResult.map,
+    userUsableGroupsResult.map,
+  ])
 
   const registryNames = useMemo(
     () => registry.map((entry) => entry.name),
@@ -285,11 +518,8 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 
   // Auto groups
   const autoGroupsList = useMemo(() => {
-    return safeJsonParse<string[]>(autoGroups, {
-      fallback: [],
-      context: 'auto groups',
-    })
-  }, [autoGroups])
+    return autoGroupsResult.groups
+  }, [autoGroupsResult.groups])
 
   const handleAutoGroupAdd = useCallback(
     (name: string) => {
@@ -318,10 +548,78 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
     [autoGroupsList, onChange]
   )
 
+  const optimizationOverrides = useMemo(() => {
+    if (!optimizationUserGroup) return undefined
+    const overrides = groupGroupRatioResult.map[optimizationUserGroup]
+    if (
+      typeof overrides !== 'object' ||
+      overrides === null ||
+      Array.isArray(overrides)
+    ) {
+      return undefined
+    }
+    return overrides
+  }, [groupGroupRatioResult.map, optimizationUserGroup])
+
+  const optimizationError = useMemo(() => {
+    if (
+      !groupRatioResult.isValid ||
+      !topupGroupRatioResult.isValid ||
+      !userUsableGroupsResult.isValid ||
+      !autoGroupsResult.isValid ||
+      !groupGroupRatioResult.isValid
+    ) {
+      return t(
+        'Cannot optimize until AutoGroups and ratio maps are valid JSON with non-negative finite numeric values.'
+      )
+    }
+    if (
+      optimizationUserGroup &&
+      groupGroupRatioResult.invalidUserGroups.has(optimizationUserGroup)
+    ) {
+      return t(
+        'Cannot optimize with this baseline because it has an invalid special ratio override.'
+      )
+    }
+    return null
+  }, [
+    autoGroupsResult.isValid,
+    groupGroupRatioResult.invalidUserGroups,
+    groupGroupRatioResult.isValid,
+    groupRatioResult.isValid,
+    optimizationUserGroup,
+    t,
+    topupGroupRatioResult.isValid,
+    userUsableGroupsResult.isValid,
+  ])
+
+  const handleAutoGroupOptimize = useCallback(() => {
+    // This intentionally replaces the manual order only after an explicit
+    // administrator action. Unknown/stale entries are excluded because the
+    // backend cannot assign a user to a group that is not registered here.
+    onChange(
+      'AutoGroups',
+      JSON.stringify(
+        buildOptimizedAutoGroups(registry, optimizationOverrides),
+        null,
+        2
+      )
+    )
+  }, [onChange, optimizationOverrides, registry])
+
   const autoGroupCandidates = useMemo(
     () => registryNames.filter((name) => !autoGroupsList.includes(name)),
     [registryNames, autoGroupsList]
   )
+
+  const autoGroupItems = useMemo(() => {
+    const occurrences = new Map<string, number>()
+    return autoGroupsList.map((group) => {
+      const occurrence = (occurrences.get(group) ?? 0) + 1
+      occurrences.set(group, occurrence)
+      return { group, key: `${group}-${occurrence}` }
+    })
+  }, [autoGroupsList])
 
   return (
     <div className='space-y-4'>
@@ -351,17 +649,65 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
         </CardHeader>
         <CardContent>
           <div className='space-y-4'>
-            <GroupNameSelect
-              options={autoGroupCandidates}
-              value={null}
-              placeholder={t('Add group')}
-              onValueChange={handleAutoGroupAdd}
-            />
+            <div className='flex flex-wrap items-center gap-2'>
+              <GroupNameSelect
+                options={autoGroupCandidates}
+                value={null}
+                placeholder={t('Add group')}
+                onValueChange={handleAutoGroupAdd}
+              />
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={handleAutoGroupOptimize}
+                disabled={optimizationError !== null}
+              >
+                {t('Optimize by effective ratio')}
+              </Button>
+            </div>
+            <div className='space-y-2'>
+              <Label>{t('Optimization baseline user group')}</Label>
+              <Select
+                value={optimizationUserGroup ?? '__base_ratio__'}
+                onValueChange={(value) => {
+                  if (typeof value !== 'string') return
+                  setOptimizationUserGroup(
+                    value === '__base_ratio__' ? null : value
+                  )
+                }}
+              >
+                <SelectTrigger className='w-full sm:w-64'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value='__base_ratio__'>
+                      {t('Base billing ratios')}
+                    </SelectItem>
+                    {registryNames.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base billing ratios by default; selecting a user group applies its exact special ratio overrides before sorting."
+              )}
+            </p>
+            {optimizationError && (
+              <p className='text-destructive text-sm' role='alert'>
+                {optimizationError}
+              </p>
+            )}
             {autoGroupsList.length > 0 && (
               <div className='space-y-2'>
-                {autoGroupsList.map((group, index) => (
+                {autoGroupItems.map(({ group, key }, index) => (
                   <div
-                    key={group}
+                    key={key}
                     className='flex items-center gap-2 rounded-md border p-3'
                   >
                     <GripVertical className='text-muted-foreground h-4 w-4' />
@@ -457,6 +803,10 @@ function GroupPricingTable({
   const emitRows = useCallback(
     (nextRows: GroupPricingRow[]) => {
       setRows(nextRows)
+      const validation = getGroupPricingValidation(nextRows)
+      if (validation.duplicateNames.length > 0 || validation.hasInvalidRatio) {
+        return
+      }
       const serialized = serializeGroupPricingRows(nextRows)
       onChange('GroupRatio', serialized.GroupRatio)
       onChange('UserUsableGroups', serialized.UserUsableGroups)
@@ -506,17 +856,8 @@ function GroupPricingTable({
     [emitRows, rows]
   )
 
-  const duplicateNames = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const row of rows) {
-      const name = row.name.trim()
-      if (!name) continue
-      counts.set(name, (counts.get(name) ?? 0) + 1)
-    }
-    return [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([name]) => name)
-  }, [rows])
+  const validation = useMemo(() => getGroupPricingValidation(rows), [rows])
+  const duplicateNames = validation.duplicateNames
 
   return (
     <Card className={sectionCardClassName}>
@@ -526,7 +867,7 @@ function GroupPricingTable({
             <CardTitle>{t('Pricing groups')}</CardTitle>
             <CardDescription>
               {t(
-                'All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.'
+                'All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group. A top-up ratio and a payment channel price are independent multipliers.'
               )}
             </CardDescription>
           </div>
@@ -568,6 +909,7 @@ function GroupPricingTable({
                     min={0}
                     step={0.1}
                     value={row.ratio}
+                    aria-invalid={!isValidRequiredRatio(row.ratio)}
                     onChange={(event) =>
                       updateRow(row._id, 'ratio', event.target.value)
                     }
@@ -585,6 +927,7 @@ function GroupPricingTable({
                     step={0.1}
                     value={row.topupRatio}
                     placeholder={t('Not set')}
+                    aria-invalid={!isValidOptionalRatio(row.topupRatio)}
                     onChange={(event) =>
                       updateRow(row._id, 'topupRatio', event.target.value)
                     }
@@ -663,15 +1006,17 @@ function GroupPricingTable({
               })}
             </p>
           )}
+          {validation.hasInvalidRatio && (
+            <p className='text-destructive text-sm'>
+              {t(
+                'Ratios must be finite numbers greater than or equal to zero.'
+              )}
+            </p>
+          )}
         </div>
       </CardContent>
     </Card>
   )
-}
-
-type GroupOverride = {
-  targetGroup: string
-  ratio: number
 }
 
 type GroupOverrideRulesProps = {
@@ -708,13 +1053,25 @@ function GroupOverrideRules({
 
   const groupGroupRatioList = useMemo(() => {
     const map = parseNestedRatioMap(groupGroupRatio)
-    return Object.entries(map).map(([userGroup, overrides]) => ({
-      userGroup,
-      overrides: Object.entries(overrides).map(([targetGroup, ratio]) => ({
-        targetGroup,
-        ratio,
-      })),
-    }))
+    return Object.entries(map)
+      .filter(
+        ([userGroup, overrides]) =>
+          userGroup.trim() !== '' &&
+          typeof overrides === 'object' &&
+          overrides !== null &&
+          !Array.isArray(overrides)
+      )
+      .map(([userGroup, overrides]) => ({
+        userGroup,
+        overrides: Object.entries(overrides)
+          .filter(([targetGroup]) => targetGroup.trim() !== '')
+          .map(([targetGroup, ratio]) => ({
+            targetGroup,
+            ratio: parseOverrideRatio(ratio),
+          }))
+          .sort(compareOverrides),
+      }))
+      .sort((left, right) => stableNameCompare(left.userGroup, right.userGroup))
   }, [groupGroupRatio])
 
   const emitMap = useCallback(
@@ -796,7 +1153,7 @@ function GroupOverrideRules({
         <CardTitle>{t('Special ratio rules')}</CardTitle>
         <CardDescription>
           {t(
-            'Each rule reads as a sentence: users of one group pay a special ratio when billed as another group. Without a rule, the billing group base ratio applies.'
+            'Each rule reads as a sentence: users of one group pay a special ratio when billed as another group. An exact user group plus billing group rule takes priority; otherwise the billing group base ratio applies. Top-up ratios and payment channel prices remain independent multipliers.'
           )}
         </CardDescription>
       </CardHeader>
@@ -895,8 +1252,9 @@ function GroupOverrideRules({
                                   )
                                   return (
                                     <span className='inline-flex items-center gap-1.5'>
-                                      {override.ratio}
-                                      {baseRatio !== undefined &&
+                                      {override.ratio ?? t('Invalid ratio')}
+                                      {override.ratio !== null &&
+                                        baseRatio !== undefined &&
                                         baseRatio !== override.ratio && (
                                           <span className='text-muted-foreground text-xs'>
                                             {t('(instead of {{ratio}})', {
@@ -1028,15 +1386,15 @@ function GroupOverrideDialog({
     }
 
     setTargetGroup(editData?.targetGroup ?? null)
-    setRatio(editData ? String(editData.ratio) : '')
+    setRatio(editData?.ratio === null ? '' : String(editData?.ratio ?? ''))
   }, [editData, open])
 
   const baseRatio = targetGroup ? baseRatioByName.get(targetGroup) : undefined
 
   const handleSave = () => {
     if (!targetGroup || !ratio.trim()) return
-    const parsedRatio = Number.parseFloat(ratio)
-    if (Number.isNaN(parsedRatio)) return
+    const parsedRatio = Number(ratio)
+    if (!Number.isFinite(parsedRatio) || parsedRatio < 0) return
 
     onSave(targetGroup, parsedRatio, editData?.targetGroup)
     setTargetGroup(null)
@@ -1088,10 +1446,16 @@ function GroupOverrideDialog({
         <div className='space-y-2'>
           <Label>{t('Ratio')}</Label>
           <Input
+            type='number'
+            min={0}
+            step={0.01}
             value={ratio}
             onChange={(e) => {
               const val = e.target.value
-              if (val === '' || !Number.isNaN(Number.parseFloat(val))) {
+              if (
+                val === '' ||
+                (Number.isFinite(Number(val)) && Number(val) >= 0)
+              ) {
                 setRatio(val)
               }
             }}

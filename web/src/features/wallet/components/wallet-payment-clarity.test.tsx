@@ -315,6 +315,106 @@ describe('wallet payment clarity', () => {
     await unmount(rendered)
   })
 
+  test('uses the initial default Linux.do method for quotes and confirmation', async () => {
+    await i18n.changeLanguage('en')
+    setUsdBillingCurrency()
+    const paymentMethod = {
+      name: 'LINUX DO Credit',
+      settlement_unit: 'LDC',
+      type: 'epay',
+      unit_price: '10',
+    }
+    const recharge = await render(
+      <RechargeFormCard
+        topupInfo={{
+          ...topupInfo,
+          discount: { 1: 0.8 },
+          pay_methods: [paymentMethod],
+          topup_group_ratio: 0.14,
+        }}
+        presetAmounts={[{ value: 1, discount: 0.8 }]}
+        selectedPreset={1}
+        onSelectPreset={() => undefined}
+        topupAmount={1}
+        onTopupAmountChange={() => undefined}
+        paymentAmount={1.12}
+        calculating={false}
+        onPaymentMethodSelect={() => undefined}
+        paymentLoading={null}
+        redemptionCode=''
+        onRedemptionCodeChange={() => undefined}
+        onRedeem={() => undefined}
+        redeeming={false}
+      />
+    )
+
+    assert.equal(
+      recharge.container.textContent?.includes(
+        'Pay 1.12 LDC (original payment 1.4 LDC)'
+      ),
+      true
+    )
+    assert.equal(
+      recharge.container.textContent?.includes(
+        'Amount due: 1.12 LDC (actual payment)'
+      ),
+      true
+    )
+    await unmount(recharge)
+
+    const confirmation = await render(
+      <PaymentConfirmDialog
+        open
+        onOpenChange={() => undefined}
+        onConfirm={() => undefined}
+        topupAmount={1}
+        paymentAmount={1.12}
+        paymentMethod={paymentMethod}
+        calculating={false}
+        processing={false}
+        discountRate={0.8}
+      />
+    )
+
+    assert.equal(
+      document.body.textContent?.includes('Top up 1 USD; pay 1.12 LDC'),
+      true
+    )
+    await unmount(confirmation)
+  })
+
+  test('applies the current group multiplier to ordinary payment presets', async () => {
+    await i18n.changeLanguage('en')
+    setUsdBillingCurrency()
+    const rendered = await render(
+      <RechargeFormCard
+        topupInfo={{ ...topupInfo, topup_group_ratio: 0.14 }}
+        presetAmounts={[{ value: 1 }]}
+        selectedPreset={1}
+        onSelectPreset={() => undefined}
+        topupAmount={1}
+        onTopupAmountChange={() => undefined}
+        paymentAmount={0.14}
+        calculating={false}
+        onPaymentMethodSelect={() => undefined}
+        paymentLoading={null}
+        redemptionCode=''
+        onRedemptionCodeChange={() => undefined}
+        onRedeem={() => undefined}
+        redeeming={false}
+        priceRatio={1}
+      />
+    )
+
+    assert.equal(
+      rendered.container.textContent?.includes(
+        'Pay $0.14 USD (original payment $0.14 USD)'
+      ),
+      true
+    )
+    await unmount(rendered)
+  })
+
   test('repeats the destination, credited balance, top-up payment, and method in confirmation', async () => {
     await i18n.changeLanguage('en')
     setUsdBillingCurrency()

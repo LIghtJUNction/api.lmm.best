@@ -66,6 +66,10 @@ export async function requestPaymentAmount(
   paymentType: string,
   calculators: PaymentAmountCalculators = defaultPaymentAmountCalculators
 ): Promise<number> {
+  const usesRegularCalculator =
+    !isStripePayment(paymentType) &&
+    !isWaffoPayment(paymentType) &&
+    !isWaffoPancakePayment(paymentType)
   let calculator = calculators.regular
   if (isStripePayment(paymentType)) {
     calculator = calculators.stripe
@@ -75,7 +79,10 @@ export async function requestPaymentAmount(
     calculator = calculators.waffoPancake
   }
 
-  const response = await calculator({ amount: topupAmount })
+  const request = usesRegularCalculator
+    ? { amount: topupAmount, payment_method: paymentType }
+    : { amount: topupAmount }
+  const response = await calculator(request)
   if (!isApiSuccess(response) || !response.data) {
     return 0
   }

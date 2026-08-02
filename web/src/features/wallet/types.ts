@@ -100,6 +100,10 @@ export interface PaymentMethod {
   min_topup?: number
   /** Optional react-icons component name or safe icon URL */
   icon?: string
+  /** Settlement unit shown for this gateway, for example LDC. */
+  settlement_unit?: string
+  /** Configured gateway price for one credited USD. The server remains authoritative. */
+  unit_price?: string | number
 }
 
 /**
@@ -134,6 +138,8 @@ export interface TopupInfo {
   amount_options: number[]
   /** Discount rates by amount */
   discount: Record<number, number>
+  /** Top-up pricing multiplier for the current user's group. */
+  topup_group_ratio?: number
   /** Optional topup link for purchasing codes */
   topup_link?: string
   /** Whether Creem topup is enabled */
@@ -210,6 +216,8 @@ export interface WaffoPancakePaymentRequest {
 export interface AmountRequest {
   /** Topup amount to calculate */
   amount: number
+  /** Gateway selected for a regular Epay amount calculation. */
+  payment_method?: string
 }
 
 /**

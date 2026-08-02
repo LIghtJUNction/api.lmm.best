@@ -37,13 +37,59 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 
+const SETTLEMENT_UNIT_PATTERN = /^[A-Za-z0-9._-]{1,16}$/
+const POSITIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
+
 const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
-  z.object({
-    name: z.string().min(1, t('Payment method name is required')),
-    type: z.string().min(1, t('Payment type key is required')),
-    icon: z.string().optional(),
-    min_topup: z.string().optional(),
-  })
+  z
+    .object({
+      name: z.string().min(1, t('Payment method name is required')),
+      type: z.string().min(1, t('Payment type key is required')),
+      icon: z.string().optional(),
+      min_topup: z.string().optional(),
+      settlement_unit: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() || SETTLEMENT_UNIT_PATTERN.test(value.trim()),
+          {
+            message: t(
+              'Settlement unit must use only letters, numbers, dots, hyphens, or underscores (max 16 characters)'
+            ),
+          }
+        ),
+      unit_price: z
+        .string()
+        .optional()
+        .refine(
+          (value) => {
+            if (!value?.trim()) return true
+            const trimmed = value.trim()
+            return POSITIVE_DECIMAL_PATTERN.test(trimmed) && Number(trimmed) > 0
+          },
+          { message: t('Gateway price must be a positive decimal number') }
+        ),
+    })
+    .superRefine((values, ctx) => {
+      const hasSettlementUnit = !!values.settlement_unit?.trim()
+      const hasUnitPrice = !!values.unit_price?.trim()
+
+      if (hasSettlementUnit && !hasUnitPrice) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Set a valid gateway price when a settlement unit is set'),
+          path: ['unit_price'],
+        })
+      }
+      if (hasUnitPrice && !hasSettlementUnit) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Set a settlement unit when a gateway price is set'),
+          path: ['settlement_unit'],
+        })
+      }
+    })
 
 type PaymentMethodDialogFormValues = z.infer<
   ReturnType<typeof createPaymentMethodDialogSchema>
@@ -56,6 +102,8 @@ export type PaymentMethodData = {
   type: string
   icon?: string
   min_topup?: string
+  settlement_unit?: string
+  unit_price?: string
   color?: string
 }
 
@@ -68,6 +116,7 @@ type PaymentMethodDialogProps = {
 
 const PAYMENT_TYPE_ICON_NAMES: Record<string, string> = {
   alipay: 'SiAlipay',
+  epay: 'SiLinux',
   stripe: 'SiStripe',
   waffo_pancake: 'LuCreditCard',
   wxpay: 'SiWechat',
@@ -104,6 +153,12 @@ export function PaymentMethodDialog({
       value: 'stripe',
     },
     {
+      iconName: 'SiLinux',
+      label: 'LINUX DO Credit (Epay: epay)',
+      name: 'LINUX DO Credit',
+      value: 'epay',
+    },
+    {
       iconName: 'LuCreditCard',
       label: 'Waffo Pancake (waffo_pancake)',
       name: 'Waffo Pancake',
@@ -120,6 +175,8 @@ export function PaymentMethodDialog({
       type: '',
       icon: '',
       min_topup: '',
+      settlement_unit: '',
+      unit_price: '',
     },
   })
 
@@ -132,6 +189,8 @@ export function PaymentMethodDialog({
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
         min_topup: editData.min_topup ?? '',
+        settlement_unit: editData.settlement_unit ?? '',
+        unit_price: editData.unit_price ?? '',
       })
     } else {
       form.reset({
@@ -139,6 +198,8 @@ export function PaymentMethodDialog({
         type: '',
         icon: '',
         min_topup: '',
+        settlement_unit: '',
+        unit_price: '',
       })
     }
   }, [editData, form, open])
@@ -153,6 +214,12 @@ export function PaymentMethodDialog({
     }
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
+    }
+    if (values.settlement_unit && values.settlement_unit.trim() !== '') {
+      data.settlement_unit = values.settlement_unit.trim()
+    }
+    if (values.unit_price && values.unit_price.trim() !== '') {
+      data.unit_price = values.unit_price.trim()
     }
     onSave(data)
     form.reset()
@@ -305,6 +372,50 @@ export function PaymentMethodDialog({
                 </FormControl>
                 <FormDescription>
                   {t('Optional minimum recharge amount for this method.')}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='settlement_unit'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Settlement unit (optional)')}</FormLabel>
+                <FormControl>
+                  <Input placeholder='LDC' {...field} />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'The gateway currency label shown to users, for example LDC.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='unit_price'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Gateway price per 1 USD (optional)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min='0.0001'
+                    step='0.0001'
+                    placeholder='10'
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'The server uses this price to quote and verify payment. Example: 10 means 10 LDC for 1 USD.'
+                  )}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
