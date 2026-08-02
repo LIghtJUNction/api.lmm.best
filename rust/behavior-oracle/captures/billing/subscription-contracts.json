@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "source": {
+    "revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9",
+    "synthetic": true,
+    "live_charges_forbidden": true
+  },
+  "scope": "legacy Go subscription billing contracts",
+  "authenticated_purchase_routes": [
+    {
+      "id": "POST /api/subscription/epay/pay",
+      "request": {"content_type": "application/json", "body": {"plan_id": "positive integer", "payment_method": "configured ePay method"}},
+      "success": {"status": 200, "body": {"message": "success", "data": "provider parameters", "url": "provider purchase URI"}},
+      "preconditions": ["payment compliance confirmed", "enabled plan", "price_amount >= 0.01", "valid payment method", "ePay configured", "MaxPurchasePerUser not exceeded"],
+      "on_upstream_purchase_failure": "mark the new pending subscription order expired, then return legacy API error"
+    },
+    {
+      "id": "POST /api/subscription/fastpay/pay",
+      "request": {"content_type": "application/json", "body": {"plan_id": "positive integer", "payment_method": "alipay or wechat after normalization"}},
+      "success": {"status": 200, "body": {"message": "success", "data": "signed FastPay parameters", "url": "FastPay submit URL"}},
+      "preconditions": ["payment compliance confirmed", "enabled plan", "price_amount >= 0.01", "FastPay configured", "MaxPurchasePerUser not exceeded"]
+    },
+    {
+      "id": "POST /api/subscription/stripe/pay",
+      "request": {"content_type": "application/json", "body": {"plan_id": "positive integer"}},
+      "success": {"status": 200, "body": {"message": "success", "data": {"pay_link": "Stripe Checkout URL"}}},
+      "preconditions": ["payment compliance confirmed", "enabled plan", "StripePriceId", "sk_ or rk_ secret", "Stripe webhook secret", "existing user", "MaxPurchasePerUser not exceeded"],
+      "upstream_failure": {"status": 200, "body": {"message": "error", "data": "拉起支付失败"}}
+    },
+    {
+      "id": "POST /api/subscription/creem/pay",
+      "request": {"content_type": "application/json", "body": {"plan_id": "positive integer"}},
+      "success": {"status": 200, "body": {"message": "success", "data": {"checkout_url": "Creem checkout URL", "order_id": "subscription trade number"}}},
+      "preconditions": ["payment compliance confirmed", "enabled plan", "CreemProductId", "webhook secret unless test mode", "existing user", "MaxPurchasePerUser not exceeded"],
+      "upstream_failure": {"status": 200, "body": {"message": "error", "data": "拉起支付失败"}, "effect": "pending order remains"}
+    },
+    {
+      "id": "POST /api/subscription/waffo-pancake/pay",
+      "request": {"content_type": "application/json", "body": {"plan_id": "positive integer"}},
+      "success": {"status": 200, "body": {"message": "success", "data": {"checkout_url": "Waffo Pancake checkout URL", "session_id": "provider session", "expires_at": "provider expiry", "order_id": "subscription trade number", "token": "provider token", "token_expires_at": "provider token expiry"}}},
+      "preconditions": ["payment compliance confirmed", "enabled plan", "WaffoPancakeProductId", "merchant and private-key configuration", "existing user", "MaxPurchasePerUser not exceeded"],
+      "upstream_failure": {"status": 200, "body": {"message": "error", "data": "拉起支付失败"}, "effect": "new order status becomes failed"}
+    },
+    {
+      "id": "POST /api/subscription/balance/pay",
+      "request": {"content_type": "application/json", "body": {"plan_id": "positive integer"}},
+      "success": {"status": 200, "body": {"success": true, "message": "", "data": null}},
+      "preconditions": ["payment compliance confirmed", "enabled plan", "nonnegative price", "AllowBalancePay", "wallet quota at least ceil(price_amount * QuotaPerUnit)"],
+      "transaction": ["lock plan and user", "debit wallet quota", "create active subscription", "insert already-successful balance subscription order"],
+      "cache_effect": ["decrement legacy user quota cache", "refresh user group cache when the purchase changes its group"]
+    }
+  ],
+  "anonymous_callback_routes": [
+    {
+      "id": "POST|GET /api/subscription/epay/notify",
+      "request": {"post": "form parameters", "get": "query parameters"},
+      "auth": "ePay client Verify(params) and TradeStatus == TRADE_SUCCESS",
+      "success": {"status": 200, "body_text": "success"},
+      "reject": {"status": 200, "body_text": "fail"},
+      "completion": "CompleteSubscriptionOrder(trade_no, verified provider payload, epay, verifyInfo.Type)"
+    },
+    {
+      "id": "GET|POST /api/subscription/epay/return",
+      "request": {"post": "form parameters", "get": "query parameters"},
+      "auth": "ePay Verify(params)",
+      "responses": [{"status": 302, "location_suffix": "/wallet?pay=success"}, {"status": 302, "location_suffix": "/wallet?pay=pending"}, {"status": 302, "location_suffix": "/wallet?pay=fail"}],
+      "completion": "only verified TRADE_SUCCESS completes the order"
+    },
+    {
+      "id": "POST /api/subscription/fastpay/notify",
+      "request": {"content_type": "application/json or form-urlencoded", "body_fields": ["merchantNo", "orderNo", "outTradeNo", "amount", "payAmount", "payType", "status", "payTime", "timestamp", "sign"]},
+      "auth": "case-insensitive MD5 of lexicographically sorted sign fields plus &key=ApiSecret; secret and sign must both be nonempty",
+      "success": {"status": 200, "body_text": "success"},
+      "reject": {"status": 200, "body_text": "fail"},
+      "completion_gate": "status is string 1 or SUCCESS",
+      "completion": "CompleteSubscriptionOrder(outTradeNo, raw callback body, fastpay, payType)"
+    },
+    {
+      "id": "POST /api/stripe/webhook",
+      "required_header": "Stripe-Signature",
+      "availability_gate": "payment compliance, Stripe API secret, Stripe webhook secret, Stripe price ID",
+      "auth": "Stripe ConstructEventWithOptions(raw body, Stripe-Signature, webhook secret; API version mismatch ignored)",
+      "reject_statuses": {"disabled": 403, "body_read_error": 503, "invalid_signature": 400},
+      "success": {"status": 200, "body": null},
+      "subscription_events": ["checkout.session.completed with status complete and payment_status paid", "checkout.session.async_payment_succeeded", "checkout.session.expired"],
+      "transitions": {"paid": "pending -> success", "expired": "pending -> expired"}
+    },
+    {
+      "id": "POST /api/creem/webhook",
+      "required_header": "creem-signature",
+      "availability_gate": "payment compliance, Creem API key, nonempty products, Creem webhook secret",
+      "auth": "HMAC-SHA256 hex(raw body, webhook secret), constant-time compare; empty secret is accepted only in CreemTestMode but route gate normally requires it",
+      "reject_statuses": {"disabled": 403, "body_or_json_error": 400, "missing_or_invalid_signature": 401, "subscription_completion_error": 500},
+      "success": {"status": 200, "body": null},
+      "completion_gate": "eventType checkout.completed, object.order.status paid, object.request_id nonempty",
+      "completion": "CompleteSubscriptionOrder(request_id, JSON event, creem, empty actual payment method)"
+    }
+  ],
+  "persistence": {
+    "subscription_orders": {
+      "identity": "trade_no unique",
+      "initial": {"status": "pending", "fields": ["user_id", "plan_id", "money", "payment_method", "payment_provider", "create_time"]},
+      "complete": {"status": "success", "sets": ["complete_time", "provider_payload", "payment_method when actual method supplied"]},
+      "expire": {"from": "pending", "to": "expired", "sets": ["complete_time"]},
+      "errors": ["subscription order not found", "payment method mismatch", "subscription order status invalid"]
+    },
+    "completion_transaction": ["SELECT order FOR UPDATE by trade_no", "require expected payment provider", "success is a no-op", "only pending may complete", "snapshot enabled-or-disabled plan into active user_subscription", "upsert matching top_up success record", "save successful order"],
+    "user_subscriptions": {"insert": {"status": "active", "amount_used": 0, "source": "order", "snapshots": ["quota", "end time", "reset schedule", "group transition", "wallet overflow policy"]}},
+    "replay_and_concurrency": ["LockOrder(tradeNo) serializes duplicate callbacks only inside one Go process", "database row lock protects completion across processes", "duplicate success callback returns success without creating another subscription", "provider mismatch is rejected before any state transition"]
+  },
+  "valkey": {
+    "subscription_plan": {"key": "new-api:subscription_plan:v1:<plan_id>", "codec": "JSON", "ttl_seconds_default": 300, "fallback": "in-process LRU"},
+    "subscription_plan_info": {"key": "new-api:subscription_plan_info:v1:sub:<user_subscription_id>", "codec": "JSON", "ttl_seconds_default": 120, "fallback": "in-process LRU"},
+    "invalidation": "plan change deletes its plan key and purges all plan-info keys",
+    "callback_effect": "callbacks do not add a dedicated idempotency/replay key; idempotency is database-backed"
+  },
+  "dynamic_fields": ["trade_no", "create_time", "complete_time", "subscription id", "checkout URL", "provider signature", "provider payload", "redirect host"]
+}

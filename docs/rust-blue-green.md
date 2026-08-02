@@ -1,6 +1,6 @@
 # Rust 后端蓝绿部署
 
-这套原生 Arch Linux 部署骨架将 `lmm-api-rs` 的进程升级与数据库迁移拆开，并且默认只接管内部探针。当前 Rust 后端尚未实现 Go 服务的业务路由，因此**不得把生产 API 全量切到 Rust**。
+这套原生 Arch Linux 部署骨架将 `lmm-api-rs` 的进程升级与数据库迁移拆开，并且默认只接管内部探针。生产 ownership 的实时结论必须读取 `rust/routes/migration-gate.tsv`；本次审计快照仍是 **Go 356/356**。Rust 的候选实现绝不能被表述为已切流或已替代 Go。
 
 ## 边界与不变量
 
@@ -8,12 +8,12 @@
 - artifact 安装到 `/opt/lmm-api-rs/releases/<revision>/`；slot 的 `current` 符号链接用同文件系统 `rename(2)` 原子替换。
 - 部署程序与 nginx 资产固定安装到 `/usr/lib/lmm-api-rs/deploy/`，`/usr/local/sbin` 仅提供符号链接入口；transient unit 不依赖调用者当前目录。
 - PostgreSQL migrator 是独立事务，绝不放在应用 `ExecStartPre`、应用启动或蓝绿切换脚本里。
-- `/readyz` 必须验证 PostgreSQL 与 schema contract，并发执行全部检查且不短路。启用 fail-closed 全局 API 限流时，Valkey 也是 required dependency，故障必须返回 HTTP 503；关闭限流时 Valkey 才只是 cache acceleration，故障返回 HTTP 200 的 `degraded`。`/livez` 只证明进程存活。
+- `/readyz` 必须验证 PostgreSQL、schema contract 及已挂载路由的实际表/权限，并发执行全部检查且不短路。API-token 已挂载时，`tokens` 的完整列 shape 与 `EXPLAIN` 的 INSERT（含 ID sequence default）、UPDATE、DELETE capability 是 schema gate；`EXPLAIN` 不会写业务行。启用 fail-closed 全局 API 限流时，Valkey 也是 required dependency，故障必须返回 HTTP 503；关闭限流时 Valkey 才只是 cache acceleration，故障返回 HTTP 200 的 `degraded`。`/livez` 只证明进程存活。
 - nginx upstream include 先写 `.next`，经 `mv -T` 原子替换，再执行 `nginx -t` 与 reload。失败时恢复审计目录保存的旧 include。
 - nginx 不配置对非幂等请求的重试。当前 route ownership include 只提供三个仅 loopback 可访问的 GET/HEAD 内部探针。
 - 每次事务用 `flock` 串行化，并在 `/var/log/lmm-api-rs/deployments/<UTC>-<revision>/` 保存不含连接串的 hash、探针结果、切换前配置与结果。
 - 切换前 journal 写入 `PREPARED`（old/new/revision/旧 upstream hash 与备份路径），reload 成功后立即写 `COMMITTED`。若进程在窗口内被 SIGKILL，下次启动通过真实 nginx TLS build canary 判断运行中 worker：命中新 revision 就提交并停止旧 slot，否则先恢复旧 worker 与旧 upstream、再停止未接流的新 slot；恢复 journal 始终保留原 PREPARED artifact revision。
-- 当前只接管短生命周期内部 GET/HEAD 探针，切换后直接向旧 slot 发送 SIGTERM，由 Rust 的 `LMM_DRAIN_TIMEOUT_SECONDS` 完成有界排空。未来接管业务流量前必须提供 Rust 自身的 HTTP、SSE 与 WebSocket 连接生命周期指标，不能用任意外部 shell 命令伪装精确 drain。
+- 当前只接管短生命周期内部 GET/HEAD 探针，切换后直接向旧 slot 发送 SIGTERM。Rust 先将 readiness 标为 draining，拒绝新请求，再由 `LMM_DRAIN_TIMEOUT_SECONDS` 完成有界排空；该值最大 40 秒，低于 systemd 的 `TimeoutStopSec=45s`，避免 supervisor 先行中断请求。未来接管业务流量前必须提供 Rust 自身的 HTTP、SSE 与 WebSocket 连接生命周期指标，不能用任意外部 shell 命令伪装精确 drain。
 
 ## 首次安装
 
@@ -40,23 +40,29 @@ LMM_BUILD_REVISION="$(git rev-parse HEAD)" cargo build --release --locked -p lmm
 sha256sum target/release/lmm-api-rs
 ```
 
-先执行不启动实例、不切换流量的计划。它会验证配置、hash 和生产路由禁用门；如果此前事务被强杀，也会以 nginx upstream 为权威原子修复 active state/journal：
+先执行不启动实例、不切换流量的只读计划。它会验证配置、hash 和生产路由禁用门，并只从 nginx upstream 读取当前 slot；它不会修复 state/journal、启动或停止 slot、reload nginx：
 
 ```bash
 sudo deploy-lmm-api-rs --artifact /absolute/path/lmm-api-rs \
   --sha256 <sha256> --revision <git-sha> --dry-run
 ```
 
-正式事务必须交给 systemd manager，使 SSH/API 控制连接断开后仍能自主完成。入口会先把 artifact 复制并复核到 root-owned、绝对路径的 `/var/lib/lmm-api-rs/artifacts/`，transient unit 不依赖用户目录或原始构建路径：
+当前 Go 冻结生产业务路由；**没有默认的正式切换命令**。仅在另行书面批准的 internal-probes 演练中，才可使用一次性环境批准、固定目标和精确 revision 确认。入口会先把 artifact 复制并复核到 root-owned、绝对路径的 `/var/lib/lmm-api-rs/artifacts/`，transient unit 不依赖用户目录或原始构建路径：
 
 ```bash
-sudo deploy-lmm-api-rs --artifact /absolute/path/lmm-api-rs \
-  --sha256 <sha256> --revision <git-sha> --systemd-run
+revision=<git-sha>
+export LMM_RS_CUTOVER_APPROVAL=GO_FREEZE_OVERRIDE_INTERNAL_PROBES
+sudo --preserve-env=LMM_RS_CUTOVER_APPROVAL deploy-lmm-api-rs \
+  --artifact /absolute/path/lmm-api-rs --sha256 <sha256> --revision "$revision" --systemd-run \
+  --approve-cutover --cutover-target internal-probes --cutover-revision "$revision"
+unset LMM_RS_CUTOVER_APPROVAL
 ```
+
+该批准不能指定业务路由目标，且 `/etc/lmm-api-rs/production-routing.enabled` 仍会使部署器拒绝执行；它不能把生产 API 从 Go 转交给 Rust。
 
 该入口有意立即返回；不要把后续 `systemctl show` 当作最终证据，因为 `--collect` 会回收完成的 transient unit。完成状态以 `/var/log/lmm-api-rs/deployments/*/result`、`/opt/lmm-api-rs/active-slot` 和 TLS build identity 三者为准。失败 unit 的 journal 只用于诊断，不能替代 durable result。
 
-部署器安装 inactive slot、启动并检查 `/livez`、`/readyz` 和 revision、写 PREPARED journal、原子切换内部探针 upstream、reload nginx，再通过真实 TLS `/readyz` 与 `/build` 确认 nginx 选中了目标 revision。nginx reload 是异步的，旧 worker 可能在短窗口内继续响应；canary 因此在有限截止时间内重试，并且只有 readiness、revision 与 slot 同时匹配才算收敛。回滚严格按“启动旧 slot 并 direct-ready → 原子恢复旧 upstream → `nginx -t`/reload/is-active → TLS canary 验证旧 revision → 停止新 slot”执行；任一步失败会保留新 slot 并写 `NEEDS_ATTENTION`，绝不报告成功。旧 release 不在同一事务删除。
+部署器安装 inactive slot、启动并检查 `/livez`、`/readyz` 和 revision；随后调用 mounted 的只读 status/public-content 路径预热真实请求边界（只会写 best-effort cache），再写 PREPARED journal、原子切换内部探针 upstream、reload nginx，并通过真实 TLS `/readyz` 与 `/build` 确认 nginx 选中了目标 revision。nginx reload 是异步的，旧 worker 可能在短窗口内继续响应；canary 因此在有限截止时间内重试，并且只有 readiness、revision 与 slot 同时匹配才算收敛。回滚严格按“启动旧 slot 并 direct-ready → 原子恢复旧 upstream → `nginx -t`/reload/is-active → TLS canary 验证旧 revision → 停止新 slot”执行；任一步失败会保留新 slot 并写 `NEEDS_ATTENTION`，绝不报告成功。旧 release 不在同一事务删除。
 
 ## 故障注入与验证
 
@@ -94,16 +100,22 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 
 ## 当前 Rust 业务迁移状态
 
-Rust 已实现 `/api/notice`、`/api/about` 与 `/api/home_page_content` 的只读垂直切片，用于 direct differential testing。实现按 domain content kind → application repository/cache ports → SQLx PostgreSQL 与 Redis/Valkey adapters → Axum transport 分层。Valkey 使用 `lmm:public-content:v1:*` 短 TTL cache-aside；miss、失败或 `LMM_DEPENDENCY_TIMEOUT_SECONDS` 超时均回源 PostgreSQL，PG read 也受同一 deadline 约束，缓存写超时/失败不影响成功响应，PG 始终是唯一权威来源。
+`rust/routes/migration-gate.tsv` 是唯一的迁移记分牌，更新文档或新增候选代码不能改变其结论。路由数量、挂载状态、差分验证和独立审批会随本地迁移工作更新；不得把本文或任一历史演练记录当作当前迁移进度。后续审批或 gate 更新必须以 TSV 与下面命令重新生成的结果为准。生产 owner 的实时结论也只能由 TSV 给出；在得到明确的生产切换授权前，业务路由仍由 Go 承担。
 
-这些路径尚未加入 nginx Rust ownership。生产 `/api/` 仍全部进入 Go；在生产 PG 切换、差分测试和 Rust 全局 API rate limit 完成前不得改变这一点。
+`migration_routes` 候选模块是否已经挂到根 router，完全由 `rust/routes/migration-gate.tsv` 判定。候选 source、甚至其局部挂载本身都不等于 production route ownership，也不能计入迁移完成数；只有 TSV 记录的独立差分、审批与 owner 状态才能得出该结论。冻结的原始 Go 实现保存在被 Git 忽略的 `legacy-go-backup/`，只供行为 oracle 与差分测试读取，不能作为运行时回退路径。
 
-Rust 已实现与 Go `GlobalAPIRateLimit` 对齐的 Valkey 固定窗口：沿用 `GLOBAL_API_RATE_LIMIT_*` 配置、`rateLimit:v2:ip:GA:<ip>` key、Lua 原子 INCR/EXPIRE/TTL 修复、429 空 body 与 `Retry-After`。启用时，`LMM_DEPENDENCY_TIMEOUT_SECONDS` 覆盖完整的 Valkey connect + Lua operation；连接、命令或超时失败都按 Go 行为 fail-closed 返回空 500。关闭时在任何 Valkey I/O 前直接放行。客户端 IP 只在连接 peer 为 loopback nginx 时读取 `X-Real-IP`。实际 route ownership 切换前，Go 与 Rust 必须共同使用专用 Valkey 6380，否则跨后端请求会得到两份独立额度。自动化测试用 pending future 的毫秒级 seam 验证 deadline；真实 half-open Valkey 仍须在 staging 故障注入验证，不能把单元测试当作网络集成证明。
+目标架构中，PostgreSQL 18 是唯一持久化权威；Valkey 仅承载可重建的缓存、会话/撤销传播与限流状态。候选公共内容路径采用 cache-aside：Valkey miss、失败或超时必须回源 PostgreSQL，缓存写失败不得伪造成功。启用 fail-closed 全局限流时，Go 与 Rust 必须使用同一 dedicated Valkey URL 和相同 key contract；否则不得把任何业务 ownership 从 Go 分给 Rust。
 
-commit `825a3bfe15878b125daa57b478b784a4e7847c62` 在真实 Valkey 6380 上用隔离 IP 和临时 `2/37s` 配置验证了 `200, 200, 429`，第三次空 body 且 `Retry-After=37`，对应共享 key 计数为 3。测试 key 随后删除，配置原子恢复为 `360/180s`，同一 artifact 再切换到 green。生产 Go 全程 PID 不变且 `NRestarts=0`。
+复核当前状态和门禁时只运行只读命令：
 
-生产 Go 的 `/etc/lmm-api/lmm-api.env` 当前没有 `REDIS_CONN_STRING`，因此仍使用进程内 global API limiter。不得在这一状态下把部分 `/api` ownership 交给 Rust，否则客户端可在两个后端各获得一份额度。也不得仅为接入 Valkey 在交互会话中重启唯一 Go 进程；Go 接入专用 6380 必须进入可脱离控制连接运行、具备健康验证与完整回滚的后端/PG 切换事务。
+```bash
+awk -F '\t' 'NR > 1 { owner[$8]++; mount[$5]++; diff[$6]++ }
+  END { for (k in owner) print "owner", k, owner[k];
+        for (k in mount) print "mount", k, mount[k];
+        for (k in diff) print "differential", k, diff[k] }' \
+  rust/routes/migration-gate.tsv
+bash rust/scripts/check-migration-plan.sh
+bash rust/scripts/check-real-integration-gates.sh
+```
 
-2026-08-01 将 commit `883526b1a553697b5c3ce02dbf5ea7ab8fd3c7e5` 发布到内部 blue slot 后，使用从 Go TLS 响应复制到隔离 rehearsal PG 的三项内容逐项比较规范化 JSON，三条路径全部一致。真实 Valkey 6380 上三个 versioned key 均建立且 TTL 为 5 秒。生产 `/api/status` 保持 200，公网内部探针保持 403，Go PID 与 `NRestarts=0` 未变化。演练同时确认 rehearsal schema 对象必须由应用 role 拥有或显式授予最小权限；readiness 的 `SELECT 1` 不能替代业务表权限 canary。
-
-commit `ba44b924e949dd52c780097ea8f9edb2001d864d` 增加 `options` 最小读权限 canary 后，隔离环境临时撤销权限会使候选 green 持续返回 503，部署事务自动保留旧 blue/3100；恢复应用 role 所有权后，同一 artifact 正常切换到 green，durable result 为 `SUCCESS active=green previous=blue`。整个故障注入期间 Go PID 与 `NRestarts=0` 未变化。
+上述命令不会启动服务、修改 upstream 或泄露凭据；只有每个 route 完成独立 TCP differential、集成门禁和审查后，才可由单独的变更更新 gate。

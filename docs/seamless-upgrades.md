@@ -36,15 +36,15 @@ Run `make check-frontend-split` whenever routers or deployment files change. Add
 
 ## Go backend today: autonomous, bounded interruption
 
-Production currently uses one Go process and SQLite. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
+Production currently uses one Go process and SQLite. The 2026-08-01 gate snapshot has Go owning all 356 legacy routes; always read `rust/routes/migration-gate.tsv` rather than treating this prose as the current ownership source. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
 
 Do not run old and new backend binaries concurrently against the SQLite database. Two writers, startup migrations, and background jobs make that unsafe; copying SQLite for each process would instead create divergent state.
 
 ## Rust internal-probe blue/green foundation
 
-The native Rust blue/green deployment foundation is installed on ArchDmit, with blue on `127.0.0.1:3100` and green on `127.0.0.1:3101`. It currently owns only loopback-restricted GET/HEAD liveness, readiness, and build probes. Releases, per-slot symlinks, nginx upstream publication, PREPARED/COMMITTED journals, crash reconciliation, and graceful slot shutdown are independent of the Go process. See `docs/rust-blue-green.md` for the operational contract and production rehearsal evidence.
+The native Rust blue/green deployment foundation uses blue on `127.0.0.1:3100` and green on `127.0.0.1:3101`. Nginx ownership remains only loopback-restricted GET/HEAD liveness, readiness, and build probes. Releases, per-slot symlinks, nginx upstream publication, PREPARED/COMMITTED journals, crash reconciliation, and SIGTERM bounded drain are independent of the Go process. Root-router and candidate-module counts are deliberately not repeated here: the migration TSV is authoritative. Neither a mounted candidate nor a historical internal-probe rehearsal owns production traffic. See `docs/rust-blue-green.md` and the TSV for the current result.
 
-This foundation is deliberately not a production API cutover. Production business routes still go to Go on port 3000, and SQLite remains authoritative. The Rust production-routing enable marker is a hard failure condition until route parity and PostgreSQL cutover are approved.
+This foundation is deliberately not a production API cutover. Production business routes still go to Go on port 3000, and SQLite remains authoritative. The Rust production-routing enable marker is a hard failure condition until every route passes independent differential gates and the PostgreSQL 18 cutover is approved.
 
 ## PostgreSQL production migration prerequisite
 

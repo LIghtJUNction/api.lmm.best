@@ -12,7 +12,10 @@ EnvironmentFile=/etc/lmm-api-rs/%i.env
 ExecStart=/opt/lmm-api-rs/slots/%i/current/lmm-api-rs
 Restart=on-failure
 RestartSec=2s
+# Config caps LMM_DRAIN_TIMEOUT_SECONDS at 40, leaving this supervisor margin
+# for process teardown without cutting an in-flight request short.
 TimeoutStopSec=45s
+TimeoutAbortSec=45s
 KillSignal=SIGTERM
 NoNewPrivileges=yes
 PrivateTmp=yes

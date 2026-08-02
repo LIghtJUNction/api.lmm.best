@@ -1,0 +1,60 @@
+//! Reusable HTTP slices for the Rust control-plane binary.
+
+use std::net::IpAddr;
+
+use axum::{
+    body::Body,
+    http::{HeaderValue, StatusCode, header},
+    response::Response,
+};
+
+/// Trusted values established once at the listener request boundary.
+#[derive(Clone, Debug)]
+pub struct RequestContext {
+    /// Server-generated identifier shared by legacy-compatible handlers.
+    pub request_id: String,
+    /// Client address after the listener's trusted-proxy policy is applied.
+    pub client_ip: Option<IpAddr>,
+}
+
+/// Original trimmed client-address text used for legacy rate-limit keys.
+#[derive(Clone, Debug)]
+pub struct ClientIpKey(pub String);
+
+/// Marks a response whose empty body is part of the legacy wire contract.
+///
+/// The listener boundary normally replaces non-JSON error bodies with its
+/// standard error envelope.  Critical legacy rate-limit failures are the one
+/// deliberate exception, so the marker is shared by every route slice that
+/// can produce those responses.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PreserveLegacyEmptyError;
+
+/// Build a legacy-compatible empty error response and protect it from the
+/// listener's JSON error normalizer.
+pub fn legacy_empty_response(status: StatusCode, retry_after_seconds: Option<u64>) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = status;
+    if let Some(seconds) = retry_after_seconds.filter(|seconds| *seconds > 0)
+        && let Ok(value) = HeaderValue::from_str(&seconds.to_string())
+    {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response.extensions_mut().insert(PreserveLegacyEmptyError);
+    response
+}
+
+/// Dashboard authentication routes and their PostgreSQL/Valkey adapter.
+pub mod auth;
+
+/// Legacy-compatible OpenAI model discovery route.
+pub mod models;
+
+/// Hardened shared construction for outbound control-plane HTTP calls.
+pub mod outbound_http;
+
+/// Candidate route slices compiled for migration testing but not mounted.
+pub mod migration_routes;
+
+/// Legacy-compatible public system status route.
+pub mod status;

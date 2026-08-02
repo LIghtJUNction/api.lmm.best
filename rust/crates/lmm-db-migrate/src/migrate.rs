@@ -371,7 +371,7 @@ fn sqlite_canonical(
     }
     match column.converter {
         Converter::Boolean01 => canonical_bool(Some(sqlite_i64(value, column)?)),
-        Converter::Json => canonical_json(Some(sqlite_str(value, column)?)),
+        Converter::Json => canonical_json(Some(sqlite_json_str(value, column)?)),
         Converter::GormTimestampUtc => canonical_timestamp(Some(sqlite_str(value, column)?)),
         Converter::Decimal10_6 => {
             let value = sqlite_number(value, column)?;
@@ -417,6 +417,20 @@ fn sqlite_str<'a>(value: ValueRef<'a>, column: &Column) -> Result<&'a str, Migra
     value
         .as_str()
         .map_err(|error| MigrationError::Canonical(format!("{}: {error}", column.name)))
+}
+
+fn sqlite_json_str<'a>(value: ValueRef<'a>, column: &Column) -> Result<&'a str, MigrationError> {
+    let bytes = match value {
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => bytes,
+        _ => {
+            return Err(MigrationError::Canonical(format!(
+                "{} is not UTF-8 JSON text or blob",
+                column.name
+            )));
+        }
+    };
+    std::str::from_utf8(bytes)
+        .map_err(|_| MigrationError::Canonical(format!("{} is not UTF-8", column.name)))
 }
 
 fn sqlite_number(value: ValueRef<'_>, column: &Column) -> Result<String, MigrationError> {
@@ -491,7 +505,14 @@ fn validate_catalog(
     let query = fs::read_to_string(catalog_sql)?.replace("'public'", &format!("'{schema}'"));
     let value: serde_json::Value = target.query_one(&query, &[])?.get(0);
     let temporary = tempfile::NamedTempFile::new()?;
-    serde_json::to_writer(temporary.as_file(), &value)?;
+    // PostgreSQL renders a regclass default as `nextval('sequence'::regclass)` when
+    // the sequence is on the search path, but qualifies it in a versioned schema.
+    // The manifest deliberately stores the schema-agnostic form so the same contract
+    // can validate each isolated rehearsal namespace.
+    let canonical_catalog = serde_json::to_string(&value)?.replace(&format!("'{schema}."), "'");
+    temporary
+        .as_file()
+        .write_all(canonical_catalog.as_bytes())?;
     manifest.validate_postgres_catalog(temporary.path())
 }
 
@@ -642,7 +663,7 @@ fn postgres_evidence(
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
-        "SELECT {expressions} FROM {}.{} ORDER BY {keys}",
+        "SELECT {expressions} FROM {}.{} AS source ORDER BY {keys}",
         quote_ident(schema),
         quote_ident(&table.name)
     );
@@ -683,7 +704,11 @@ fn sqlite_order_expression(column: &Column) -> String {
 }
 
 fn pg_order_expression(column: &Column) -> String {
-    let name = quote_ident(&column.name);
+    // Qualify the base column so PostgreSQL cannot resolve this ORDER BY item
+    // to the text-valued SELECT expression with the same derived name. That
+    // ambiguity otherwise orders bigint identifiers lexicographically (for
+    // example 1, 10, 2) and produces a false canonical-hash mismatch.
+    let name = format!("source.{}", quote_ident(&column.name));
     if postgres_is_text(column) {
         format!("{name} COLLATE \"C\"")
     } else {
@@ -1027,5 +1052,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn json_column() -> Column {
+        Column {
+            name: "channel_info".into(),
+            sqlite_type: "json".into(),
+            sqlite_not_null: false,
+            sqlite_default: None,
+            pk_position: 0,
+            postgres_type: "json".into(),
+            postgres_not_null: false,
+            postgres_default: None,
+            converter: Converter::Json,
+        }
+    }
+
+    #[test]
+    fn sqlite_json_should_accept_utf8_blob_storage_used_by_gorm() {
+        assert_eq!(
+            sqlite_canonical(ValueRef::Blob(br#"{"z":2,"a":1}"#), &json_column()).unwrap(),
+            CanonicalValue::Json(r#"{"a":1,"z":2}"#.into())
+        );
+    }
+
+    #[test]
+    fn sqlite_json_should_reject_non_utf8_blob_storage() {
+        assert!(sqlite_canonical(ValueRef::Blob(&[0xff, 0xfe]), &json_column()).is_err());
     }
 }

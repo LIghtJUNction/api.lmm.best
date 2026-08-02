@@ -1,0 +1,9 @@
+{
+  "route": { "id": "POST /api/user/auth/refresh", "middleware": ["RouteTag(api)", "gzip", "BodyStorageCleanup", "GlobalAPIRateLimit", "SessionCookieOriginGuard", "CriticalRateLimit", "DisableCache"], "side_effects": ["expired refresh cookie", "critical rate-limit counter"] },
+  "request": { "method": "POST", "path": "/api/user/auth/refresh", "headers": { "accept": "application/json", "content-type": "application/json" }, "body": {} },
+  "observe": { "db_tables": ["user_sessions"], "valkey_patterns": ["rateLimit:*"] },
+  "capture_headers": ["cache-control", "content-type", "expires", "pragma", "set-cookie", "x-new-api-version", "x-oneapi-request-id"],
+  "normalization": { "rules": [
+    { "path": "$.response.selected_headers.x-oneapi-request-id", "operation": "replace", "replacement": "<REQUEST_ID>", "reason": "legacy request ids contain wall-clock time and randomness" }
+  ] }
+}

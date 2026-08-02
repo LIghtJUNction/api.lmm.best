@@ -18,7 +18,7 @@ LMM API（运营及维护者：LIghtJUNction，以下简称“我们”）提供
 
 您应提供真实、准确、完整的信息，妥善保管账户、密码和 API 密钥，并对账户下发生的操作负责。您不得出租、出借、出售账户或向未经授权的第三方披露登录凭据。
 
-发现未经授权使用、安全事件或异常扣费时，请立即发送邮件至 [lightjunction.me@gmail.com](mailto:lightjunction.me@gmail.com)。请勿通过邮件发送密码或完整 API 密钥。
+发现未经授权使用、安全事件或异常扣费时，请立即发送邮件至 [support@lmm.best](mailto:support@lmm.best)。请勿通过邮件发送密码或完整 API 密钥。
 
 ## 3. 合法与可接受使用
 
@@ -58,7 +58,7 @@ LMM API（运营及维护者：LIghtJUNction，以下简称“我们”）提供
 
 ## 6. 账单与扣费争议
 
-如您认为充值、扣费或余额记录存在错误，请在发现问题后尽快发送邮件至 [lightjunction.me@gmail.com](mailto:lightjunction.me@gmail.com)，并提供注册邮箱、订单号或交易 ID、相关日志编号及问题说明。
+如您认为充值、扣费或余额记录存在错误，请在发现问题后尽快发送邮件至 [support@lmm.best](mailto:support@lmm.best)，并提供注册邮箱、订单号或交易 ID、相关日志编号及问题说明。
 
 我们通常会在 2 个工作日内确认收到，并在 5 个工作日内完成初步核查或告知进一步处理进度。为便于及时核查，请优先联系我们；本条款不限制您依法享有的投诉、申诉或交易争议权利。
 
@@ -92,7 +92,7 @@ LMM API（运营及维护者：LIghtJUNction，以下简称“我们”）提供
 
 ### 7.4 退款申请与处理
 
-请使用注册邮箱发送退款申请至 [lightjunction.me@gmail.com](mailto:lightjunction.me@gmail.com)，邮件标题注明“退款申请”，并提供：
+请使用注册邮箱发送退款申请至 [support@lmm.best](mailto:support@lmm.best)，邮件标题注明“退款申请”，并提供：
 
 - 注册邮箱；
 - 订单号或交易 ID；
@@ -145,7 +145,7 @@ AI 输出可能不准确、不完整、存在偏差或已经过时，不构成�
 
 本条款的订立、生效、解释、履行和争议解决适用中华人民共和国大陆地区法律，但不包括其法律冲突规则。
 
-发生争议时，双方应先通过 [lightjunction.me@gmail.com](mailto:lightjunction.me@gmail.com) 友好协商。自一方提出书面协商请求之日起 30 日内未能解决的，任何一方可向运营者住所地有管辖权的人民法院提起诉讼。
+发生争议时，双方应先通过 [support@lmm.best](mailto:support@lmm.best) 友好协商。自一方提出书面协商请求之日起 30 日内未能解决的，任何一方可向运营者住所地有管辖权的人民法院提起诉讼。
 
 如适用消费者保护法律或民事诉讼法律对适用法律、管辖或争议解决另有强制规定，相关强制规定优先适用。
 
@@ -155,8 +155,8 @@ AI 输出可能不准确、不完整、存在偏差或已经过时，不构成�
 
 有关服务、充值、账单、退款、投诉、账户、安全、法律或隐私问题，请联系：
 
-- 客服、账单及退款：[lightjunction.me@gmail.com](mailto:lightjunction.me@gmail.com)
-- 法务、隐私及安全：[lightjunction.me@gmail.com](mailto:lightjunction.me@gmail.com)
+- 客服、账单及退款：[support@lmm.best](mailto:support@lmm.best)
+- 法务、隐私及安全：[support@lmm.best](mailto:support@lmm.best)
 - 网站：[https://api.lmm.best:9000](https://api.lmm.best:9000)
 
 使用本服务或在付款时确认同意，即表示您已阅读并同意本条款。

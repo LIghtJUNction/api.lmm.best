@@ -1,6 +1,6 @@
 # Dedicated Valkey for lmm-api
 
-Production uses a dedicated native Valkey instance for lmm-api. It is deliberately separate from the pre-existing `valkey.service` on `127.0.0.1:6379`; the deployment script refuses to proceed unless that listener exists and verifies that its unit state and PID did not change.
+The target architecture uses a dedicated native Valkey instance for lmm-api. It is deliberately separate from the pre-existing `valkey.service` on `127.0.0.1:6379`; the deployment script refuses to proceed unless that listener exists and verifies that its unit state and PID did not change. Its presence does not mean production Go is already using it or that Rust traffic is enabled.
 
 ## Layout and resource policy
 
@@ -17,7 +17,7 @@ Production uses a dedicated native Valkey instance for lmm-api. It is deliberate
 | Persistence | AOF, `appendfsync everysec` |
 | Kernel tuning | `vm.overcommit_memory=1`; THP `madvise` |
 
-PostgreSQL is authoritative. Valkey accelerates shared sessions, revocation propagation, and rate limiting; its AOF improves warm restarts but is not a database backup. The default user is disabled. The `lmm-api` ACL user may access keys and scripting but is denied Valkey's `@dangerous` command category. Protected mode and loopback binding provide independent network containment.
+After the approved PostgreSQL 18 cutover, PostgreSQL is the sole persistent authority. Valkey accelerates shared sessions, revocation propagation, and rate limiting; its AOF improves warm restarts but is not a database backup. The default user is disabled. The `lmm-api` ACL user may access keys and scripting but is denied Valkey's `@dangerous` command category. Protected mode and loopback binding provide independent network containment.
 
 The project uses go-redis v8 and accepts the generated URL without modification:
 
@@ -37,6 +37,19 @@ sudo deploy/valkey/deploy-valkey-lmm-api.sh install
 sudo deploy/valkey/deploy-valkey-lmm-api.sh health
 ```
 
+`lmm-api-rs-bin` also carries these immutable inputs under
+`/usr/lib/lmm-api-rs/deploy/valkey`, so a test host can validate the exact
+packaged release before an explicit operation:
+
+```bash
+sudo /usr/lib/lmm-api-rs/deploy/valkey/check-valkey-deployment.sh
+sudo /usr/lib/lmm-api-rs/deploy/valkey/deploy-valkey-lmm-api.sh install
+```
+
+Installing or upgrading the package only writes files below `/usr`; it never
+invokes either command, enables or starts `valkey-lmm-api.service`, or changes
+sysctl/tmpfiles state.
+
 The install is idempotent: an existing generated credential is preserved, managed files are written via same-directory atomic rename, publishers are serialized with `flock`, systemd state directories are declarative, and every run atomically reserves a non-overwritable backup directory using a UTC timestamp, nanoseconds, and 64 bits of secure randomness. A failed install automatically restores those managed files, the exact prior active/enabled state of the dedicated unit, and the prior runtime kernel values. Restoration failures are reported separately from the original deployment failure; they are never silently swallowed. If the restored instance was active, the deployer repeats its authenticated health check. The script applies the checked-in sysctl/tmpfiles policy, requires `valkey-server --check-system` to pass, validates fixed security directives, starts the isolated unit, performs an authenticated PING, proves the application user cannot run `CONFIG`, and verifies both listener isolation and the untouched 6379 instance.
 
 Valkey 9.1 does not expose a config-only parser. A configuration error therefore fails the isolated unit start; the existing 6379 service remains untouched and the retained backup provides recovery.
@@ -51,9 +64,9 @@ Add this line to the lmm-api unit without copying the secret into the unit itsel
 EnvironmentFile=/etc/lmm-api/valkey.env
 ```
 
-Apply this only as part of the reviewed backend blue/green deployment. Restarting lmm-api merely to attach Valkey would violate the seamless-upgrade boundary. All concurrently active backend slots must use the same Valkey URL and `CRYPTO_SECRET`.
+Apply this only as part of the reviewed autonomous backend/database transaction. Restarting the sole Go process merely to attach Valkey would create an avoidable interruption. All concurrently active backend slots must use the same Valkey URL and `CRYPTO_SECRET`; otherwise they create separate rate-limit/session state.
 
-As verified on 2026-08-01, the production Go environment does not yet define `REDIS_CONN_STRING`; its global API limiter is therefore process-local. Rust already uses the dedicated 6380 instance. Partial Go/Rust route ownership is blocked until the autonomous backend cutover attaches Go (or its PG-compatible replacement) to the same dedicated Valkey without relying on the initiating API/SSH connection.
+As verified on 2026-08-01, the production Go environment does not yet define `REDIS_CONN_STRING`; its global API limiter is therefore process-local. Candidate Rust processes may use the dedicated 6380 instance only in isolation. Partial Go/Rust route ownership is blocked until the autonomous backend cutover attaches the serving backend to the same dedicated Valkey without relying on the initiating API/SSH connection. The same-date gate snapshot reports Go 356/356; use `rust/routes/migration-gate.tsv` for the live ownership conclusion.
 
 ## Rollback
 

@@ -1,0 +1,1532 @@
+//! Unmounted observability and maintenance route candidates.
+//!
+//! This module is compiled for migration tests but is not composed into the
+//! production listener until its frozen Go behavior has been approved.
+
+use std::{collections::BTreeMap, sync::Arc};
+
+use async_trait::async_trait;
+use axum::{
+    Json, Router,
+    extract::{RawQuery, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{delete, get, post},
+};
+use secrecy::SecretString;
+use serde::Serialize;
+use serde_json::{Value, json};
+use sqlx::{PgPool, Row};
+use thiserror::Error;
+
+use crate::auth::DashboardAuth;
+
+const ADMIN_ROLE: i64 = 10;
+const ROOT_ROLE: i64 = 100;
+const MAX_SELF_RANGE_SECONDS: i64 = 30 * 24 * 60 * 60;
+
+/// The legacy authentication boundary required by a route family.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservabilityAccess {
+    /// A dashboard administrator is required.
+    Admin,
+    /// The root dashboard administrator is required.
+    Root,
+    /// Any authenticated dashboard user is required.
+    User,
+    /// A read-only API token is required.
+    Token,
+    /// The legacy pricing-navigation gate permits public visitors or users.
+    PublicOrUser,
+}
+
+/// A principal resolved by application-owned authentication middleware.
+///
+/// Route handlers never infer this value from role-like request headers.  A
+/// production adapter must resolve it from the server-side session or API-token
+/// authority before these unmounted routes are composed into the listener.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObservabilityPrincipal {
+    /// An unauthenticated visitor accepted by the public pricing gate.
+    Public,
+    /// A validated dashboard user.
+    User {
+        /// Stable user identifier used for self-scoped reads.
+        user_id: i64,
+        /// Server-side username used by the legacy self-stat query.
+        username: String,
+        /// Server-side dashboard role.
+        role: i64,
+    },
+    /// A validated read-only API token.
+    Token {
+        /// Stable token identifier used for token-scoped log reads.
+        token_id: i64,
+    },
+}
+
+/// Authentication is injected at the application boundary so the route slice
+/// remains independent of a particular session or token implementation.
+#[async_trait]
+pub trait ObservabilityAuthorizer: Send + Sync {
+    /// Resolves a principal for the requested legacy access boundary.
+    async fn authorize(
+        &self,
+        headers: &HeaderMap,
+        access: ObservabilityAccess,
+    ) -> Result<ObservabilityPrincipal, ObservabilityAuthError>;
+}
+
+/// Validates the legacy read-only API-token boundary used only by
+/// `GET /api/log/token`.
+///
+/// This is intentionally separate from [`DashboardAuth`].  Dashboard session
+/// credentials and relay API tokens have different formats and authorities;
+/// treating either one as the other would let a dashboard bearer token leak
+/// into an API-token-only route (or vice versa).
+#[async_trait]
+pub trait ObservabilityTokenAuthorizer: Send + Sync {
+    /// Resolves a legacy API token after its wire-format normalization.
+    async fn authorize_read_only(
+        &self,
+        presented: &str,
+    ) -> Result<ObservabilityPrincipal, ObservabilityAuthError>;
+}
+
+/// PostgreSQL authority for the legacy read-only API-token middleware.
+///
+/// It deliberately preserves the Go `TokenAuthReadOnly` policy: an expired or
+/// depleted token may inspect its own logs, but disabled tokens and tokens
+/// whose owner is disabled may not.  It does not mutate token access counters,
+/// Valkey, or any request-owned state.
+#[derive(Clone)]
+pub struct PgReadOnlyObservabilityTokenAuthorizer {
+    pg: PgPool,
+}
+
+impl PgReadOnlyObservabilityTokenAuthorizer {
+    #[must_use]
+    pub fn new(pg: PgPool) -> Self {
+        Self { pg }
+    }
+}
+
+#[async_trait]
+impl ObservabilityTokenAuthorizer for PgReadOnlyObservabilityTokenAuthorizer {
+    async fn authorize_read_only(
+        &self,
+        presented: &str,
+    ) -> Result<ObservabilityPrincipal, ObservabilityAuthError> {
+        let key =
+            legacy_read_only_token_key(presented).ok_or(ObservabilityAuthError::Unauthorized)?;
+        let token_id = sqlx::query_scalar::<_, i64>(
+            "SELECT t.id FROM tokens t JOIN users u ON u.id = t.user_id \
+             WHERE t.key = $1 AND t.deleted_at IS NULL AND u.deleted_at IS NULL \
+             AND t.status <> 2 AND u.status = 1",
+        )
+        .bind(key)
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| ObservabilityAuthError::Unauthorized)?
+        .ok_or(ObservabilityAuthError::Unauthorized)?;
+        if token_id <= 0 {
+            return Err(ObservabilityAuthError::Unauthorized);
+        }
+        Ok(ObservabilityPrincipal::Token { token_id })
+    }
+}
+
+/// Concrete dashboard/session and API-token authorizer for this route family.
+///
+/// The runtime owns both authorities.  No role, user id, or token id is ever
+/// read from client-controlled request headers other than the credential
+/// itself; claims are resolved by the injected server-side implementations.
+#[derive(Clone)]
+pub struct DashboardObservabilityAuthorizer {
+    dashboard_auth: Arc<dyn DashboardAuth>,
+    token_auth: Arc<dyn ObservabilityTokenAuthorizer>,
+}
+
+impl DashboardObservabilityAuthorizer {
+    #[must_use]
+    pub fn new(
+        dashboard_auth: Arc<dyn DashboardAuth>,
+        token_auth: Arc<dyn ObservabilityTokenAuthorizer>,
+    ) -> Self {
+        Self {
+            dashboard_auth,
+            token_auth,
+        }
+    }
+
+    async fn dashboard_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<ObservabilityPrincipal, ObservabilityAuthError> {
+        let credential =
+            authorization_credential(headers).ok_or(ObservabilityAuthError::Unauthorized)?;
+        let user = self
+            .dashboard_auth
+            .self_user(SecretString::from(credential))
+            .await
+            .map_err(|_| ObservabilityAuthError::Unauthorized)?;
+        if user.id <= 0 {
+            return Err(ObservabilityAuthError::Unauthorized);
+        }
+        Ok(ObservabilityPrincipal::User {
+            user_id: user.id,
+            username: user.username,
+            role: user.role,
+        })
+    }
+}
+
+#[async_trait]
+impl ObservabilityAuthorizer for DashboardObservabilityAuthorizer {
+    async fn authorize(
+        &self,
+        headers: &HeaderMap,
+        access: ObservabilityAccess,
+    ) -> Result<ObservabilityPrincipal, ObservabilityAuthError> {
+        match access {
+            ObservabilityAccess::Token => {
+                let credential = authorization_credential(headers)
+                    .ok_or(ObservabilityAuthError::Unauthorized)?;
+                self.token_auth.authorize_read_only(&credential).await
+            }
+            ObservabilityAccess::PublicOrUser if authorization_credential(headers).is_none() => {
+                Ok(ObservabilityPrincipal::Public)
+            }
+            ObservabilityAccess::Admin
+            | ObservabilityAccess::Root
+            | ObservabilityAccess::User
+            | ObservabilityAccess::PublicOrUser => self.dashboard_principal(headers).await,
+        }
+    }
+}
+
+fn authorization_credential(headers: &HeaderMap) -> Option<String> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let mut fields = value.split_whitespace();
+    let first = fields.next()?;
+    let credential = match (
+        first.eq_ignore_ascii_case("bearer"),
+        fields.next(),
+        fields.next(),
+    ) {
+        (true, Some(value), None) => value,
+        (false, None, None) => first,
+        _ => return None,
+    };
+    (!credential.is_empty()).then(|| credential.to_owned())
+}
+
+fn legacy_read_only_token_key(presented: &str) -> Option<&str> {
+    let raw = presented.strip_prefix("sk-").unwrap_or(presented);
+    let key = raw.split('-').next()?;
+    (!key.is_empty()).then_some(key)
+}
+
+/// Authentication failures presented by the frozen route boundary.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum ObservabilityAuthError {
+    /// No valid credential was supplied for the requested boundary.
+    #[error("Unauthorized")]
+    Unauthorized,
+}
+
+/// A single storage operation selected by the HTTP compatibility layer.
+///
+/// Keeping this catalog-shaped boundary avoids twenty-one near-identical
+/// trait methods while still making every route testable with a strict fake.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservabilityOperation {
+    AllQuotaDates,
+    QuotaDatesByUser,
+    SelfQuotaDates,
+    AllFlowQuotaDates,
+    SelfFlowQuotaDates,
+    AllLogs,
+    ChannelAffinityUsageCacheStats,
+    SelfLogs,
+    SelfLogStats,
+    LogStats,
+    LogsByToken,
+    PerfMetrics,
+    PerfMetricsSummary,
+    ClearDiskCache,
+    ForceGc,
+    CleanupLogFiles,
+    LogFiles,
+    ResetPerformanceStats,
+    PerformanceStats,
+}
+
+/// Fully authorized request passed to the persistence/metrics boundary.
+#[derive(Clone, Debug)]
+pub struct ObservabilityCall {
+    /// The selected legacy operation.
+    pub operation: ObservabilityOperation,
+    /// Principal authenticated before storage is invoked.
+    pub principal: ObservabilityPrincipal,
+    /// Decoded legacy query parameters.
+    pub query: BTreeMap<String, String>,
+}
+
+/// Backend boundary for the 21 unmounted route candidates.
+#[async_trait]
+pub trait ObservabilityStore: Send + Sync {
+    /// Executes one already-authorized observation or maintenance operation.
+    async fn execute(&self, call: ObservabilityCall) -> Result<Value, ObservabilityStoreError>;
+}
+
+/// Runtime metrics boundary for process-owned metric reads.
+///
+/// The Go implementation combines persisted buckets with hot in-memory and
+/// Valkey counters.  That ownership stays outside this unmounted HTTP slice so
+/// the eventual listener can inject the process-wide collector rather than
+/// create a second, divergent collector here.
+#[async_trait]
+pub trait ObservabilityMetrics: Send + Sync {
+    /// Reads one frozen process-owned metric operation.
+    async fn query(
+        &self,
+        operation: ObservabilityOperation,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError>;
+}
+
+/// Runtime maintenance boundary for process and filesystem owned operations.
+#[async_trait]
+pub trait ObservabilityMaintenance: Send + Sync {
+    /// Performs one authorized maintenance operation.
+    async fn execute(
+        &self,
+        operation: ObservabilityOperation,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError>;
+}
+
+/// Explicit fail-closed metrics adapter for a process without the legacy
+/// collector wired in yet.
+///
+/// Returning synthetic empty groups or zero counters would look like a healthy
+/// metrics result to the dashboard.  This adapter instead takes the frozen 500
+/// error path and has no Valkey or process side effects, which makes it safe as
+/// the default dependency for an isolated test instance.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnavailableObservabilityMetrics;
+
+#[async_trait]
+impl ObservabilityMetrics for UnavailableObservabilityMetrics {
+    async fn query(
+        &self,
+        _: ObservabilityOperation,
+        _: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        Err(ObservabilityStoreError::Unavailable)
+    }
+}
+
+/// Explicit fail-closed maintenance adapter for a process without an
+/// application-owned maintenance service.
+///
+/// It intentionally does not call `GC`, scan disks, list log files, or reset
+/// counters.  Mounting the route with this adapter is therefore safe for a
+/// test instance while preserving the legacy dependency-failure envelope.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnavailableObservabilityMaintenance;
+
+#[async_trait]
+impl ObservabilityMaintenance for UnavailableObservabilityMaintenance {
+    async fn execute(
+        &self,
+        _: ObservabilityOperation,
+        _: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        Err(ObservabilityStoreError::Unavailable)
+    }
+}
+
+/// PostgreSQL implementation for the dashboard and usage-audit records.
+///
+/// Construct this with the process-wide metrics and maintenance services when
+/// the root listener gains ownership.  It is deliberately not mounted here.
+#[derive(Clone)]
+pub struct PgObservabilityStore {
+    pg: PgPool,
+    metrics: Arc<dyn ObservabilityMetrics>,
+    maintenance: Arc<dyn ObservabilityMaintenance>,
+}
+
+impl PgObservabilityStore {
+    /// Builds the concrete store from PostgreSQL and application-owned runtime
+    /// services; no request header is trusted as an identity source.
+    #[must_use]
+    pub fn new(
+        pg: PgPool,
+        metrics: Arc<dyn ObservabilityMetrics>,
+        maintenance: Arc<dyn ObservabilityMaintenance>,
+    ) -> Self {
+        Self {
+            pg,
+            metrics,
+            maintenance,
+        }
+    }
+}
+
+#[async_trait]
+impl ObservabilityStore for PgObservabilityStore {
+    async fn execute(&self, call: ObservabilityCall) -> Result<Value, ObservabilityStoreError> {
+        match call.operation {
+            ObservabilityOperation::PerfMetrics
+            | ObservabilityOperation::PerfMetricsSummary
+            | ObservabilityOperation::ChannelAffinityUsageCacheStats => {
+                self.metrics.query(call.operation, &call.query).await
+            }
+            ObservabilityOperation::ClearDiskCache
+            | ObservabilityOperation::ForceGc
+            | ObservabilityOperation::CleanupLogFiles
+            | ObservabilityOperation::LogFiles
+            | ObservabilityOperation::ResetPerformanceStats
+            | ObservabilityOperation::PerformanceStats => {
+                self.maintenance.execute(call.operation, &call.query).await
+            }
+            _ => self.query_postgres(call).await,
+        }
+    }
+}
+
+impl PgObservabilityStore {
+    async fn query_postgres(
+        &self,
+        call: ObservabilityCall,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let start = integer_query(&call.query, "start_timestamp");
+        let end = integer_query(&call.query, "end_timestamp");
+        match call.operation {
+            ObservabilityOperation::AllQuotaDates => self
+                .json_rows("SELECT jsonb_build_object('model_name', model_name, 'created_at', created_at, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE created_at >= $1 AND created_at <= $2 GROUP BY model_name, created_at", start, end)
+                .await,
+            ObservabilityOperation::QuotaDatesByUser => self
+                .json_rows("SELECT jsonb_build_object('username', username, 'created_at', created_at, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE created_at >= $1 AND created_at <= $2 GROUP BY username, created_at", start, end)
+                .await,
+            ObservabilityOperation::SelfQuotaDates => {
+                let user_id = user_id(&call.principal)?;
+                self.json_rows_for_user("SELECT jsonb_build_object('user_id', user_id, 'username', username, 'model_name', model_name, 'created_at', created_at, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 GROUP BY user_id, username, model_name, created_at", user_id, start, end).await
+            }
+            ObservabilityOperation::AllFlowQuotaDates | ObservabilityOperation::SelfFlowQuotaDates => {
+                let user_filter = match call.operation {
+                    ObservabilityOperation::SelfFlowQuotaDates => Some(user_id(&call.principal)?),
+                    _ => None,
+                };
+                self.flow_rows(start, end, user_filter).await
+            }
+            ObservabilityOperation::AllLogs | ObservabilityOperation::SelfLogs | ObservabilityOperation::LogsByToken => self.logs(call, start, end).await,
+            ObservabilityOperation::SelfLogStats | ObservabilityOperation::LogStats => self.stats(call, start, end).await,
+            _ => Err(ObservabilityStoreError::Unavailable),
+        }
+    }
+
+    async fn json_rows(
+        &self,
+        sql: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let rows = sqlx::query(sql)
+            .bind(start)
+            .bind(end)
+            .fetch_all(&self.pg)
+            .await
+            .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(values(rows))
+    }
+
+    async fn json_rows_for_user(
+        &self,
+        sql: &str,
+        user_id: i64,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let rows = sqlx::query(sql)
+            .bind(user_id)
+            .bind(start)
+            .bind(end)
+            .fetch_all(&self.pg)
+            .await
+            .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(values(rows))
+    }
+
+    async fn flow_rows(
+        &self,
+        start: i64,
+        end: i64,
+        user_id: Option<i64>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let rows = match user_id {
+            Some(user_id) => sqlx::query("SELECT jsonb_build_object('token_id', token_id, 'use_group', use_group, 'model_name', model_name, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE user_id = $1 AND use_group <> '' AND created_at >= $2 AND created_at <= $3 GROUP BY token_id, use_group, model_name ORDER BY SUM(quota) DESC").bind(user_id).bind(start).bind(end).fetch_all(&self.pg).await,
+            None => sqlx::query("SELECT jsonb_build_object('user_id', user_id, 'username', username, 'use_group', use_group, 'model_name', model_name, 'channel_id', channel_id, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE use_group <> '' AND created_at >= $1 AND created_at <= $2 GROUP BY user_id, username, use_group, model_name, channel_id ORDER BY SUM(quota) DESC").bind(start).bind(end).fetch_all(&self.pg).await,
+        }.map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(values(rows))
+    }
+
+    async fn logs(
+        &self,
+        call: ObservabilityCall,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, ObservabilityStoreError> {
+        const LOG_JSON: &str = "jsonb_build_object('id', id, 'user_id', user_id, 'created_at', created_at, 'type', type, 'content', content, 'username', username, 'token_name', token_name, 'model_name', model_name, 'quota', quota, 'prompt_tokens', prompt_tokens, 'completion_tokens', completion_tokens, 'channel', channel, 'token_id', token_id, 'group', \"group\")";
+        let rows = match call.operation {
+            ObservabilityOperation::SelfLogs => sqlx::query(&format!("SELECT {LOG_JSON} FROM logs WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY id DESC LIMIT 100")).bind(user_id(&call.principal)?).bind(start).bind(end).fetch_all(&self.pg).await,
+            ObservabilityOperation::LogsByToken => sqlx::query(&format!("SELECT {LOG_JSON} FROM logs WHERE token_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY id DESC LIMIT 100")).bind(token_id(&call.principal)?).bind(start).bind(end).fetch_all(&self.pg).await,
+            _ => sqlx::query(&format!("SELECT {LOG_JSON} FROM logs WHERE created_at >= $1 AND created_at <= $2 ORDER BY id DESC LIMIT 100")).bind(start).bind(end).fetch_all(&self.pg).await,
+        }.map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(json!({"page": 1, "page_size": 100, "total": rows.len(), "items": values(rows)}))
+    }
+
+    async fn stats(
+        &self,
+        call: ObservabilityCall,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let rows = match call.operation {
+            ObservabilityOperation::SelfLogStats => sqlx::query("SELECT COALESCE(SUM(quota), 0) AS quota, COUNT(*) AS rpm, COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0) AS tpm FROM logs WHERE user_id = $1 AND type = 2 AND created_at >= $2 AND created_at <= $3").bind(user_id(&call.principal)?).bind(start).bind(end).fetch_one(&self.pg).await,
+            _ => sqlx::query("SELECT COALESCE(SUM(quota), 0) AS quota, COUNT(*) AS rpm, COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0) AS tpm FROM logs WHERE type = 2 AND created_at >= $1 AND created_at <= $2").bind(start).bind(end).fetch_one(&self.pg).await,
+        }.map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(
+            json!({"quota": rows.try_get::<i64, _>("quota").map_err(|_| ObservabilityStoreError::Unavailable)?, "rpm": rows.try_get::<i64, _>("rpm").map_err(|_| ObservabilityStoreError::Unavailable)?, "tpm": rows.try_get::<i64, _>("tpm").map_err(|_| ObservabilityStoreError::Unavailable)?}),
+        )
+    }
+}
+
+fn integer_query(query: &BTreeMap<String, String>, key: &str) -> i64 {
+    query
+        .get(key)
+        .and_then(|value| value.parse().ok())
+        .map_or(0, |value| value)
+}
+
+fn user_id(principal: &ObservabilityPrincipal) -> Result<i64, ObservabilityStoreError> {
+    match principal {
+        ObservabilityPrincipal::User { user_id, .. } if *user_id > 0 => Ok(*user_id),
+        _ => Err(ObservabilityStoreError::Unavailable),
+    }
+}
+
+fn token_id(principal: &ObservabilityPrincipal) -> Result<i64, ObservabilityStoreError> {
+    match principal {
+        ObservabilityPrincipal::Token { token_id } if *token_id > 0 => Ok(*token_id),
+        _ => Err(ObservabilityStoreError::Unavailable),
+    }
+}
+
+fn values(rows: Vec<sqlx::postgres::PgRow>) -> Value {
+    Value::Array(
+        rows.into_iter()
+            .filter_map(|row| row.try_get::<Value, _>(0).ok())
+            .collect(),
+    )
+}
+
+/// A dependency error that preserves the legacy 500 error branch.
+#[derive(Clone, Debug, Error)]
+pub enum ObservabilityStoreError {
+    /// The selected metrics or persistence backend is unavailable.
+    #[error("observability backend unavailable")]
+    Unavailable,
+}
+
+/// State for the independent observability route slice.
+#[derive(Clone)]
+pub struct ObservabilityState {
+    store: Arc<dyn ObservabilityStore>,
+    authorizer: Arc<dyn ObservabilityAuthorizer>,
+}
+
+impl ObservabilityState {
+    /// Creates the route state from application-owned authorization and storage.
+    #[must_use]
+    pub fn new(
+        store: Arc<dyn ObservabilityStore>,
+        authorizer: Arc<dyn ObservabilityAuthorizer>,
+    ) -> Self {
+        Self { store, authorizer }
+    }
+}
+
+/// Builds the unmounted observability and maintenance routes.
+///
+/// `/api/system-info` and `/api/system-task` are intentionally absent: their
+/// PostgreSQL-backed ownership is already established in `control_admin`.
+pub fn observability_router(state: ObservabilityState) -> Router {
+    Router::new()
+        .route("/api/data/", get(all_quota_dates))
+        .route("/api/data/users", get(quota_dates_by_user))
+        .route("/api/data/self", get(self_quota_dates))
+        .route("/api/data/flow", get(all_flow_quota_dates))
+        .route("/api/data/flow/self", get(self_flow_quota_dates))
+        .route("/api/log/", get(all_logs))
+        .route(
+            "/api/log/channel_affinity_usage_cache",
+            get(channel_affinity_usage_cache_stats),
+        )
+        .route("/api/log/search", get(deprecated_log_search))
+        .route("/api/log/self", get(self_logs))
+        .route("/api/log/self/search", get(deprecated_self_log_search))
+        .route("/api/log/self/stat", get(self_log_stats))
+        .route("/api/log/stat", get(log_stats))
+        .route("/api/log/token", get(logs_by_token))
+        .route("/api/perf-metrics", get(perf_metrics))
+        .route("/api/perf-metrics/summary", get(perf_metrics_summary))
+        .route("/api/performance/disk_cache", delete(clear_disk_cache))
+        .route("/api/performance/gc", post(force_gc))
+        .route(
+            "/api/performance/logs",
+            get(log_files).delete(cleanup_log_files),
+        )
+        .route(
+            "/api/performance/reset_stats",
+            post(reset_performance_stats),
+        )
+        .route("/api/performance/stats", get(performance_stats))
+        .with_state(state)
+}
+
+#[derive(Serialize)]
+struct LegacyEnvelope<T: Serialize> {
+    success: bool,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<T>,
+}
+
+fn success(data: Value) -> Response {
+    Json(LegacyEnvelope {
+        success: true,
+        message: String::new(),
+        data: Some(data),
+    })
+    .into_response()
+}
+
+fn success_message(message: &str) -> Response {
+    Json(LegacyEnvelope::<Value> {
+        success: true,
+        message: message.to_owned(),
+        data: None,
+    })
+    .into_response()
+}
+
+fn failure(status: StatusCode, message: impl Into<String>) -> Response {
+    (
+        status,
+        Json(LegacyEnvelope::<Value> {
+            success: false,
+            message: message.into(),
+            data: None,
+        }),
+    )
+        .into_response()
+}
+
+fn auth_failure(status: StatusCode, code: &'static str, message: &'static str) -> Response {
+    (
+        status,
+        Json(json!({"success": false, "code": code, "message": message})),
+    )
+        .into_response()
+}
+
+async fn authorize(
+    state: &ObservabilityState,
+    headers: &HeaderMap,
+    access: ObservabilityAccess,
+) -> Result<ObservabilityPrincipal, Response> {
+    let principal =
+        state
+            .authorizer
+            .authorize(headers, access)
+            .await
+            .map_err(|_| match access {
+                ObservabilityAccess::Token => failure(StatusCode::UNAUTHORIZED, "未提供令牌"),
+                ObservabilityAccess::Admin
+                | ObservabilityAccess::Root
+                | ObservabilityAccess::User
+                | ObservabilityAccess::PublicOrUser => auth_failure(
+                    StatusCode::UNAUTHORIZED,
+                    "AUTH_UNAUTHORIZED",
+                    "Unauthorized",
+                ),
+            })?;
+    let allowed = match (&principal, access) {
+        (ObservabilityPrincipal::User { role, .. }, ObservabilityAccess::Admin) => {
+            *role >= ADMIN_ROLE
+        }
+        (ObservabilityPrincipal::User { role, .. }, ObservabilityAccess::Root) => {
+            *role >= ROOT_ROLE
+        }
+        (ObservabilityPrincipal::User { user_id, .. }, ObservabilityAccess::User) => *user_id > 0,
+        (ObservabilityPrincipal::Token { token_id }, ObservabilityAccess::Token) => *token_id > 0,
+        (
+            ObservabilityPrincipal::Public | ObservabilityPrincipal::User { .. },
+            ObservabilityAccess::PublicOrUser,
+        ) => true,
+        _ => false,
+    };
+    if allowed {
+        Ok(principal)
+    } else {
+        Err(auth_failure(
+            StatusCode::FORBIDDEN,
+            "AUTH_INSUFFICIENT_PRIVILEGE",
+            "管理员权限不足",
+        ))
+    }
+}
+
+async fn execute(
+    state: &ObservabilityState,
+    headers: &HeaderMap,
+    access: ObservabilityAccess,
+    operation: ObservabilityOperation,
+    query: BTreeMap<String, String>,
+) -> Response {
+    let principal = match authorize(state, headers, access).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    execute_authorized(state, principal, operation, query).await
+}
+
+async fn execute_authorized(
+    state: &ObservabilityState,
+    principal: ObservabilityPrincipal,
+    operation: ObservabilityOperation,
+    query: BTreeMap<String, String>,
+) -> Response {
+    match state
+        .store
+        .execute(ObservabilityCall {
+            operation,
+            principal,
+            query,
+        })
+        .await
+    {
+        Ok(data) => success(data),
+        Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    }
+}
+
+async fn execute_raw(
+    state: &ObservabilityState,
+    headers: &HeaderMap,
+    access: ObservabilityAccess,
+    operation: ObservabilityOperation,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(state, headers, access).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    execute_authorized(state, principal, operation, parse_query(raw_query)).await
+}
+
+fn parse_query(raw_query: RawQuery) -> BTreeMap<String, String> {
+    raw_query.0.map_or_else(BTreeMap::new, |raw| {
+        let mut query = BTreeMap::new();
+        for pair in raw.split('&') {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let Some(key) = decode_query_component(key) else {
+                continue;
+            };
+            let Some(value) = decode_query_component(value) else {
+                continue;
+            };
+            // Gin's `Query` returns the first occurrence. Keeping the first
+            // decoded value avoids making duplicate query keys change the
+            // selected dashboard filter during the migration.
+            query.entry(key).or_insert(value);
+        }
+        query
+    })
+}
+
+fn decode_query_component(component: &str) -> Option<String> {
+    let bytes = component.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => decoded.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16)?;
+                let low = (bytes[index + 2] as char).to_digit(16)?;
+                decoded.push((high * 16 + low) as u8);
+                index += 2;
+            }
+            b'%' => return None,
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn flow_range(query: &BTreeMap<String, String>) -> Result<(i64, i64), &'static str> {
+    let start = query
+        .get("start_timestamp")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or("invalid start_timestamp")?;
+    let end = query
+        .get("end_timestamp")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or("invalid end_timestamp")?;
+    if end < start {
+        return Err("invalid time range");
+    }
+    Ok((start, end))
+}
+
+fn self_range_is_too_large(query: &BTreeMap<String, String>) -> bool {
+    let timestamp = |name| {
+        query
+            .get(name)
+            .and_then(|value| value.parse::<i64>().ok())
+            .map_or(0, |value| value)
+    };
+    let start = timestamp("start_timestamp");
+    let end = timestamp("end_timestamp");
+    end.saturating_sub(start) > MAX_SELF_RANGE_SECONDS
+}
+
+async fn all_quota_dates(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Admin,
+        ObservabilityOperation::AllQuotaDates,
+        raw_query,
+    )
+    .await
+}
+
+async fn quota_dates_by_user(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Admin,
+        ObservabilityOperation::QuotaDatesByUser,
+        raw_query,
+    )
+    .await
+}
+
+async fn self_quota_dates(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::User).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let query = parse_query(raw_query);
+    if self_range_is_too_large(&query) {
+        return failure(StatusCode::OK, "时间跨度不能超过 1 个月");
+    }
+    execute_authorized(
+        &state,
+        principal,
+        ObservabilityOperation::SelfQuotaDates,
+        query,
+    )
+    .await
+}
+
+async fn all_flow_quota_dates(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let query = parse_query(raw_query);
+    if let Err(message) = flow_range(&query) {
+        return failure(StatusCode::OK, message);
+    }
+    execute_authorized(
+        &state,
+        principal,
+        ObservabilityOperation::AllFlowQuotaDates,
+        query,
+    )
+    .await
+}
+
+async fn self_flow_quota_dates(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::User).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let query = parse_query(raw_query);
+    if let Err(message) = flow_range(&query) {
+        return failure(StatusCode::OK, message);
+    }
+    if self_range_is_too_large(&query) {
+        return failure(StatusCode::OK, "时间跨度不能超过 1 个月");
+    }
+    execute_authorized(
+        &state,
+        principal,
+        ObservabilityOperation::SelfFlowQuotaDates,
+        query,
+    )
+    .await
+}
+
+async fn all_logs(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Admin,
+        ObservabilityOperation::AllLogs,
+        raw_query,
+    )
+    .await
+}
+
+async fn channel_affinity_usage_cache_stats(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let query = parse_query(raw_query);
+    if query.get("rule_name").is_none_or(String::is_empty) {
+        return failure(StatusCode::BAD_REQUEST, "missing param: rule_name");
+    }
+    if query.get("key_fp").is_none_or(String::is_empty) {
+        return failure(StatusCode::BAD_REQUEST, "missing param: key_fp");
+    }
+    execute_authorized(
+        &state,
+        principal,
+        ObservabilityOperation::ChannelAffinityUsageCacheStats,
+        query,
+    )
+    .await
+}
+
+async fn deprecated_log_search(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::Admin).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let _ = principal;
+    failure(StatusCode::OK, "该接口已废弃")
+}
+
+async fn self_logs(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::User,
+        ObservabilityOperation::SelfLogs,
+        raw_query,
+    )
+    .await
+}
+
+async fn deprecated_self_log_search(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::User).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let _ = principal;
+    failure(StatusCode::OK, "该接口已废弃")
+}
+
+async fn self_log_stats(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::User,
+        ObservabilityOperation::SelfLogStats,
+        raw_query,
+    )
+    .await
+}
+
+async fn log_stats(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Admin,
+        ObservabilityOperation::LogStats,
+        raw_query,
+    )
+    .await
+}
+
+async fn logs_by_token(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Token,
+        ObservabilityOperation::LogsByToken,
+        raw_query,
+    )
+    .await
+}
+
+async fn perf_metrics(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::PublicOrUser).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let query = parse_query(raw_query);
+    if query.get("model").is_none_or(String::is_empty) {
+        return failure(StatusCode::BAD_REQUEST, "model is required");
+    }
+    execute_authorized(
+        &state,
+        principal,
+        ObservabilityOperation::PerfMetrics,
+        query,
+    )
+    .await
+}
+
+async fn perf_metrics_summary(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::PublicOrUser,
+        ObservabilityOperation::PerfMetricsSummary,
+        raw_query,
+    )
+    .await
+}
+
+async fn clear_disk_cache(State(state): State<ObservabilityState>, headers: HeaderMap) -> Response {
+    let response = execute(
+        &state,
+        &headers,
+        ObservabilityAccess::Root,
+        ObservabilityOperation::ClearDiskCache,
+        BTreeMap::new(),
+    )
+    .await;
+    if response.status() == StatusCode::OK {
+        success_message("不活跃的磁盘缓存已清理")
+    } else {
+        response
+    }
+}
+
+async fn force_gc(State(state): State<ObservabilityState>, headers: HeaderMap) -> Response {
+    let response = execute(
+        &state,
+        &headers,
+        ObservabilityAccess::Root,
+        ObservabilityOperation::ForceGc,
+        BTreeMap::new(),
+    )
+    .await;
+    if response.status() == StatusCode::OK {
+        success_message("GC 已执行")
+    } else {
+        response
+    }
+}
+
+async fn log_files(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Root,
+        ObservabilityOperation::LogFiles,
+        raw_query,
+    )
+    .await
+}
+
+async fn cleanup_log_files(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    let principal = match authorize(&state, &headers, ObservabilityAccess::Root).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let query = parse_query(raw_query);
+    let mode = query.get("mode").map_or("", String::as_str);
+    if mode != "by_count" && mode != "by_days" {
+        return failure(StatusCode::OK, "invalid mode, must be by_count or by_days");
+    }
+    let valid_value = query
+        .get("value")
+        .and_then(|value| value.parse::<i64>().ok())
+        .is_some_and(|value| value > 0);
+    if !valid_value {
+        return failure(StatusCode::OK, "invalid value, must be a positive integer");
+    }
+    execute_authorized(
+        &state,
+        principal,
+        ObservabilityOperation::CleanupLogFiles,
+        query,
+    )
+    .await
+}
+
+async fn reset_performance_stats(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+) -> Response {
+    let response = execute(
+        &state,
+        &headers,
+        ObservabilityAccess::Root,
+        ObservabilityOperation::ResetPerformanceStats,
+        BTreeMap::new(),
+    )
+    .await;
+    if response.status() == StatusCode::OK {
+        success_message("统计信息已重置")
+    } else {
+        response
+    }
+}
+
+async fn performance_stats(
+    State(state): State<ObservabilityState>,
+    headers: HeaderMap,
+    raw_query: RawQuery,
+) -> Response {
+    execute_raw(
+        &state,
+        &headers,
+        ObservabilityAccess::Root,
+        ObservabilityOperation::PerformanceStats,
+        raw_query,
+    )
+    .await
+}
+
+/// Lightweight deterministic backend for focused HTTP tests.
+///
+/// This is not a production default.  In particular, the affinity-cache
+/// statistic fails closed because it requires a process-owned cache service.
+#[derive(Default)]
+pub struct InMemoryObservabilityStore;
+
+#[async_trait]
+impl ObservabilityStore for InMemoryObservabilityStore {
+    async fn execute(&self, call: ObservabilityCall) -> Result<Value, ObservabilityStoreError> {
+        let data = match call.operation {
+            ObservabilityOperation::AllQuotaDates
+            | ObservabilityOperation::QuotaDatesByUser
+            | ObservabilityOperation::SelfQuotaDates
+            | ObservabilityOperation::AllFlowQuotaDates
+            | ObservabilityOperation::SelfFlowQuotaDates
+            | ObservabilityOperation::LogsByToken => json!([]),
+            ObservabilityOperation::AllLogs | ObservabilityOperation::SelfLogs => {
+                json!({"page": 1, "page_size": 10, "total": 0, "items": []})
+            }
+            ObservabilityOperation::ChannelAffinityUsageCacheStats => {
+                return Err(ObservabilityStoreError::Unavailable);
+            }
+            ObservabilityOperation::SelfLogStats | ObservabilityOperation::LogStats => {
+                json!({"quota": 0, "rpm": 0, "tpm": 0})
+            }
+            ObservabilityOperation::PerfMetrics => json!({"groups": []}),
+            ObservabilityOperation::PerfMetricsSummary => json!({"groups": []}),
+            ObservabilityOperation::ClearDiskCache
+            | ObservabilityOperation::ForceGc
+            | ObservabilityOperation::ResetPerformanceStats => Value::Null,
+            ObservabilityOperation::CleanupLogFiles => {
+                json!({"deleted_count": 0, "freed_bytes": 0, "failed_files": []})
+            }
+            ObservabilityOperation::LogFiles => json!({"enabled": false}),
+            ObservabilityOperation::PerformanceStats => json!({
+                "cache_stats": {}, "memory_stats": {}, "disk_cache_info": {},
+                "disk_space_info": {}, "config": {}
+            }),
+        };
+        Ok(data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::{
+        AuthBundle, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardUser,
+        LoginOutcome, LoginRequest, LogoutRequest, LogoutResult, RequestMetadata,
+        TwoFactorLoginRequest,
+    };
+    use async_trait::async_trait;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    struct StaticDashboardAuth {
+        user: DashboardUser,
+    }
+
+    #[async_trait]
+    impl DashboardAuth for StaticDashboardAuth {
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, AuthError> {
+            Ok(CriticalRateLimitOutcome::Allowed)
+        }
+
+        async fn login(
+            &self,
+            _: LoginRequest,
+            _: RequestMetadata,
+        ) -> Result<LoginOutcome, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn login_2fa(
+            &self,
+            _: TwoFactorLoginRequest,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn refresh(
+            &self,
+            _: SecretString,
+            _: Option<String>,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn self_user(&self, _: SecretString) -> Result<DashboardUser, AuthError> {
+            Ok(self.user.clone())
+        }
+
+        async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn generate_personal_access_token(
+            &self,
+            _: SecretString,
+        ) -> Result<String, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+    }
+
+    #[derive(Default)]
+    struct StaticTokenAuth;
+
+    #[async_trait]
+    impl ObservabilityTokenAuthorizer for StaticTokenAuth {
+        async fn authorize_read_only(
+            &self,
+            presented: &str,
+        ) -> Result<ObservabilityPrincipal, ObservabilityAuthError> {
+            if presented == "token" {
+                Ok(ObservabilityPrincipal::Token { token_id: 9 })
+            } else {
+                Err(ObservabilityAuthError::Unauthorized)
+            }
+        }
+    }
+
+    struct CountingStore(AtomicUsize);
+
+    #[async_trait]
+    impl ObservabilityStore for CountingStore {
+        async fn execute(&self, _: ObservabilityCall) -> Result<Value, ObservabilityStoreError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(json!({}))
+        }
+    }
+
+    fn user(role: i64) -> DashboardUser {
+        DashboardUser {
+            id: 7,
+            username: "member".to_owned(),
+            display_name: String::new(),
+            role,
+            status: 1,
+            email: String::new(),
+            github_id: String::new(),
+            discord_id: String::new(),
+            oidc_id: String::new(),
+            wechat_id: String::new(),
+            telegram_id: String::new(),
+            group: String::new(),
+            quota: 0,
+            used_quota: 0,
+            request_count: 0,
+            aff_code: String::new(),
+            aff_count: 0,
+            aff_quota: 0,
+            aff_history_quota: 0,
+            inviter_id: 0,
+            linux_do_id: String::new(),
+            setting: String::new(),
+            stripe_customer: String::new(),
+            sidebar_modules: Value::Null,
+            permissions: Value::Null,
+        }
+    }
+
+    fn router_for(role: i64, store: Arc<CountingStore>) -> Router {
+        let authorizer = DashboardObservabilityAuthorizer::new(
+            Arc::new(StaticDashboardAuth { user: user(role) }),
+            Arc::new(StaticTokenAuth),
+        );
+        observability_router(ObservabilityState::new(store, Arc::new(authorizer)))
+    }
+
+    async fn response_body(response: Response) -> Value {
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        serde_json::from_slice(&body).expect("JSON envelope")
+    }
+
+    #[tokio::test]
+    async fn dashboard_token_public_and_role_matrix_stays_server_authorized() {
+        let member_store = Arc::new(CountingStore(AtomicUsize::new(0)));
+        let member = router_for(1, member_store.clone());
+        let public = member
+            .clone()
+            .oneshot(
+                Request::get("/api/perf-metrics/summary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(public.status(), StatusCode::OK);
+        let forged_admin = member
+            .clone()
+            .oneshot(
+                Request::get("/api/log/")
+                    .header("authorization", "Bearer dashboard")
+                    .header("x-role", "100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(forged_admin.status(), StatusCode::FORBIDDEN);
+        let token = member
+            .oneshot(
+                Request::get("/api/log/token")
+                    .header("authorization", "Bearer token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(token.status(), StatusCode::OK);
+        assert_eq!(member_store.0.load(Ordering::Relaxed), 2);
+
+        let admin = router_for(ADMIN_ROLE, Arc::new(CountingStore(AtomicUsize::new(0))));
+        assert_eq!(
+            admin
+                .clone()
+                .oneshot(
+                    Request::get("/api/log/")
+                        .header("authorization", "Bearer dashboard")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            admin
+                .oneshot(
+                    Request::post("/api/performance/gc")
+                        .header("authorization", "Bearer dashboard")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let root = router_for(ROOT_ROLE, Arc::new(CountingStore(AtomicUsize::new(0))));
+        assert_eq!(
+            root.oneshot(
+                Request::post("/api/performance/gc")
+                    .header("authorization", "Bearer dashboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_runtime_adapters_fail_closed_without_success_payloads() {
+        let query = BTreeMap::new();
+        assert!(
+            UnavailableObservabilityMetrics
+                .query(ObservabilityOperation::PerfMetrics, &query)
+                .await
+                .is_err()
+        );
+        assert!(
+            UnavailableObservabilityMaintenance
+                .execute(ObservabilityOperation::ForceGc, &query)
+                .await
+                .is_err()
+        );
+
+        let store = PgObservabilityStore::new(
+            PgPool::connect_lazy("postgres://unused:unused@localhost/unused").unwrap(),
+            Arc::new(UnavailableObservabilityMetrics),
+            Arc::new(UnavailableObservabilityMaintenance),
+        );
+        let error = store
+            .execute(ObservabilityCall {
+                operation: ObservabilityOperation::ForceGc,
+                principal: ObservabilityPrincipal::User {
+                    user_id: 1,
+                    username: "root".to_owned(),
+                    role: ROOT_ROLE,
+                },
+                query,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ObservabilityStoreError::Unavailable));
+    }
+
+    #[test]
+    fn authorization_and_read_only_token_normalization_match_legacy_forms() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "bearer sk-key-channel".parse().unwrap());
+        assert_eq!(
+            authorization_credential(&headers).as_deref(),
+            Some("sk-key-channel")
+        );
+        assert_eq!(legacy_read_only_token_key("sk-key-channel"), Some("key"));
+        headers.insert("authorization", "Bearer one two".parse().unwrap());
+        assert_eq!(authorization_credential(&headers), None);
+    }
+
+    #[tokio::test]
+    async fn unavailable_route_keeps_the_legacy_500_envelope() {
+        let state = ObservabilityState::new(
+            Arc::new(PgObservabilityStore::new(
+                PgPool::connect_lazy("postgres://unused:unused@localhost/unused").unwrap(),
+                Arc::new(UnavailableObservabilityMetrics),
+                Arc::new(UnavailableObservabilityMaintenance),
+            )),
+            Arc::new(DashboardObservabilityAuthorizer::new(
+                Arc::new(StaticDashboardAuth {
+                    user: user(ROOT_ROLE),
+                }),
+                Arc::new(StaticTokenAuth),
+            )),
+        );
+        let response = observability_router(state)
+            .oneshot(
+                Request::post("/api/performance/gc")
+                    .header("authorization", "Bearer dashboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response_body(response).await["message"],
+            Value::String("observability backend unavailable".to_owned())
+        );
+    }
+}

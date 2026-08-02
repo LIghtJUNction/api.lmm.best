@@ -35,8 +35,11 @@ token_estimator_test.go
 skills-lock.json
 .playwright-mcp
 /rust/target/
+/rust/apps/lmm-api-rs/tests/root-route-acceptance/target/
+/packaging/aur/lmm-api-rs-bin/out/
 /legacy-go-backup/
 /.codegraph/
+/SWAP.md
 
 # Local-only live probes and scratch test workspaces.
 .local-tests/

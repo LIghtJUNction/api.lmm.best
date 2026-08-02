@@ -120,10 +120,10 @@ function ComplianceLinks() {
         </Link>
       ))}
       <a
-        href='mailto:lightjunction.me@gmail.com'
+        href='mailto:support@lmm.best'
         className='hover:text-foreground font-medium transition-colors duration-200'
       >
-        {t('Customer Support')}: lightjunction.me@gmail.com
+        {t('Customer Support')}: support@lmm.best
       </a>
     </div>
   )

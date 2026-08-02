@@ -1,10 +1,11 @@
 # Autonomous SQLite → PostgreSQL backend cutover
 
-This transaction is the production bridge from the single Go/SQLite process to
-Go on PostgreSQL plus the dedicated Valkey. It is native systemd automation;
-Docker is not used. The script is implemented and fault-tested, but production
-execution remains prohibited until a fresh authenticated canary token, target
-database role, final maintenance window, and operator approval are present.
+This transaction is the proposed production bridge from the single Go/SQLite
+process to Go on PostgreSQL 18 plus the dedicated Valkey. It is native systemd
+automation; Docker is not used. It is a rehearsable coordinator, not an
+authorization to migrate: production remains Go/SQLite and the 2026-08-01 gate
+snapshot has Go owning 356/356 routes, until a fresh authenticated canary token, target database role, final
+maintenance window, isolated rehearsal evidence, and operator approval exist.
 
 ## State and rollback law
 
@@ -25,7 +26,8 @@ is never sourced.
 3. `FREEZING_WRITES`: stop the only Go writer and confirm it is inactive.
 4. Run an offline WAL checkpoint, reject remaining SQLite sidecars, run
    `quick_check`, and create a hash-verified private SQLite backup.
-5. `COPYING_TO_POSTGRES`: transactionally create a fresh versioned schema,
+5. `COPYING_TO_POSTGRES`: transactionally create a fresh versioned PostgreSQL
+   18 schema,
    COPY all 34 tables, set 29 sequences, validate the catalog, and independently
    compare counts, BLAKE3 hashes, and financial aggregates.
 6. Durably write `PG_WRITE_BOUNDARY` **before** publishing any environment that
@@ -163,3 +165,27 @@ and every audit artifact contains no DSN, token, row value, or financial value.
 Repository fake-systemd tests are necessary but not production authorization.
 Production remains prohibited until this isolated rehearsal passes and the
 operator explicitly approves the maintenance cutover.
+
+## Connection-loss and rollback operator checklist
+
+Do not execute a production cutover from an interactive shell. First run the
+documented `--dry-run`; only an approved maintenance transaction may use
+`--systemd-run`, so the coordinator can outlive SSH/API disconnects. Record the
+transaction identifier without copying its environment, DSN, canary token, or
+journal contents into chat.
+
+After a disconnect or failed transient unit, inspect the durable result and
+recover through the coordinator rather than restarting `lmm-api.service` by
+hand:
+
+```bash
+sudo lmm-api-cutover --reconcile-only
+sudo systemctl status lmm-api.service --no-pager
+sudo journalctl -u lmm-api-cutover-reconcile.service -u lmm-api.service --since '30 minutes ago'
+```
+
+Before `PG_WRITE_BOUNDARY`, reconciliation restores the saved SQLite
+environment. At or after that boundary it only converges forward to the exact
+hash-verified PostgreSQL candidate; manual SQLite rollback is prohibited. This
+one-time database move is maintenance downtime, not blue/green traffic
+switching. It does not authorize Rust production ownership.

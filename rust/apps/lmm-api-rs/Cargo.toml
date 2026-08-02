@@ -7,21 +7,38 @@ version.workspace = true
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+bcrypt.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hmac.workspace = true
+hex.workspace = true
+form_urlencoded.workspace = true
 http.workspace = true
+httpdate.workspace = true
+ipnet.workspace = true
+jsonwebtoken.workspace = true
 lmm-application = { path = "../../crates/application" }
 lmm-contracts = { path = "../../crates/contracts" }
 lmm-domain = { path = "../../crates/domain" }
 lmm-observability = { path = "../../crates/observability" }
 redis.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rsa = { version = "0.9.10", features = ["pem"] }
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+totp-rs.workspace = true
 tower = { version = "0.5.2", features = ["util"] }
 tower-http = { workspace = true, features = ["fs"] }
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-serde_json = "1.0.142"
 [lints]
 workspace = true

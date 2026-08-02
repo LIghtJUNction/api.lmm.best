@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "source": {
+    "revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9",
+    "evidence": [
+      "router/relay-router.go: POST /models/*path and POST /v1beta/models/*path",
+      "middleware/distributor.go: extractModelNameFromGeminiPath",
+      "relaykit/dto/gemini.go: GeminiChatRequest.IsStream"
+    ]
+  },
+  "cases": [
+    {
+      "id": "gemini-dynamic-action-null-body-alt-sse",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/gemini-2.5-pro:countTokens",
+        "query": {
+          "alt": "sse",
+          "key": "<TOKEN>"
+        },
+        "body": null
+      },
+      "relay_boundary": {
+        "model": "gemini-2.5-pro",
+        "request_path": "/v1beta/models/gemini-2.5-pro:countTokens",
+        "streaming": true,
+        "must_not_forward_query_credential": true
+      }
+    },
+    {
+      "id": "anthropic-null-sse-payload",
+      "reply": {
+        "kind": null,
+        "payload": null
+      },
+      "expected_sse": [
+        "data: null",
+        "data: [DONE]"
+      ]
+    },
+    {
+      "id": "gemini-upstream-error",
+      "failure": "upstream",
+      "response": {
+        "status": 502,
+        "body": {
+          "error": {
+            "code": 502,
+            "message": "relay request could not be completed",
+            "status": "UNAVAILABLE"
+          }
+        }
+      }
+    }
+  ],
+  "limits": [
+    "This is a source-traced mock differential for the HTTP boundary only.",
+    "Production token lookup, channel selection, retry, billing, Valkey, and provider I/O require the composed relay executor."
+  ]
+}
