@@ -84,7 +84,7 @@ bash legacy-go-hotfix/build-production-binary.sh --web-dist /path/to/verified/we
 The builder requires `--web-dist`, performs a clean `git archive`, checks and
 applies the patch, copies that distribution into the temporary source tree,
 and runs the root build with `GOPROXY=off`, `CGO_ENABLED=0`, `-trimpath`,
-`-buildvcs=false`, the production version `0.1.0.r28.g3e39995.payrate1`, and
+`-buildvcs=false`, the production version `0.1.0.r29.g3e39995.payrate2`, and
 static linker flags.
 Missing cached Go dependencies or a static-link failure fail explicitly instead
 of downloading or falling back. On success it verifies `--version`, confirms

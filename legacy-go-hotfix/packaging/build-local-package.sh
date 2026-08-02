@@ -34,7 +34,7 @@ for license_file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
   }
 done
 
-current_version='0.1.0.r27.g3e39995-1'
+current_version='0.1.0.r28.g3e39995.payrate1-1'
 target_version=$(sed -n "s/^pkgver=['\"]\{0,1\}\([^'\"]*\).*/\1/p" "$package_dir/PKGBUILD")
 target_pkgrel=$(sed -n "s/^pkgrel=['\"]\{0,1\}\([^'\"]*\).*/\1/p" "$package_dir/PKGBUILD")
 [[ -n $target_version ]] || {

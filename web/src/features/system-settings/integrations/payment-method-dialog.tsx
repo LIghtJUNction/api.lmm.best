@@ -36,6 +36,9 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
+
+import { getPaymentMethodRatePresets } from './payment-method-rate-presets'
 
 const SETTLEMENT_UNIT_PATTERN = /^[A-Za-z0-9._-]{1,16}$/
 const POSITIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
@@ -112,13 +115,13 @@ type PaymentMethodDialogProps = {
   onOpenChange: (open: boolean) => void
   onSave: (data: PaymentMethodData) => void
   editData?: PaymentMethodData | null
+  globalPrice: number
 }
 
 const PAYMENT_TYPE_ICON_NAMES: Record<string, string> = {
   alipay: 'SiAlipay',
   epay: 'SiLinux',
   stripe: 'SiStripe',
-  waffo_pancake: 'LuCreditCard',
   wxpay: 'SiWechat',
 }
 
@@ -129,6 +132,7 @@ export function PaymentMethodDialog({
   onOpenChange,
   onSave,
   editData,
+  globalPrice,
 }: PaymentMethodDialogProps) {
   const { t } = useTranslation()
   const isEditMode = !!editData
@@ -159,7 +163,7 @@ export function PaymentMethodDialog({
       value: 'epay',
     },
     {
-      iconName: 'LuCreditCard',
+      iconName: '',
       label: 'Waffo Pancake (waffo_pancake)',
       name: 'Waffo Pancake',
       value: 'waffo_pancake',
@@ -181,6 +185,11 @@ export function PaymentMethodDialog({
   })
 
   const iconValue = form.watch('icon')
+  const selectedType = form.watch('type')
+  const settlementUnitValue = form.watch('settlement_unit')?.trim()
+  const unitPriceValue = form.watch('unit_price')?.trim()
+  const usesDedicatedPricing = usesDedicatedPaymentPricing(selectedType)
+  const ratePresets = getPaymentMethodRatePresets(globalPrice)
 
   useEffect(() => {
     if (editData) {
@@ -215,10 +224,18 @@ export function PaymentMethodDialog({
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
     }
-    if (values.settlement_unit && values.settlement_unit.trim() !== '') {
+    if (
+      !usesDedicatedPaymentPricing(values.type) &&
+      values.settlement_unit &&
+      values.settlement_unit.trim() !== ''
+    ) {
       data.settlement_unit = values.settlement_unit.trim()
     }
-    if (values.unit_price && values.unit_price.trim() !== '') {
+    if (
+      !usesDedicatedPaymentPricing(values.type) &&
+      values.unit_price &&
+      values.unit_price.trim() !== ''
+    ) {
       data.unit_price = values.unit_price.trim()
     }
     onSave(data)
@@ -291,6 +308,16 @@ export function PaymentMethodDialog({
                       const nextOption = getPaymentTypeOption(value)
 
                       field.onChange(value)
+                      if (usesDedicatedPaymentPricing(value)) {
+                        form.setValue('settlement_unit', '', {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                        form.setValue('unit_price', '', {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }
                       if (
                         nextOption?.iconName &&
                         (!currentIcon ||
@@ -378,49 +405,141 @@ export function PaymentMethodDialog({
             )}
           />
 
-          <FormField
-            control={form.control}
-            name='settlement_unit'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Settlement unit (optional)')}</FormLabel>
-                <FormControl>
-                  <Input placeholder='LDC' {...field} />
-                </FormControl>
-                <FormDescription>
-                  {t(
-                    'The gateway currency label shown to users, for example LDC.'
-                  )}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          {usesDedicatedPricing ? (
+            <div className='bg-muted/40 rounded-md border p-3 text-sm'>
+              <p className='font-medium'>{t('Dedicated gateway pricing')}</p>
+              <p className='text-muted-foreground mt-1 text-xs leading-relaxed'>
+                {t(
+                  'This payment flow uses its dedicated gateway price setting, so per-method settlement pricing is not applied here.'
+                )}
+              </p>
+            </div>
+          ) : (
+            <>
+              <FormField
+                control={form.control}
+                name='settlement_unit'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Settlement unit (optional)')}</FormLabel>
+                    <FormControl>
+                      <Input placeholder='LDC' {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'The gateway currency label shown to users, for example LDC.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-          <FormField
-            control={form.control}
-            name='unit_price'
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>{t('Gateway price per 1 USD (optional)')}</FormLabel>
-                <FormControl>
-                  <Input
-                    type='number'
-                    min='0.0001'
-                    step='0.0001'
-                    placeholder='10'
-                    {...field}
-                  />
-                </FormControl>
-                <FormDescription>
-                  {t(
-                    'The server uses this price to quote and verify payment. Example: 10 means 10 LDC for 1 USD.'
-                  )}
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+              <FormField
+                control={form.control}
+                name='unit_price'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Gateway price per 1 USD (optional)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min='0.000000000001'
+                        step='any'
+                        placeholder='10'
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'The server uses this price to quote and verify payment. Example: 10 means 10 LDC for 1 USD.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <div className='bg-muted/30 space-y-2 rounded-md border p-3'>
+                <div>
+                  <p className='text-sm font-medium'>
+                    {t('Channel price presets')}
+                  </p>
+                  <p className='text-muted-foreground text-xs leading-relaxed'>
+                    {t(
+                      'Choose a preset or enter any positive decimal. The settlement unit and price must be configured together.'
+                    )}
+                  </p>
+                </div>
+                <div className='grid gap-2 sm:grid-cols-2'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    disabled={!ratePresets}
+                    onClick={() => {
+                      if (!ratePresets) return
+                      form.setValue(
+                        'unit_price',
+                        ratePresets.currentGlobalPrice,
+                        { shouldDirty: true, shouldValidate: true }
+                      )
+                    }}
+                  >
+                    {t('Use global price')}
+                    {ratePresets ? ` · ${ratePresets.currentGlobalPrice}` : ''}
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    disabled={!ratePresets}
+                    onClick={() => {
+                      if (!ratePresets) return
+                      form.setValue(
+                        'unit_price',
+                        ratePresets.reciprocalGlobalPrice,
+                        { shouldDirty: true, shouldValidate: true }
+                      )
+                    }}
+                  >
+                    {t('Use global price reciprocal')}
+                    {ratePresets
+                      ? ` · ${ratePresets.reciprocalGlobalPrice}`
+                      : ''}
+                  </Button>
+                </div>
+                {ratePresets ? (
+                  <p className='text-muted-foreground text-xs leading-relaxed'>
+                    {t(
+                      'Reciprocal preview: 1 ÷ {{price}} = {{reciprocal}}. This reverses the configured price direction; verify the settlement preview before saving.',
+                      {
+                        price: ratePresets.currentGlobalPrice,
+                        reciprocal: ratePresets.reciprocalGlobalPrice,
+                      }
+                    )}
+                  </p>
+                ) : (
+                  <p className='text-destructive text-xs'>
+                    {t('Set a positive global price to use rate presets.')}
+                  </p>
+                )}
+                {settlementUnitValue && unitPriceValue ? (
+                  <p className='text-sm font-medium'>
+                    {t(
+                      'Settlement preview: 1 platform USD = {{price}} {{unit}}',
+                      {
+                        price: unitPriceValue,
+                        unit: settlementUnitValue,
+                      }
+                    )}
+                  </p>
+                ) : null}
+              </div>
+            </>
+          )}
         </form>
       </Form>
     </Dialog>

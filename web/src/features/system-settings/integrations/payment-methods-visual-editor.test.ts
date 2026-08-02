@@ -34,6 +34,18 @@ describe('payment method JSON validation', () => {
     )
   })
 
+  test('accepts provider-defined Epay types with channel pricing', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'Provider custom method',
+        settlement_unit: 'POINTS',
+        type: 'provider_method_v2',
+        unit_price: '2.75',
+      }),
+      true
+    )
+  })
+
   test('rejects incomplete, unsafe, and non-decimal metadata', () => {
     const base = { name: 'LINUX DO Credit', type: 'epay' }
     for (const value of [

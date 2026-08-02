@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly BASE_COMMIT='3e39995a092f960882db6bf455b371d32591dc47'
-readonly RELEASE_VERSION='0.1.0.r28.g3e39995.payrate1'
+readonly RELEASE_VERSION='0.1.0.r29.g3e39995.payrate2'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PATCH_FILE="$SCRIPT_DIR/channel-pricing.patch"

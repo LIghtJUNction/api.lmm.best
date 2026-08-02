@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  formatPaymentSettlementRate,
   formatSettlementAmount,
   getPaymentSettlementUnit,
 } from './payment-unit'
@@ -92,6 +93,41 @@ describe('payment settlement units', () => {
         unit_price: ' 10 ',
       }),
       null
+    )
+  })
+
+  test('ignores generic settlement metadata on dedicated payment flows', () => {
+    for (const type of ['stripe', 'waffo', 'waffo_pancake']) {
+      const method = {
+        name: type,
+        settlement_unit: 'LDC',
+        type,
+        unit_price: '10',
+      }
+
+      assert.equal(getPaymentSettlementUnit(method), null)
+      assert.equal(formatPaymentSettlementRate(method), null)
+    }
+  })
+
+  test('preserves exact configured decimal rates in the wallet label', () => {
+    assert.equal(
+      formatPaymentSettlementRate({
+        name: 'Tiny-rate gateway',
+        settlement_unit: 'TOKEN',
+        type: 'epay',
+        unit_price: '0.000000000001',
+      }),
+      '0.000000000001 TOKEN / USD'
+    )
+    assert.equal(
+      formatPaymentSettlementRate({
+        name: 'Precise gateway',
+        settlement_unit: 'TOKEN',
+        type: 'custom-provider-method',
+        unit_price: '1.2345',
+      }),
+      '1.2345 TOKEN / USD'
     )
   })
 })

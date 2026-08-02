@@ -1023,6 +1023,7 @@ export function PaymentSettingsSection({
                           <PaymentMethodsVisualEditor
                             value={field.value}
                             onChange={field.onChange}
+                            globalPrice={currentFormValues.Price}
                           />
                         ) : (
                           <JsonCodeEditor

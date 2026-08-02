@@ -37,18 +37,22 @@ import {
   PaymentMethodDialog,
   type PaymentMethodData,
 } from './payment-method-dialog'
+import {
+  insertPaymentMethodTemplate,
+  PAYMENT_METHOD_TEMPLATES,
+} from './payment-method-templates'
 import { isValidPaymentMethodData } from './payment-method-validation'
 
 type PaymentMethodsVisualEditorProps = {
   value: string
   onChange: (value: string) => void
+  globalPrice: number
 }
 
 const PAYMENT_TYPE_ICON_NAMES: Record<string, string> = {
   alipay: 'SiAlipay',
   epay: 'SiLinux',
   stripe: 'SiStripe',
-  waffo_pancake: 'LuCreditCard',
   wxpay: 'SiWechat',
 }
 
@@ -63,62 +67,9 @@ function getEffectiveIconName(method: PaymentMethodData) {
 export function PaymentMethodsVisualEditor({
   value,
   onChange,
+  globalPrice,
 }: PaymentMethodsVisualEditorProps) {
   const { t } = useTranslation()
-  const paymentTemplates = [
-    {
-      name: t('Epay Alipay'),
-      template: {
-        icon: getDefaultIconName('alipay'),
-        name: '支付宝',
-        type: 'alipay',
-      },
-    },
-    {
-      name: t('Epay WeChat Pay'),
-      template: {
-        icon: getDefaultIconName('wxpay'),
-        name: '微信',
-        type: 'wxpay',
-      },
-    },
-    {
-      name: t('Stripe'),
-      template: {
-        icon: getDefaultIconName('stripe'),
-        min_topup: '10',
-        name: 'Stripe',
-        type: 'stripe',
-      },
-    },
-    {
-      name: 'Waffo Pancake',
-      template: {
-        icon: getDefaultIconName('waffo_pancake'),
-        name: 'Waffo Pancake',
-        type: 'waffo_pancake',
-      },
-    },
-    {
-      name: 'LINUX DO Credit',
-      template: {
-        icon: getDefaultIconName('epay'),
-        name: 'LINUX DO Credit',
-        settlement_unit: 'LDC',
-        type: 'epay',
-        unit_price: '10',
-      },
-    },
-    {
-      name: t('Custom Epay method'),
-      template: {
-        icon: 'LuCreditCard',
-        min_topup: '50',
-        name: '自定义1',
-        type: 'custom1',
-      },
-    },
-  ]
   const [searchText, setSearchText] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editData, setEditData] = useState<PaymentMethodData | null>(null)
@@ -215,21 +166,10 @@ export function PaymentMethodsVisualEditor({
       silent: true,
     })
 
-    // Check if template already exists
-    const exists = parsed.some(
-      (item) =>
-        typeof item === 'object' &&
-        item !== null &&
-        'type' in item &&
-        'name' in item &&
-        item.type === template.type &&
-        item.name === template.name
-    )
+    const updated = insertPaymentMethodTemplate(parsed, template)
+    if (updated.length === parsed.length) return
 
-    if (!exists) {
-      parsed.push(template)
-      onChange(JSON.stringify(parsed, null, 2))
-    }
+    onChange(JSON.stringify(updated, null, 2))
   }
 
   return (
@@ -254,28 +194,54 @@ export function PaymentMethodsVisualEditor({
               <Lightbulb className='h-4 w-4 sm:mr-2' />
               <span className='sm:inline'>{t('Templates')}</span>
             </PopoverTrigger>
-            <PopoverContent className='w-60'>
+            <PopoverContent className='w-72'>
               <div className='space-y-2'>
                 <p className='text-muted-foreground text-xs'>
                   {t('Quick insert payment entries')}
                 </p>
                 <div className='space-y-1'>
-                  {paymentTemplates.map((item) => (
+                  {PAYMENT_METHOD_TEMPLATES.map((item) => (
                     <Button
-                      key={item.name}
+                      key={item.method.type}
                       type='button'
                       variant='ghost'
-                      className='w-full justify-start text-sm'
+                      className='h-auto w-full justify-start py-2 text-sm'
                       onClick={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
-                        handleInsertTemplate(item.template)
+                        handleInsertTemplate(item.method)
                       }}
                     >
                       <Plus className='mr-2 h-3 w-3' />
-                      {item.name}
+                      <span className='flex min-w-0 flex-col items-start'>
+                        <span className='truncate'>{t(item.labelKey)}</span>
+                        <span className='text-muted-foreground font-mono text-[11px]'>
+                          {item.method.type}
+                          {item.method.unit_price && item.method.settlement_unit
+                            ? ` · ${item.method.unit_price} ${item.method.settlement_unit}/USD`
+                            : ''}
+                        </span>
+                      </span>
                     </Button>
                   ))}
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    className='h-auto w-full justify-start py-2 text-sm'
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      handleAdd()
+                    }}
+                  >
+                    <Plus className='mr-2 h-3 w-3' />
+                    <span className='flex min-w-0 flex-col items-start'>
+                      <span>{t('Custom Epay method')}</span>
+                      <span className='text-muted-foreground text-[11px]'>
+                        {t('Enter the payment type supported by your provider')}
+                      </span>
+                    </span>
+                  </Button>
                 </div>
               </div>
             </PopoverContent>
@@ -497,6 +463,7 @@ export function PaymentMethodsVisualEditor({
         onOpenChange={setDialogOpen}
         onSave={handleSave}
         editData={editData}
+        globalPrice={globalPrice}
       />
     </div>
   )
