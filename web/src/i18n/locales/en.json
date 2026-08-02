@@ -5313,6 +5313,9 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Payment notes": "Payment notes",
+    "The amount shown on each card is the platform credit. The actual payment and any discount are calculated for the selected payment method.": "The amount shown on each card is the platform credit. The actual payment and any discount are calculated for the selected payment method.",
+    "Selected method: {{method}} · Estimated payment: {{amount}} (original {{original}})": "Selected method: {{method}} · Estimated payment: {{amount}} (original {{original}})"
   }
 }

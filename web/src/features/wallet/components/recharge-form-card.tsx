@@ -199,6 +199,18 @@ export function RechargeFormCard({
       ? formatSettlementAmount(amount, settlementUnit.label)
       : formatPaymentAmount(amount)
   const pancakeCurrencySupported = isWaffoPancakeCurrencySupported()
+  const selectedPresetPricing = (() => {
+    if (selectedPreset === null) return null
+    const preset = presetAmounts.find((item) => item.value === selectedPreset)
+    if (!preset) return null
+    const discount =
+      preset.discount || topupInfo?.discount?.[preset.value] || 1.0
+    return calculatePresetPricing(
+      preset.value,
+      (settlementUnit?.unitPrice ?? priceRatio) * topupGroupRatio,
+      discount
+    )
+  })()
 
   if (loading) {
     return (
@@ -365,30 +377,47 @@ export function RechargeFormCard({
                                 </Badge>
                               )}
                             </div>
-                            <div className='text-muted-foreground mt-1.5 flex w-full min-w-0 flex-col gap-0.5 text-xs sm:mt-2'>
-                              <span>
-                                {t(
-                                  'Estimated actual payment via {{method}}: {{amount}} (original payment {{original}})',
-                                  {
-                                    method: selectedPaymentMethodName,
-                                    amount: payment,
-                                    original: originalPayment,
-                                  }
-                                )}
-                              </span>
-                              {hasDiscount && savedAmount > 0 && (
-                                <span>
-                                  {t('Discount applied {{amount}}', {
-                                    amount:
-                                      formatPresetPaymentAmount(savedAmount),
-                                  })}
-                                </span>
-                              )}
-                            </div>
                           </Button>
                         )
                       })}
                     </div>
+                    <Card className='bg-muted/30 border-dashed shadow-none'>
+                      <CardContent className='space-y-1.5 p-3 text-xs sm:p-4'>
+                        <div className='font-medium'>{t('Payment notes')}</div>
+                        <p className='text-muted-foreground'>
+                          {t(
+                            'The amount shown on each card is the platform credit. The actual payment and any discount are calculated for the selected payment method.'
+                          )}
+                        </p>
+                        {selectedPreset !== null && (
+                          <>
+                            <p className='text-muted-foreground'>
+                              {t(
+                                'Selected method: {{method}} · Estimated payment: {{amount}} (original {{original}})',
+                                {
+                                  method: selectedPaymentMethodName,
+                                  amount: formatPresetPaymentAmount(
+                                    selectedPresetPricing?.actualPrice ?? 0
+                                  ),
+                                  original: formatPresetPaymentAmount(
+                                    selectedPresetPricing?.originalPrice ?? 0
+                                  ),
+                                }
+                              )}
+                            </p>
+                            {selectedPresetPricing?.hasDiscount && (
+                              <p className='text-muted-foreground'>
+                                {t('Discount applied {{amount}}', {
+                                  amount: formatPresetPaymentAmount(
+                                    selectedPresetPricing.savedAmount
+                                  ),
+                                })}
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </CardContent>
+                    </Card>
                   </Field>
                 </FieldGroup>
               )}
