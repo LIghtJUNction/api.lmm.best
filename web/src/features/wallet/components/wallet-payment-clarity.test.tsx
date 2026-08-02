@@ -180,10 +180,8 @@ describe('wallet payment clarity', () => {
       true
     )
     assert.equal(
-      noDiscountPreset?.textContent?.includes(
-        'Estimated actual payment via Alipay: ¥540 CNY (original payment ¥540 CNY)'
-      ),
-      true
+      noDiscountPreset?.textContent?.includes('Estimated actual payment'),
+      false
     )
 
     const discountPreset = rendered.container.querySelector(
@@ -195,10 +193,8 @@ describe('wallet payment clarity', () => {
       true
     )
     assert.equal(
-      discountPreset?.textContent?.includes(
-        'Estimated actual payment via Alipay: ¥864 CNY (original payment ¥1,080 CNY)'
-      ),
-      true
+      discountPreset?.textContent?.includes('Estimated actual payment'),
+      false
     )
 
     const customAmount = rendered.container.querySelector('#topup-amount')
@@ -258,7 +254,7 @@ describe('wallet payment clarity', () => {
     assert.equal(text.includes('100(Platform amount, unit: USD)'), true)
     assert.equal(
       text.includes(
-        'Estimated actual payment via Alipay: ¥80 CNY (original payment ¥100 CNY)'
+        'Selected method: Alipay · Estimated payment: ¥80 CNY (original ¥100 CNY)'
       ),
       true
     )
@@ -355,7 +351,7 @@ describe('wallet payment clarity', () => {
 
     assert.equal(
       recharge.container.textContent?.includes(
-        'Estimated actual payment via LINUX DO Credit: 1.12 LDC (original payment 1.4 LDC)'
+        'Selected method: LINUX DO Credit · Estimated payment: 1.12 LDC (original 1.4 LDC)'
       ),
       true
     )
@@ -414,7 +410,7 @@ describe('wallet payment clarity', () => {
 
     assert.equal(
       rendered.container.textContent?.includes(
-        'Estimated actual payment via Alipay: $0.14 USD (original payment $0.14 USD)'
+        'Selected method: Alipay · Estimated payment: $0.14 USD (original $0.14 USD)'
       ),
       true
     )
@@ -500,7 +496,13 @@ describe('wallet payment clarity', () => {
     )
     assert.equal(
       rendered.container.textContent?.includes(
-        '通过 Alipay 预计实付：¥80 CNY（原价需付款 ¥100 CNY）'
+        '卡片中的金额是平台到账金额，实际支付金额和优惠会根据所选支付方式计算。'
+      ),
+      true
+    )
+    assert.equal(
+      rendered.container.textContent?.includes(
+        '所选方式：Alipay · 预计支付：¥80 CNY（原价 ¥100 CNY）'
       ),
       true
     )
@@ -563,6 +565,10 @@ describe('wallet payment clarity', () => {
     const text = rendered.container.textContent ?? ''
     assert.equal(
       text.includes('通过 Alipay 预计实付：$80 USD（原价需付款 $100 USD）'),
+      false
+    )
+    assert.equal(
+      text.includes('所选方式：Alipay · 预计支付：$80 USD（原价 $100 USD）'),
       true
     )
     assert.equal(text.includes('人民币'), false)
