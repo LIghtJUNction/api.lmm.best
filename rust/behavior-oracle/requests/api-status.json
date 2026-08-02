@@ -1,0 +1,10 @@
+{
+  "route": { "id": "GET /api/status", "middleware": ["RouteTag(api)", "gzip", "BodyStorageCleanup", "GlobalAPIRateLimit"], "side_effects": [] },
+  "request": { "method": "GET", "path": "/api/status", "headers": { "accept": "application/json" }, "body": null },
+  "observe": { "db_tables": ["options", "custom_oauth_providers"], "valkey_patterns": ["*"] },
+  "capture_headers": ["content-type", "x-new-api-version", "x-oneapi-request-id"],
+  "normalization": { "rules": [
+    { "path": "$.response.selected_headers.x-oneapi-request-id", "operation": "replace", "replacement": "<REQUEST_ID>", "reason": "legacy request ids contain wall-clock time and randomness" },
+    { "path": "$.response.body.data.start_time", "operation": "replace", "replacement": "<START_TIME>", "reason": "process start time is runtime-specific" }
+  ] }
+}

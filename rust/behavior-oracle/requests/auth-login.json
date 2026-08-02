@@ -1,0 +1,9 @@
+{
+  "route": { "id": "POST /api/user/login", "middleware": ["RouteTag(api)", "gzip", "BodyStorageCleanup", "GlobalAPIRateLimit", "CriticalRateLimit", "DisableCache", "AnonymousRequestBodyLimit", "TurnstileCheck"], "side_effects": ["critical rate-limit counter"] },
+  "request": { "method": "POST", "path": "/api/user/login", "headers": { "accept": "application/json", "content-type": "application/json" }, "body": { "username": "<SYNTHETIC_USER>", "password": "<SYNTHETIC_PASSWORD>" } },
+  "observe": { "db_tables": ["users", "user_sessions"], "valkey_patterns": ["rateLimit:*"] },
+  "capture_headers": ["cache-control", "content-type", "expires", "pragma", "x-new-api-version", "x-oneapi-request-id"],
+  "normalization": { "rules": [
+    { "path": "$.response.selected_headers.x-oneapi-request-id", "operation": "replace", "replacement": "<REQUEST_ID>", "reason": "legacy request ids contain wall-clock time and randomness" }
+  ] }
+}

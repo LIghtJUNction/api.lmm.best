@@ -1,0 +1,42 @@
+{
+  "route": {
+    "id": "GET /v1/models",
+    "middleware": [
+      "CORS",
+      "DecompressRequest",
+      "BodyStorageCleanup",
+      "Stats",
+      "RouteTag(relay)",
+      "TokenAuth"
+    ],
+    "side_effects": []
+  },
+  "request": {
+    "method": "GET",
+    "path": "/v1/models",
+    "headers": {
+      "accept": "application/json",
+      "authorization": "Bearer sk-oraclemodelstoken"
+    },
+    "body": null
+  },
+  "observe": {
+    "db_tables": ["users", "tokens", "abilities", "channels"],
+    "valkey_patterns": ["*"]
+  },
+  "capture_headers": [
+    "content-type",
+    "x-new-api-version",
+    "x-oneapi-request-id"
+  ],
+  "normalization": {
+    "rules": [
+      {
+        "path": "$.response.selected_headers.x-oneapi-request-id",
+        "operation": "replace",
+        "replacement": "<REQUEST_ID>",
+        "reason": "legacy request ids contain wall-clock time and randomness"
+      }
+    ]
+  }
+}

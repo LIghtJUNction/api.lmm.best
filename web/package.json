@@ -16,7 +16,8 @@
     "copyright:check": "node scripts/add-copyright.mjs --check",
     "copyright": "node scripts/add-copyright.mjs",
     "i18n:sync": "node scripts/sync-i18n.mjs",
-    "knip": "knip"
+    "knip": "knip",
+    "smoke:dashboard": "node scripts/read-only-dashboard-smoke.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

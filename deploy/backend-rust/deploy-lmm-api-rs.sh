@@ -9,14 +9,23 @@ REVISION=
 DRY_RUN=0
 RUN_AS_TRANSIENT=0
 RECONCILE_ONLY=0
+CUTOVER_APPROVED=0
+CUTOVER_TARGET=
+CUTOVER_REVISION=
+readonly CUTOVER_APPROVAL_VALUE=GO_FREEZE_OVERRIDE_INTERNAL_PROBES
 
 usage() {
     cat <<'EOF'
-Usage: deploy-lmm-api-rs.sh --artifact PATH --sha256 HEX --revision ID [--dry-run] [--systemd-run]
-       deploy-lmm-api-rs.sh --revision ID --reconcile-only
+Usage: deploy-lmm-api-rs.sh --artifact PATH --sha256 HEX --revision ID [--dry-run] [--systemd-run] \
+         [--approve-cutover --cutover-target internal-probes --cutover-revision ID]
+       deploy-lmm-api-rs.sh --revision ID --reconcile-only \
+         [--approve-cutover --cutover-target internal-probes --cutover-revision ID]
 
-Only the loopback GET/HEAD internal Rust probe upstream is switched. Production API
-route ownership remains disabled until PostgreSQL migration and route parity.
+Dry-run is the only default action. Any operation that can restart a Rust slot,
+reload nginx, or reconcile an upstream requires the one-shot cutover interlock:
+the explicit flag, LMM_RS_CUTOVER_APPROVAL=$CUTOVER_APPROVAL_VALUE, the fixed
+internal-probes target, and the exact requested revision. Production API route
+ownership remains disabled until separate approval.
 EOF
 }
 die() { printf '%s: %s\n' "$SCRIPT_NAME" "$*" >&2; exit 1; }
@@ -30,6 +39,9 @@ while (($#)); do
         --dry-run) DRY_RUN=1; shift ;;
         --systemd-run) RUN_AS_TRANSIENT=1; shift ;;
         --reconcile-only) RECONCILE_ONLY=1; shift ;;
+        --approve-cutover) CUTOVER_APPROVED=1; shift ;;
+        --cutover-target) CUTOVER_TARGET=${2:?}; shift 2 ;;
+        --cutover-revision) CUTOVER_REVISION=${2:?}; shift 2 ;;
         --help|-h) usage; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -40,29 +52,6 @@ SELF=$(readlink -f -- "$0")
 [[ $SELF == /* && -f $SELF && ! -L $SELF ]] || die "deployment entrypoint must resolve to an absolute regular file"
 readonly SELF
 
-if ((RUN_AS_TRANSIENT)); then
-    ((DRY_RUN == 0 && RECONCILE_ONLY == 0)) || die "--systemd-run cannot be combined with dry-run/reconcile-only"
-    [[ $EUID -eq 0 ]] || die "--systemd-run staging requires root"
-    [[ $ARTIFACT == /* && -f $ARTIFACT && ! -L $ARTIFACT ]] || die "artifact must be an absolute non-symlink regular file"
-    [[ $EXPECTED_SHA256 =~ ^[[:xdigit:]]{64}$ ]] || die "sha256 must be 64 hexadecimal characters"
-    incoming_dir=/var/lib/lmm-api-rs/artifacts
-    mkdir -p "$incoming_dir"
-    durable_artifact="$incoming_dir/${REVISION}-${EXPECTED_SHA256}"
-    if [[ ! -e $durable_artifact ]]; then
-        durable_temp="$incoming_dir/.${REVISION}-${EXPECTED_SHA256}.$$.tmp"
-        install -m 0700 -o root -g root "$ARTIFACT" "$durable_temp"
-        [[ $(sha256sum "$durable_temp" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || die "artifact changed while staging"
-        sync -f "$durable_temp"; mv -T "$durable_temp" "$durable_artifact"; sync -f "$incoming_dir"
-    fi
-    [[ -f $durable_artifact && ! -L $durable_artifact && $(stat -c %u "$durable_artifact") == 0 ]] || die "durable artifact is unsafe"
-    [[ $(sha256sum "$durable_artifact" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || die "durable artifact checksum mismatch"
-    command -v systemd-run >/dev/null || die "systemd-run is required"
-    exec systemd-run --unit="lmm-api-rs-deploy-${REVISION}" --collect --property=Type=oneshot \
-        --property=TimeoutStartSec=15min -- "$SELF" --artifact "$durable_artifact" \
-        --sha256 "$EXPECTED_SHA256" --revision "$REVISION"
-fi
-if [[ ${LMM_TEST_MODE:-0} != 1 && $EUID -ne 0 ]]; then die "must run as root"; fi
-
 readonly ROOT=${LMM_RS_ROOT:-/opt/lmm-api-rs}
 readonly ETC_ROOT=${LMM_RS_ETC_ROOT:-/etc/lmm-api-rs}
 readonly RUN_ROOT=${LMM_RS_RUN_ROOT:-/run/lmm-api-rs}
@@ -71,6 +60,90 @@ readonly NGINX_UPSTREAM=${LMM_RS_NGINX_UPSTREAM:-/etc/nginx/conf.d/lmm-api-rs-ac
 readonly ACTIVE_FILE="$ROOT/active-slot"
 readonly JOURNAL_FILE="$ROOT/deploy-journal"
 readonly LOCK_FILE=${LMM_RS_DEPLOY_LOCK:-/run/lock/lmm-api-nginx-deploy.lock}
+
+slot_from_upstream() {
+    [[ -s $NGINX_UPSTREAM ]] || return 1
+    selected_port=$(sed -nE 's/^[[:space:]]*server[[:space:]]+127\.0\.0\.1:(3100|3101);.*/\1/p' "$NGINX_UPSTREAM" | head -n1)
+    case $selected_port in 3100) printf blue ;; 3101) printf green ;; *)
+        grep -Eq 'server[[:space:]]+127\.0\.0\.1:9;' "$NGINX_UPSTREAM" && printf none || return 1 ;;
+    esac
+}
+
+require_cutover_approval() {
+    ((DRY_RUN)) && return
+    # The ordinary local harness still exercises rollback mechanics. Specific
+    # interlock tests set LMM_TEST_ENFORCE_CUTOVER_INTERLOCK=1 and must pass the
+    # exact same approval contract as production.
+    if [[ ${LMM_TEST_MODE:-0} == 1 && ${LMM_TEST_ENFORCE_CUTOVER_INTERLOCK:-0} != 1 ]]; then
+        return
+    fi
+    ((CUTOVER_APPROVED)) || die "mutating cutover requires --approve-cutover"
+    [[ ${LMM_RS_CUTOVER_APPROVAL:-} == "$CUTOVER_APPROVAL_VALUE" ]] || \
+        die "mutating cutover requires one-shot LMM_RS_CUTOVER_APPROVAL"
+    [[ $CUTOVER_TARGET == internal-probes ]] || \
+        die "cutover target must be confirmed as internal-probes"
+    [[ $CUTOVER_REVISION == "$REVISION" ]] || \
+        die "cutover revision confirmation must exactly match --revision"
+}
+
+require_cutover_approval
+
+# This marker is a hard safety boundary, including for reconcile-only. Check
+# it before artifact staging, audit/lock creation, or journal reconciliation.
+[[ ! -e $ETC_ROOT/production-routing.enabled ]] || \
+    die "production routing is unsupported before PG migration and route parity approval"
+
+if ((RUN_AS_TRANSIENT)); then
+    ((DRY_RUN == 0 && RECONCILE_ONLY == 0)) || die "--systemd-run cannot be combined with dry-run/reconcile-only"
+    [[ $EUID -eq 0 || ${LMM_TEST_MODE:-0} == 1 ]] || die "--systemd-run staging requires root"
+    [[ $ARTIFACT == /* && -f $ARTIFACT && ! -L $ARTIFACT ]] || die "artifact must be an absolute non-symlink regular file"
+    [[ $EXPECTED_SHA256 =~ ^[[:xdigit:]]{64}$ ]] || die "sha256 must be 64 hexadecimal characters"
+    incoming_dir=${LMM_RS_ARTIFACT_ROOT:-/var/lib/lmm-api-rs/artifacts}
+    [[ $incoming_dir == /* ]] || die "artifact root must be absolute"
+    mkdir -p "$incoming_dir"
+    durable_artifact="$incoming_dir/${REVISION}-${EXPECTED_SHA256}"
+    if [[ ! -e $durable_artifact ]]; then
+        durable_temp="$incoming_dir/.${REVISION}-${EXPECTED_SHA256}.$$.tmp"
+        if [[ ${LMM_TEST_MODE:-0} == 1 ]]; then
+            install -m 0700 "$ARTIFACT" "$durable_temp"
+        else
+            install -m 0700 -o root -g root "$ARTIFACT" "$durable_temp"
+        fi
+        [[ $(sha256sum "$durable_temp" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || die "artifact changed while staging"
+        sync -f "$durable_temp"; mv -T "$durable_temp" "$durable_artifact"; sync -f "$incoming_dir"
+    fi
+    [[ -f $durable_artifact && ! -L $durable_artifact ]] || die "durable artifact is unsafe"
+    if [[ ${LMM_TEST_MODE:-0} != 1 ]]; then
+        [[ $(stat -c %u "$durable_artifact") == 0 ]] || die "durable artifact is unsafe"
+    fi
+    [[ $(sha256sum "$durable_artifact" | awk '{print $1}') == "$EXPECTED_SHA256" ]] || die "durable artifact checksum mismatch"
+    command -v systemd-run >/dev/null || die "systemd-run is required"
+    exec systemd-run --unit="lmm-api-rs-deploy-${REVISION}" --collect --property=Type=oneshot \
+        --property=TimeoutStartSec=15min --setenv="LMM_RS_CUTOVER_APPROVAL=$CUTOVER_APPROVAL_VALUE" \
+        -- "$SELF" --artifact "$durable_artifact" \
+        --sha256 "$EXPECTED_SHA256" --revision "$REVISION" --approve-cutover \
+        --cutover-target "$CUTOVER_TARGET" --cutover-revision "$CUTOVER_REVISION"
+fi
+if [[ ${LMM_TEST_MODE:-0} != 1 && $EUID -ne 0 ]]; then die "must run as root"; fi
+
+if ((DRY_RUN)); then
+    [[ $RECONCILE_ONLY == 0 ]] || die "--dry-run cannot be combined with --reconcile-only"
+    [[ -n $ARTIFACT && -n $EXPECTED_SHA256 ]] || die "artifact and sha256 are required"
+    [[ $ARTIFACT == /* ]] || die "artifact path must be absolute"
+    [[ $EXPECTED_SHA256 =~ ^[[:xdigit:]]{64}$ ]] || die "sha256 must be 64 hexadecimal characters"
+    [[ -f $ARTIFACT && ! -L $ARTIFACT && -x $ARTIFACT ]] || die "artifact must be an executable, non-symlink regular file"
+    for required in "$ETC_ROOT/common.env" "$ETC_ROOT/blue.env" "$ETC_ROOT/green.env"; do
+        [[ -s $required && ! -L $required ]] || die "required configuration is absent or unsafe: $required"
+    done
+    actual_sha256=$(sha256sum "$ARTIFACT" | awk '{print $1}')
+    [[ $actual_sha256 == "$EXPECTED_SHA256" ]] || die "artifact checksum mismatch"
+    active=$(slot_from_upstream) || die "cannot derive active slot from managed nginx upstream"
+    case $active in blue) inactive=green ;; green) inactive=blue ;; none) inactive=blue ;; esac
+    printf 'DRY_RUN active=%s inactive=%s\n' "$active" "$inactive"
+    log "dry-run: production route ownership remains unchanged"
+    exit 0
+fi
+
 safe_revision=${REVISION//[^A-Za-z0-9._-]/_}
 [[ -n $safe_revision ]] || safe_revision=preflight
 TRANSACTION_ID="$(date -u +%Y%m%dT%H%M%SZ)-${safe_revision}-$$"
@@ -140,12 +213,20 @@ verify_nginx_identity() {
     done
     return 1
 }
-slot_from_upstream() {
-    [[ -s $NGINX_UPSTREAM ]] || return 1
-    selected_port=$(sed -nE 's/^[[:space:]]*server[[:space:]]+127\.0\.0\.1:(3100|3101);.*/\1/p' "$NGINX_UPSTREAM" | head -n1)
-    case $selected_port in 3100) printf blue ;; 3101) printf green ;; *)
-        grep -Eq 'server[[:space:]]+127\.0\.0\.1:9;' "$NGINX_UPSTREAM" && printf none || return 1 ;;
-    esac
+warm_candidate() {
+    candidate_port=$1
+    # These mounted, read-only endpoints exercise the candidate's actual
+    # request boundary and populate only best-effort Valkey cache entries.  A
+    # failure is a candidate failure: never switch traffic just because
+    # /readyz can execute SELECT 1.
+    curl --fail --silent --show-error --connect-timeout 1 --max-time 3 \
+        "http://127.0.0.1:${candidate_port}/api/status" >"$AUDIT_DIR/status.warm.json"
+    curl --fail --silent --show-error --connect-timeout 1 --max-time 3 \
+        "http://127.0.0.1:${candidate_port}/api/notice" >"$AUDIT_DIR/notice.warm.json"
+    curl --fail --silent --show-error --connect-timeout 1 --max-time 3 \
+        "http://127.0.0.1:${candidate_port}/api/about" >"$AUDIT_DIR/about.warm.json"
+    curl --fail --silent --show-error --connect-timeout 1 --max-time 3 \
+        "http://127.0.0.1:${candidate_port}/api/home_page_content" >"$AUDIT_DIR/home-page.warm.json"
 }
 reconcile_state() {
     if [[ -s $JOURNAL_FILE ]] && grep -Fq 'phase=PREPARED' "$JOURNAL_FILE"; then
@@ -154,6 +235,9 @@ reconcile_state() {
         pending_new=$(sed -nE 's/.* new=([^ ]+).*/\1/p' "$JOURNAL_FILE")
         pending_backup=$(sed -nE 's/.* backup=([^ ]+).*/\1/p' "$JOURNAL_FILE")
         pending_sha=$(sed -nE 's/.* upstream_sha=([^ ]+).*/\1/p' "$JOURNAL_FILE")
+        [[ $pending_revision =~ ^[A-Za-z0-9._-]{7,128}$ ]] || die "PREPARED revision is invalid"
+        [[ $pending_revision == "$REVISION" ]] || \
+            die "PREPARED revision does not match the explicitly approved revision"
         [[ $pending_old == none || $pending_old == blue || $pending_old == green ]] || die "PREPARED old slot is invalid"
         [[ $pending_new == blue || $pending_new == green ]] || die "PREPARED new slot is invalid"
         [[ $pending_backup == "$AUDIT_ROOT"/* && -f $pending_backup && ! -L $pending_backup ]] || die "PREPARED backup path is unsafe"
@@ -276,19 +360,10 @@ fi
 for required in "$ETC_ROOT/common.env" "$ETC_ROOT/blue.env" "$ETC_ROOT/green.env"; do
     [[ -s $required && ! -L $required ]] || die "required configuration is absent or unsafe: $required"
 done
-[[ ! -e $ETC_ROOT/production-routing.enabled ]] || die "production routing is unsupported before PG migration and route parity approval"
-
 actual_sha256=$(sha256sum "$ARTIFACT" | awk '{print $1}')
 [[ $actual_sha256 == "$EXPECTED_SHA256" ]] || die "artifact checksum mismatch"
 atomic_text "$AUDIT_DIR/manifest" 0600 "revision=$REVISION sha256=$actual_sha256 started_at=$(date -u +%FT%TZ)"
 case $active in blue) inactive=green; port=3101 ;; green) inactive=blue; port=3100 ;; none) inactive=blue; port=3100 ;; esac
-if ((DRY_RUN)); then
-    write_result "DRY_RUN active=$active inactive=$inactive"
-    trap - ERR EXIT
-    log "dry-run: production route ownership remains unchanged"
-    exit 0
-fi
-
 readonly RELEASE_DIR="$ROOT/releases/$REVISION"
 if [[ -e $RELEASE_DIR ]]; then
     [[ -d $RELEASE_DIR && ! -L $RELEASE_DIR && -f $RELEASE_DIR/lmm-api-rs && ! -L $RELEASE_DIR/lmm-api-rs ]] || die "immutable release path has unsafe contents"
@@ -323,6 +398,7 @@ curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${port}/readyz"
 curl --fail --silent --show-error --max-time 3 "http://127.0.0.1:${port}/_internal/build" >"$AUDIT_DIR/build.direct.json"
 grep -Fq "\"revision\":\"$REVISION\"" "$AUDIT_DIR/build.direct.json" || die "direct build revision mismatch"
 grep -Fq "\"slot\":\"$inactive\"" "$AUDIT_DIR/build.direct.json" || die "direct build slot mismatch"
+warm_candidate "$port"
 [[ ${LMM_DEPLOY_FAIL_AT:-} != ready ]] || die "injected failure at ready"
 
 atomic_from_file "$NGINX_UPSTREAM" "$old_upstream" 0600

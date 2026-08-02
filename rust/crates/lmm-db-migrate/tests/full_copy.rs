@@ -281,7 +281,22 @@ fn create_sqlite_fixture(path: &Path, manifest: &Manifest) {
             ["null-value"],
         )
         .unwrap();
+    connection
+        .execute(
+            "UPDATE channels SET channel_info=?1 WHERE id=1",
+            [br#"{"z":2,"a":1}"#.as_slice()],
+        )
+        .unwrap();
     connection.execute_batch("INSERT INTO channels (id,key,balance) VALUES (2,'key-2',-0.1),(3,'key-3',NULL),(4,'key-4',0.0000001); INSERT INTO top_ups (id,trade_no,amount,money) VALUES (2,'trade-2',-5,-0.1),(3,'trade-3',NULL,NULL); INSERT INTO subscription_orders (id,trade_no,money) VALUES (2,'order-2',-0.1),(3,'order-3',NULL);").unwrap();
+    // Exercise numeric primary-key ordering across a decimal-width boundary.
+    // An unqualified PostgreSQL ORDER BY can otherwise bind to the text
+    // projection and yield 1, 10, 2 instead of the source order 1, 2, 10.
+    connection
+        .execute_batch(
+            "INSERT INTO checkins (id,user_id,checkin_date,quota_awarded,created_at) VALUES \
+             (2,2,'2026-08-02',2,2),(10,10,'2026-08-10',10,10);",
+        )
+        .unwrap();
     connection.close().unwrap();
     assert!(!path.with_extension("db-wal").exists());
 }

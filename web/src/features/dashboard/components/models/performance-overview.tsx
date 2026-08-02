@@ -21,7 +21,10 @@ import { Gauge, HeartPulse, Timer } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
+import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import {
@@ -103,29 +106,28 @@ export function PerformanceOverview() {
 
   if (!loading && !hasData) {
     return (
-      <div className='text-muted-foreground overflow-hidden rounded-lg border px-4 py-3 text-center text-xs'>
-        {t('No performance data available')}
-      </div>
+      <Card size='sm'>
+        <CardContent className='text-muted-foreground text-center text-xs'>
+          {t('No performance data available')}
+        </CardContent>
+      </Card>
     )
   }
 
   return (
-    <div className='overflow-hidden rounded-lg border'>
-      <div className='flex flex-wrap items-center gap-x-5 gap-y-2.5 px-4 py-2.5 sm:px-5 sm:py-3'>
-        {/* Title */}
+    <Card size='sm' className='gap-0 py-0'>
+      <CardHeader className='flex flex-wrap items-center gap-x-5 gap-y-2.5 border-b px-4 py-3 sm:px-5'>
         <div className='flex items-center gap-1.5'>
           <IconBadge tone='success' size='xs'>
             <HeartPulse />
           </IconBadge>
-          <span className='text-xs font-semibold whitespace-nowrap'>
+          <CardTitle className='text-xs whitespace-nowrap'>
             {t('Performance health')}
-          </span>
+          </CardTitle>
         </div>
 
-        {/* Separator */}
-        <div className='bg-border hidden h-4 w-px sm:block' />
+        <Separator className='hidden h-4 sm:block' orientation='vertical' />
 
-        {/* 3 KPI inline metrics */}
         {loading ? (
           <div className='flex flex-wrap items-center gap-x-5 gap-y-2'>
             {['success', 'latency', 'throughput'].map((key) => (
@@ -159,10 +161,10 @@ export function PerformanceOverview() {
           </div>
         )}
 
-        {/* Separator */}
-        <div className='bg-border hidden h-4 w-px lg:block' />
+        <Separator className='hidden h-4 lg:block' orientation='vertical' />
+      </CardHeader>
 
-        {/* Top models inline badges */}
+      <CardContent className='px-4 py-3 sm:px-5'>
         {!loading && hasData && (
           <div className='flex flex-wrap items-center gap-1.5'>
             {topModels.map((model) => (
@@ -170,8 +172,8 @@ export function PerformanceOverview() {
             ))}
           </div>
         )}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -206,7 +208,7 @@ function ModelBadge(props: { model: PerfModelSummary }) {
   const model = props.model
 
   return (
-    <span className='bg-muted/50 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1'>
+    <Badge className='max-w-full gap-1.5' variant='secondary'>
       <span className='max-w-[10rem] truncate font-mono text-[11px]'>
         {model.model_name}
       </span>
@@ -225,6 +227,6 @@ function ModelBadge(props: { model: PerfModelSummary }) {
       >
         {formatUptimePct(model.success_rate)}
       </span>
-    </span>
+    </Badge>
   )
 }

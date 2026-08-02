@@ -1,0 +1,124 @@
+{
+  "capture_version": 1,
+  "source": {
+    "revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9",
+    "listener": "isolated Go listener with synthetic SQLite and disposable Valkey",
+    "synthetic": true
+  },
+  "surface": {
+    "route": "/api/option/",
+    "middleware": [
+      "RouteTag(api)",
+      "gzip",
+      "BodyStorageCleanup",
+      "GlobalAPIRateLimit",
+      "RootAuth"
+    ],
+    "authentication": "Authorization bearer token for a synthetic root user"
+  },
+  "shared_response_headers": {
+    "content-type": "application/json; charset=utf-8",
+    "x-new-api-version": "v0.0.0",
+    "x-oneapi-request-id": "<REQUEST_ID>"
+  },
+  "cases": [
+    {
+      "id": "get-anonymous",
+      "request": { "method": "GET", "headers": { "accept": "application/json" }, "body": null },
+      "response": { "status": 401, "headers": {}, "json": { "code": "AUTH_UNAUTHORIZED", "message": "Unauthorized, invalid access token", "success": false } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-anonymous",
+      "request": { "method": "PUT", "headers": { "content-type": "application/json" }, "body": { "key": "SystemName", "value": "Oracle A" } },
+      "response": { "status": 401, "headers": {}, "json": { "code": "AUTH_UNAUTHORIZED", "message": "Unauthorized, invalid access token", "success": false } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "get-root-redacts-sensitive-options",
+      "request": { "method": "GET", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "accept": "application/json" }, "body": null },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": true, "message": "", "data": "option array; excludes theme.frontend and keys suffixed Token, Secret, Key, secret, or api_key; appends CompletionRatioMeta" } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-malformed-json",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": "{" },
+      "response": { "status": 400, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": false, "message": "无效的参数" } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-string-value",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "SystemName", "value": "Oracle A" } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": true, "message": "" } },
+      "effects": { "database": [ "options.SystemName value changes from LMM API to Oracle A", "logs inserts type=3 content=Updated system setting SystemName" ], "valkey": [] }
+    },
+    {
+      "id": "put-replay-is-successful",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "SystemName", "value": "Oracle A" } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": true, "message": "" } },
+      "effects": { "database": [ "options.SystemName remains Oracle A", "logs inserts another type=3 Updated system setting SystemName row" ], "valkey": [] }
+    },
+    {
+      "id": "put-boolean-coerces-to-string",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "DemoSiteEnabled", "value": true } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": true, "message": "" } },
+      "effects": { "database": [ "options.DemoSiteEnabled value changes from false to string true", "logs inserts type=3 Updated system setting DemoSiteEnabled" ], "valkey": [] }
+    },
+    {
+      "id": "put-number-coerces-to-string",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "OracleNumeric", "value": 7.5 } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": true, "message": "" } },
+      "effects": { "database": [ "options inserts OracleNumeric with string value 7.5", "logs inserts type=3 Updated system setting OracleNumeric" ], "valkey": [] }
+    },
+    {
+      "id": "put-rejects-compliance-field",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "payment_setting.compliance_confirmed", "value": true } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": false, "message": "合规确认字段不允许通过通用设置接口修改" } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-github-enable-requires-credentials",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "GitHubOAuthEnabled", "value": true } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": false, "message": "无法启用 GitHub OAuth，请先填入 GitHub Client Id 以及 GitHub Client Secret！" } },
+      "effects": { "database": [ "options.GitHubOAuthEnabled remains false" ], "valkey": [] }
+    },
+    {
+      "id": "put-rejects-retired-theme",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "theme.frontend", "value": "classic" } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": false, "message": "Classic 前端已移除，主题只能设置为 default" } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-rejects-invalid-gemini-safety-json",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "gemini.safety_settings", "value": "not-json" } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": false, "message": "Gemini safety settings must be a JSON string map: invalid character 'o' in literal null (expecting 'u')" } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-rejects-invalid-claude-default-map",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "claude.default_max_tokens", "value": -1 } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": false, "message": "Claude default max tokens must be a JSON map of model to integer: json: cannot unmarshal number into Go value of type map[string]int" } },
+      "effects": { "database": [], "valkey": [] }
+    },
+    {
+      "id": "put-sensitive-key-persists-but-is-not-readable",
+      "request": { "method": "PUT", "headers": { "authorization": "Bearer <SYNTHETIC_ROOT_TOKEN>", "content-type": "application/json" }, "body": { "key": "SecretProbeToken", "value": "<SYNTHETIC_REDACTED_VALUE>" } },
+      "response": { "status": 200, "headers": { "auth-version": "864b7076dbcd0a3c01b5520316720ebf" }, "json": { "success": true, "message": "" } },
+      "effects": { "database": [ "options inserts SecretProbeToken with the supplied synthetic value", "logs inserts type=3 Updated system setting SecretProbeToken", "subsequent root GET excludes SecretProbeToken" ], "valkey": [] }
+    }
+  ],
+  "valkey_baseline": {
+    "created_by_synthetic-login-not-option-route": [
+      "auth:session:<digest>, TTL observed 60 seconds",
+      "user:1, TTL observed 60 seconds",
+      "auth:user:version:1, TTL -1",
+      "rateLimit:v2:ip:CT:::1, TTL observed 1200 seconds"
+    ],
+    "option_route_result": "No option route case added, changed, removed, or refreshed a Valkey key under GLOBAL_API_RATE_LIMIT_ENABLE=false."
+  },
+  "normalization": [
+    { "path": "response.headers.x-oneapi-request-id", "replacement": "<REQUEST_ID>", "reason": "wall-clock and random request id" },
+    { "path": "request.headers.authorization", "replacement": "Bearer <SYNTHETIC_ROOT_TOKEN>", "reason": "never persist access credentials" },
+    { "path": "sensitive option value", "replacement": "<SYNTHETIC_REDACTED_VALUE>", "reason": "capture demonstrates redaction without retaining a value" }
+  ]
+}
