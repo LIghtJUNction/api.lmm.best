@@ -83,7 +83,8 @@ if [[ -d $dropins ]]; then
   cp -a -- "$dropins" "$snapshot/etc/systemd/system/lmm-api.service.d"
 fi
 install -d -m 0700 -- "$snapshot/var/lib/private/lmm-api"
-sqlite3 "$database" ".backup '$snapshot/var/lib/private/lmm-api/one-api.db'"
+sqlite3 -cmd '.timeout 30000' "$database" \
+  ".backup '$snapshot/var/lib/private/lmm-api/one-api.db'"
 [[ $(sqlite3 "$snapshot/var/lib/private/lmm-api/one-api.db" 'PRAGMA quick_check;') == ok ]] || die 'SQLite backup quick_check failed'
 
 pacman -Qi lmm-api-git >"$snapshot/package-info.txt"
