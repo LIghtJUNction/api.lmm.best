@@ -5313,6 +5313,9 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Payment notes": "支付说明",
+    "The amount shown on each card is the platform credit. The actual payment and any discount are calculated for the selected payment method.": "卡片中的金额是平台到账金额，实际支付金额和优惠会根据所选支付方式计算。",
+    "Selected method: {{method}} · Estimated payment: {{amount}} (original {{original}})": "所选方式：{{method}} · 预计支付：{{amount}}（原价 {{original}}）"
   }
 }
