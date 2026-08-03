@@ -594,10 +594,10 @@ impl PgModelsService {
         };
         (user.id == id
             && user.auth_version > 0
-            && !self
+            && self
                 .auth_floor(id)
                 .await
-                .is_some_and(|floor| floor > user.auth_version))
+                .is_none_or(|floor| floor <= user.auth_version))
         .then_some(user)
     }
 

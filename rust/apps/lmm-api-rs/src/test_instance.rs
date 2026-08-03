@@ -561,7 +561,7 @@ fn frozen_dashboard_models() -> Value {
     let fixture = include_str!("../assets/channel-id2models-go-v1.json");
     let digest = Sha256::digest(fixture.as_bytes());
     assert_eq!(
-        format!("{:x}", digest),
+        format!("{digest:x}"),
         FROZEN_DASHBOARD_CHANNEL_MODELS_SHA256,
         "pinned Go channelId2Models fixture changed"
     );

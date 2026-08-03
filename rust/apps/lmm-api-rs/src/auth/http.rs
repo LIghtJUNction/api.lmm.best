@@ -1362,7 +1362,14 @@ mod tests {
 
     #[tokio::test]
     async fn self_rejects_resolved_required_user_policy_failures_without_data() {
-        let cases: [(&str, fn(&mut DashboardUser), StatusCode, &str, &str); 3] = [
+        type SelfPolicyCase = (
+            &'static str,
+            fn(&mut DashboardUser),
+            StatusCode,
+            &'static str,
+            &'static str,
+        );
+        let cases: [SelfPolicyCase; 3] = [
             (
                 "disabled",
                 |user: &mut DashboardUser| user.status = 2,
