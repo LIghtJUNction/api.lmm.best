@@ -786,6 +786,9 @@ fn principal_auth_error(principal: ApiTokenPrincipal) -> Option<PrincipalAuthErr
     None
 }
 
+// This HTTP boundary returns a fully formed Axum response so callers can
+// preserve the legacy status, headers, and localized JSON envelope.
+#[allow(clippy::result_large_err)]
 fn require_principal(
     principal: Option<Extension<ApiTokenPrincipal>>,
     headers: &HeaderMap,

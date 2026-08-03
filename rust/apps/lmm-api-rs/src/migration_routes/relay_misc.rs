@@ -298,6 +298,9 @@ struct ModelRequest {
     stream: Option<bool>,
 }
 
+// Relay authentication failures carry the exact legacy HTTP response through
+// this parsing boundary, including localized payloads and response headers.
+#[allow(clippy::result_large_err)]
 fn request_context(
     protocol: RelayProtocol,
     request: &Request,
@@ -427,6 +430,8 @@ fn not_implemented_response() -> Response {
     response
 }
 
+// The response is intentionally propagated intact to the mounted route.
+#[allow(clippy::result_large_err)]
 fn accepted(outcome: RelayAuth) -> Result<(), Response> {
     match outcome {
         RelayAuth::Authorized => Ok(()),

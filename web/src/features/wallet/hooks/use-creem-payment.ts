@@ -56,7 +56,7 @@ export function useCreemPayment() {
       cancelPaymentCheckout(checkout)
       toast.error(response.message || i18next.t('Payment request failed'))
       return false
-    } catch (_error) {
+    } catch {
       if (checkout) cancelPaymentCheckout(checkout)
       toast.error(i18next.t('Payment request failed'))
       return false
