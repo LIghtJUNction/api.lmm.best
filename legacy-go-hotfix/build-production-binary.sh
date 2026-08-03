@@ -2,10 +2,11 @@
 set -euo pipefail
 
 readonly BASE_COMMIT='3e39995a092f960882db6bf455b371d32591dc47'
-readonly RELEASE_VERSION='0.1.0.r29.g3e39995.payrate2'
+readonly RELEASE_VERSION='0.1.0.r30.g3e39995.bounty1'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PATCH_FILE="$SCRIPT_DIR/channel-pricing.patch"
+BOUNTY_PATCH_FILE="$SCRIPT_DIR/open-source-bounties.patch"
 OUT_DIR="$SCRIPT_DIR/out"
 WEB_DIST=''
 
@@ -34,6 +35,7 @@ done
 [[ -n "$WEB_DIST" ]] || { usage; exit 2; }
 [[ -d "$WEB_DIST" ]] || { printf 'web dist is not a directory: %s\n' "$WEB_DIST" >&2; exit 1; }
 [[ -f "$PATCH_FILE" ]] || { printf 'missing patch: %s\n' "$PATCH_FILE" >&2; exit 1; }
+[[ -f "$BOUNTY_PATCH_FILE" ]] || { printf 'missing patch: %s\n' "$BOUNTY_PATCH_FILE" >&2; exit 1; }
 
 SOURCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lmm-channel-pricing-build.XXXXXX")"
 OUTPUT_TMP=''
@@ -48,6 +50,8 @@ trap cleanup EXIT
 git -C "$REPO_DIR" archive "$BASE_COMMIT" | tar -x -C "$SOURCE_DIR"
 git -C "$SOURCE_DIR" apply --check "$PATCH_FILE"
 git -C "$SOURCE_DIR" apply "$PATCH_FILE"
+git -C "$SOURCE_DIR" apply --check "$BOUNTY_PATCH_FILE"
+git -C "$SOURCE_DIR" apply "$BOUNTY_PATCH_FILE"
 mkdir -p "$SOURCE_DIR/web/dist"
 cp -a -- "$WEB_DIST/." "$SOURCE_DIR/web/dist/"
 
