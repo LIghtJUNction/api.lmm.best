@@ -647,7 +647,11 @@ fn parse_pay(headers: &HeaderMap, body: &[u8], query: Option<&str>) -> Result<Pa
     // Gin chooses its binder from Content-Type; an unlabelled JSON-looking
     // body is treated as a form, while an invalid JSON body is not reparsed as
     // form data.
-    let form = (!json_body).then(|| parse_form(body)).unwrap_or_default();
+    let form = if !json_body {
+        parse_form(body)
+    } else {
+        Default::default()
+    };
     if amount <= 0.0 {
         amount = form
             .get("amount")
@@ -922,7 +926,7 @@ fn decimal_parts(rendered: &str) -> (String, i32) {
         .strip_prefix('-')
         .map_or((false, rendered), |value| (true, value));
     if rendered == "0" {
-        return ((negative.then_some("-0").unwrap_or("0")).into(), 0);
+        return (if negative { "-0" } else { "0" }.into(), 0);
     }
     let (whole, fraction) = rendered.split_once('.').unwrap_or((rendered, ""));
     let digits = format!("{whole}{fraction}");
