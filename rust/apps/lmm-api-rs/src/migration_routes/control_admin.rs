@@ -1338,14 +1338,14 @@ async fn oauth_discovery(State(state): State<ControlAdminState>, request: Reques
 }
 
 fn discovery_error_message(message: String) -> String {
-    if message.starts_with("获取 Discovery 配置失败:")
-        || message.starts_with("创建 Discovery 请求失败:")
-        || message.starts_with("解析 Discovery 配置失败:")
+    if [
+        "获取 Discovery 配置失败:",
+        "创建 Discovery 请求失败",
+        "解析 Discovery 配置失败",
+    ]
+    .iter()
+    .any(|prefix| message.starts_with(prefix))
     {
-        message
-    } else if message.starts_with("创建 Discovery 请求失败") {
-        message
-    } else if message.starts_with("解析 Discovery 配置失败") {
         message
     } else {
         format!("获取 Discovery 配置失败: {message}")

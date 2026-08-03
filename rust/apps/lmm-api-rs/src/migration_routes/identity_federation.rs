@@ -1190,7 +1190,7 @@ async fn oauth_callback_inner(
         return failure(StatusCode::BAD_REQUEST, "unknown OAuth provider");
     }
     let state_token = query.state.trim();
-    let pending = match load_flow(&state, state_token, &provider).await {
+    let pending = match load_flow(state, state_token, &provider).await {
         Ok(Some(flow)) => flow,
         Ok(None) => return failure(StatusCode::FORBIDDEN, "OAuth state is invalid"),
         Err(_) => return failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
@@ -1946,13 +1946,15 @@ async fn telegram_bind(
     };
     match commit_telegram_bind(
         &state,
-        &hash,
-        user_id,
-        &session_id,
-        assertion,
-        &subject,
-        now,
-        assertion_expires_at,
+        TelegramBindCommit {
+            flow_hash: &hash,
+            user_id,
+            session_id: &session_id,
+            assertion,
+            subject: &subject,
+            now,
+            assertion_expires_at,
+        },
     )
     .await
     {
@@ -2073,16 +2075,29 @@ async fn claim_telegram_assertion(
         .ok_or(FederationError::Unauthorized)
 }
 
-async fn commit_telegram_bind(
-    state: &FederationState,
-    flow_hash: &str,
+struct TelegramBindCommit<'a> {
+    flow_hash: &'a str,
     user_id: i64,
-    session_id: &str,
-    assertion: &str,
-    subject: &str,
+    session_id: &'a str,
+    assertion: &'a str,
+    subject: &'a str,
     now: i64,
     assertion_expires_at: i64,
+}
+
+async fn commit_telegram_bind(
+    state: &FederationState,
+    commit: TelegramBindCommit<'_>,
 ) -> Result<(), TelegramBindError> {
+    let TelegramBindCommit {
+        flow_hash,
+        user_id,
+        session_id,
+        assertion,
+        subject,
+        now,
+        assertion_expires_at,
+    } = commit;
     let mut tx = state
         .pool
         .begin()

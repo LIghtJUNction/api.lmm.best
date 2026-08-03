@@ -174,6 +174,26 @@ export const STATIC_I18N_KEYS = [
   'Technical Support',
   'Professional team providing 24/7 technical support',
 
+  // Support ticket
+  'Refund request',
+  'Request a refund for an eligible payment.',
+  'Invoice request',
+  'Ask for an invoice or billing document.',
+  'Technical support',
+  'Get help with API errors or integration issues.',
+  'Billing issue',
+  'Report an incorrect charge or balance.',
+  'Account & access',
+  'Get help signing in or managing account access.',
+  'Other request',
+  'Contact support about something else.',
+  'Enter a valid contact email',
+  'Reference ID is too long',
+  'Subject must be at least 4 characters',
+  'Subject must be at most 100 characters',
+  'Details must be at least 20 characters',
+  'Details must be at most 1200 characters',
+
   // User management (interpolated keys)
   'Remaining Quota ({{currency}})',
   'Enter quota in tokens',

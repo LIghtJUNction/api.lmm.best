@@ -581,7 +581,7 @@ async fn aff_transfer(State(state): State<IdentityCheckinAffState>, request: Req
     if (body.quota as f64) < qpu {
         return fail(transfer_failure_message(
             &headers,
-            format!("转移额度最小为{}！", qpu),
+            format!("转移额度最小为{qpu}！"),
         ));
     }
     let mut tx = match state.pg.begin().await {
