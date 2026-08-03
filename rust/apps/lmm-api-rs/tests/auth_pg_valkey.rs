@@ -178,7 +178,10 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
             .fetch_one(&pool)
             .await
             .expect("login metadata remains authoritative after refresh");
-    assert_eq!(persisted_metadata, ("127.0.0.1".to_owned(), "integration-login".to_owned()));
+    assert_eq!(
+        persisted_metadata,
+        ("127.0.0.1".to_owned(), "integration-login".to_owned())
+    );
     let cache_metadata: Vec<Option<String>> = redis::cmd("HMGET")
         .arg(&keys[0])
         .arg("IP")

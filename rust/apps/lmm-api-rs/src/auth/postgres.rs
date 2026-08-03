@@ -1099,7 +1099,7 @@ return {0, ttl}
             user,
             next_secret,
         )
-            .await
+        .await
     }
 
     async fn self_user(&self, access_token: SecretString) -> Result<DashboardUser, AuthError> {

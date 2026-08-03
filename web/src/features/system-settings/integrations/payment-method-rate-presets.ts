@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 const MAXIMUM_FRACTION_DIGITS = 12
 const POSITIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
 
