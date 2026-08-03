@@ -43,10 +43,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.sha }}
 
-      - name: Install PostgreSQL client and JSON tooling
+      - name: Install PostgreSQL client and repository tooling
         run: |
           sudo apt-get update
-          sudo apt-get install --yes postgresql-client jq
+          sudo apt-get install --yes postgresql-client jq ripgrep
 
       - name: Set up pinned Rust toolchain
         run: |
