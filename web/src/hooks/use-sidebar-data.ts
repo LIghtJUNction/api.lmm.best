@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Activity,
   Box,
+  Bug,
   CreditCard,
   FileText,
   FlaskConical,
@@ -118,6 +119,11 @@ export function useSidebarData(): SidebarData {
             title: t('Submit a ticket'),
             url: '/support',
             icon: LifeBuoy,
+          },
+          {
+            title: t('Open-source bounties'),
+            url: '/open-source-bounties',
+            icon: Bug,
           },
         ],
       },

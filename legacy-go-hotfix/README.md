@@ -1,5 +1,23 @@
 # Legacy Go channel-pricing hotfix
 
+This hotfix bundle also includes `open-source-bounties.patch`, which adds the
+production API and database models for the “开源悬赏” lifecycle. The same
+authenticated balance rules apply to every publisher, including root users:
+
+- drafts do not charge balance;
+- publishing burns the chosen promotion quota and escrows every advertised
+  reward slot from the publisher's own balance;
+- contributors accept a challenge and submit matching GitHub Issue/PR links;
+- the publisher approves or rejects the submission;
+- approval transfers the escrowed reward directly to the contributor balance;
+- closing is blocked while challenges are active, then refunds only unused
+  escrow; promotion spend is non-refundable;
+- no project is inserted or promoted by default.
+
+The patch creates an append-only bounty ledger alongside project and challenge
+state so every promotion spend, escrow funding, reward transfer, and refund is
+auditable.
+
 This directory is a self-contained, reproducible production hotfix for the Go
 baseline `3e39995a092f960882db6bf455b371d32591dc47`. It deliberately does not
 touch the active Rust or Web migration worktree.

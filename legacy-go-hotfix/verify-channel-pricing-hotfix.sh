@@ -5,6 +5,7 @@ readonly BASE_COMMIT='3e39995a092f960882db6bf455b371d32591dc47'
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PATCH_FILE="$SCRIPT_DIR/channel-pricing.patch"
+BOUNTY_PATCH_FILE="$SCRIPT_DIR/open-source-bounties.patch"
 WEB_DIST=''
 
 usage() {
@@ -30,6 +31,7 @@ while (($# > 0)); do
 done
 
 [[ -f "$PATCH_FILE" ]] || { printf 'missing patch: %s\n' "$PATCH_FILE" >&2; exit 1; }
+[[ -f "$BOUNTY_PATCH_FILE" ]] || { printf 'missing patch: %s\n' "$BOUNTY_PATCH_FILE" >&2; exit 1; }
 if [[ -n "$WEB_DIST" && ! -d "$WEB_DIST" ]]; then
   printf 'web dist is not a directory: %s\n' "$WEB_DIST" >&2
   exit 1
@@ -42,6 +44,8 @@ trap cleanup EXIT
 git -C "$REPO_DIR" archive "$BASE_COMMIT" | tar -x -C "$SOURCE_DIR"
 git -C "$SOURCE_DIR" apply --check "$PATCH_FILE"
 git -C "$SOURCE_DIR" apply "$PATCH_FILE"
+git -C "$SOURCE_DIR" apply --check "$BOUNTY_PATCH_FILE"
+git -C "$SOURCE_DIR" apply "$BOUNTY_PATCH_FILE"
 
 if [[ -n "$WEB_DIST" ]]; then
   mkdir -p "$SOURCE_DIR/web/dist"
@@ -51,7 +55,9 @@ fi
 (
   cd "$SOURCE_DIR"
   go test ./controller -run 'TestQuoteTopUp|TestValidateEpayCallback' -count=1
+  go test ./model -run 'Test(OpenSourceBounty|CloseOpenSourceBounty|PublishOpenSourceBounty|SubmitOpenSourceBounty)' -count=1
+  go test ./router -run '^$'
   go build ./controller
 )
 
-printf 'channel-pricing hotfix verified against %s\n' "$BASE_COMMIT"
+printf 'channel-pricing and open-source bounty hotfixes verified against %s\n' "$BASE_COMMIT"
