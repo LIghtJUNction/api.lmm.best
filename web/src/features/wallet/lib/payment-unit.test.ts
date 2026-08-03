@@ -22,6 +22,7 @@ import { describe, test } from 'node:test'
 import {
   formatPaymentSettlementRate,
   formatSettlementAmount,
+  getPaymentTopupRatio,
   getPaymentSettlementUnit,
 } from './payment-unit'
 
@@ -107,6 +108,7 @@ describe('payment settlement units', () => {
 
       assert.equal(getPaymentSettlementUnit(method), null)
       assert.equal(formatPaymentSettlementRate(method), null)
+      assert.equal(getPaymentTopupRatio({ ...method, topup_ratio: '0.5' }), 1)
     }
   })
 
@@ -129,5 +131,31 @@ describe('payment settlement units', () => {
       }),
       '1.2345 TOKEN / USD'
     )
+  })
+
+  test('normalizes a per-method top-up multiplier with a backward-compatible default', () => {
+    assert.equal(
+      getPaymentTopupRatio({
+        name: 'LINUX DO Credit',
+        topup_ratio: '0.5',
+        type: 'epay',
+      }),
+      0.5
+    )
+    assert.equal(
+      getPaymentTopupRatio({ name: 'Legacy method', type: 'alipay' }),
+      1
+    )
+
+    for (const topupRatio of ['0', '-1', '1e2', ' 2 ', 'NaN']) {
+      assert.equal(
+        getPaymentTopupRatio({
+          name: 'Invalid method',
+          topup_ratio: topupRatio,
+          type: 'epay',
+        }),
+        1
+      )
+    }
   })
 })
