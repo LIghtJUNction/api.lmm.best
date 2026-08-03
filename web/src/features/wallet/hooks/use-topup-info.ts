@@ -81,6 +81,11 @@ function parsePaymentMethods(
           typeof item.unit_price === 'number'
             ? item.unit_price
             : undefined,
+        topup_ratio:
+          typeof item.topup_ratio === 'string' ||
+          typeof item.topup_ratio === 'number'
+            ? item.topup_ratio
+            : undefined,
         min_topup:
           type === 'stripe' && normalizedMinTopup <= 0
             ? stripeMinTopup
