@@ -8,10 +8,10 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly SCRIPT_DIR
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../../.." && pwd -P)
 readonly REPO_ROOT
-readonly MANIFEST_PATH="$REPO_ROOT/rust/Cargo.toml"
-readonly CRATE_BINARY="$REPO_ROOT/rust/target/release/lmm-api-rs"
-readonly MIGRATOR_BINARY="$REPO_ROOT/rust/target/release/lmm-db-migrate"
-readonly FRONTEND_DIST="$REPO_ROOT/web/dist"
+readonly MANIFEST_PATH="$REPO_ROOT/apps/api-rust/Cargo.toml"
+readonly CRATE_BINARY="$REPO_ROOT/apps/api-rust/target/release/lmm-api-rs"
+readonly MIGRATOR_BINARY="$REPO_ROOT/apps/api-rust/target/release/lmm-db-migrate"
+readonly FRONTEND_DIST="$REPO_ROOT/apps/web/dist"
 readonly MANIFEST_BUILDER="$SCRIPT_DIR/build-source-manifest.sh"
 
 # These arrays are the package contract. Keep them explicit: adding a whole
@@ -32,13 +32,13 @@ readonly FALLBACK_ASSETS=(
   deploy/backend-rust/README-sanitized-test-schema.md
 )
 readonly MIGRATION_ASSETS=(
-  rust/crates/lmm-db-migrate/schema/table-map.json
-  rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql
-  rust/crates/lmm-db-migrate/schema/export-postgres-catalog.sql
-  rust/migrations/0001_schema_contract.sql
-  rust/crates/lmm-db-migrate/schema/provenance.json
-  rust/legacy/go-provenance.json
-  rust/routes/legacy-go-routes.tsv
+  apps/api-rust/crates/lmm-db-migrate/schema/table-map.json
+  apps/api-rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql
+  apps/api-rust/crates/lmm-db-migrate/schema/export-postgres-catalog.sql
+  apps/api-rust/migrations/0001_schema_contract.sql
+  apps/api-rust/crates/lmm-db-migrate/schema/provenance.json
+  apps/api-rust/legacy/go-provenance.json
+  apps/api-rust/routes/legacy-go-routes.tsv
 )
 
 die() {
@@ -93,13 +93,13 @@ for required_asset in "${FALLBACK_ASSETS[@]}" "${MIGRATION_ASSETS[@]}"; do
   path="$REPO_ROOT/$required_asset"
   [[ -f $path && ! -L $path ]] || die "required packaging asset is missing or unsafe: $required_asset"
 done
-[[ -d $FRONTEND_DIST && ! -L $FRONTEND_DIST ]] || die 'web/dist is missing or unsafe'
+[[ -d $FRONTEND_DIST && ! -L $FRONTEND_DIST ]] || die 'apps/web/dist is missing or unsafe'
 
 if find -P "$FRONTEND_DIST" -type l -print -quit | grep -q .; then
   die "source tree must not contain symlinks: $FRONTEND_DIST"
 fi
-if find -P "$REPO_ROOT/rust" -type d -name target -prune -o -type l -print -quit | grep -q .; then
-  die "source tree must not contain symlinks outside target directories: $REPO_ROOT/rust"
+if find -P "$REPO_ROOT/apps/api-rust" -type d -name target -prune -o -type l -print -quit | grep -q .; then
+  die "source tree must not contain symlinks outside target directories: $REPO_ROOT/apps/api-rust"
 fi
 
 for command in awk cargo find install makepkg sha256sum stat tar; do
@@ -127,16 +127,16 @@ manifest_args=(
   --root "$REPO_ROOT"
   --output "$source_manifest"
   --sha256-output "$source_manifest_sha"
-  --path rust
-  --exclude rust/target
-  --path rust/Cargo.toml
-  --path rust/Cargo.lock
-  --path web/dist
+  --path apps/api-rust
+  --exclude apps/api-rust/target
+  --path apps/api-rust/Cargo.toml
+  --path apps/api-rust/Cargo.lock
+  --path apps/web/dist
 )
 while IFS= read -r -d '' target_dir; do
   target_relative=${target_dir#"$REPO_ROOT/"}
   manifest_args+=(--exclude "$target_relative")
-done < <(find -P "$REPO_ROOT/rust" -type d -name target -print0)
+done < <(find -P "$REPO_ROOT/apps/api-rust" -type d -name target -print0)
 for path in "${FALLBACK_ASSETS[@]}" "${MIGRATION_ASSETS[@]}"; do
   manifest_args+=(--path "$path")
 done
@@ -180,7 +180,7 @@ tar_args=(
   -C "$REPO_ROOT"
   -cf "$build_dir/selected-fallback-assets.tar"
 )
-tar_args+=("${FALLBACK_ASSETS[@]}" "${MIGRATION_ASSETS[@]}" web/dist)
+tar_args+=("${FALLBACK_ASSETS[@]}" "${MIGRATION_ASSETS[@]}" apps/web/dist)
 tar "${tar_args[@]}"
 
 install -Dm0644 "$SCRIPT_DIR/PKGBUILD" "$build_dir/PKGBUILD"

@@ -1,88 +1,105 @@
-# Rust backend for frontend development. PostgreSQL and Valkey must already exist and the
-# versioned application schema must already have been installed by lmm-db-migrate.
 services:
-  postgres-preflight:
+  postgres:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-    restart: "no"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        result="$$(psql -XAt -v ON_ERROR_STOP=1 \
-          --set=schema="$$LMM_DATABASE_SCHEMA" \
-          --set=contract="$$LMM_SCHEMA_CONTRACT" \
-          -c "SELECT (current_setting('server_version_num')::int BETWEEN 180000 AND 189999 AND current_schema() = :'schema' AND EXISTS (SELECT 1 FROM :\"schema\".lmm_schema_contract WHERE singleton AND :'contract'::bigint BETWEEN min_reader_version AND max_reader_version AND :'contract'::bigint BETWEEN min_writer_version AND max_writer_version))::int")"
-        [ "$$result" = 1 ]
     environment:
-      PGDATABASE: ${DATABASE_URL:?set the complete migrated PostgreSQL DATABASE_URL in .env}
-      LMM_DATABASE_SCHEMA: ${LMM_DATABASE_SCHEMA:?set a versioned LMM_DATABASE_SCHEMA in .env}
-      LMM_SCHEMA_CONTRACT: ${LMM_SCHEMA_CONTRACT:?set LMM_SCHEMA_CONTRACT in .env}
-    read_only: true
-    tmpfs:
-      - /tmp:size=8m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+      POSTGRES_DB: ${POSTGRES_DB:-lmm_api_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-lmm_api}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [lmm-api-dev]
 
-  valkey-preflight:
+  valkey:
     image: valkey/valkey:8-alpine@sha256:a038175878d66b9d274fbf8be73c0305e93798b83917647f167e18cef3c71eec
-    restart: "no"
-    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - |
-        result="$$(valkey-cli --no-auth-warning -u "$$VALKEY_URL" PING)"
-        [ "$$result" = PONG ]
+      - valkey-server
+      - --requirepass
+      - ${VALKEY_PASSWORD:?set VALKEY_PASSWORD in .env}
     environment:
-      VALKEY_URL: ${VALKEY_URL:?set the complete dedicated Valkey URL in .env}
-    read_only: true
-    tmpfs:
-      - /tmp:size=8m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:?set VALKEY_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli --no-auth-warning -a \"$${VALKEY_PASSWORD}\" ping | grep -qx PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [lmm-api-dev]
 
-  lmm-api-rs:
+  lmm-api-go:
     build:
       context: .
       dockerfile: Dockerfile.dev
-      args:
-        LMM_BUILD_REVISION: ${LMM_BUILD_REVISION:-development}
-    image: lmm-api-rs-dev:local
+    image: lmm-api-go-dev:local
     restart: unless-stopped
     init: true
-    stop_grace_period: 45s
     ports:
       - "${LMM_API_BIND_ADDRESS:-127.0.0.1}:${LMM_API_PORT:-3000}:3000"
     environment:
-      DATABASE_URL: ${DATABASE_URL:?set the complete migrated PostgreSQL DATABASE_URL in .env}
-      VALKEY_URL: ${VALKEY_URL:?set the complete dedicated Valkey URL in .env}
-      LMM_DATABASE_SCHEMA: ${LMM_DATABASE_SCHEMA:?set a versioned LMM_DATABASE_SCHEMA in .env}
-      LMM_SCHEMA_CONTRACT: ${LMM_SCHEMA_CONTRACT:?set LMM_SCHEMA_CONTRACT in .env}
-      LMM_RS_LISTEN_ADDR: 0.0.0.0:3000
-      LMM_RS_SLOT: ${LMM_RS_SLOT:-blue}
-      LMM_DEPENDENCY_TIMEOUT_SECONDS: ${LMM_DEPENDENCY_TIMEOUT_SECONDS:-2}
-      LMM_DRAIN_TIMEOUT_SECONDS: ${LMM_DRAIN_TIMEOUT_SECONDS:-30}
-      LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS: ${LMM_PUBLIC_CONTENT_CACHE_TTL_SECONDS:-5}
-      GLOBAL_API_RATE_LIMIT_ENABLE: ${GLOBAL_API_RATE_LIMIT_ENABLE:-true}
-      GLOBAL_API_RATE_LIMIT: ${GLOBAL_API_RATE_LIMIT:-360}
-      GLOBAL_API_RATE_LIMIT_DURATION: ${GLOBAL_API_RATE_LIMIT_DURATION:-180}
+      SQL_DSN: ${SQL_DSN:?set a PostgreSQL SQL_DSN in .env}
+      REDIS_CONN_STRING: ${VALKEY_URL:?set the Valkey URL in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      CRYPTO_SECRET: ${CRYPTO_SECRET:?set CRYPTO_SECRET in .env}
+      SESSION_COOKIE_SECURE: "false"
+      PORT: "3000"
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
-      postgres-preflight:
-        condition: service_completed_successfully
-      valkey-preflight:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/api/status"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+    volumes:
+      - go_dev_data:/data
+    networks: [lmm-api-dev]
+
+  lmm-api-rs-preview:
+    profiles: [rust-preview]
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
+      args:
+        LMM_BUILD_REVISION: development
+    image: lmm-api-rs-preview-dev:local
+    ports:
+      - "${LMM_RS_PREVIEW_BIND_ADDRESS:-127.0.0.1}:${LMM_RS_PREVIEW_PORT:-3001}:3000"
+    environment:
+      DATABASE_URL: ${LMM_RS_PREVIEW_DATABASE_URL:-}
+      VALKEY_URL: ${LMM_RS_PREVIEW_VALKEY_URL:-}
+      LMM_DATABASE_SCHEMA: ${LMM_RS_PREVIEW_SCHEMA:-lmm_preview_dev_v1}
+      LMM_SCHEMA_CONTRACT: ${LMM_RS_PREVIEW_SCHEMA_CONTRACT:-1}
+      LMM_RS_LISTEN_ADDR: 0.0.0.0:3000
+      LMM_RS_SLOT: preview
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        case "$$LMM_DATABASE_SCHEMA" in
+          lmm_preview_*) ;;
+          *) echo "Rust preview requires an lmm_preview_* schema" >&2; exit 78 ;;
+        esac
+        test -n "$$DATABASE_URL" || { echo "LMM_RS_PREVIEW_DATABASE_URL is required" >&2; exit 78; }
+        test -n "$$VALKEY_URL" || { echo "LMM_RS_PREVIEW_VALKEY_URL is required" >&2; exit 78; }
+        exec /usr/local/bin/lmm-api-rs
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/readyz"]
       interval: 10s
       timeout: 3s
       start_period: 10s
       retries: 5
-    read_only: true
-    tmpfs:
-      - /tmp:size=16m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    networks: [lmm-api-dev]
+
+volumes:
+  postgres_dev_data:
+  go_dev_data:
+
+networks:
+  lmm-api-dev:
+    driver: bridge
