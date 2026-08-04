@@ -1,6 +1,6 @@
 <div align="center">
 
-![lmm.best.api](./web/public/logo.png)
+![lmm.best.api](./apps/web/public/logo.png)
 
 # lmm.best.api
 
@@ -39,7 +39,15 @@ Applications and SDKs
 Authorized upstream model services
 ```
 
-The Go service serves both the API and the embedded React web application. The frontend lives in [`web/`](./web), while request handling is organized across [`router/`](./router), [`middleware/`](./middleware), [`controller/`](./controller), [`service/`](./service), and [`relay/`](./relay).
+The repository provides two selectable backends and one shared frontend. Go is the default production backend; Rust is an explicit preview and does not replace the Go image, release, or `latest` tag.
+
+| Path | Role |
+| --- | --- |
+| [`apps/api-go`](./apps/api-go) | Default production backend; embeds the verified frontend build |
+| [`apps/api-rust`](./apps/api-rust) | Optional Rust preview backend and migration/oracle tooling |
+| [`apps/web`](./apps/web) | Shared React frontend used by both backend selections |
+
+The default development and Compose infrastructure is PostgreSQL plus Valkey. The Go backend still preserves the upstream New API database compatibility described below.
 
 ## Capabilities
 
@@ -50,13 +58,13 @@ The Go service serves both the API and the embedded React web application. The f
 | Governance | Users, groups, API keys, model restrictions, quotas, rate limits, and administrative permissions |
 | Operations | Usage logs, dashboards, channel testing, health information, cost accounting, and multi-instance operation |
 | Identity | Password login plus configurable OIDC, Discord, Linux DO, and Telegram authentication |
-| Storage | SQLite for simple deployments; MySQL or PostgreSQL for shared deployments; optional Redis caching and shared limits |
+| Storage | PostgreSQL plus Valkey by default; upstream-compatible SQLite/MySQL support remains in the Go backend |
 
 Provider-specific behavior changes over time. Verify the route and model you need against the implementation and the [upstream New API documentation](https://docs.newapi.pro/en/docs) before production rollout.
 
 ## Quick start
 
-The checked-in Compose file currently runs the upstream `calciumion/new-api:latest` image with PostgreSQL and Redis. It is useful for evaluating the compatible baseline; build and publish this fork yourself when you need fork-specific changes.
+The checked-in Compose file builds this repository's default Go image and starts PostgreSQL plus Valkey. The Rust service is isolated behind the explicit `rust-preview` profile.
 
 ```bash
 git clone https://github.com/LIghtJUNction/api.lmm.best.git
@@ -70,26 +78,35 @@ Open <http://localhost:3000> and follow the setup flow. Check service health wit
 
 ```bash
 curl http://localhost:3000/api/status
-docker compose logs -f new-api
+docker compose logs -f lmm-api-go
 ```
 
-Persistent PostgreSQL data uses the `pg_data` volume. Application data and logs are mounted at `./data` and `./logs` by the Compose service.
+Persistent data uses the `postgres_data`, `valkey_data`, and `go_data` volumes.
 
 ## Build this fork
 
-Requirements are Go (see [`go.mod`](./go.mod)) and Bun for the web application.
+Install Go, Bun, Docker Compose, and [`just`](https://just.systems/), then use the repository recipes:
 
 ```bash
-cd web
-bun install
-bun run build
-cd ..
-
-go build -o new-api .
-./new-api
+just setup
+just dev
+just test
+just build
+just run
 ```
 
-The Go binary embeds `web/dist`, so build the frontend before compiling the final executable. For available development and quality commands, see [`web/package.json`](./web/package.json) and the root [`makefile`](./makefile).
+`just build` creates `apps/web/dist`, synchronizes it into `apps/api-go/web/dist`, and builds the static Go executable at `apps/api-go/out/lmm-api`. Use `just docker` and `just package` for the default Go image and package.
+
+Rust remains opt-in:
+
+```bash
+just dev-rust
+just test-rust
+just build-rust
+just docker-rust
+```
+
+These commands produce preview artifacts only. They do not change the default backend or production release ownership.
 
 ## Configuration and production safety
 

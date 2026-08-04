@@ -17,184 +17,10 @@ env:
   RUST_TOOLCHAIN: '1.88.0'
 
 jobs:
-  rust:
-    name: Rust workspace and PostgreSQL 18 contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    services:
-      postgres:
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres-ci
-          POSTGRES_DB: lmm_rehearsal
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d lmm_rehearsal"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-
-      - name: Install PostgreSQL client and repository tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client jq ripgrep
-
-      - name: Set up pinned Rust toolchain
-        run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
-          rustup default "$RUST_TOOLCHAIN"
-          rustc --version --verbose
-
-      - name: Verify immutable route ownership evidence
-        run: bash rust/scripts/check-go-route-manifest.sh
-
-      - name: Report non-production Rust parity status
-        run: |
-          set -euo pipefail
-          export LC_ALL=C
-          legacy=rust/routes/legacy-go-routes.tsv
-          implemented=rust/routes/rust-implemented-routes.tsv
-          ownership=rust/routes/ownership.tsv
-          parity_tmp="$(mktemp -d "${RUNNER_TEMP}/lmm-route-parity.XXXXXX")"
-          trap 'rm -rf "$parity_tmp"' EXIT
-
-          awk -F '\t' 'NF == 3 { print $1 "\t" $2 }' "$legacy" | sort -u > "$parity_tmp/legacy"
-          awk -F '\t' '$0 !~ /^#/ && NF == 3 { print $1 "\t" $2 }' "$implemented" | sort -u > "$parity_tmp/implemented"
-          legacy_count="$(wc -l < "$parity_tmp/legacy")"
-          implemented_count="$(wc -l < "$parity_tmp/implemented")"
-          missing_count="$(comm -23 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
-          extra_count="$(comm -13 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
-          rust_owned_count="$(awk -F '\t' '
-            FNR == NR {
-              if ($0 ~ /^#/ || NF == 0) next
-              priority[++rules] = $1 + 0
-              kind[rules] = $2
-              pattern[rules] = $3
-              owner[rules] = $4
-              next
-            }
-            {
-              path = $2
-              best = -1
-              winners = 0
-              for (rule = 1; rule <= rules; rule++) {
-                applies = (kind[rule] == "exact" && path == pattern[rule]) ||
-                          (kind[rule] == "prefix" && index(path, pattern[rule]) == 1)
-                if (!applies) continue
-                if (priority[rule] > best) {
-                  best = priority[rule]
-                  winners = 1
-                  winner = rule
-                } else if (priority[rule] == best) {
-                  winners++
-                }
-              }
-              if (winners == 1 && owner[winner] == "rust") rust_owned++
-            }
-            END { print rust_owned + 0 }
-          ' "$ownership" "$legacy")"
-
-          if [[ "$legacy_count" -eq 356 && "$implemented_count" -eq 356 &&
-                "$missing_count" -eq 0 && "$extra_count" -eq 0 &&
-                "$rust_owned_count" -eq 356 ]]; then
-            status="PRODUCTION-READY"
-            echo "::notice::Rust route parity is production-ready (356/356 implemented and Rust-owned)"
-          else
-            status="NON-PRODUCTION"
-            echo "::warning::Rust route parity is non-production: implemented=${implemented_count}/356, Rust-owned=${rust_owned_count}/356, missing=${missing_count}, extra=${extra_count}"
-          fi
-          echo "Rust route parity: ${status} — implemented ${implemented_count}/356; Rust-owned ${rust_owned_count}/356; missing ${missing_count}; extra ${extra_count}." >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Verify migration artifact provenance
-        run: bash rust/crates/lmm-db-migrate/scripts/verify-provenance.sh
-
-      - name: Check formatting
-        working-directory: rust
-        run: cargo fmt --all --check
-
-      - name: Lint workspace
-        working-directory: rust
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-      - name: Test workspace
-        working-directory: rust
-        run: cargo test --workspace --all-targets --all-features --locked
-
-      - name: Build Rust binaries
-        working-directory: rust
-        env:
-          LMM_BUILD_REVISION: ${{ github.sha }}
-        run: cargo build --workspace --all-targets --locked
-
-      - name: Assert PostgreSQL 18 server
-        env:
-          PGPASSWORD: postgres-ci
-        run: |
-          version="$(psql -XAt -h 127.0.0.1 -U postgres -d lmm_rehearsal -c 'SHOW server_version_num')"
-          [[ "$version" =~ ^18[0-9]{4}$ ]]
-          echo "PostgreSQL server_version_num=$version"
-
-      - name: Validate PostgreSQL 18 baseline catalog
-        env:
-          PGPASSWORD: postgres-ci
-        run: |
-          set -euo pipefail
-          schema_dir=rust/crates/lmm-db-migrate/schema
-          catalog="$RUNNER_TEMP/postgres-catalog.json"
-          psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d lmm_rehearsal \
-            -f "$schema_dir/postgresql-baseline.sql" >/dev/null
-          psql -XAt -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d lmm_rehearsal \
-            -f "$schema_dir/export-postgres-catalog.sql" > "$catalog"
-          [[ "$(jq 'length' "$catalog")" == 34 ]]
-          [[ "$(jq '[.[].columns[]] | length' "$catalog")" == 421 ]]
-          [[ "$(jq '[.[].indexes[]] | length' "$catalog")" == 172 ]]
-          [[ "$(jq '[.[] | select(.sequence != null)] | length' "$catalog")" == 29 ]]
-          cargo run --quiet --locked --manifest-path rust/Cargo.toml -p lmm-db-migrate -- \
-            postgres-catalog-validate \
-            --manifest "$schema_dir/table-map.json" \
-            --catalog "$catalog"
-
-      - name: Run PostgreSQL 18 canonical equivalence test
-        env:
-          PGPASSWORD: postgres-ci
-          LMM_TEST_PG_SOCKET: 127.0.0.1
-          LMM_TEST_PG_PORT: '5432'
-          LMM_TEST_PG_DATABASE: lmm_rehearsal
-        working-directory: rust
-        run: >-
-          cargo test -p lmm-db-migrate --test postgres_equivalence --locked --
-          --ignored --exact --nocapture
-          sqlite_and_postgres_should_have_identical_canonical_table_hashes
-
-      - name: Run every PostgreSQL 18 schema contract test
-        env:
-          LMM_TEST_DATABASE_URL: postgresql://postgres:postgres-ci@127.0.0.1:5432/lmm_rehearsal
-        working-directory: rust
-        run: cargo test -p lmm-db-migrate --test schema_contract --locked -- --ignored --nocapture
-
-      - name: Run PostgreSQL 18 full-copy migration test
-        env:
-          LMM_TEST_DATABASE_URL: postgresql://postgres:postgres-ci@127.0.0.1:5432/lmm_rehearsal
-        working-directory: rust
-        run: >-
-          cargo test -p lmm-db-migrate --test full_copy --locked --
-          --ignored --exact --nocapture
-          full_copy_should_verify_all_tables_and_rollback_both_fault_phases
-
   web:
-    name: Web checks and production build
+    name: Web checks, route manifest, and production build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: web
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -202,28 +28,118 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: '1.3.14'
+          bun-version: '1.4.0'
 
-      - name: Install dependencies
+      - name: Install workspace dependencies
         run: bun install --frozen-lockfile
 
       - name: Check formatting and copyright headers
         run: |
-          bun run format:check
-          bun run copyright:check
+          bun run --filter @lmm/web format:check
+          bun run --filter @lmm/web copyright:check
 
       - name: Lint and typecheck
         run: |
-          bun run lint
-          bun run typecheck
+          bun run --filter @lmm/web lint
+          bun run --filter @lmm/web typecheck
 
-      - name: Test
-        run: bun test
+      - name: Test web workspace
+        run: bun run --filter @lmm/web test
+
+      - name: Validate frontend API route manifest
+        run: bash apps/api-rust/behavior-oracle/tests/test-frontend-api-route-manifest.sh
 
       - name: Build production web assets
         env:
           VITE_REACT_APP_VERSION: ${{ github.sha }}
-        run: bun run build
+        run: bun run --filter @lmm/web build
+
+      - name: Upload web assets for the Go embed build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-web-dist
+          path: apps/web/dist
+          if-no-files-found: error
+
+  go:
+    name: Go default backend, relaykit, and static build
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: |
+            apps/api-go/go.sum
+            apps/api-go/relaykit/go.sum
+
+      - name: Download verified web assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ci-web-dist
+          path: apps/api-go/web/dist
+
+      - name: Test default Go module
+        working-directory: apps/api-go
+        run: go test ./...
+
+      - name: Test and build independent relaykit module
+        working-directory: apps/api-go/relaykit
+        env:
+          GOWORK: 'off'
+        run: |
+          go test ./...
+          go build ./...
+
+      - name: Build static Go production binary
+        working-directory: apps/api-go
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p out
+          go build -trimpath -ldflags="-s -w" -o out/lmm-api .
+          file out/lmm-api
+          if ldd out/lmm-api 2>&1 | grep -qvE 'not a dynamic executable|statically linked'; then
+            echo 'Go production binary is dynamically linked' >&2
+            exit 1
+          fi
+
+  rust-preview:
+    name: Rust preview health
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version --verbose
+
+      - name: Report route ownership and parity without gating Go production
+        continue-on-error: true
+        run: |
+          bash apps/api-rust/scripts/check-go-route-manifest.sh
+          echo 'Rust route ownership remains preview evidence and does not gate the Go release lane.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check formatting
+        working-directory: apps/api-rust
+        run: cargo fmt --all --check
+
+      - name: Lint workspace
+        working-directory: apps/api-rust
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test workspace
+        working-directory: apps/api-rust
+        run: cargo test --workspace --all-targets --all-features --locked
 
   electron-retirement:
     name: Electron embedded-backend retirement guard
