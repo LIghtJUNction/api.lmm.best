@@ -14,7 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const openSourceBountyMCPProtocolVersion = "2026-07-28"
+const openSourceBountyMCPProtocolVersion = "2025-11-25"
 
 type bountyMCPOutput struct {
 	Message        string `json:"message"`
