@@ -1,6 +1,6 @@
 # Rust 后端蓝绿部署
 
-这套原生 Arch Linux 部署骨架将 `lmm-api-rs` 的进程升级与数据库迁移拆开，并且默认只接管内部探针。生产 ownership 的实时结论必须读取 `rust/routes/migration-gate.tsv`；本次审计快照仍是 **Go 356/356**。Rust 的候选实现绝不能被表述为已切流或已替代 Go。
+这套原生 Arch Linux 部署骨架将 `lmm-api-rs` 的进程升级与数据库迁移拆开，并且默认只接管内部探针。生产 ownership 的实时结论必须读取 `apps/api-rust/routes/migration-gate.tsv`；本次审计快照仍是 **Go 356/356**。Rust 的候选实现绝不能被表述为已切流或已替代 Go。
 
 ## 边界与不变量
 
@@ -100,9 +100,9 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 
 ## 当前 Rust 业务迁移状态
 
-`rust/routes/migration-gate.tsv` 是唯一的迁移记分牌，更新文档或新增候选代码不能改变其结论。路由数量、挂载状态、差分验证和独立审批会随本地迁移工作更新；不得把本文或任一历史演练记录当作当前迁移进度。后续审批或 gate 更新必须以 TSV 与下面命令重新生成的结果为准。生产 owner 的实时结论也只能由 TSV 给出；在得到明确的生产切换授权前，业务路由仍由 Go 承担。
+`apps/api-rust/routes/migration-gate.tsv` 是唯一的迁移记分牌，更新文档或新增候选代码不能改变其结论。路由数量、挂载状态、差分验证和独立审批会随本地迁移工作更新；不得把本文或任一历史演练记录当作当前迁移进度。后续审批或 gate 更新必须以 TSV 与下面命令重新生成的结果为准。生产 owner 的实时结论也只能由 TSV 给出；在得到明确的生产切换授权前，业务路由仍由 Go 承担。
 
-`migration_routes` 候选模块是否已经挂到根 router，完全由 `rust/routes/migration-gate.tsv` 判定。候选 source、甚至其局部挂载本身都不等于 production route ownership，也不能计入迁移完成数；只有 TSV 记录的独立差分、审批与 owner 状态才能得出该结论。冻结的原始 Go 实现保存在被 Git 忽略的 `legacy-go-backup/`，只供行为 oracle 与差分测试读取，不能作为运行时回退路径。
+`migration_routes` 候选模块是否已经挂到根 router，完全由 `apps/api-rust/routes/migration-gate.tsv` 判定。候选 source、甚至其局部挂载本身都不等于 production route ownership，也不能计入迁移完成数；只有 TSV 记录的独立差分、审批与 owner 状态才能得出该结论。冻结的原始 Go 实现保存在被 Git 忽略的 `legacy-go-backup/`，只供行为 oracle 与差分测试读取，不能作为运行时回退路径。
 
 目标架构中，PostgreSQL 18 是唯一持久化权威；Valkey 仅承载可重建的缓存、会话/撤销传播与限流状态。候选公共内容路径采用 cache-aside：Valkey miss、失败或超时必须回源 PostgreSQL，缓存写失败不得伪造成功。启用 fail-closed 全局限流时，Go 与 Rust 必须使用同一 dedicated Valkey URL 和相同 key contract；否则不得把任何业务 ownership 从 Go 分给 Rust。
 
@@ -113,9 +113,9 @@ awk -F '\t' 'NR > 1 { owner[$8]++; mount[$5]++; diff[$6]++ }
   END { for (k in owner) print "owner", k, owner[k];
         for (k in mount) print "mount", k, mount[k];
         for (k in diff) print "differential", k, diff[k] }' \
-  rust/routes/migration-gate.tsv
-bash rust/scripts/check-migration-plan.sh
-bash rust/scripts/check-real-integration-gates.sh
+  apps/api-rust/routes/migration-gate.tsv
+bash apps/api-rust/scripts/check-migration-plan.sh
+bash apps/api-rust/scripts/check-real-integration-gates.sh
 ```
 
 上述命令不会启动服务、修改 upstream 或泄露凭据；只有每个 route 完成独立 TCP differential、集成门禁和审查后，才可由单独的变更更新 gate。

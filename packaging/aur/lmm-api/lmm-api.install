@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -u
+
+post_install() {
+  printf '%s\n' 'Install lmm-api-go for the stable service. Rust requires explicit selection and preview configuration.'
+}
+
+post_upgrade() { :; }
+post_remove() { :; }
