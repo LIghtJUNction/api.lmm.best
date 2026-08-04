@@ -105,6 +105,29 @@ func TestOpenSourceBountyEmptyListQueriesReturnNonNilSlices(t *testing.T) {
 	assert.Empty(t, disputes)
 }
 
+func TestOpenSourceBountyBoardRanksByGrossPricePerFix(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "price-ranking-owner", 100_000, common.RoleCommonUser)
+	for index, reward := range []int{500, 5_000, 1_000} {
+		input := openSourceBountyInput(fmt.Sprintf("https://github.com/example/ranking-%d", index), reward, 1)
+		input.Title = fmt.Sprintf("Ranked bounty %d", reward)
+		project, err := CreateOpenSourceBountyDraft(owner.Id, input)
+		require.NoError(t, err)
+		_, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+		require.NoError(t, err)
+	}
+
+	projects, total, err := ListOpenSourceBounties(owner.Id, 1, 20)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), total)
+	require.Len(t, projects, 3)
+	assert.Equal(t, []int{5_000, 1_000, 500}, []int{
+		projects[0].RewardQuota,
+		projects[1].RewardQuota,
+		projects[2].RewardQuota,
+	})
+}
+
 func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "root-owner", 10_000, common.RoleRootUser)
@@ -314,36 +337,39 @@ func TestOpenSourceBountyPublicationChargesAdministratorConfiguredFee(t *testing
 
 	charge, err := CalculateOpenSourceBountyPublicationCharge(project)
 	require.NoError(t, err)
-	assert.Equal(t, 999, charge.EscrowQuota)
+	assert.Equal(t, 999, charge.GrossQuota)
+	assert.Equal(t, 324, charge.NetRewardQuota)
+	assert.Equal(t, 972, charge.EscrowQuota)
 	assert.Equal(t, 250, charge.PlatformFeeRateBps)
-	assert.Equal(t, 25, charge.PlatformFeeQuota, "fractional quota fees round up")
-	assert.Equal(t, 1_024, charge.TotalQuota)
+	assert.Equal(t, 27, charge.PlatformFeeQuota, "each contributor slot rounds its fee up independently")
+	assert.Equal(t, 999, charge.TotalQuota)
 
 	project, charged, err := PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 1_024, charged)
+	assert.Equal(t, 999, charged)
+	assert.Equal(t, 324, project.NetRewardQuota)
 	assert.Equal(t, 250, project.PlatformFeeRateBps)
-	assert.Equal(t, 25, project.PlatformFeeQuota)
+	assert.Equal(t, 27, project.PlatformFeeQuota)
 
 	var ownerAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
-	assert.Equal(t, 3_976, ownerAfter.Quota)
+	assert.Equal(t, 4_001, ownerAfter.Quota)
 	var feeLedger OpenSourceBountyLedger
 	require.NoError(t, db.Where("project_id = ? AND kind = ?", project.Id, OpenSourceBountyLedgerPlatformFee).First(&feeLedger).Error)
-	assert.Equal(t, 25, feeLedger.Quota)
+	assert.Equal(t, 27, feeLedger.Quota)
 
 	_, refunded, err := CloseOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 999, refunded)
+	assert.Equal(t, 972, refunded)
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
-	assert.Equal(t, 4_975, ownerAfter.Quota, "the public platform fee is not refundable")
+	assert.Equal(t, 4_973, ownerAfter.Quota, "the public platform fee is retained from the gross listing price")
 }
 
 func TestOpenSourceBountyDailyCheckinRewardCanCoverPublicationFee(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	require.NoError(t, db.AutoMigrate(&Checkin{}))
 	setOpenSourceBountyFeeRateForTest("1")
-	owner := createOpenSourceBountyUser(t, db, "checkin-fee-owner", 1_000, common.RoleCommonUser)
+	owner := createOpenSourceBountyUser(t, db, "checkin-fee-owner", 990, common.RoleCommonUser)
 	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/checkin-fee", 1_000, 1))
 	require.NoError(t, err)
 
@@ -356,7 +382,8 @@ func TestOpenSourceBountyDailyCheckinRewardCanCoverPublicationFee(t *testing.T) 
 
 	project, charged, err := PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 1_010, charged)
+	assert.Equal(t, 1_000, charged)
+	assert.Equal(t, 990, project.NetRewardQuota)
 	assert.Equal(t, 10, project.PlatformFeeQuota)
 	var ownerAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)

@@ -6,9 +6,10 @@ REPO_DIR="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 OUT_DIR="$SCRIPT_DIR/out"
 WEB_DIST=''
 SOURCE_REF='HEAD'
+RELEASE_VERSION_OVERRIDE=''
 
 usage() {
-  printf 'Usage: %s --web-dist /path/to/verified/web-dist [--source-ref REF]\n' "${0##*/}" >&2
+  printf 'Usage: %s --web-dist /path/to/verified/web-dist [--source-ref REF] [--version VERSION]\n' "${0##*/}" >&2
 }
 
 while (($# > 0)); do
@@ -21,6 +22,11 @@ while (($# > 0)); do
     --source-ref)
       (($# >= 2)) || { usage; exit 2; }
       SOURCE_REF="$2"
+      shift 2
+      ;;
+    --version)
+      (($# >= 2)) || { usage; exit 2; }
+      RELEASE_VERSION_OVERRIDE="$2"
       shift 2
       ;;
     -h|--help)
@@ -45,9 +51,16 @@ git -C "$REPO_DIR" cat-file -e "${SOURCE_REF}:apps/api-go/go.mod" 2>/dev/null ||
   exit 1
 }
 
-RELEASE_VERSION=$(sed -n "s/^pkgver=['\"]\{0,1\}\([^'\"]*\).*/\1/p" "$SCRIPT_DIR/packaging/PKGBUILD")
+RELEASE_VERSION=$RELEASE_VERSION_OVERRIDE
+if [[ -z $RELEASE_VERSION ]]; then
+  RELEASE_VERSION=$(sed -n "s/^pkgver=['\"]\{0,1\}\([^'\"]*\).*/\1/p" "$SCRIPT_DIR/packaging/PKGBUILD")
+fi
 [[ -n "$RELEASE_VERSION" ]] || {
   printf '%s\n' 'could not read pkgver from packaging/PKGBUILD' >&2
+  exit 1
+}
+[[ $RELEASE_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ ]] || {
+  printf 'invalid release version: %s\n' "$RELEASE_VERSION" >&2
   exit 1
 }
 SOURCE_REVISION=$(git -C "$REPO_DIR" rev-parse "${SOURCE_REF}^{commit}")
