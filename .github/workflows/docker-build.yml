@@ -45,10 +45,21 @@ jobs:
       - name: Resolve release configuration
         id: release
         env:
+          IMAGE_REPOSITORY: ${{ vars.DOCKER_IMAGE_REPOSITORY }}
           REQUESTED_BACKEND: ${{ inputs.backend || 'go' }}
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          if [[ -z "$IMAGE_REPOSITORY" || "$IMAGE_REPOSITORY" == "calciumion/new-api" ]]; then
+            echo 'DOCKER_IMAGE_REPOSITORY must select this fork owned repository' >&2
+            exit 1
+          fi
+          case "$IMAGE_REPOSITORY" in
+            *[!A-Za-z0-9._/-]*|[[:space:]]*)
+              echo 'DOCKER_IMAGE_REPOSITORY is invalid' >&2
+              exit 1
+              ;;
+          esac
           if [[ -n "$REQUESTED_TAG" ]]; then
             git rev-parse "refs/tags/$REQUESTED_TAG" >/dev/null
             source_tag="$REQUESTED_TAG"
@@ -60,13 +71,13 @@ jobs:
 
           case "$REQUESTED_BACKEND" in
             go)
-              image=calciumion/new-api
+              image=$IMAGE_REPOSITORY
               dockerfile=Dockerfile
               version_tag=$docker_tag
               latest=true
               ;;
             rust-preview)
-              image=calciumion/new-api-rust-preview
+              image=${IMAGE_REPOSITORY}-rust-preview
               dockerfile=Dockerfile.rust
               version_tag=${docker_tag}-preview
               latest=false
