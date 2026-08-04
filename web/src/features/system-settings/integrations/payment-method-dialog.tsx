@@ -50,6 +50,17 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
       type: z.string().min(1, t('Payment type key is required')),
       icon: z.string().optional(),
       min_topup: z.string().optional(),
+      topup_ratio: z
+        .string()
+        .optional()
+        .refine(
+          (value) => {
+            if (!value?.trim()) return true
+            const trimmed = value.trim()
+            return POSITIVE_DECIMAL_PATTERN.test(trimmed) && Number(trimmed) > 0
+          },
+          { message: t('Payment multiplier must be a positive decimal number') }
+        ),
       settlement_unit: z
         .string()
         .optional()
@@ -105,6 +116,7 @@ export type PaymentMethodData = {
   type: string
   icon?: string
   min_topup?: string
+  topup_ratio?: string
   settlement_unit?: string
   unit_price?: string
   color?: string
@@ -179,6 +191,7 @@ export function PaymentMethodDialog({
       type: '',
       icon: '',
       min_topup: '',
+      topup_ratio: '',
       settlement_unit: '',
       unit_price: '',
     },
@@ -198,6 +211,7 @@ export function PaymentMethodDialog({
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
         min_topup: editData.min_topup ?? '',
+        topup_ratio: editData.topup_ratio ?? '',
         settlement_unit: editData.settlement_unit ?? '',
         unit_price: editData.unit_price ?? '',
       })
@@ -207,6 +221,7 @@ export function PaymentMethodDialog({
         type: '',
         icon: '',
         min_topup: '',
+        topup_ratio: '',
         settlement_unit: '',
         unit_price: '',
       })
@@ -223,6 +238,13 @@ export function PaymentMethodDialog({
     }
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
+    }
+    if (
+      !usesDedicatedPaymentPricing(values.type) &&
+      values.topup_ratio &&
+      values.topup_ratio.trim() !== ''
+    ) {
+      data.topup_ratio = values.topup_ratio.trim()
     }
     if (
       !usesDedicatedPaymentPricing(values.type) &&
@@ -309,6 +331,10 @@ export function PaymentMethodDialog({
 
                       field.onChange(value)
                       if (usesDedicatedPaymentPricing(value)) {
+                        form.setValue('topup_ratio', '', {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
                         form.setValue('settlement_unit', '', {
                           shouldDirty: true,
                           shouldValidate: true,
@@ -404,6 +430,33 @@ export function PaymentMethodDialog({
               </FormItem>
             )}
           />
+
+          {!usesDedicatedPricing && (
+            <FormField
+              control={form.control}
+              name='topup_ratio'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Payment multiplier (optional)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min='0.000000000001'
+                      step='any'
+                      placeholder='1'
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      "Multiplied with the user's group top-up multiplier. Leave empty for 1."
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          )}
 
           {usesDedicatedPricing ? (
             <div className='bg-muted/40 rounded-md border p-3 text-sm'>

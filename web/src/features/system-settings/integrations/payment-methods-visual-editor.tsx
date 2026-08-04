@@ -341,6 +341,15 @@ export function PaymentMethodsVisualEditor({
                   ),
               },
               {
+                id: 'topup-ratio',
+                header: t('Payment multiplier'),
+                cell: (method) => (
+                  <span className='font-mono text-sm'>
+                    ×{method.topup_ratio || '1'}
+                  </span>
+                ),
+              },
+              {
                 id: 'actions',
                 header: t('Actions'),
                 className: 'text-right',
@@ -367,6 +376,7 @@ export function PaymentMethodsVisualEditor({
                 method.name,
                 method.icon,
                 method.min_topup,
+                method.topup_ratio,
                 method.settlement_unit,
                 method.unit_price,
                 method.color,
@@ -450,6 +460,14 @@ export function PaymentMethodsVisualEditor({
                         </span>
                       </div>
                     )}
+                    <div className='flex items-center gap-2'>
+                      <span className='text-muted-foreground min-w-20'>
+                        {t('Payment multiplier')}:
+                      </span>
+                      <span className='font-mono'>
+                        ×{method.topup_ratio || '1'}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )

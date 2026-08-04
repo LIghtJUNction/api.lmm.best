@@ -27,6 +27,7 @@ describe('payment method JSON validation', () => {
       isValidPaymentMethodData({
         name: 'LINUX DO Credit',
         settlement_unit: 'LDC',
+        topup_ratio: '0.5',
         type: 'epay',
         unit_price: '10',
       }),
@@ -56,6 +57,10 @@ describe('payment method JSON validation', () => {
       { ...base, settlement_unit: 'LDC', unit_price: '1e1' },
       { ...base, settlement_unit: 'LDC', unit_price: '0' },
       { ...base, settlement_unit: 'LDC', unit_price: 10 },
+      { ...base, topup_ratio: '0' },
+      { ...base, topup_ratio: '-1' },
+      { ...base, topup_ratio: '1e2' },
+      { ...base, topup_ratio: 2 },
     ]) {
       assert.equal(isValidPaymentMethodData(value), false)
     }
