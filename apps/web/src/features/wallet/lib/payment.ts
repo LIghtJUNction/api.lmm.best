@@ -33,9 +33,10 @@ import { getPaymentCurrencyLabel } from './format'
  * Check if browser is Safari
  */
 function isSafariBrowser(): boolean {
+  const userAgent = navigator.userAgent
   return (
-    navigator.userAgent.includes('Safari') &&
-    !navigator.userAgent.includes('Chrome')
+    userAgent.includes('Safari') &&
+    !/(?:Chrome|CriOS|FxiOS|EdgiOS|OPiOS)/.test(userAgent)
   )
 }
 
