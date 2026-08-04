@@ -125,6 +125,8 @@ type OpenSourceBountyLedger struct {
 	Quota              int     `json:"quota" gorm:"not null"`
 	Note               string  `json:"note" gorm:"type:varchar(500);not null;default:''"`
 	RewardPayoutKey    *string `json:"-" gorm:"type:varchar(64);uniqueIndex"`
+	RecipientReadAt    int64   `json:"recipient_read_at" gorm:"bigint;not null;default:0;index"`
+	ThankedAt          int64   `json:"thanked_at" gorm:"bigint;not null;default:0;index"`
 	CreatedAt          int64   `json:"created_at" gorm:"bigint;not null;index"`
 }
 
@@ -146,7 +148,22 @@ type OpenSourceBountyProjectView struct {
 	ApprovedChallengeCount int64                      `json:"approved_challenge_count"`
 	OwnerRatingAverage     float64                    `json:"owner_rating_average"`
 	OwnerRatingCount       int64                      `json:"owner_rating_count"`
+	OwnerThankHeartCount   int64                      `json:"owner_thank_heart_count"`
 	ViewerChallenge        *OpenSourceBountyChallenge `json:"viewer_challenge,omitempty" gorm:"-"`
+}
+
+type OpenSourceBountyTipNotification struct {
+	Id              int    `json:"id"`
+	ProjectId       int    `json:"project_id"`
+	ChallengeId     int    `json:"challenge_id"`
+	SenderUserId    int    `json:"sender_user_id"`
+	SenderUsername  string `json:"sender_username"`
+	ProjectTitle    string `json:"project_title"`
+	Quota           int    `json:"quota"`
+	Note            string `json:"note"`
+	RecipientReadAt int64  `json:"recipient_read_at"`
+	ThankedAt       int64  `json:"thanked_at"`
+	CreatedAt       int64  `json:"created_at"`
 }
 
 type OpenSourceBountyChallengeView struct {
@@ -245,6 +262,21 @@ func CalculateOpenSourceBountyPublicationCharge(project *OpenSourceBountyProject
 		PlatformFeeQuota: int(fee64), PlatformFeeRateBps: config.RateBasisPoints,
 		TotalQuota: grossTotal,
 	}, nil
+}
+
+func openSourceBountyPlatformFeeRecipient(tx *gorm.DB) (*User, error) {
+	var recipient User
+	err := tx.Select("id", "username").
+		Where("role = ? AND status = ? AND deleted_at IS NULL", common.RoleRootUser, common.UserStatusEnabled).
+		Order("id ASC").First(&recipient).Error
+	if err != nil {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND", "an enabled super administrator is required to receive the platform fee")
+	}
+	return &recipient, nil
+}
+
+func GetOpenSourceBountyPlatformFeeRecipient() (*User, error) {
+	return openSourceBountyPlatformFeeRecipient(DB)
 }
 
 func normalizeBountyDraft(input OpenSourceBountyDraftInput) (OpenSourceBountyDraftInput, error) {
@@ -415,6 +447,8 @@ func PublishOpenSourceBountyWithMCPConfirmation(ownerUserId int, projectId int, 
 
 func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSourceBountyMCPConfirmedOperation) (*OpenSourceBountyProject, int, error) {
 	chargedQuota := 0
+	platformFeeQuota := 0
+	platformFeeRecipientUserId := 0
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if operation != nil {
 			if err := validateOpenSourceBountyMCPConfirmationTx(tx, ownerUserId, operation.ToolName, operation.PayloadHash, operation.State); err != nil {
@@ -441,6 +475,26 @@ func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSour
 		if result.RowsAffected != 1 {
 			return bountyError("OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE", "insufficient balance to publish this bounty")
 		}
+		if charge.PlatformFeeQuota > 0 {
+			recipient, err := openSourceBountyPlatformFeeRecipient(tx)
+			if err != nil {
+				return err
+			}
+			if operation != nil && operation.PlatformFeeRecipientUserId != recipient.Id {
+				return bountyError("OPEN_SOURCE_BOUNTY_MCP_CONFIRMATION_INVALID", "the platform fee recipient changed; request a new confirmation")
+			}
+			result := tx.Model(&User{}).
+				Where("id = ? AND role = ? AND status = ? AND deleted_at IS NULL", recipient.Id, common.RoleRootUser, common.UserStatusEnabled).
+				Update("quota", gorm.Expr("quota + ?", charge.PlatformFeeQuota))
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return bountyError("OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND", "the super administrator fee account is unavailable")
+			}
+			platformFeeQuota = charge.PlatformFeeQuota
+			platformFeeRecipientUserId = recipient.Id
+		}
 		now := common.GetTimestamp()
 		if err := tx.Model(&project).Updates(map[string]interface{}{
 			"status": OpenSourceBountyStatusPublished, "escrow_quota": charge.EscrowQuota,
@@ -454,7 +508,10 @@ func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSour
 			{ProjectId: project.Id, UserId: ownerUserId, Kind: OpenSourceBountyLedgerEscrowFund, Quota: charge.EscrowQuota, CreatedAt: now},
 		}
 		if charge.PlatformFeeQuota > 0 {
-			entries = append(entries, OpenSourceBountyLedger{ProjectId: project.Id, UserId: ownerUserId, Kind: OpenSourceBountyLedgerPlatformFee, Quota: charge.PlatformFeeQuota, CreatedAt: now})
+			entries = append(entries, OpenSourceBountyLedger{
+				ProjectId: project.Id, UserId: ownerUserId, CounterpartyUserId: platformFeeRecipientUserId,
+				Kind: OpenSourceBountyLedgerPlatformFee, Quota: charge.PlatformFeeQuota, CreatedAt: now,
+			})
 		}
 		if err := tx.Create(&entries).Error; err != nil {
 			return err
@@ -472,10 +529,24 @@ func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSour
 		}
 		return nil, 0, err
 	}
-	if err := cacheDecrUserQuota(ownerUserId, int64(chargedQuota)); err != nil {
-		common.SysLog("failed to decrease user quota cache after publishing open-source bounty: " + err.Error())
+	if ownerUserId == platformFeeRecipientUserId {
+		if err := cacheDecrUserQuota(ownerUserId, int64(chargedQuota-platformFeeQuota)); err != nil {
+			common.SysLog("failed to update publisher quota cache after self-receiving the bounty platform fee: " + err.Error())
+		}
+	} else {
+		if err := cacheDecrUserQuota(ownerUserId, int64(chargedQuota)); err != nil {
+			common.SysLog("failed to decrease user quota cache after publishing open-source bounty: " + err.Error())
+		}
+		if platformFeeQuota > 0 {
+			if err := cacheIncrUserQuota(platformFeeRecipientUserId, int64(platformFeeQuota)); err != nil {
+				common.SysLog("failed to increase super administrator quota cache after bounty publication: " + err.Error())
+			}
+		}
 	}
 	RecordLog(ownerUserId, LogTypeSystem, fmt.Sprintf("Published open-source bounty %d with %d gross listing quota", projectId, chargedQuota))
+	if platformFeeQuota > 0 {
+		RecordLog(platformFeeRecipientUserId, LogTypeTopup, fmt.Sprintf("Received %d platform fee quota from open-source bounty %d", platformFeeQuota, projectId))
+	}
 	project, err := GetOpenSourceBountyProject(projectId)
 	return project, chargedQuota, err
 }
@@ -621,8 +692,62 @@ func openSourceBountyProjectQuery() *gorm.DB {
 			)) AS active_challenge_count,
 			(SELECT COUNT(*) FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND c.status = 'approved') AS approved_challenge_count,
 			COALESCE((SELECT AVG(c.contributor_rating_score) FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0), 0) AS owner_rating_average,
-			(SELECT COUNT(*) FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0) AS owner_rating_count`, appealCutoff).
+			(SELECT COUNT(*) FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0) AS owner_rating_count,
+			(SELECT COUNT(*) FROM open_source_bounty_ledgers heart WHERE heart.user_id = p.owner_user_id AND heart.kind = 'tip_transfer' AND heart.thanked_at > 0) AS owner_thank_heart_count`, appealCutoff).
 		Joins("JOIN users u ON u.id = p.owner_user_id AND u.deleted_at IS NULL")
+}
+
+func openSourceBountyTipNotificationQuery() *gorm.DB {
+	return DB.Table("open_source_bounty_ledgers AS tip").
+		Select(`tip.id, tip.project_id, tip.challenge_id, tip.user_id AS sender_user_id,
+			sender.username AS sender_username, project.title AS project_title, tip.quota, tip.note,
+			tip.recipient_read_at, tip.thanked_at, tip.created_at`).
+		Joins("JOIN users sender ON sender.id = tip.user_id AND sender.deleted_at IS NULL").
+		Joins("JOIN open_source_bounty_projects project ON project.id = tip.project_id")
+}
+
+func ListOpenSourceBountyTipNotifications(recipientUserId int, limit int) ([]OpenSourceBountyTipNotification, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	items := make([]OpenSourceBountyTipNotification, 0)
+	err := openSourceBountyTipNotificationQuery().
+		Where("tip.kind = ? AND tip.counterparty_user_id = ?", OpenSourceBountyLedgerTipTransfer, recipientUserId).
+		Order("tip.created_at DESC, tip.id DESC").Limit(limit).Scan(&items).Error
+	return items, err
+}
+
+func MarkOpenSourceBountyTipNotificationsRead(recipientUserId int) error {
+	return DB.Model(&OpenSourceBountyLedger{}).
+		Where("kind = ? AND counterparty_user_id = ? AND recipient_read_at = 0", OpenSourceBountyLedgerTipTransfer, recipientUserId).
+		Update("recipient_read_at", common.GetTimestamp()).Error
+}
+
+func ThankOpenSourceBountyTip(recipientUserId int, tipId int) (*OpenSourceBountyTipNotification, error) {
+	if tipId <= 0 {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_INVALID_ID", "invalid open-source bounty tip identifier")
+	}
+	now := common.GetTimestamp()
+	result := DB.Model(&OpenSourceBountyLedger{}).
+		Where("id = ? AND kind = ? AND counterparty_user_id = ? AND thanked_at = 0", tipId, OpenSourceBountyLedgerTipTransfer, recipientUserId).
+		Updates(map[string]any{"thanked_at": now, "recipient_read_at": now})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	var notification OpenSourceBountyTipNotification
+	if err := openSourceBountyTipNotificationQuery().
+		Where("tip.id = ? AND tip.kind = ? AND tip.counterparty_user_id = ?", tipId, OpenSourceBountyLedgerTipTransfer, recipientUserId).
+		Scan(&notification).Error; err != nil {
+		return nil, err
+	}
+	if notification.Id == 0 {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_TIP_NOT_FOUND", "tip notification was not found")
+	}
+	if result.RowsAffected > 0 {
+		RecordLog(recipientUserId, LogTypeSystem, fmt.Sprintf("Thanked open-source bounty tip %d", tipId))
+		RecordLog(notification.SenderUserId, LogTypeSystem, fmt.Sprintf("Received a thank heart for open-source bounty tip %d", tipId))
+	}
+	return &notification, nil
 }
 
 func attachViewerChallenges(views []OpenSourceBountyProjectView, viewerUserId int) error {
@@ -655,14 +780,16 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 	if pageSize < 1 || pageSize > maxOpenSourceBountyPageSize {
 		pageSize = 20
 	}
-	statuses := []string{OpenSourceBountyStatusPublished, OpenSourceBountyStatusPaused, OpenSourceBountyStatusCompleted}
+	statuses := []string{OpenSourceBountyStatusPublished, OpenSourceBountyStatusPaused}
 	var total int64
 	if err := DB.Model(&OpenSourceBountyProject{}).Where("status IN ?", statuses).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	views := make([]OpenSourceBountyProjectView, 0)
 	err := openSourceBountyProjectQuery().Where("p.status IN ?", statuses).
-		Order("p.reward_quota DESC, p.published_at DESC, p.id DESC").
+		Order("p.reward_quota DESC").
+		Order("CASE WHEN p.status = 'published' THEN 0 ELSE 1 END ASC").
+		Order("p.published_at ASC, p.id ASC").
 		Offset((page - 1) * pageSize).Limit(pageSize).Scan(&views).Error
 	if err != nil {
 		return nil, 0, err

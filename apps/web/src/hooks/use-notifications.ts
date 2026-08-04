@@ -16,11 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
+import type { NotificationTab } from '@/components/notification-popover'
+import {
+  listReceivedBountyTips,
+  markReceivedBountyTipsRead,
+  thankBountyTip,
+} from '@/features/open-source-bounties/api'
+import type { BountyTipNotification } from '@/features/open-source-bounties/types'
 import { useStatus } from '@/hooks/use-status'
 import { getNotice } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 import { useNotificationStore } from '@/stores/notification-store'
 
 function hashString(input: string): string {
@@ -63,10 +73,12 @@ function getAnnouncementKey(item: Record<string, unknown>): string {
  * Provides unread counts and read status management
  */
 export function useNotifications() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const userId = useAuthStore((state) => state.auth.user?.id ?? 0)
   const [popoverOpen, setPopoverOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'notice' | 'announcements'>(
-    'notice'
-  )
+  const [activeTab, setActiveTab] = useState<NotificationTab>('notice')
+  const [thankingTipId, setThankingTipId] = useState(0)
 
   // Fetch Notice from API
   const {
@@ -93,6 +105,13 @@ export function useNotifications() {
         : [],
     [announcementsEnabled, statusAnnouncements]
   )
+  const { data: bountyTips = [], isLoading: bountyTipsLoading } = useQuery({
+    queryKey: ['open-source-bounties', 'tip-notifications', userId],
+    queryFn: listReceivedBountyTips,
+    enabled: userId > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  })
 
   // Notification store
   const {
@@ -118,13 +137,23 @@ export function useNotifications() {
         return !isAnnouncementRead(key)
       }
     ).length
+    const bountyTipsUnread = bountyTips.filter(
+      (item) => item.recipient_read_at === 0
+    ).length
 
     return {
       notice: noticeUnread,
       announcements: announcementsUnread,
-      total: noticeUnread + announcementsUnread,
+      bountyTips: bountyTipsUnread,
+      total: noticeUnread + announcementsUnread + bountyTipsUnread,
     }
-  }, [noticeContent, lastReadNotice, announcements, isAnnouncementRead])
+  }, [
+    noticeContent,
+    lastReadNotice,
+    announcements,
+    isAnnouncementRead,
+    bountyTips,
+  ])
 
   const markAnnouncementsAsRead = () => {
     if (announcements.length > 0) {
@@ -136,7 +165,26 @@ export function useNotifications() {
   }
 
   // Handle popover open
-  const handleOpenPopover = (tab?: 'notice' | 'announcements') => {
+  const markBountyTipsAsRead = () => {
+    if (userId <= 0 || unreadCounts.bountyTips === 0) return
+    const readAt = Math.floor(Date.now() / 1000)
+    queryClient.setQueryData<BountyTipNotification[]>(
+      ['open-source-bounties', 'tip-notifications', userId],
+      (items = []) =>
+        items.map((item) =>
+          item.recipient_read_at > 0
+            ? item
+            : { ...item, recipient_read_at: readAt }
+        )
+    )
+    void markReceivedBountyTipsRead().catch(() => {
+      void queryClient.invalidateQueries({
+        queryKey: ['open-source-bounties', 'tip-notifications', userId],
+      })
+    })
+  }
+
+  const handleOpenPopover = (tab?: NotificationTab) => {
     const nextTab = tab || activeTab
 
     // Mark currently visible content as read when opening the notification center
@@ -145,6 +193,9 @@ export function useNotifications() {
     }
     if (nextTab === 'announcements') {
       markAnnouncementsAsRead()
+    }
+    if (nextTab === 'bounty-tips') {
+      markBountyTipsAsRead()
     }
 
     setActiveTab(nextTab)
@@ -161,11 +212,34 @@ export function useNotifications() {
   }
 
   // Handle tab change - mark announcements as read when switching to that tab
-  const handleTabChange = (tab: 'notice' | 'announcements') => {
+  const handleTabChange = (tab: NotificationTab) => {
     setActiveTab(tab)
 
     if (tab === 'announcements') {
       markAnnouncementsAsRead()
+    }
+    if (tab === 'bounty-tips') {
+      markBountyTipsAsRead()
+    }
+  }
+
+  const handleThankTip = async (tipId: number) => {
+    setThankingTipId(tipId)
+    try {
+      const updated = await thankBountyTip(tipId)
+      queryClient.setQueryData<BountyTipNotification[]>(
+        ['open-source-bounties', 'tip-notifications', userId],
+        (items = []) =>
+          items.map((item) => (item.id === tipId ? updated : item))
+      )
+      await queryClient.invalidateQueries({
+        queryKey: ['open-source-bounties'],
+      })
+      toast.success(t('Thanks sent'))
+    } catch {
+      toast.error(t('Unable to send thanks'))
+    } finally {
+      setThankingTipId(0)
     }
   }
 
@@ -173,7 +247,8 @@ export function useNotifications() {
     // Data
     notice: noticeContent,
     announcements,
-    loading: noticeLoading || statusLoading,
+    bountyTips,
+    loading: noticeLoading || statusLoading || bountyTipsLoading,
 
     // Unread counts
     unreadCount: unreadCounts.total,
@@ -185,10 +260,12 @@ export function useNotifications() {
     setPopoverOpen: handlePopoverOpenChange,
     activeTab,
     setActiveTab: handleTabChange,
+    thankingTipId,
 
     // Actions
     openPopover: handleOpenPopover,
     closePopover: () => setPopoverOpen(false),
     refetchNotice,
+    thankTip: handleThankTip,
   }
 }

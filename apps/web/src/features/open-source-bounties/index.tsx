@@ -40,6 +40,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Heart } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -150,6 +151,8 @@ const ERROR_KEYS: Record<string, string> = {
   OPEN_SOURCE_BOUNTY_INVALID_QUOTA: 'Reward per fix must be greater than zero.',
   OPEN_SOURCE_BOUNTY_INVALID_FEE:
     'The platform fee leaves no contributor reward.',
+  OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND:
+    'An enabled super administrator is required to receive the platform fee.',
   OPEN_SOURCE_BOUNTY_INVALID_SLOTS:
     'Reward slots must be a whole number between 1 and 100.',
   OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE:
@@ -272,6 +275,7 @@ export function OpenSourceBounties() {
     queryFn: listMyBountyDisputes,
   })
   const isAdmin = (user?.role ?? 0) >= 10
+  const isSuperAdmin = (user?.role ?? 0) >= 100
   const adminDisputesQuery = useQuery({
     queryKey: ['open-source-bounties', 'disputes', 'admin'],
     queryFn: listAdminBountyDisputes,
@@ -394,7 +398,7 @@ export function OpenSourceBounties() {
     if (
       !window.confirm(
         t(
-          'Publish now? Your balance will pay the {{gross}} gross listing total. The public {{rate}}% platform fee is {{fee}}, leaving {{netReward}} per approved fix and {{escrow}} total escrow.',
+          'Publish now? Your balance will be debited {{gross}} gross. The public {{rate}}% platform fee of {{fee}} is credited to the super administrator, leaving {{netReward}} per approved fix and {{escrow}} total escrow.',
           {
             gross: formatQuota(charge.gross),
             rate: charge.feeRatePercent,
@@ -570,10 +574,16 @@ export function OpenSourceBounties() {
   } else {
     bountyBoardContent = (
       <div className='grid gap-4 lg:grid-cols-2'>
-        {bountyQuery.data?.items.map((project) => (
+        {bountyQuery.data?.items.map((project, index) => (
           <BountyCard
             key={project.id}
             project={project}
+            rank={
+              ((bountyQuery.data?.page ?? 1) - 1) *
+                (bountyQuery.data?.page_size ?? 50) +
+              index +
+              1
+            }
             viewerUserId={user?.id ?? 0}
             pending={pending}
             onAccept={() => setAcceptProject(project)}
@@ -627,9 +637,36 @@ export function OpenSourceBounties() {
                 {t('Every publisher pays from their own balance')}
               </AlertTitle>
               <AlertDescription>
-                {t(
-                  'Publishing deducts the gross listing total from your balance. The public administrator-configured platform fee is retained from that amount, and the remainder becomes contributor escrow. This rule also applies to administrators and the site owner.'
-                )}
+                <div className='flex flex-col gap-3'>
+                  <p>
+                    {t(
+                      'Publishing deducts the gross listing total from your balance. The public administrator-configured platform fee is credited to the super administrator account, and the remainder becomes contributor escrow. Publishers and contributors settle directly; administrators intervene only in disputes.'
+                    )}
+                  </p>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Badge variant='secondary'>
+                      {t('Public platform fee: {{rate}}%', {
+                        rate: (
+                          (configQuery.data?.rate_basis_points ?? 0) / 100
+                        ).toFixed(2),
+                      })}
+                    </Badge>
+                    {isSuperAdmin ? (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        render={<a href='/system-settings/billing/quota' />}
+                      >
+                        <HugeiconsIcon
+                          icon={FileEditIcon}
+                          strokeWidth={2}
+                          data-icon='inline-start'
+                        />
+                        {t('Fee settings')}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
               </AlertDescription>
             </Alert>
           </CardStaggerItem>
@@ -1082,12 +1119,14 @@ function LoadingState({ label }: { label: string }) {
 
 function BountyCard({
   project,
+  rank,
   viewerUserId,
   pending,
   onAccept,
   onSubmit,
 }: {
   project: BountyProject
+  rank: number
   viewerUserId: number
   pending: string
   onAccept: () => void
@@ -1137,13 +1176,14 @@ function BountyCard({
       description={`${project.owner_username} · ${statusLabel(t, project.status)}`}
       icon={<HugeiconsIcon icon={Bug01Icon} strokeWidth={1.8} />}
       iconTone='primary'
+      action={<BountyRankBadge rank={rank} />}
       disableHoverEffect
       contentClassName='flex h-full flex-col gap-4'
     >
       <p className='text-muted-foreground line-clamp-3 text-sm leading-relaxed'>
         {project.description}
       </p>
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-5'>
         <Metric
           label={t('Reward per fix')}
           value={formatQuota(project.reward_quota)}
@@ -1162,6 +1202,15 @@ function BountyCard({
             project.owner_rating_count > 0
               ? `${project.owner_rating_average.toFixed(1)}/5 · ${project.owner_rating_count}`
               : t('No ratings yet')
+          }
+        />
+        <Metric
+          label={t('Thanks received')}
+          value={
+            <span className='inline-flex items-center gap-1.5'>
+              <Heart className='size-4 fill-rose-500 text-rose-500' />
+              {project.owner_thank_heart_count ?? 0}
+            </span>
           }
         />
       </div>
@@ -1187,6 +1236,29 @@ function BountyCard({
         {viewerAction}
       </div>
     </TitledCard>
+  )
+}
+
+function BountyRankBadge({ rank }: { rank: number }) {
+  let className = 'border-border bg-background text-muted-foreground'
+  if (rank === 1) {
+    className =
+      'border-amber-500/70 bg-amber-400 text-amber-950 dark:border-amber-300/70 dark:bg-amber-300 dark:text-amber-950'
+  } else if (rank === 2) {
+    className =
+      'border-zinc-400/70 bg-zinc-200 text-zinc-800 dark:border-zinc-300/60 dark:bg-zinc-300 dark:text-zinc-950'
+  } else if (rank === 3) {
+    className =
+      'border-orange-500/60 bg-orange-200 text-orange-950 dark:border-orange-300/60 dark:bg-orange-300 dark:text-orange-950'
+  }
+
+  return (
+    <Badge
+      variant='outline'
+      className={`h-7 min-w-10 px-2 font-mono text-xs font-semibold tabular-nums ${className}`}
+    >
+      #{rank}
+    </Badge>
   )
 }
 
@@ -1477,7 +1549,7 @@ function ChallengeCard({
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className='bg-muted/50 rounded-lg border p-3'>
       <p className='text-muted-foreground text-xs'>{label}</p>
@@ -1685,7 +1757,7 @@ function DraftDialog(props: {
         <AlertTitle>{t('Publish charge')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Publish charge: {{total}} gross listing total, including {{fee}} public platform fee ({{rate}}%), leaves {{netReward}} per approved fix and {{escrow}} total escrow. Current balance: {{balance}}.',
+            'Publish charge: {{total}} gross listing total. Of that amount, {{fee}} public platform fee ({{rate}}%) is credited to the super administrator, leaving {{netReward}} per approved fix and {{escrow}} total escrow. Current balance: {{balance}}.',
             {
               escrow: formatQuota(props.charge.escrow),
               fee: formatQuota(props.charge.platformFee),
@@ -2643,7 +2715,7 @@ Endpoint: ${endpoint}
 Protocol: MCP ${protocolVersion}, stateless Streamable HTTP
 Authorization: Bearer ${revealedToken || '<YOUR_PERSONAL_MCP_TOKEN>'}
 
-Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing deducts the gross listed price from my balance, retains the public administrator-configured platform fee from that amount, and locks the remaining net contributor rewards in escrow, including when I am an administrator or site owner. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. After a contributor submits the matching Issue and pull request, the bounty publisher reviews the work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
+Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Treat every bounty as a peer-to-peer transaction between its publisher and contributor; an administrator intervenes only when either party opens a dispute. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing debits the gross listed price from my balance, credits the public administrator-configured platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit and the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. After a contributor submits the matching Issue and pull request, the bounty publisher reviews the work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
     [endpoint, protocolVersion, revealedToken]
   )
 
@@ -2806,8 +2878,13 @@ function RulesPanel() {
     ],
     [
       '3',
-      'Submit for publisher review',
-      'Submit the Issue and pull request in Open-source bounties. The bounty publisher reviews the defect and fix directly, then approves payment when the requirements are met.',
+      'Settle directly with the publisher',
+      'Submit the Issue and pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
+    ],
+    [
+      '4',
+      'Escalate only disputed trades',
+      'If either party disputes rejection or payment, open a platform ticket. A third-party administrator may review the preserved evidence and arbitrate the escrow.',
     ],
   ] as const
   return (

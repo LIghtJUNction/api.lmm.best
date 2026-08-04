@@ -12,7 +12,7 @@ die() { printf 'deploy-go: %s\n' "$*" >&2; exit 1; }
 
 [[ ${CONFIRM_PRODUCTION:-} == api.lmm.best ]] || die 'CONFIRM_PRODUCTION must equal api.lmm.best'
 [[ ${LMM_API_BACKEND:-} == go ]] || die 'LMM_API_BACKEND must equal go'
-for command in bun git jq makepkg pacman scp sha256sum ssh; do
+for command in bun git jq makepkg pacman scp sha256sum ssh tar; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 [[ $(ssh "$HOST" hostnamectl --static) == "$EXPECTED_HOST" ]] || die 'production host identity mismatch'
@@ -63,6 +63,14 @@ chmod 0755 "$work_dir/rollback/lmm-api"
   --binary "$work_dir/rollback/lmm-api" \
   --output-dir "$work_dir/rollback"
 
+if find "$REPO_ROOT/apps/web/dist" -type l -print -quit | grep -q .; then
+  die 'frontend dist must not contain symlinks'
+fi
+frontend_archive="$work_dir/frontend-dist.tar"
+tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+  -C "$REPO_ROOT/apps/web/dist" -cf "$frontend_archive" .
+frontend_sha256=$(sha256sum "$frontend_archive" | awk '{print $1}')
+
 new_package=$(find "$work_dir/new" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*' ! -name '*.sha256' -print -quit)
 rollback_package=$(find "$work_dir/rollback" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*' ! -name '*.sha256' -print -quit)
 [[ -n $new_package && -n $rollback_package ]] || die 'release or rollback package is missing'
@@ -71,10 +79,18 @@ rollback_sha256=$(sha256sum "$rollback_package" | awk '{print $1}')
 
 remote_stage="/var/lib/lmm-api/deploy-staging/$release_version"
 ssh "$HOST" install -d -m0700 "$remote_stage"
-scp "$SCRIPT_DIR/activate-go-release.sh" "$new_package" "$rollback_package" "$HOST:$remote_stage/"
+scp \
+  "$SCRIPT_DIR/activate-go-release.sh" \
+  "$SCRIPT_DIR/../frontend-release.sh" \
+  "$frontend_archive" \
+  "$new_package" \
+  "$rollback_package" \
+  "$HOST:$remote_stage/"
 # The remote path is derived from a validated pkgver.
 # shellcheck disable=SC2029
-ssh "$HOST" chmod 0700 "$remote_stage/activate-go-release.sh"
+ssh "$HOST" chmod 0700 \
+  "$remote_stage/activate-go-release.sh" \
+  "$remote_stage/frontend-release.sh"
 
 new_name=${new_package##*/}
 rollback_name=${rollback_package##*/}
@@ -89,6 +105,9 @@ ssh "$HOST" systemd-run \
   --package-sha256 "$new_sha256" \
   --rollback-package "$remote_stage/$rollback_name" \
   --rollback-sha256 "$rollback_sha256" \
+  --frontend-archive "$remote_stage/${frontend_archive##*/}" \
+  --frontend-sha256 "$frontend_sha256" \
+  --frontend-release-script "$remote_stage/frontend-release.sh" \
   --expected-version "$release_version" \
   --status-file "$status_file"
 
