@@ -450,7 +450,7 @@ export function SupportTicket({
                         <FieldDescription>
                           {selectedCategory === 'bounty_dispute'
                             ? t(
-                                'The system automatically attaches the project, Issue, pull request, encrypted review message, payment history, and mutual ratings.'
+                                'The system automatically attaches the project, Issue, pull request, verification notes, payment history, and mutual ratings.'
                               )
                             : t(
                                 'This helps us find the relevant record faster.'

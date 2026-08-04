@@ -68,15 +68,14 @@ func createOpenSourceBountyUser(t *testing.T, db *gorm.DB, username string, quot
 	return user
 }
 
-func openSourceBountyInput(repository string, promotion int, reward int, slots int) OpenSourceBountyDraftInput {
+func openSourceBountyInput(repository string, reward int, slots int) OpenSourceBountyDraftInput {
 	return OpenSourceBountyDraftInput{
-		RepositoryUrl:  repository,
-		Title:          "Fix reproducible API defects",
-		Description:    "Find a reproducible defect and provide a focused fix with verification.",
-		Rules:          "The Issue must document reproduction, expected behavior, actual behavior, and impact. The pull request must link the Issue and include verification.",
-		PromotionQuota: promotion,
-		RewardQuota:    reward,
-		RewardSlots:    slots,
+		RepositoryUrl: repository,
+		Title:         "Fix reproducible API defects",
+		Description:   "Find a reproducible defect and provide a focused fix with verification.",
+		Rules:         "The Issue must document reproduction, expected behavior, actual behavior, and impact. The pull request must link the Issue and include verification.",
+		RewardQuota:   reward,
+		RewardSlots:   slots,
 	}
 }
 
@@ -111,7 +110,7 @@ func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 	owner := createOpenSourceBountyUser(t, db, "root-owner", 10_000, common.RoleRootUser)
 	participant := createOpenSourceBountyUser(t, db, "contributor", 100, common.RoleCommonUser)
 
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/project", 1_000, 2_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/project", 2_000, 1))
 	require.NoError(t, err)
 	var ownerAfterDraft User
 	require.NoError(t, db.First(&ownerAfterDraft, owner.Id).Error)
@@ -119,11 +118,11 @@ func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 
 	project, charged, err := PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 3_000, charged)
+	assert.Equal(t, 2_000, charged)
 	assert.Equal(t, OpenSourceBountyStatusPublished, project.Status)
 	assert.Equal(t, 2_000, project.EscrowQuota)
 	require.NoError(t, db.First(&ownerAfterDraft, owner.Id).Error)
-	assert.Equal(t, 7_000, ownerAfterDraft.Quota, "root users must pay from their own balance")
+	assert.Equal(t, 8_000, ownerAfterDraft.Quota, "root users must pay from their own balance")
 
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "@contributor")
 	require.NoError(t, err)
@@ -134,7 +133,6 @@ func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 		project.Id,
 		"https://github.com/example/project/issues/12",
 		"https://github.com/example/project/pull/13",
-		"encrypted-review-message-reference",
 		"Regression test included.",
 	)
 	require.NoError(t, err)
@@ -155,10 +153,9 @@ func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 
 	var ledger []OpenSourceBountyLedger
 	require.NoError(t, db.Order("id asc").Find(&ledger).Error)
-	require.Len(t, ledger, 3)
-	assert.Equal(t, OpenSourceBountyLedgerPromotionSpend, ledger[0].Kind)
-	assert.Equal(t, OpenSourceBountyLedgerEscrowFund, ledger[1].Kind)
-	assert.Equal(t, OpenSourceBountyLedgerRewardTransfer, ledger[2].Kind)
+	require.Len(t, ledger, 2)
+	assert.Equal(t, OpenSourceBountyLedgerEscrowFund, ledger[0].Kind)
+	assert.Equal(t, OpenSourceBountyLedgerRewardTransfer, ledger[1].Kind)
 
 	_, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, true, "duplicate approval", 5, "Already reviewed.")
 	require.Error(t, err)
@@ -170,7 +167,7 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "rating-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "rating-participant", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/ratings", 1_000, 2_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/ratings", 2_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
@@ -184,7 +181,7 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 
 	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id,
 		"https://github.com/example/ratings/issues/1", "https://github.com/example/ratings/pull/2",
-		"encrypted-review-message", "Partial fix ready for review.")
+		"Partial fix ready for review.")
 	require.NoError(t, err)
 	challenge, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, false, "More work is needed.", 4, "Strong diagnosis; the remaining edge case still needs coverage.")
 	require.NoError(t, err)
@@ -200,7 +197,7 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 	var ownerAfter, participantAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
-	assert.Equal(t, 6_750, ownerAfter.Quota)
+	assert.Equal(t, 7_750, ownerAfter.Quota)
 	assert.Equal(t, 250, participantAfter.Quota)
 
 	accepted, err := ListAcceptedOpenSourceBounties(participant.Id)
@@ -229,7 +226,7 @@ func TestOpenSourceBountyRESTTipIdempotencyReplayMismatchAndRetry(t *testing.T) 
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "rest-tip-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "rest-tip-contributor", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/rest-tip", 100, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/rest-tip", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
@@ -250,7 +247,7 @@ func TestOpenSourceBountyRESTTipIdempotencyReplayMismatchAndRetry(t *testing.T) 
 	var ownerAfter, participantAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
-	assert.Equal(t, 8_650, ownerAfter.Quota)
+	assert.Equal(t, 8_750, ownerAfter.Quota)
 	assert.Equal(t, 250, participantAfter.Quota)
 	var tipLedgers int64
 	require.NoError(t, db.Model(&OpenSourceBountyLedger{}).Where("challenge_id = ? AND kind = ?", challenge.Id, OpenSourceBountyLedgerTipTransfer).Count(&tipLedgers).Error)
@@ -275,7 +272,7 @@ func TestOpenSourceBountyRESTTipConcurrentDuplicateTransfersOnce(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	owner := createOpenSourceBountyUser(t, db, "rest-race-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "rest-race-contributor", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/rest-race", 100, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/rest-race", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
@@ -301,7 +298,7 @@ func TestOpenSourceBountyRESTTipConcurrentDuplicateTransfersOnce(t *testing.T) {
 	var ownerAfter, participantAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
-	assert.Equal(t, 8_600, ownerAfter.Quota)
+	assert.Equal(t, 8_700, ownerAfter.Quota)
 	assert.Equal(t, 300, participantAfter.Quota)
 	var tipLedgers int64
 	require.NoError(t, db.Model(&OpenSourceBountyLedger{}).Where("challenge_id = ? AND kind = ?", challenge.Id, OpenSourceBountyLedgerTipTransfer).Count(&tipLedgers).Error)
@@ -312,7 +309,7 @@ func TestOpenSourceBountyPublicationChargesAdministratorConfiguredFee(t *testing
 	db := setupOpenSourceBountyTestDB(t)
 	setOpenSourceBountyFeeRateForTest("2.5")
 	owner := createOpenSourceBountyUser(t, db, "fee-owner", 5_000, common.RoleRootUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/fee", 100, 333, 3))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/fee", 333, 3))
 	require.NoError(t, err)
 
 	charge, err := CalculateOpenSourceBountyPublicationCharge(project)
@@ -320,17 +317,17 @@ func TestOpenSourceBountyPublicationChargesAdministratorConfiguredFee(t *testing
 	assert.Equal(t, 999, charge.EscrowQuota)
 	assert.Equal(t, 250, charge.PlatformFeeRateBps)
 	assert.Equal(t, 25, charge.PlatformFeeQuota, "fractional quota fees round up")
-	assert.Equal(t, 1_124, charge.TotalQuota)
+	assert.Equal(t, 1_024, charge.TotalQuota)
 
 	project, charged, err := PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
-	assert.Equal(t, 1_124, charged)
+	assert.Equal(t, 1_024, charged)
 	assert.Equal(t, 250, project.PlatformFeeRateBps)
 	assert.Equal(t, 25, project.PlatformFeeQuota)
 
 	var ownerAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
-	assert.Equal(t, 3_876, ownerAfter.Quota)
+	assert.Equal(t, 3_976, ownerAfter.Quota)
 	var feeLedger OpenSourceBountyLedger
 	require.NoError(t, db.Where("project_id = ? AND kind = ?", project.Id, OpenSourceBountyLedgerPlatformFee).First(&feeLedger).Error)
 	assert.Equal(t, 25, feeLedger.Quota)
@@ -339,7 +336,31 @@ func TestOpenSourceBountyPublicationChargesAdministratorConfiguredFee(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, 999, refunded)
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
-	assert.Equal(t, 4_875, ownerAfter.Quota, "promotion and platform fees are not refundable")
+	assert.Equal(t, 4_975, ownerAfter.Quota, "the public platform fee is not refundable")
+}
+
+func TestOpenSourceBountyDailyCheckinRewardCanCoverPublicationFee(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Checkin{}))
+	setOpenSourceBountyFeeRateForTest("1")
+	owner := createOpenSourceBountyUser(t, db, "checkin-fee-owner", 1_000, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/checkin-fee", 1_000, 1))
+	require.NoError(t, err)
+
+	_, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE", OpenSourceBountyErrorCode(err))
+	_, err = userCheckinWithoutTransaction(&Checkin{
+		UserId: owner.Id, CheckinDate: "2026-08-04", QuotaAwarded: 10, CreatedAt: 1,
+	}, owner.Id, 10)
+	require.NoError(t, err)
+
+	project, charged, err := PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 1_010, charged)
+	assert.Equal(t, 10, project.PlatformFeeQuota)
+	var ownerAfter User
+	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
+	assert.Zero(t, ownerAfter.Quota)
 }
 
 func TestOpenSourceBountyFeeRateParsesDecimalBasisPointsExactly(t *testing.T) {
@@ -377,7 +398,7 @@ func TestOpenSourceBountyDisputeAllowsThirdPartyEscrowIntervention(t *testing.T)
 	owner := createOpenSourceBountyUser(t, db, "dishonest-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "merged-contributor", 0, common.RoleCommonUser)
 	admin := createOpenSourceBountyUser(t, db, "dispute-admin", 0, common.RoleAdminUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/dispute", 1_000, 2_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/dispute", 2_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
@@ -385,7 +406,7 @@ func TestOpenSourceBountyDisputeAllowsThirdPartyEscrowIntervention(t *testing.T)
 	require.NoError(t, err)
 	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id,
 		"https://github.com/example/dispute/issues/7", "https://github.com/example/dispute/pull/8",
-		"encrypted-proof-that-the-merged-fix-met-requirements", "The fix was merged after passing verification.")
+		"The fix was merged after passing verification.")
 	require.NoError(t, err)
 	challenge, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, false, "Refusing payment despite merge.", 1, "Rejected after merge without a valid technical reason.")
 	require.NoError(t, err)
@@ -452,13 +473,13 @@ func TestOpenSourceBountyOpenDisputeFreezesEscrowAndRewardSlot(t *testing.T) {
 	participant := createOpenSourceBountyUser(t, db, "freeze-contributor", 0, common.RoleCommonUser)
 	other := createOpenSourceBountyUser(t, db, "waiting-contributor", 0, common.RoleCommonUser)
 	admin := createOpenSourceBountyUser(t, db, "freeze-admin", 0, common.RoleAdminUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/freeze", 100, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/freeze", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "freeze-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/freeze/issues/1", "https://github.com/example/freeze/pull/2", "encrypted-freeze-evidence", "Verified fix.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/freeze/issues/1", "https://github.com/example/freeze/pull/2", "Verified fix.")
 	require.NoError(t, err)
 	challenge, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, false, "Payment rejected.", 2, "Rejected despite useful work.")
 	require.NoError(t, err)
@@ -487,13 +508,13 @@ func TestOpenSourceBountyRejectedChallengeAppealWindowExpires(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "appeal-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "appeal-contributor", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/appeal", 100, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/appeal", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "appeal-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/appeal/issues/1", "https://github.com/example/appeal/pull/2", "encrypted-appeal-evidence", "Appeal evidence.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/appeal/issues/1", "https://github.com/example/appeal/pull/2", "Appeal evidence.")
 	require.NoError(t, err)
 	challenge, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, false, "Submission rejected.", 2, "Requirements were not met.")
 	require.NoError(t, err)
@@ -515,13 +536,13 @@ func TestOpenSourceBountyDisputeRejectsPartyAdministrators(t *testing.T) {
 	createRejectedDispute := func(repository string, ownerRole int, participantRole int) (User, User, *OpenSourceBountyDisputeView) {
 		owner := createOpenSourceBountyUser(t, db, repository+"-owner", 10_000, ownerRole)
 		participant := createOpenSourceBountyUser(t, db, repository+"-participant", 0, participantRole)
-		project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/"+repository, 100, 1_000, 1))
+		project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/"+repository, 1_000, 1))
 		require.NoError(t, err)
 		project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 		require.NoError(t, err)
 		challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, repository+"-participant")
 		require.NoError(t, err)
-		challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/"+repository+"/issues/1", "https://github.com/example/"+repository+"/pull/2", "encrypted-conflict-evidence", "Conflict evidence.")
+		challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/"+repository+"/issues/1", "https://github.com/example/"+repository+"/pull/2", "Conflict evidence.")
 		require.NoError(t, err)
 		challenge, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, false, "Submission rejected.", 1, "Disputed review outcome.")
 		require.NoError(t, err)
@@ -550,13 +571,13 @@ func TestOpenSourceBountyConcurrentOpenCreatesOneDispute(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	owner := createOpenSourceBountyUser(t, db, "concurrent-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "concurrent-contributor", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/concurrent", 100, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/concurrent", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "concurrent-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/concurrent/issues/1", "https://github.com/example/concurrent/pull/2", "encrypted-concurrent-evidence", "Concurrent filing evidence.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/concurrent/issues/1", "https://github.com/example/concurrent/pull/2", "Concurrent filing evidence.")
 	require.NoError(t, err)
 
 	start := make(chan struct{})
@@ -591,13 +612,13 @@ func TestOpenSourceBountyConcurrentReviewAndResolveTransferOnce(t *testing.T) {
 	owner := createOpenSourceBountyUser(t, db, "race-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "race-contributor", 0, common.RoleCommonUser)
 	admin := createOpenSourceBountyUser(t, db, "race-admin", 0, common.RoleAdminUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/race", 100, 2_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/race", 2_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "race-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/race/issues/1", "https://github.com/example/race/pull/2", "encrypted-race-evidence", "Fix ready.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/race/issues/1", "https://github.com/example/race/pull/2", "Fix ready.")
 	require.NoError(t, err)
 	dispute, err := OpenOpenSourceBountyDispute(participant.Id, challenge.Id, "merged_but_unpaid", "The contribution is complete; owner approval and administrator enforcement must not both transfer the reward.")
 	require.NoError(t, err)
@@ -634,13 +655,13 @@ func TestOpenSourceBountyDisputeKeepsSnapshotAndShowsLiveTipAndRatings(t *testin
 	owner := createOpenSourceBountyUser(t, db, "evidence-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "evidence-contributor", 0, common.RoleCommonUser)
 	admin := createOpenSourceBountyUser(t, db, "evidence-admin", 0, common.RoleAdminUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/evidence", 100, 2_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/evidence", 2_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "evidence-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/evidence/issues/1", "https://github.com/example/evidence/pull/2", "encrypted-evidence", "Evidence submitted before the dispute.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/evidence/issues/1", "https://github.com/example/evidence/pull/2", "Evidence submitted before the dispute.")
 	require.NoError(t, err)
 
 	dispute, err := OpenOpenSourceBountyDispute(participant.Id, challenge.Id, "merged_but_unpaid", "The submitted contribution is complete, and later tips and ratings must remain visible to the independent reviewer.")
@@ -679,13 +700,13 @@ func TestOpenSourceBountyConcurrentOpenAndReviewPreserveDispute(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	owner := createOpenSourceBountyUser(t, db, "open-review-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "open-review-contributor", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/open-review", 100, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/open-review", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "open-review-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/open-review/issues/1", "https://github.com/example/open-review/pull/2", "encrypted-open-review", "Concurrent dispute evidence.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/open-review/issues/1", "https://github.com/example/open-review/pull/2", "Concurrent dispute evidence.")
 	require.NoError(t, err)
 
 	start := make(chan struct{})
@@ -720,13 +741,13 @@ func TestOpenSourceBountyConcurrentTipAndResolvePreserveBothTransfers(t *testing
 	owner := createOpenSourceBountyUser(t, db, "tip-resolve-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "tip-resolve-contributor", 0, common.RoleCommonUser)
 	admin := createOpenSourceBountyUser(t, db, "tip-resolve-admin", 0, common.RoleAdminUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/tip-resolve", 100, 2_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/tip-resolve", 2_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "tip-resolve-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/tip-resolve/issues/1", "https://github.com/example/tip-resolve/pull/2", "encrypted-tip-resolve", "Tip and payout evidence.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/tip-resolve/issues/1", "https://github.com/example/tip-resolve/pull/2", "Tip and payout evidence.")
 	require.NoError(t, err)
 	dispute, err := OpenOpenSourceBountyDispute(participant.Id, challenge.Id, "merged_but_unpaid", "A tip and an administrator payout may race, but both valid transfers must commit without deadlock or duplication.")
 	require.NoError(t, err)
@@ -762,13 +783,13 @@ func TestOpenSourceBountyDisputeRejectsRevokedAdminAndInvalidClaimants(t *testin
 	owner := createOpenSourceBountyUser(t, db, "claim-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "claim-contributor", 0, common.RoleCommonUser)
 	admin := createOpenSourceBountyUser(t, db, "claim-admin", 0, common.RoleAdminUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/claims", 100, 1_000, 2))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/claims", 1_000, 2))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "claim-contributor")
 	require.NoError(t, err)
-	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/claims/issues/1", "https://github.com/example/claims/pull/2", "encrypted-claim-evidence", "Claim evidence.")
+	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id, "https://github.com/example/claims/issues/1", "https://github.com/example/claims/pull/2", "Claim evidence.")
 	require.NoError(t, err)
 	dispute, err := OpenOpenSourceBountyDispute(participant.Id, challenge.Id, "merged_but_unpaid", "The administrator role must be revalidated in the same transaction that would transfer escrow.")
 	require.NoError(t, err)
@@ -800,7 +821,7 @@ func TestCloseOpenSourceBountyRefundsOnlyUnusedEscrow(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "participant", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/refund", 1_000, 2_000, 2))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/refund", 2_000, 2))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
@@ -819,13 +840,13 @@ func TestCloseOpenSourceBountyRefundsOnlyUnusedEscrow(t *testing.T) {
 
 	var ownerAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
-	assert.Equal(t, 9_000, ownerAfter.Quota, "promotion spend remains non-refundable")
+	assert.Equal(t, 10_000, ownerAfter.Quota, "closing refunds all unused escrow when the fee rate is zero")
 }
 
 func TestPublishOpenSourceBountyInsufficientBalanceIsAtomic(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "poor-owner", 999, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/atomic", 500, 500, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/atomic", 1_000, 1))
 	require.NoError(t, err)
 
 	_, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
@@ -845,7 +866,7 @@ func TestSubmitOpenSourceBountyRejectsEvidenceFromAnotherRepository(t *testing.T
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "participant", 0, common.RoleCommonUser)
-	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/source", 1_000, 1_000, 1))
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/source", 1_000, 1))
 	require.NoError(t, err)
 	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
@@ -857,7 +878,6 @@ func TestSubmitOpenSourceBountyRejectsEvidenceFromAnotherRepository(t *testing.T
 		project.Id,
 		"https://github.com/other/project/issues/1",
 		"https://github.com/example/source/pull/2",
-		"encrypted-review-message-reference",
 		"",
 	)
 	assert.Equal(t, "OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH", OpenSourceBountyErrorCode(err))

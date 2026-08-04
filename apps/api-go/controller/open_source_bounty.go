@@ -15,10 +15,9 @@ type openSourceBountyAcceptRequest struct {
 }
 
 type openSourceBountySubmitRequest struct {
-	IssueUrl               string `json:"issue_url"`
-	PullRequestUrl         string `json:"pull_request_url"`
-	EncryptedReviewMessage string `json:"encrypted_review_message"`
-	SubmissionNote         string `json:"submission_note"`
+	IssueUrl       string `json:"issue_url"`
+	PullRequestUrl string `json:"pull_request_url"`
+	SubmissionNote string `json:"submission_note"`
 }
 
 type openSourceBountyReviewRequest struct {
@@ -245,7 +244,7 @@ func SubmitOpenSourceBountyChallenge(c *gin.Context) {
 	}
 	challenge, err := model.SubmitOpenSourceBountyChallenge(
 		c.GetInt("id"), projectId, request.IssueUrl, request.PullRequestUrl,
-		request.EncryptedReviewMessage, request.SubmissionNote,
+		request.SubmissionNote,
 	)
 	if err != nil {
 		openSourceBountyApiError(c, err)

@@ -259,7 +259,7 @@ export function QuotaSettingsSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Percentage of the full reward pool charged to the publisher when a bounty is published. Promotion spend and escrow are charged separately.'
+                      'Public percentage of the full reward pool charged to the publisher when a bounty is published. Daily check-in rewards added to the publisher balance can offset this fee; escrow is locked separately.'
                     )}
                   </FormDescription>
                   <FormMessage />
