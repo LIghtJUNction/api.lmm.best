@@ -104,6 +104,8 @@ export interface PaymentMethod {
   settlement_unit?: string
   /** Configured gateway price for one credited USD. The server remains authoritative. */
   unit_price?: string | number
+  /** Per-method payment multiplier combined with the user's group multiplier. */
+  topup_ratio?: string | number
 }
 
 /**

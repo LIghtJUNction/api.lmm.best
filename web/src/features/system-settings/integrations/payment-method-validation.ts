@@ -33,6 +33,10 @@ export function isValidPaymentMethodData(
     typeof item.type !== 'string' ||
     ('icon' in item && typeof item.icon !== 'string') ||
     ('min_topup' in item && typeof item.min_topup !== 'string') ||
+    ('topup_ratio' in item &&
+      (typeof item.topup_ratio !== 'string' ||
+        !POSITIVE_DECIMAL_PATTERN.test(item.topup_ratio) ||
+        Number(item.topup_ratio) <= 0)) ||
     ('color' in item && typeof item.color !== 'string')
   ) {
     return false
