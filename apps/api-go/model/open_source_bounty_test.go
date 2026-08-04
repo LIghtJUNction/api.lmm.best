@@ -108,24 +108,52 @@ func TestOpenSourceBountyEmptyListQueriesReturnNonNilSlices(t *testing.T) {
 func TestOpenSourceBountyBoardRanksByGrossPricePerFix(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "price-ranking-owner", 100_000, common.RoleCommonUser)
+	projectsByReward := make(map[int]*OpenSourceBountyProject)
 	for index, reward := range []int{500, 5_000, 1_000} {
 		input := openSourceBountyInput(fmt.Sprintf("https://github.com/example/ranking-%d", index), reward, 1)
 		input.Title = fmt.Sprintf("Ranked bounty %d", reward)
 		project, err := CreateOpenSourceBountyDraft(owner.Id, input)
 		require.NoError(t, err)
-		_, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+		project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
 		require.NoError(t, err)
+		projectsByReward[reward] = project
 	}
+	require.NoError(t, DB.Model(&OpenSourceBountyProject{}).
+		Where("id = ?", projectsByReward[5_000].Id).
+		Updates(map[string]any{"status": OpenSourceBountyStatusPaused, "published_at": int64(100)}).Error)
+
+	equalPriceInput := openSourceBountyInput("https://github.com/example/ranking-equal", 5_000, 1)
+	equalPriceInput.Title = "Equal-price active bounty"
+	equalPriceProject, err := CreateOpenSourceBountyDraft(owner.Id, equalPriceInput)
+	require.NoError(t, err)
+	equalPriceProject, _, err = PublishOpenSourceBounty(owner.Id, equalPriceProject.Id)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&OpenSourceBountyProject{}).
+		Where("id = ?", equalPriceProject.Id).
+		Update("published_at", int64(200)).Error)
 
 	projects, total, err := ListOpenSourceBounties(owner.Id, 1, 20)
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), total)
-	require.Len(t, projects, 3)
-	assert.Equal(t, []int{5_000, 1_000, 500}, []int{
+	assert.Equal(t, int64(4), total)
+	require.Len(t, projects, 4)
+	assert.Equal(t, []int{5_000, 5_000, 1_000, 500}, []int{
 		projects[0].RewardQuota,
 		projects[1].RewardQuota,
 		projects[2].RewardQuota,
+		projects[3].RewardQuota,
 	})
+	assert.Equal(t, equalPriceProject.Id, projects[0].Id, "an active listing wins only the equal-price tie")
+	assert.Equal(t, projectsByReward[5_000].Id, projects[1].Id, "a paused high-price listing still outranks lower prices")
+
+	require.NoError(t, DB.Model(&OpenSourceBountyProject{}).
+		Where("id = ?", projectsByReward[1_000].Id).
+		Update("status", OpenSourceBountyStatusCompleted).Error)
+	projects, total, err = ListOpenSourceBounties(owner.Id, 1, 20)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), total, "completed lifecycle records must not occupy the public ranking")
+	for _, project := range projects {
+		assert.NotEqual(t, OpenSourceBountyStatusCompleted, project.Status)
+	}
 }
 
 func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
@@ -202,6 +230,37 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 	assert.Equal(t, 250, tipped)
 	assert.Equal(t, 250, challenge.TipQuota)
 
+	notifications, err := ListOpenSourceBountyTipNotifications(participant.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, notifications, 1)
+	assert.Equal(t, owner.Id, notifications[0].SenderUserId)
+	assert.Equal(t, owner.Username, notifications[0].SenderUsername)
+	assert.Equal(t, project.Title, notifications[0].ProjectTitle)
+	assert.Equal(t, 250, notifications[0].Quota)
+	assert.Zero(t, notifications[0].RecipientReadAt)
+	assert.Zero(t, notifications[0].ThankedAt)
+
+	require.NoError(t, MarkOpenSourceBountyTipNotificationsRead(participant.Id))
+	notifications, err = ListOpenSourceBountyTipNotifications(participant.Id, 50)
+	require.NoError(t, err)
+	assert.NotZero(t, notifications[0].RecipientReadAt)
+
+	thanked, err := ThankOpenSourceBountyTip(participant.Id, notifications[0].Id)
+	require.NoError(t, err)
+	assert.NotZero(t, thanked.ThankedAt)
+	thankedAgain, err := ThankOpenSourceBountyTip(participant.Id, notifications[0].Id)
+	require.NoError(t, err)
+	assert.Equal(t, thanked.ThankedAt, thankedAgain.ThankedAt, "thanking the same tip must be idempotent")
+
+	stranger := createOpenSourceBountyUser(t, db, "rating-stranger", 0, common.RoleCommonUser)
+	_, err = ThankOpenSourceBountyTip(stranger.Id, notifications[0].Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_TIP_NOT_FOUND", OpenSourceBountyErrorCode(err))
+
+	publicProjects, _, err := ListOpenSourceBounties(stranger.Id, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, publicProjects, 1)
+	assert.Equal(t, int64(1), publicProjects[0].OwnerThankHeartCount)
+
 	challenge, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id,
 		"https://github.com/example/ratings/issues/1", "https://github.com/example/ratings/pull/2",
 		"Partial fix ready for review.")
@@ -243,6 +302,8 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 	require.NoError(t, db.Where("challenge_id = ? AND kind = ?", challenge.Id, OpenSourceBountyLedgerTipTransfer).First(&tipLedger).Error)
 	assert.Equal(t, 250, tipLedger.Quota)
 	assert.Equal(t, "Thanks for isolating the failing path.", tipLedger.Note)
+	assert.NotZero(t, tipLedger.RecipientReadAt)
+	assert.Equal(t, thanked.ThankedAt, tipLedger.ThankedAt)
 }
 
 func TestOpenSourceBountyRESTTipIdempotencyReplayMismatchAndRetry(t *testing.T) {
@@ -331,7 +392,8 @@ func TestOpenSourceBountyRESTTipConcurrentDuplicateTransfersOnce(t *testing.T) {
 func TestOpenSourceBountyPublicationChargesAdministratorConfiguredFee(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	setOpenSourceBountyFeeRateForTest("2.5")
-	owner := createOpenSourceBountyUser(t, db, "fee-owner", 5_000, common.RoleRootUser)
+	root := createOpenSourceBountyUser(t, db, "fee-recipient-root", 100, common.RoleRootUser)
+	owner := createOpenSourceBountyUser(t, db, "fee-owner", 5_000, common.RoleCommonUser)
 	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/fee", 333, 3))
 	require.NoError(t, err)
 
@@ -357,18 +419,62 @@ func TestOpenSourceBountyPublicationChargesAdministratorConfiguredFee(t *testing
 	var feeLedger OpenSourceBountyLedger
 	require.NoError(t, db.Where("project_id = ? AND kind = ?", project.Id, OpenSourceBountyLedgerPlatformFee).First(&feeLedger).Error)
 	assert.Equal(t, 27, feeLedger.Quota)
+	assert.Equal(t, owner.Id, feeLedger.UserId)
+	assert.Equal(t, root.Id, feeLedger.CounterpartyUserId)
+	var rootAfter User
+	require.NoError(t, db.First(&rootAfter, root.Id).Error)
+	assert.Equal(t, 127, rootAfter.Quota, "the public platform fee is credited to the super administrator")
 
 	_, refunded, err := CloseOpenSourceBounty(owner.Id, project.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 972, refunded)
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
 	assert.Equal(t, 4_973, ownerAfter.Quota, "the public platform fee is retained from the gross listing price")
+	require.NoError(t, db.First(&rootAfter, root.Id).Error)
+	assert.Equal(t, 127, rootAfter.Quota, "closing a bounty does not refund the platform fee")
+}
+
+func TestOpenSourceBountyRootPublisherReceivesItsPlatformFee(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	setOpenSourceBountyFeeRateForTest("1")
+	root := createOpenSourceBountyUser(t, db, "self-fee-root", 1_000, common.RoleRootUser)
+	project, err := CreateOpenSourceBountyDraft(root.Id, openSourceBountyInput("https://github.com/example/self-fee", 1_000, 1))
+	require.NoError(t, err)
+
+	project, charged, err := PublishOpenSourceBounty(root.Id, project.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 1_000, charged)
+	assert.Equal(t, 990, project.EscrowQuota)
+	var rootAfter User
+	require.NoError(t, db.First(&rootAfter, root.Id).Error)
+	assert.Equal(t, 10, rootAfter.Quota, "the root publisher pays gross and receives the fee in the same transaction")
+	var feeLedger OpenSourceBountyLedger
+	require.NoError(t, db.Where("project_id = ? AND kind = ?", project.Id, OpenSourceBountyLedgerPlatformFee).First(&feeLedger).Error)
+	assert.Equal(t, root.Id, feeLedger.UserId)
+	assert.Equal(t, root.Id, feeLedger.CounterpartyUserId)
+}
+
+func TestOpenSourceBountyPublicationRollsBackWithoutFeeRecipient(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	setOpenSourceBountyFeeRateForTest("1")
+	owner := createOpenSourceBountyUser(t, db, "missing-fee-recipient-owner", 1_000, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/missing-fee-recipient", 1_000, 1))
+	require.NoError(t, err)
+
+	_, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND", OpenSourceBountyErrorCode(err))
+	var ownerAfter User
+	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
+	assert.Equal(t, 1_000, ownerAfter.Quota, "the gross debit rolls back when the fee cannot be credited")
+	require.NoError(t, db.First(project, project.Id).Error)
+	assert.Equal(t, OpenSourceBountyStatusDraft, project.Status)
 }
 
 func TestOpenSourceBountyDailyCheckinRewardCanCoverPublicationFee(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	require.NoError(t, db.AutoMigrate(&Checkin{}))
 	setOpenSourceBountyFeeRateForTest("1")
+	root := createOpenSourceBountyUser(t, db, "checkin-fee-root", 0, common.RoleRootUser)
 	owner := createOpenSourceBountyUser(t, db, "checkin-fee-owner", 990, common.RoleCommonUser)
 	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/checkin-fee", 1_000, 1))
 	require.NoError(t, err)
@@ -388,6 +494,9 @@ func TestOpenSourceBountyDailyCheckinRewardCanCoverPublicationFee(t *testing.T) 
 	var ownerAfter User
 	require.NoError(t, db.First(&ownerAfter, owner.Id).Error)
 	assert.Zero(t, ownerAfter.Quota)
+	var rootAfter User
+	require.NoError(t, db.First(&rootAfter, root.Id).Error)
+	assert.Equal(t, 10, rootAfter.Quota)
 }
 
 func TestOpenSourceBountyFeeRateParsesDecimalBasisPointsExactly(t *testing.T) {

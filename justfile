@@ -97,7 +97,12 @@ test-rust:
 test-all: test test-rust
 
 # Run default Go and web quality gates.
-check: format-check lint typecheck test
+check: format-check lint typecheck test check-deploy
+
+# Verify atomic frontend publication and the protected Go deployment contract.
+check-deploy:
+    bash deploy/test-frontend-release.sh
+    bash deploy/production/test-go-deploy-contract.sh
 
 format: format-go format-web
 

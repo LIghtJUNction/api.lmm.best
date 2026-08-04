@@ -56,6 +56,8 @@ func setupOpenSourceBountyMCPControllerTest(t *testing.T) (*gorm.DB, model.User,
 		&model.OpenSourceBountyRESTOperation{},
 		&model.OpenSourceBountyDispute{},
 	))
+	root := model.User{Username: "fee-recipient-root", Password: "password", AffCode: "fee-recipient-root", Quota: 0, Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&root).Error)
 	user := model.User{Username: "mcp-owner", Password: "password", AffCode: "mcp-owner", Quota: 10_000, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&user).Error)
 	token, _, err := model.RotateOpenSourceBountyMCPToken(user.Id)
@@ -82,6 +84,8 @@ func setupOpenSourceBountyMCPControllerTest(t *testing.T) (*gorm.DB, model.User,
 
 func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing.T) {
 	db, user, token := setupOpenSourceBountyMCPControllerTest(t)
+	var root model.User
+	require.NoError(t, db.Where("username = ?", "fee-recipient-root").First(&root).Error)
 	server := httptest.NewServer(NewOpenSourceBountyMCPHandler())
 	t.Cleanup(server.Close)
 
@@ -164,6 +168,10 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.NoError(t, err)
 	require.True(t, first.NeedsInput())
 	require.NotEmpty(t, first.RequestState)
+	confirmation, ok := first.InputRequests["confirmation"].(*mcp.ElicitParams)
+	require.True(t, ok)
+	assert.Contains(t, confirmation.Message, "credits the public 2.50% platform fee of 27 to super administrator \"fee-recipient-root\"")
+	assert.Contains(t, confirmation.Message, "Your net balance decrease is 999")
 	var before model.User
 	require.NoError(t, db.First(&before, user.Id).Error)
 	assert.Equal(t, 10_000, before.Quota, "input-required confirmation must not debit balance")
@@ -202,6 +210,9 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	var after model.User
 	require.NoError(t, db.First(&after, user.Id).Error)
 	assert.Equal(t, 9_001, after.Quota, "the gross listing price is debited exactly once")
+	var rootAfter model.User
+	require.NoError(t, db.First(&rootAfter, root.Id).Error)
+	assert.Equal(t, 27, rootAfter.Quota, "the public platform fee is credited to the super administrator exactly once")
 
 	replayed, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "open_source_bounties.publish", Arguments: map[string]any{"project_id": project.Id},
@@ -212,6 +223,8 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	assert.False(t, replayed.IsError, "a response-loss retry returns the persisted operation result")
 	require.NoError(t, db.First(&after, user.Id).Error)
 	assert.Equal(t, 9_001, after.Quota, "replaying confirmation cannot debit twice")
+	require.NoError(t, db.First(&rootAfter, root.Id).Error)
+	assert.Equal(t, 27, rootAfter.Quota, "replaying confirmation cannot credit the fee twice")
 
 	participant := model.User{Username: "mcp-contributor", Password: "password", AffCode: "mcp-contributor", Quota: 0, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&participant).Error)

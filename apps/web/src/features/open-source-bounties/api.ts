@@ -27,6 +27,7 @@ import type {
   BountyMcpConnection,
   BountyProject,
   BountyProjectDetail,
+  BountyTipNotification,
 } from './types'
 
 interface ApiEnvelope<T> {
@@ -49,9 +50,12 @@ async function unwrap<T>(request: Promise<{ data: ApiEnvelope<T> }>) {
 }
 
 export async function listBounties() {
-  const result = await unwrap<{ items: BountyProject[] | null; total: number }>(
-    api.get('/api/open-source-bounties?page=1&page_size=50')
-  )
+  const result = await unwrap<{
+    items: BountyProject[] | null
+    total: number
+    page: number
+    page_size: number
+  }>(api.get('/api/open-source-bounties?page=1&page_size=50'))
   return { ...result, items: result.items ?? [] }
 }
 
@@ -188,6 +192,22 @@ export function tipChallenge(
     api.post(`/api/open-source-bounties/challenges/${challengeId}/tip`, input, {
       headers: { 'Idempotency-Key': idempotencyKey },
     })
+  )
+}
+
+export function listReceivedBountyTips() {
+  return unwrap<BountyTipNotification[]>(
+    api.get('/api/open-source-bounties/tips/received')
+  )
+}
+
+export function markReceivedBountyTipsRead() {
+  return unwrap<null>(api.post('/api/open-source-bounties/tips/received/read'))
+}
+
+export function thankBountyTip(tipId: number) {
+  return unwrap<BountyTipNotification>(
+    api.post(`/api/open-source-bounties/tips/${tipId}/thank`)
   )
 }
 

@@ -9,6 +9,9 @@ readonly ENV_FILE=/etc/lmm-api/lmm-api.env
 readonly BINARY=/usr/lib/lmm-api/backends/go/lmm-api
 readonly BACKUP_ROOT=/var/lib/lmm-api/deploy-backups
 readonly LOCK_FILE=/run/lock/lmm-api-go-deploy.lock
+readonly FRONTEND_ROOT=/srv/lmm-api-frontend
+readonly FRONTEND_PROBE_URL=https://127.0.0.1:9000/
+readonly FRONTEND_PROBE_HOST=api.lmm.best
 
 die() { printf 'activate-go-release: %s\n' "$*" >&2; exit 1; }
 is_sha256() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
@@ -17,6 +20,9 @@ PACKAGE=''
 PACKAGE_SHA256=''
 ROLLBACK_PACKAGE=''
 ROLLBACK_SHA256=''
+FRONTEND_ARCHIVE=''
+FRONTEND_SHA256=''
+FRONTEND_RELEASE_SCRIPT=''
 EXPECTED_VERSION=''
 STATUS_FILE=''
 while (($#)); do
@@ -25,6 +31,9 @@ while (($#)); do
     --package-sha256) (($# >= 2)) || die '--package-sha256 requires a value'; PACKAGE_SHA256=$2; shift 2 ;;
     --rollback-package) (($# >= 2)) || die '--rollback-package requires a value'; ROLLBACK_PACKAGE=$2; shift 2 ;;
     --rollback-sha256) (($# >= 2)) || die '--rollback-sha256 requires a value'; ROLLBACK_SHA256=$2; shift 2 ;;
+    --frontend-archive) (($# >= 2)) || die '--frontend-archive requires a value'; FRONTEND_ARCHIVE=$2; shift 2 ;;
+    --frontend-sha256) (($# >= 2)) || die '--frontend-sha256 requires a value'; FRONTEND_SHA256=$2; shift 2 ;;
+    --frontend-release-script) (($# >= 2)) || die '--frontend-release-script requires a value'; FRONTEND_RELEASE_SCRIPT=$2; shift 2 ;;
     --expected-version) (($# >= 2)) || die '--expected-version requires a value'; EXPECTED_VERSION=$2; shift 2 ;;
     --status-file) (($# >= 2)) || die '--status-file requires a value'; STATUS_FILE=$2; shift 2 ;;
     *) die "unknown argument: $1" ;;
@@ -33,16 +42,19 @@ done
 
 [[ $EUID -eq 0 ]] || die 'must run as root'
 [[ $(hostnamectl --static) == "$EXPECTED_HOST" ]] || die 'refusing to run on an unexpected host'
-[[ $EXPECTED_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ ]] || die 'invalid expected version'
+[[ $EXPECTED_VERSION =~ ^[0-9][0-9A-Za-z._-]*$ ]] || die 'invalid expected version'
 [[ $STATUS_FILE == /var/lib/lmm-api/deploy-staging/* && ! -L $STATUS_FILE ]] || die 'unsafe status path'
-for path in "$PACKAGE" "$ROLLBACK_PACKAGE"; do
+for path in "$PACKAGE" "$ROLLBACK_PACKAGE" "$FRONTEND_ARCHIVE" "$FRONTEND_RELEASE_SCRIPT"; do
   [[ $path == /var/lib/lmm-api/deploy-staging/* && -f $path && ! -L $path ]] || die "unsafe package path: $path"
 done
 is_sha256 "$PACKAGE_SHA256" || die 'invalid package checksum'
 is_sha256 "$ROLLBACK_SHA256" || die 'invalid rollback checksum'
+is_sha256 "$FRONTEND_SHA256" || die 'invalid frontend checksum'
 [[ $(sha256sum "$PACKAGE" | awk '{print $1}') == "$PACKAGE_SHA256" ]] || die 'package checksum mismatch'
 [[ $(sha256sum "$ROLLBACK_PACKAGE" | awk '{print $1}') == "$ROLLBACK_SHA256" ]] || die 'rollback checksum mismatch'
-for command in curl flock jq pacman pg_dump pg_restore sha256sum systemctl; do
+[[ $(sha256sum "$FRONTEND_ARCHIVE" | awk '{print $1}') == "$FRONTEND_SHA256" ]] || die 'frontend archive checksum mismatch'
+[[ -x $FRONTEND_RELEASE_SCRIPT ]] || die 'frontend release script is not executable'
+for command in curl flock jq pacman pg_dump pg_restore readlink sha256sum systemctl tar; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 
@@ -88,10 +100,50 @@ probe_version() {
   return 1
 }
 
+probe_frontend() {
+  local expected_release=$1 expected_sha256=$2 response_file
+  response_file="${STATUS_FILE%/*}/frontend-probe.html"
+  for _ in {1..15}; do
+    if [[ $(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true) == "releases/$expected_release" ]] &&
+       curl --fail --silent --show-error --insecure --max-time 3 --noproxy '*' \
+         --header "Host: $FRONTEND_PROBE_HOST" \
+         --output "$response_file" "$FRONTEND_PROBE_URL" 2>/dev/null &&
+       [[ $(sha256sum "$response_file" | awk '{print $1}') == "$expected_sha256" ]]; then
+      rm -f -- "$response_file"
+      return 0
+    fi
+    sleep 1
+  done
+  rm -f -- "$response_file"
+  return 1
+}
+
 install -d -m0700 "${LOCK_FILE%/*}" "$BACKUP_ROOT"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die 'another Go deployment is running'
 write_status PREPARING
+
+frontend_link=$(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true)
+[[ $frontend_link =~ ^releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]] || \
+  die 'current frontend release link is missing or unsafe'
+old_frontend_release=${BASH_REMATCH[1]}
+[[ -d $FRONTEND_ROOT/releases/$old_frontend_release ]] || \
+  die 'current frontend release directory is missing'
+old_frontend_sha256=$(sha256sum "$FRONTEND_ROOT/releases/$old_frontend_release/index.html" | awk '{print $1}')
+
+frontend_source="${STATUS_FILE%/*}/frontend-dist"
+[[ ! -e $frontend_source ]] || die 'frontend extraction directory already exists'
+if tar -tf "$FRONTEND_ARCHIVE" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+  die 'frontend archive contains an unsafe path'
+fi
+mkdir -m0700 -- "$frontend_source"
+tar --extract --file "$FRONTEND_ARCHIVE" --directory "$frontend_source" \
+  --no-same-owner --no-same-permissions
+if find "$frontend_source" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
+  die 'frontend archive contains unsupported file types'
+fi
+[[ -f $frontend_source/index.html ]] || die 'frontend archive lacks index.html'
+frontend_sha256=$(sha256sum "$frontend_source/index.html" | awk '{print $1}')
 
 new_record=$(pacman -Qp "$PACKAGE")
 rollback_record=$(pacman -Qp "$ROLLBACK_PACKAGE")
@@ -121,14 +173,29 @@ mv -T "$snapshot/postgresql.dump.new" "$snapshot/postgresql.dump"
 chmod 0600 "$snapshot/postgresql.dump"
 printf 'expected_version=%s\nold_version=%s\ncreated_at=%s\n' \
   "$EXPECTED_VERSION" "$old_version" "$(date -u +%FT%TZ)" >"$snapshot/release.env"
+printf 'old_frontend_release=%s\nold_frontend_sha256=%s\n' \
+  "$old_frontend_release" "$old_frontend_sha256" >>"$snapshot/release.env"
 write_status "BACKUP_READY $snapshot"
 
 rollback() {
-  local reason=$1
+  local reason=$1 frontend_restored=1 backend_restored=1
   write_status "ROLLBACK_STARTED $reason"
-  pacman -U --noconfirm "$ROLLBACK_PACKAGE"
-  restart_service
-  if probe_version "$old_version"; then
+  if [[ $(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true) != "releases/$old_frontend_release" ]]; then
+    if ! "$FRONTEND_RELEASE_SCRIPT" rollback \
+      --root "$FRONTEND_ROOT" \
+      --release "$old_frontend_release" \
+      --keep 3; then
+      [[ $(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true) == "releases/$old_frontend_release" ]] || frontend_restored=0
+    fi
+  fi
+  if pacman -U --noconfirm "$ROLLBACK_PACKAGE"; then
+    restart_service || backend_restored=0
+  else
+    backend_restored=0
+  fi
+  if (( frontend_restored && backend_restored )) &&
+     probe_version "$old_version" &&
+     probe_frontend "$old_frontend_release" "$old_frontend_sha256"; then
     write_status "ROLLED_BACK $old_version $reason"
   else
     write_status "ROLLBACK_FAILED $reason"
@@ -153,4 +220,14 @@ fi
 if ! probe_version "$EXPECTED_VERSION"; then
   rollback health-or-version-probe-failed
 fi
-write_status "DEPLOYED $EXPECTED_VERSION $snapshot"
+if ! "$FRONTEND_RELEASE_SCRIPT" publish \
+  --root "$FRONTEND_ROOT" \
+  --source "$frontend_source" \
+  --release "$EXPECTED_VERSION" \
+  --keep 3; then
+  rollback frontend-publish-failed
+fi
+if ! probe_frontend "$EXPECTED_VERSION" "$frontend_sha256"; then
+  rollback frontend-health-probe-failed
+fi
+write_status "DEPLOYED $EXPECTED_VERSION $snapshot frontend=$EXPECTED_VERSION"
