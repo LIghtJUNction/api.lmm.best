@@ -71,6 +71,7 @@ type OpenSourceBountyProject struct {
 	Description        string `json:"description" gorm:"type:text;not null"`
 	Rules              string `json:"rules" gorm:"type:text;not null"`
 	RewardQuota        int    `json:"reward_quota" gorm:"not null;default:0"`
+	NetRewardQuota     int    `json:"net_reward_quota" gorm:"not null;default:0"`
 	RewardSlots        int    `json:"reward_slots" gorm:"not null;default:0"`
 	EscrowQuota        int    `json:"escrow_quota" gorm:"not null;default:0"`
 	PlatformFeeRateBps int    `json:"platform_fee_rate_bps" gorm:"not null;default:0"`
@@ -173,6 +174,8 @@ type OpenSourceBountyFeeConfig struct {
 }
 
 type OpenSourceBountyPublicationCharge struct {
+	GrossQuota         int `json:"gross_quota"`
+	NetRewardQuota     int `json:"net_reward_quota"`
 	EscrowQuota        int `json:"escrow_quota"`
 	PlatformFeeQuota   int `json:"platform_fee_quota"`
 	PlatformFeeRateBps int `json:"platform_fee_rate_bps"`
@@ -218,22 +221,29 @@ func parseOpenSourceBountyFeeRateBasisPoints(raw string) (int, error) {
 }
 
 func CalculateOpenSourceBountyPublicationCharge(project *OpenSourceBountyProject) (OpenSourceBountyPublicationCharge, error) {
-	baseTotal, err := bountyCharge(project.RewardQuota, project.RewardSlots)
+	grossTotal, err := bountyCharge(project.RewardQuota, project.RewardSlots)
 	if err != nil {
 		return OpenSourceBountyPublicationCharge{}, err
 	}
-	escrow := project.RewardQuota * project.RewardSlots
 	config := GetOpenSourceBountyFeeConfig()
-	escrow64, bps64 := int64(escrow), int64(config.RateBasisPoints)
-	fee64 := (escrow64/10_000)*bps64 + ((escrow64%10_000)*bps64+9_999)/10_000
+	reward64, bps64 := int64(project.RewardQuota), int64(config.RateBasisPoints)
+	feePerSlot64 := (reward64/10_000)*bps64 + ((reward64%10_000)*bps64+9_999)/10_000
 	maxInt := int64(int(^uint(0) >> 1))
-	if fee64 < 0 || fee64 > maxInt || int64(baseTotal) > maxInt-fee64 {
+	if feePerSlot64 < 0 || feePerSlot64 >= reward64 {
+		return OpenSourceBountyPublicationCharge{}, bountyError("OPEN_SOURCE_BOUNTY_INVALID_FEE", "platform fee leaves no contributor reward")
+	}
+	netReward64 := reward64 - feePerSlot64
+	escrow64 := netReward64 * int64(project.RewardSlots)
+	fee64 := feePerSlot64 * int64(project.RewardSlots)
+	if escrow64 < 0 || fee64 < 0 || escrow64 > maxInt || fee64 > maxInt || escrow64+fee64 != int64(grossTotal) {
 		return OpenSourceBountyPublicationCharge{}, bountyError("OPEN_SOURCE_BOUNTY_INVALID_QUOTA", "bounty quota is too large")
 	}
 	return OpenSourceBountyPublicationCharge{
-		EscrowQuota:      escrow,
+		GrossQuota:       grossTotal,
+		NetRewardQuota:   int(netReward64),
+		EscrowQuota:      int(escrow64),
 		PlatformFeeQuota: int(fee64), PlatformFeeRateBps: config.RateBasisPoints,
-		TotalQuota: baseTotal + int(fee64),
+		TotalQuota: grossTotal,
 	}, nil
 }
 
@@ -434,6 +444,7 @@ func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSour
 		now := common.GetTimestamp()
 		if err := tx.Model(&project).Updates(map[string]interface{}{
 			"status": OpenSourceBountyStatusPublished, "escrow_quota": charge.EscrowQuota,
+			"net_reward_quota":      charge.NetRewardQuota,
 			"platform_fee_rate_bps": charge.PlatformFeeRateBps, "platform_fee_quota": charge.PlatformFeeQuota,
 			"published_at": now, "updated_at": now,
 		}).Error; err != nil {
@@ -464,7 +475,7 @@ func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSour
 	if err := cacheDecrUserQuota(ownerUserId, int64(chargedQuota)); err != nil {
 		common.SysLog("failed to decrease user quota cache after publishing open-source bounty: " + err.Error())
 	}
-	RecordLog(ownerUserId, LogTypeSystem, fmt.Sprintf("Published open-source bounty %d and escrowed %d quota", projectId, chargedQuota))
+	RecordLog(ownerUserId, LogTypeSystem, fmt.Sprintf("Published open-source bounty %d with %d gross listing quota", projectId, chargedQuota))
 	project, err := GetOpenSourceBountyProject(projectId)
 	return project, chargedQuota, err
 }
@@ -651,7 +662,7 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 	}
 	views := make([]OpenSourceBountyProjectView, 0)
 	err := openSourceBountyProjectQuery().Where("p.status IN ?", statuses).
-		Order("p.published_at DESC, p.id DESC").
+		Order("p.reward_quota DESC, p.published_at DESC, p.id DESC").
 		Offset((page - 1) * pageSize).Limit(pageSize).Scan(&views).Error
 	if err != nil {
 		return nil, 0, err
@@ -788,6 +799,10 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 			return bountyError("OPEN_SOURCE_BOUNTY_FULL", "all reward slots are currently occupied")
 		}
 		now := common.GetTimestamp()
+		netRewardQuota := project.NetRewardQuota
+		if netRewardQuota <= 0 {
+			netRewardQuota = project.RewardQuota
+		}
 		result := tx.Where("project_id = ? AND participant_user_id = ?", projectId, participantUserId).First(&challenge)
 		if result.Error == nil {
 			if challenge.Status != OpenSourceBountyChallengeWithdrawn {
@@ -795,7 +810,7 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 			}
 			return tx.Model(&challenge).Updates(map[string]interface{}{
 				"github_handle": handle, "status": OpenSourceBountyChallengeAccepted, "issue_url": "", "pull_request_url": "",
-				"submission_note": "", "review_note": "", "reward_quota": project.RewardQuota,
+				"submission_note": "", "review_note": "", "reward_quota": netRewardQuota,
 				"accepted_at": now, "submitted_at": 0, "reviewed_at": 0, "rejected_at": 0, "paid_at": 0, "updated_at": now,
 			}).Error
 		}
@@ -804,7 +819,7 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 		}
 		challenge = OpenSourceBountyChallenge{
 			ProjectId: projectId, ParticipantUserId: participantUserId, GithubHandle: handle,
-			Status: OpenSourceBountyChallengeAccepted, RewardQuota: project.RewardQuota,
+			Status: OpenSourceBountyChallengeAccepted, RewardQuota: netRewardQuota,
 			AcceptedAt: now, CreatedAt: now, UpdatedAt: now,
 		}
 		return tx.Create(&challenge).Error

@@ -204,6 +204,7 @@ export interface BountyProject {
   description: string
   rules: string
   reward_quota: number
+  net_reward_quota: number
   reward_slots: number
   escrow_quota: number
   platform_fee_rate_bps: number

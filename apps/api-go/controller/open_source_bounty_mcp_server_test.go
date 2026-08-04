@@ -201,7 +201,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.False(t, second.NeedsInput())
 	var after model.User
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 8_976, after.Quota, "escrow and the rounded-up public 2.5% task fee debit exactly once")
+	assert.Equal(t, 9_001, after.Quota, "the gross listing price is debited exactly once")
 
 	replayed, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "open_source_bounties.publish", Arguments: map[string]any{"project_id": project.Id},
@@ -211,7 +211,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.NoError(t, err)
 	assert.False(t, replayed.IsError, "a response-loss retry returns the persisted operation result")
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 8_976, after.Quota, "replaying confirmation cannot debit twice")
+	assert.Equal(t, 9_001, after.Quota, "replaying confirmation cannot debit twice")
 
 	participant := model.User{Username: "mcp-contributor", Password: "password", AffCode: "mcp-contributor", Quota: 0, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&participant).Error)
@@ -233,7 +233,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	_, err = session.CallTool(ctx, tipConfirmed)
 	require.NoError(t, err, "a response-loss retry must recover the committed tip")
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 8_853, after.Quota, "the same confirmed tip debits the publisher exactly once")
+	assert.Equal(t, 8_878, after.Quota, "the same confirmed tip debits the publisher exactly once")
 	var participantAfter model.User
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
 	assert.Equal(t, 123, participantAfter.Quota, "the same confirmed tip credits the contributor exactly once")
@@ -257,7 +257,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	_, err = session.CallTool(ctx, approveConfirmed)
 	require.NoError(t, err, "a response-loss retry must recover the committed reward payment")
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
-	assert.Equal(t, 456, participantAfter.Quota, "the reward and tip each transfer exactly once")
+	assert.Equal(t, 447, participantAfter.Quota, "the net reward and tip each transfer exactly once")
 
 	closeRequest := &mcp.CallToolParams{Name: "open_source_bounties.close", Arguments: map[string]any{"project_id": project.Id}}
 	closePending, err := session.CallTool(ctx, closeRequest)
@@ -272,5 +272,5 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	_, err = session.CallTool(ctx, closeConfirmed)
 	require.NoError(t, err, "a response-loss retry must recover the committed escrow refund")
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 9_519, after.Quota, "the remaining escrow refund is credited exactly once")
+	assert.Equal(t, 9_526, after.Quota, "the remaining net escrow refund is credited exactly once")
 }

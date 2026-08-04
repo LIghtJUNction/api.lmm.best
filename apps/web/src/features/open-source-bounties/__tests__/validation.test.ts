@@ -21,6 +21,7 @@ import { describe, test } from 'node:test'
 
 import {
   type BountyDraftValidationInput,
+  calculateBountyCharge,
   validateBountyDraft,
 } from '../validation'
 
@@ -77,5 +78,29 @@ describe('bounty draft validation', () => {
       validateBountyDraft({ ...VALID_DRAFT, rewardSlots: 101 }).rewardSlots,
       'Reward slots must be a whole number between 1 and 100.'
     )
+  })
+})
+
+describe('bounty publication charge', () => {
+  test('deducts the public fee from each listed reward instead of adding it', () => {
+    assert.deepEqual(calculateBountyCharge(5_000_000, 20, 100), {
+      gross: 100_000_000,
+      netReward: 4_950_000,
+      escrow: 99_000_000,
+      platformFee: 1_000_000,
+      feeRatePercent: 1,
+      total: 100_000_000,
+    })
+  })
+
+  test('rounds each slot fee up to the smallest quota unit', () => {
+    assert.deepEqual(calculateBountyCharge(333, 3, 250), {
+      gross: 999,
+      netReward: 324,
+      escrow: 972,
+      platformFee: 27,
+      feeRatePercent: 2.5,
+      total: 999,
+    })
   })
 })

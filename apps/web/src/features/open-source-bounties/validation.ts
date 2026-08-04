@@ -31,6 +31,35 @@ export type BountyDraftErrors = Partial<
   Record<keyof BountyDraftValidationInput, string>
 >
 
+export type BountyCharge = {
+  gross: number
+  netReward: number
+  escrow: number
+  platformFee: number
+  feeRatePercent: number
+  total: number
+}
+
+export function calculateBountyCharge(
+  rewardQuota: number,
+  rewardSlots: number,
+  feeRateBasisPoints: number
+): BountyCharge {
+  const slots = Math.max(0, rewardSlots)
+  const feePerSlot = Math.ceil((rewardQuota * feeRateBasisPoints) / 10_000)
+  const netReward = Math.max(0, rewardQuota - feePerSlot)
+  const gross = rewardQuota * slots
+  const platformFee = feePerSlot * slots
+  return {
+    gross,
+    netReward,
+    escrow: netReward * slots,
+    platformFee,
+    feeRatePercent: feeRateBasisPoints / 100,
+    total: gross,
+  }
+}
+
 function isGithubRepositoryUrl(rawUrl: string): boolean {
   try {
     const url = new URL(rawUrl.trim())

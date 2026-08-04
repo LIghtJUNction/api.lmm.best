@@ -111,7 +111,12 @@ import {
   type BountyProject,
   type BountyProjectDetail,
 } from './types'
-import { type BountyDraftErrors, validateBountyDraft } from './validation'
+import {
+  type BountyCharge,
+  type BountyDraftErrors,
+  calculateBountyCharge,
+  validateBountyDraft,
+} from './validation'
 
 const BOUNTY_QUERY_KEYS = [
   ['open-source-bounties'],
@@ -143,6 +148,8 @@ const ERROR_KEYS: Record<string, string> = {
   OPEN_SOURCE_BOUNTY_INVALID_RULES:
     'Acceptance and verification rules must contain 20 to 5000 characters.',
   OPEN_SOURCE_BOUNTY_INVALID_QUOTA: 'Reward per fix must be greater than zero.',
+  OPEN_SOURCE_BOUNTY_INVALID_FEE:
+    'The platform fee leaves no contributor reward.',
   OPEN_SOURCE_BOUNTY_INVALID_SLOTS:
     'Reward slots must be a whole number between 1 and 100.',
   OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE:
@@ -277,15 +284,8 @@ export function OpenSourceBounties() {
 
   const draftCharge = useMemo(() => {
     const reward = parseQuotaFromDollars(draft.rewardAmount)
-    const escrow = reward * Math.max(0, draft.rewardSlots)
     const feeRateBps = configQuery.data?.rate_basis_points ?? 0
-    const platformFee = Math.ceil((escrow * feeRateBps) / 10_000)
-    return {
-      escrow,
-      platformFee,
-      feeRatePercent: feeRateBps / 100,
-      total: escrow + platformFee,
-    }
+    return calculateBountyCharge(reward, draft.rewardSlots, feeRateBps)
   }, [
     configQuery.data?.rate_basis_points,
     draft.rewardAmount,
@@ -383,6 +383,36 @@ export function OpenSourceBounties() {
     } finally {
       setPending('')
     }
+  }
+
+  const confirmPublication = (project: BountyProject) => {
+    const charge = calculateBountyCharge(
+      project.reward_quota,
+      project.reward_slots,
+      configQuery.data?.rate_basis_points ?? 0
+    )
+    if (
+      !window.confirm(
+        t(
+          'Publish now? Your balance will pay the {{gross}} gross listing total. The public {{rate}}% platform fee is {{fee}}, leaving {{netReward}} per approved fix and {{escrow}} total escrow.',
+          {
+            gross: formatQuota(charge.gross),
+            rate: charge.feeRatePercent,
+            fee: formatQuota(charge.platformFee),
+            netReward: formatQuota(charge.netReward),
+            escrow: formatQuota(charge.escrow),
+          }
+        )
+      )
+    ) {
+      return
+    }
+    void runAction(
+      `publish-${project.id}`,
+      () => publishBounty(project.id),
+      'Bounty published and reward pool funded.',
+      true
+    )
   }
 
   const handleAccept = async () => {
@@ -598,7 +628,7 @@ export function OpenSourceBounties() {
               </AlertTitle>
               <AlertDescription>
                 {t(
-                  'Publishing charges the public administrator-configured task fee and locks the full reward pool. Daily check-in rewards added to your balance can offset the fee. This rule also applies to administrators and the site owner.'
+                  'Publishing deducts the gross listing total from your balance. The public administrator-configured platform fee is retained from that amount, and the remainder becomes contributor escrow. This rule also applies to administrators and the site owner.'
                 )}
               </AlertDescription>
             </Alert>
@@ -662,47 +692,7 @@ export function OpenSourceBounties() {
                         )}
                         onEdit={() => openEditDialog(project)}
                         onReview={() => openProjectDetail(project.id)}
-                        onPublish={() =>
-                          window.confirm(
-                            t(
-                              'Publish now? Your own balance will pay the public {{fee}} task fee ({{rate}}%) and lock {{escrow}} escrow, for {{total}} total. Daily check-in rewards can offset the fee.',
-                              {
-                                fee: formatQuota(
-                                  Math.ceil(
-                                    (project.reward_quota *
-                                      project.reward_slots *
-                                      (configQuery.data?.rate_basis_points ??
-                                        0)) /
-                                      10_000
-                                  )
-                                ),
-                                rate:
-                                  (configQuery.data?.rate_basis_points ?? 0) /
-                                  100,
-                                escrow: formatQuota(
-                                  project.reward_quota * project.reward_slots
-                                ),
-                                total: formatQuota(
-                                  project.reward_quota * project.reward_slots +
-                                    Math.ceil(
-                                      (project.reward_quota *
-                                        project.reward_slots *
-                                        (configQuery.data?.rate_basis_points ??
-                                          0)) /
-                                        10_000
-                                    )
-                                ),
-                              }
-                            )
-                          )
-                            ? runAction(
-                                `publish-${project.id}`,
-                                () => publishBounty(project.id),
-                                'Bounty published and reward pool funded.',
-                                true
-                              )
-                            : undefined
-                        }
+                        onPublish={() => confirmPublication(project)}
                         onPause={() =>
                           runAction(
                             `pause-${project.id}`,
@@ -1153,10 +1143,14 @@ function BountyCard({
       <p className='text-muted-foreground line-clamp-3 text-sm leading-relaxed'>
         {project.description}
       </p>
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
         <Metric
           label={t('Reward per fix')}
           value={formatQuota(project.reward_quota)}
+        />
+        <Metric
+          label={t('Locked reward')}
+          value={formatQuota(project.net_reward_quota || project.reward_quota)}
         />
         <Metric
           label={t('Available slots')}
@@ -1221,10 +1215,18 @@ function OwnerProjectCard(props: {
       action={<Badge variant='outline'>{statusLabel(t, project.status)}</Badge>}
     >
       <div className='flex flex-col gap-4'>
-        <div className='grid gap-2 sm:grid-cols-4'>
+        <div className='grid gap-2 sm:grid-cols-5'>
           <Metric
             label={t('Reward per fix')}
             value={formatQuota(project.reward_quota)}
+          />
+          <Metric
+            label={t('Locked reward')}
+            value={
+              project.status === 'draft'
+                ? t('Calculated at publish')
+                : formatQuota(project.net_reward_quota || project.reward_quota)
+            }
           />
           <Metric
             label={t('Escrow remaining')}
@@ -1530,12 +1532,7 @@ function DraftDialog(props: {
   draft: DraftForm
   setDraft: (draft: DraftForm) => void
   errors: BountyDraftErrors
-  charge: {
-    escrow: number
-    platformFee: number
-    feeRatePercent: number
-    total: number
-  }
+  charge: BountyCharge
   availableQuota: number
   pending: boolean
   onSave: () => void
@@ -1688,11 +1685,12 @@ function DraftDialog(props: {
         <AlertTitle>{t('Publish charge')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Publish charge: {{escrow}} escrow + {{fee}} public task fee ({{rate}}%) = {{total}}. Current balance: {{balance}}. Daily check-in rewards added to this balance can offset the fee.',
+            'Publish charge: {{total}} gross listing total, including {{fee}} public platform fee ({{rate}}%), leaves {{netReward}} per approved fix and {{escrow}} total escrow. Current balance: {{balance}}.',
             {
               escrow: formatQuota(props.charge.escrow),
               fee: formatQuota(props.charge.platformFee),
               rate: props.charge.feeRatePercent.toFixed(2),
+              netReward: formatQuota(props.charge.netReward),
               total: formatQuota(props.charge.total),
               balance: formatQuota(props.availableQuota),
             }
@@ -2645,7 +2643,7 @@ Endpoint: ${endpoint}
 Protocol: MCP ${protocolVersion}, stateless Streamable HTTP
 Authorization: Bearer ${revealedToken || '<YOUR_PERSONAL_MCP_TOKEN>'}
 
-Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing charges my own balance only for the public administrator-configured task fee and locks the full reward escrow, including when I am an administrator or site owner. Daily check-in rewards are credited to the same balance and can cover some or all of the fee. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, task fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. After a contributor submits the matching Issue and pull request, the bounty publisher reviews the work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
+Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing deducts the gross listed price from my balance, retains the public administrator-configured platform fee from that amount, and locks the remaining net contributor rewards in escrow, including when I am an administrator or site owner. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. After a contributor submits the matching Issue and pull request, the bounty publisher reviews the work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
     [endpoint, protocolVersion, revealedToken]
   )
 
