@@ -1,28 +1,54 @@
-# ⚠️ 提交说明 / PR Notice
-> [!IMPORTANT]
->
-> - 请提供**人工撰写**的简洁摘要，避免直接粘贴未经整理的 AI 输出。
+# LMM API Pull Request
 
-## 📝 变更描述 / Description
-(简述：做了什么？为什么这样改能生效？请基于你对代码逻辑的理解来写，避免粘贴未经整理的内容)
+> LMM API 是 New API 的衍生版本。请说明本次变更与上游的关系，并确保 PR 只包含当前任务所需的改动。
 
-## 🚀 变更类型 / Type of change
-- [ ] 🐛 Bug 修复 (Bug fix) - *请关联对应 Issue，避免将设计取舍、理解偏差或预期不一致直接归类为 bug*
-- [ ] ✨ 新功能 (New feature) - *重大特性建议先通过 Issue 沟通*
-- [ ] ⚡ 性能优化 / 重构 (Refactor)
-- [ ] 📝 文档更新 (Documentation)
+## 变更说明 / Summary
 
-## 🔗 关联任务 / Related Issue
-- Closes # (如有)
+<!-- 做了什么、为什么要改，以及关键实现方式。请使用自己确认过的准确描述。 -->
 
-## ✅ 提交前检查项 / Checklist
-- [ ] **人工确认:** 我已亲自整理并撰写此描述，没有直接粘贴未经处理的 AI 输出。
-- [ ] **非重复提交:** 我已搜索现有的 [Issues](https://github.com/QuantumNous/new-api/issues) 与 [PRs](https://github.com/QuantumNous/new-api/pulls)，确认不是重复提交。
-- [ ] **Bug fix 说明:** 若此 PR 标记为 `Bug fix`，我已提交或关联对应 Issue，且不会将设计取舍、预期不一致或理解偏差直接归类为 bug。
-- [ ] **变更理解:** 我已理解这些更改的工作原理及可能影响。
-- [ ] **范围聚焦:** 本 PR 未包含任何与当前任务无关的代码改动。
-- [ ] **本地验证:** 已在本地运行并通过测试或手动验证，维护者可以据此复核结果。
-- [ ] **安全合规:** 代码中无敏感凭据，且符合项目代码规范。
+## 与上游的关系 / Upstream relationship
 
-## 📸 运行证明 / Proof of Work
-(请在此粘贴截图、关键日志或测试报告，以证明变更生效)
+<!-- 请选择一项，并补充相关上游 Issue、PR 或 commit 链接。 -->
+
+- [ ] LMM API 独有变更 / LMM API-specific change
+- [ ] 上游尚未合并的修复或功能 / Change not yet merged upstream
+- [ ] 同步或移植上游变更 / Upstream sync or backport
+- [ ] 不适用（文档、CI、仓库维护等）/ Not applicable
+
+上游参考 / Upstream reference:
+
+## 关联 Issue / Related issue
+
+Closes #
+
+## 变更类型 / Type of change
+
+- [ ] Bug 修复 / Bug fix
+- [ ] 新功能 / Feature
+- [ ] 重构或性能优化 / Refactor or performance
+- [ ] 前端或交互 / Frontend or UX
+- [ ] 部署、CI 或构建 / Deployment, CI, or build
+- [ ] 文档或仓库维护 / Documentation or maintenance
+
+## 验证 / Verification
+
+<!-- 列出实际执行的命令、结果，以及必要的手动验证步骤。未执行的项目请写明原因。 -->
+
+```text
+command:
+result:
+```
+
+## 截图或日志 / Screenshots or logs
+
+<!-- 涉及界面、响应格式、部署流程或性能变化时，请提供脱敏后的证据；否则填写 N/A。 -->
+
+## 提交检查 / Checklist
+
+- [ ] 我已搜索本仓库的 [Issues](https://github.com/LIghtJUNction/api.lmm.best/issues) 和 [PRs](https://github.com/LIghtJUNction/api.lmm.best/pulls)，确认没有重复工作。
+- [ ] 此 PR 只包含与当前目标相关的改动，未混入格式化或其他无关变更。
+- [ ] 我已说明该变更与上游 New API 的关系，并保留必要的来源、版权和许可证信息。
+- [ ] 我已检查兼容性；如有破坏性变化，已在说明中明确列出迁移方式。
+- [ ] 我已补充或更新相关测试，并在上方记录实际验证结果；如未测试，已说明原因。
+- [ ] 我已更新受影响的文档、示例配置和多语言文案（如适用）。
+- [ ] 代码、日志、截图和提交记录中不包含 API Key、Cookie、Token、密码、DSN 或其他敏感信息。

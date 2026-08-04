@@ -1,0 +1,14 @@
+method	path	category	source_path	rationale
+GET	/_internal/build	internal	apps/api-rust/apps/lmm-api-rs/src/http.rs	listener build metadata used by the test deployment
+GET	/_test/hold	test	apps/api-rust/apps/lmm-api-rs/src/http.rs	cfg(test) request-boundary fixture
+POST	/_test/json	test	apps/api-rust/apps/lmm-api-rs/src/http.rs	cfg(test) JSON extractor fixture
+GET	/api/extra-probe	test	apps/api-rust/apps/lmm-api-rs/src/http.rs	cfg(test) extra-surface listener-boundary fixture
+GET	/incomplete-document	fixture	apps/api-rust/apps/lmm-api-rs/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery validation fixture
+GET	/invalid-json-document	fixture	apps/api-rust/apps/lmm-api-rs/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery validation fixture
+GET	/livez	health	apps/api-rust/apps/lmm-api-rs/src/http.rs	production liveness probe outside the frozen Go API inventory
+POST	/livez	test	apps/api-rust/apps/lmm-api-rs/src/http.rs	cfg(test) complementary-method routing fixture
+GET	/loopback-redirect-document	fixture	apps/api-rust/apps/lmm-api-rs/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery redirect fixture
+GET	/loopback-redirect-start	fixture	apps/api-rust/apps/lmm-api-rs/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery redirect fixture
+GET	/oversized-document	fixture	apps/api-rust/apps/lmm-api-rs/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery response-limit fixture
+GET	/private-redirect-start	fixture	apps/api-rust/apps/lmm-api-rs/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery SSRF fixture
+GET	/readyz	health	apps/api-rust/apps/lmm-api-rs/src/http.rs	production readiness probe outside the frozen Go API inventory

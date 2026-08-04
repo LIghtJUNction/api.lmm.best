@@ -4,21 +4,32 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Branch name to build (e.g. alpha, nightly)"
+        description: 'Branch name to build (for example alpha or nightly)'
         required: true
         type: string
+      backend:
+        description: 'Backend image to publish'
+        required: true
+        default: go
+        type: choice
+        options:
+          - go
+          - rust-preview
+
+permissions:
+  contents: read
 
 jobs:
   prepare:
-    name: Prepare Docker tags
+    name: Prepare branch image tags
     runs-on: ubuntu-latest
     outputs:
-      branch: ${{ steps.version.outputs.branch }}
-      sha: ${{ steps.version.outputs.sha }}
+      backend: ${{ steps.version.outputs.backend }}
+      dockerfile: ${{ steps.version.outputs.dockerfile }}
+      image: ${{ steps.version.outputs.image }}
+      revision: ${{ steps.version.outputs.revision }}
       tag_prefix: ${{ steps.version.outputs.tag_prefix }}
       version: ${{ steps.version.outputs.version }}
-    permissions:
-      contents: read
     steps:
       - name: Check out branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -26,92 +37,60 @@ jobs:
           fetch-depth: 1
           ref: ${{ inputs.branch }}
 
-      - name: Require complete Rust production parity
-        run: |
-          set -euo pipefail
-          export LC_ALL=C
-          bash rust/scripts/check-go-route-manifest.sh
-          legacy=rust/routes/legacy-go-routes.tsv
-          implemented=rust/routes/rust-implemented-routes.tsv
-          ownership=rust/routes/ownership.tsv
-          parity_tmp="$(mktemp -d "${RUNNER_TEMP}/lmm-route-parity.XXXXXX")"
-          trap 'rm -rf "$parity_tmp"' EXIT
-
-          awk -F '\t' 'NF == 3 { print $1 "\t" $2 }' "$legacy" | sort -u > "$parity_tmp/legacy"
-          awk -F '\t' '$0 !~ /^#/ && NF == 3 { print $1 "\t" $2 }' "$implemented" | sort -u > "$parity_tmp/implemented"
-          legacy_count="$(wc -l < "$parity_tmp/legacy")"
-          implemented_count="$(wc -l < "$parity_tmp/implemented")"
-          missing_count="$(comm -23 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
-          extra_count="$(comm -13 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
-
-          if [[ "$legacy_count" -ne 356 || "$implemented_count" -ne 356 ||
-                "$missing_count" -ne 0 || "$extra_count" -ne 0 ]]; then
-            echo "::error::Docker publish blocked: Rust route coverage is incomplete (implemented=${implemented_count}/356, missing=${missing_count}, extra=${extra_count})"
-            exit 1
-          fi
-
-          awk -F '\t' '
-            FNR == NR {
-              if ($0 ~ /^#/ || NF == 0) next
-              priority[++rules] = $1 + 0
-              kind[rules] = $2
-              pattern[rules] = $3
-              owner[rules] = $4
-              next
-            }
-            {
-              path = $2
-              best = -1
-              winners = 0
-              for (rule = 1; rule <= rules; rule++) {
-                applies = (kind[rule] == "exact" && path == pattern[rule]) ||
-                          (kind[rule] == "prefix" && index(path, pattern[rule]) == 1)
-                if (!applies) continue
-                if (priority[rule] > best) {
-                  best = priority[rule]
-                  winners = 1
-                  winner = rule
-                } else if (priority[rule] == best) {
-                  winners++
-                }
-              }
-              if (winners != 1 || owner[winner] != "rust") failures++
-              else rust_owned++
-            }
-            END {
-              if (rust_owned != 356) failures++
-              if (failures) print "Docker publish blocked: all 356 routes must be unambiguously Rust-owned" > "/dev/stderr"
-              exit failures != 0
-            }
-          ' "$ownership" "$legacy"
-          echo "Docker publish parity gate passed: 356/356 routes are implemented and Rust-owned."
-
-      - name: Resolve Docker tags
+      - name: Resolve backend-specific tags
         id: version
         env:
+          BACKEND: ${{ inputs.backend }}
           BRANCH_NAME: ${{ inputs.branch }}
+          IMAGE_REPOSITORY: ${{ vars.DOCKER_IMAGE_REPOSITORY }}
         run: |
-          TAG_PREFIX=$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
-          TAG_PREFIX=${TAG_PREFIX:0:105}
-          TAG_PREFIX=$(printf '%s' "$TAG_PREFIX" | sed -E 's/[.-]+$//')
-          if [ -z "$TAG_PREFIX" ]; then
-            echo "::error::Branch '$BRANCH_NAME' cannot be converted to a valid Docker tag prefix"
+          set -euo pipefail
+          if [[ -z "$IMAGE_REPOSITORY" || "$IMAGE_REPOSITORY" == "calciumion/new-api" ]]; then
+            echo 'DOCKER_IMAGE_REPOSITORY must select this fork owned repository' >&2
             exit 1
           fi
+          case "$IMAGE_REPOSITORY" in
+            *[!A-Za-z0-9._/-]*|[[:space:]]*)
+              echo 'DOCKER_IMAGE_REPOSITORY is invalid' >&2
+              exit 1
+              ;;
+          esac
+          base=$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
+          base=${base:0:90}
+          base=$(printf '%s' "$base" | sed -E 's/[.-]+$//')
+          [[ -n "$base" ]] || { echo "branch cannot form a Docker tag: $BRANCH_NAME" >&2; exit 1; }
 
-          SHA=$(git rev-parse HEAD)
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          VERSION="${TAG_PREFIX}-$(date +'%Y%m%d')-${SHORT_SHA}"
+          revision=$(git rev-parse HEAD)
+          short_revision=$(git rev-parse --short HEAD)
+          case "$BACKEND" in
+            go)
+              image=$IMAGE_REPOSITORY
+              dockerfile=Dockerfile
+              tag_prefix=$base
+              version="${base}-$(date +'%Y%m%d')-${short_revision}"
+              ;;
+            rust-preview)
+              image=${IMAGE_REPOSITORY}-rust-preview
+              dockerfile=Dockerfile.rust
+              tag_prefix=${base}-preview
+              version="${base}-$(date +'%Y%m%d')-${short_revision}-preview"
+              ;;
+            *)
+              echo "unsupported backend: $BACKEND" >&2
+              exit 1
+              ;;
+          esac
 
-          echo "branch=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "tag_prefix=$TAG_PREFIX" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Prepared Docker tags for $BRANCH_NAME at $SHORT_SHA"
+          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$dockerfile" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "tag_prefix=$tag_prefix" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-  build_single_arch:
-    name: Build & push (${{ matrix.arch }}) [native]
-    needs: [prepare]
+  build-single-arch:
+    name: Build ${{ needs.prepare.outputs.backend }} (${{ matrix.arch }})
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -127,16 +106,14 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Check out branch
+      - name: Check out exact branch revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ needs.prepare.outputs.revision }}
 
       - name: Write VERSION
-        run: |
-          echo "${{ needs.prepare.outputs.version }}" > VERSION
-          echo "Publishing version: ${{ needs.prepare.outputs.version }} for ${{ matrix.arch }}"
+        run: printf '%s\n' '${{ needs.prepare.outputs.version }}' > VERSION
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -147,25 +124,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata (labels)
+      - name: Extract image labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: |
-            calciumion/new-api
+          images: ${{ needs.prepare.outputs.image }}
 
-      - name: Build & push single-arch
+      - name: Build and push single-architecture image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
+          file: ${{ needs.prepare.outputs.dockerfile }}
           build-args: |
-            LMM_BUILD_REVISION=${{ needs.prepare.outputs.sha }}
+            LMM_BUILD_REVISION=${{ needs.prepare.outputs.revision }}
           platforms: ${{ matrix.platform }}
           push: true
           tags: |
-            calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }}-${{ matrix.arch }}
-            calciumion/new-api:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+            ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.tag_prefix }}-${{ matrix.arch }}
+            ${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -175,21 +152,12 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Sign image with cosign
-        run: cosign sign --yes calciumion/new-api@${{ steps.build.outputs.digest }}
+      - name: Sign image digest
+        run: cosign sign --yes '${{ needs.prepare.outputs.image }}@${{ steps.build.outputs.digest }}'
 
-      - name: Output digest
-        run: |
-          echo "### Docker Image Digest (${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
-          echo "calciumion/new-api:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-  create_manifests:
-    name: Create multi-arch manifests (Docker Hub)
-    needs: [prepare, build_single_arch]
+  create-manifests:
+    name: Publish ${{ needs.prepare.outputs.backend }} branch manifests
+    needs: [prepare, build-single-arch]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -200,33 +168,30 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create & push manifest (Docker Hub - branch)
+      - name: Create branch manifest
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAG: ${{ needs.prepare.outputs.tag_prefix }}
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }} \
-            calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }}-amd64 \
-            calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }}-arm64
+            -t "${IMAGE}:${TAG}" \
+            "${IMAGE}:${TAG}-amd64" \
+            "${IMAGE}:${TAG}-arm64"
 
-      - name: Create & push manifest (Docker Hub - versioned)
+      - name: Create versioned manifest
+        env:
+          IMAGE: ${{ needs.prepare.outputs.image }}
+          TAG: ${{ needs.prepare.outputs.version }}
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:${{ needs.prepare.outputs.version }} \
-            calciumion/new-api:${{ needs.prepare.outputs.version }}-amd64 \
-            calciumion/new-api:${{ needs.prepare.outputs.version }}-arm64
+            -t "${IMAGE}:${TAG}" \
+            "${IMAGE}:${TAG}-amd64" \
+            "${IMAGE}:${TAG}-arm64"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Sign manifests with cosign
+      - name: Sign branch manifests
         run: |
-          cosign sign --yes calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }}
-          cosign sign --yes calciumion/new-api:${{ needs.prepare.outputs.version }}
-
-      - name: Output manifest digest
-        run: |
-          echo "### Multi-arch Manifest Digests" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect calciumion/new-api:${{ needs.prepare.outputs.tag_prefix }} >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect calciumion/new-api:${{ needs.prepare.outputs.version }} >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          cosign sign --yes '${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.tag_prefix }}'
+          cosign sign --yes '${{ needs.prepare.outputs.image }}:${{ needs.prepare.outputs.version }}'

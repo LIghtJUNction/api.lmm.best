@@ -1,0 +1,46 @@
+{
+  "name": "api.lmm.best",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:go": "bun run --filter @lmm/api-go dev",
+    "dev:web": "bun run --filter @lmm/web dev",
+    "dev:rust": "bun run --filter @lmm/api-rust dev",
+    "build:go": "bun run --filter @lmm/api-go build",
+    "build:web": "bun run --filter @lmm/web build",
+    "build:rust": "bun run --filter @lmm/api-rust build",
+    "test:go": "bun run --filter @lmm/api-go test",
+    "test:web": "bun run --filter @lmm/web test",
+    "test:rust": "bun run --filter @lmm/api-rust test",
+    "format:go": "bun run --filter @lmm/api-go format",
+    "format:web": "bun run --filter @lmm/web format",
+    "format:rust": "bun run --filter @lmm/api-rust format",
+    "format-check:go": "bun run --filter @lmm/api-go format:check",
+    "format-check:web": "bun run --filter @lmm/web format:check",
+    "format-check:rust": "bun run --filter @lmm/api-rust format:check",
+    "lint:go": "bun run --filter @lmm/api-go lint",
+    "lint:web": "bun run --filter @lmm/web lint",
+    "lint:rust": "bun run --filter @lmm/api-rust lint",
+    "typecheck:go": "bun run --filter @lmm/api-go typecheck",
+    "typecheck:web": "bun run --filter @lmm/web typecheck",
+    "typecheck:rust": "bun run --filter @lmm/api-rust typecheck"
+  },
+  "overrides": {
+    "brace-expansion": "2.1.1",
+    "dompurify": "3.4.12",
+    "fast-uri": "3.1.2",
+    "hono": "4.12.22",
+    "ip-address": "10.2.0",
+    "js-cookie": "3.0.7",
+    "mermaid": "11.15.0",
+    "minimist": "1.2.8",
+    "postcss": "8.5.15",
+    "qs": "6.15.2",
+    "uuid": "14.0.0"
+  }
+}
