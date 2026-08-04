@@ -23,8 +23,8 @@ export type BountyDraftValidationInput = {
   title: string
   description: string
   rules: string
-  rewardAmount: number
-  rewardSlots: number
+  rewardAmount: number | string
+  rewardSlots: number | string
 }
 
 export type BountyDraftErrors = Partial<
@@ -45,15 +45,21 @@ export type BountySubmissionLinks = {
   pullRequestUrl: string
 }
 
+export function parseBountyNumericInput(value: number | string): number {
+  if (typeof value === 'string' && value.trim() === '') return Number.NaN
+  return Number(value)
+}
+
 export function calculateBountyCharge(
   rewardQuota: number,
   rewardSlots: number,
   feeRateBasisPoints: number
 ): BountyCharge {
-  const slots = Math.max(0, rewardSlots)
-  const feePerSlot = Math.ceil((rewardQuota * feeRateBasisPoints) / 10_000)
-  const netReward = Math.max(0, rewardQuota - feePerSlot)
-  const gross = rewardQuota * slots
+  const reward = Number.isFinite(rewardQuota) ? Math.max(0, rewardQuota) : 0
+  const slots = Number.isFinite(rewardSlots) ? Math.max(0, rewardSlots) : 0
+  const feePerSlot = Math.ceil((reward * feeRateBasisPoints) / 10_000)
+  const netReward = Math.max(0, reward - feePerSlot)
+  const gross = reward * slots
   const platformFee = feePerSlot * slots
   return {
     gross,
@@ -91,6 +97,8 @@ export function validateBountyDraft(
   draft: BountyDraftValidationInput
 ): BountyDraftErrors {
   const errors: BountyDraftErrors = {}
+  const rewardAmount = parseBountyNumericInput(draft.rewardAmount)
+  const rewardSlots = parseBountyNumericInput(draft.rewardSlots)
   const titleLength = draft.title.trim().length
   const descriptionLength = draft.description.trim().length
   const rulesLength = draft.rules.trim().length
@@ -110,14 +118,10 @@ export function validateBountyDraft(
     errors.rules =
       'Acceptance and verification rules must contain 20 to 5000 characters.'
   }
-  if (!Number.isFinite(draft.rewardAmount) || draft.rewardAmount <= 0) {
+  if (!Number.isFinite(rewardAmount) || rewardAmount <= 0) {
     errors.rewardAmount = 'Reward per fix must be greater than zero.'
   }
-  if (
-    !Number.isInteger(draft.rewardSlots) ||
-    draft.rewardSlots < 1 ||
-    draft.rewardSlots > 100
-  ) {
+  if (!Number.isInteger(rewardSlots) || rewardSlots < 1 || rewardSlots > 100) {
     errors.rewardSlots =
       'Reward slots must be a whole number between 1 and 100.'
   }

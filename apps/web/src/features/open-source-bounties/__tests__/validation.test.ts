@@ -22,6 +22,7 @@ import { describe, test } from 'node:test'
 import {
   type BountyDraftValidationInput,
   calculateBountyCharge,
+  parseBountyNumericInput,
   validateBountyDraft,
   validateBountySubmissionLinks,
 } from '../validation'
@@ -40,6 +41,56 @@ const VALID_DRAFT: BountyDraftValidationInput = {
 describe('bounty draft validation', () => {
   test('accepts a complete draft with a canonical GitHub repository URL', () => {
     assert.deepEqual(validateBountyDraft(VALID_DRAFT), {})
+  })
+
+  test('accepts manually entered numeric text while keeping empty inputs invalid', () => {
+    assert.deepEqual(
+      validateBountyDraft({
+        ...VALID_DRAFT,
+        rewardAmount: '0.25',
+        rewardSlots: '2',
+      }),
+      {}
+    )
+
+    const emptyNumericErrors = validateBountyDraft({
+      ...VALID_DRAFT,
+      rewardAmount: '',
+      rewardSlots: '',
+    })
+    assert.equal(
+      emptyNumericErrors.rewardAmount,
+      'Reward per fix must be greater than zero.'
+    )
+    assert.equal(
+      emptyNumericErrors.rewardSlots,
+      'Reward slots must be a whole number between 1 and 100.'
+    )
+
+    assert.deepEqual(
+      validateBountyDraft({
+        ...VALID_DRAFT,
+        rewardAmount: ' 0.25 ',
+        rewardSlots: ' 2 ',
+      }),
+      {}
+    )
+
+    for (const value of ['   ', 'not-a-number']) {
+      const malformedNumericErrors = validateBountyDraft({
+        ...VALID_DRAFT,
+        rewardAmount: value,
+        rewardSlots: value,
+      })
+      assert.equal(
+        malformedNumericErrors.rewardAmount,
+        'Reward per fix must be greater than zero.'
+      )
+      assert.equal(
+        malformedNumericErrors.rewardSlots,
+        'Reward slots must be a whole number between 1 and 100.'
+      )
+    }
   })
 
   test('reports every invalid field with a specific message', () => {
@@ -83,6 +134,20 @@ describe('bounty draft validation', () => {
 })
 
 describe('bounty publication charge', () => {
+  test('keeps invalid in-progress numeric inputs out of the charge preview', () => {
+    const reward = parseBountyNumericInput(' ')
+    const slots = parseBountyNumericInput('not-a-number')
+
+    assert.deepEqual(calculateBountyCharge(reward, slots, 250), {
+      gross: 0,
+      netReward: 0,
+      escrow: 0,
+      platformFee: 0,
+      feeRatePercent: 2.5,
+      total: 0,
+    })
+  })
+
   test('deducts the public fee from each listed reward instead of adding it', () => {
     assert.deepEqual(calculateBountyCharge(5_000_000, 20, 100), {
       gross: 100_000_000,
