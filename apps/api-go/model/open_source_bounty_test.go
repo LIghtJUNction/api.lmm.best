@@ -80,6 +80,32 @@ func openSourceBountyInput(repository string, promotion int, reward int, slots i
 	}
 }
 
+func TestOpenSourceBountyEmptyListQueriesReturnNonNilSlices(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	user := createOpenSourceBountyUser(t, db, "empty-list-user", 0, common.RoleCommonUser)
+
+	projects, total, err := ListOpenSourceBounties(user.Id, 1, 20)
+	require.NoError(t, err)
+	assert.Zero(t, total)
+	assert.NotNil(t, projects)
+	assert.Empty(t, projects)
+
+	owned, err := ListOwnedOpenSourceBounties(user.Id)
+	require.NoError(t, err)
+	assert.NotNil(t, owned)
+	assert.Empty(t, owned)
+
+	accepted, err := ListAcceptedOpenSourceBounties(user.Id)
+	require.NoError(t, err)
+	assert.NotNil(t, accepted)
+	assert.Empty(t, accepted)
+
+	disputes, err := ListOpenSourceBountyDisputes(user.Id, false)
+	require.NoError(t, err)
+	assert.NotNil(t, disputes)
+	assert.Empty(t, disputes)
+}
+
 func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "root-owner", 10_000, common.RoleRootUser)

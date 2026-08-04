@@ -256,7 +256,7 @@ func ListOpenSourceBountyDisputesFiltered(userId int, admin bool, status string,
 	if limit > 100 {
 		limit = 100
 	}
-	var views []OpenSourceBountyDisputeView
+	views := make([]OpenSourceBountyDisputeView, 0)
 	query := openSourceBountyDisputeViewQuery()
 	if admin {
 		var user User
