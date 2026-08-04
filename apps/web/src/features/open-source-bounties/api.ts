@@ -48,10 +48,11 @@ async function unwrap<T>(request: Promise<{ data: ApiEnvelope<T> }>) {
   return response.data.data
 }
 
-export function listBounties() {
-  return unwrap<{ items: BountyProject[]; total: number }>(
+export async function listBounties() {
+  const result = await unwrap<{ items: BountyProject[] | null; total: number }>(
     api.get('/api/open-source-bounties?page=1&page_size=50')
   )
+  return { ...result, items: result.items ?? [] }
 }
 
 export function getBountyConfig() {
