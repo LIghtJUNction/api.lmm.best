@@ -14,7 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const openSourceBountyMCPProtocolVersion = "2025-11-25"
+const openSourceBountyMCPProtocolVersion = "2026-07-28"
 
 type bountyMCPOutput struct {
 	Message        string `json:"message"`
@@ -36,13 +36,12 @@ type bountyMCPChallengeInput struct {
 }
 
 type bountyMCPDraftInput struct {
-	RepositoryUrl  string `json:"repository_url" jsonschema:"Public GitHub repository URL"`
-	Title          string `json:"title" jsonschema:"Bounty title"`
-	Description    string `json:"description" jsonschema:"Eligible real-defect scope and impact"`
-	Rules          string `json:"rules" jsonschema:"Verification, test, quality, and exclusion rules"`
-	PromotionQuota int    `json:"promotion_quota" jsonschema:"Non-refundable promotion spend paid by the publisher"`
-	RewardQuota    int    `json:"reward_quota" jsonschema:"Escrowed reward for each approved fix"`
-	RewardSlots    int    `json:"reward_slots" jsonschema:"Number of funded contributor slots"`
+	RepositoryUrl string `json:"repository_url" jsonschema:"Public GitHub repository URL"`
+	Title         string `json:"title" jsonschema:"Bounty title"`
+	Description   string `json:"description" jsonschema:"Eligible real-defect scope and impact"`
+	Rules         string `json:"rules" jsonschema:"Verification, test, quality, and exclusion rules"`
+	RewardQuota   int    `json:"reward_quota" jsonschema:"Escrowed reward for each approved fix"`
+	RewardSlots   int    `json:"reward_slots" jsonschema:"Number of funded contributor slots"`
 }
 
 type bountyMCPUpdateDraftInput struct {
@@ -56,11 +55,10 @@ type bountyMCPAcceptInput struct {
 }
 
 type bountyMCPSubmitInput struct {
-	ProjectId              int    `json:"project_id" jsonschema:"Accepted bounty project identifier"`
-	IssueUrl               string `json:"issue_url" jsonschema:"GitHub Issue URL for the reproducible defect"`
-	PullRequestUrl         string `json:"pull_request_url" jsonschema:"Focused GitHub pull request URL linked to the Issue"`
-	EncryptedReviewMessage string `json:"encrypted_review_message" jsonschema:"LIghtJUNction encrypted review message containing handle, Issue, and PR links"`
-	SubmissionNote         string `json:"submission_note,omitempty" jsonschema:"Optional verification or test note"`
+	ProjectId      int    `json:"project_id" jsonschema:"Accepted bounty project identifier"`
+	IssueUrl       string `json:"issue_url" jsonschema:"GitHub Issue URL for the reproducible defect"`
+	PullRequestUrl string `json:"pull_request_url" jsonschema:"Focused GitHub pull request URL linked to the Issue"`
+	SubmissionNote string `json:"submission_note,omitempty" jsonschema:"Optional verification or test note for direct publisher review"`
 }
 
 type bountyMCPReviewInput struct {
@@ -184,7 +182,7 @@ func bountyMCPConfirmedOperation(request *mcp.CallToolRequest, userId int, toolN
 func bountyMCPDraft(input bountyMCPDraftInput) model.OpenSourceBountyDraftInput {
 	return model.OpenSourceBountyDraftInput{
 		RepositoryUrl: input.RepositoryUrl, Title: input.Title, Description: input.Description,
-		Rules: input.Rules, PromotionQuota: input.PromotionQuota,
+		Rules:       input.Rules,
 		RewardQuota: input.RewardQuota, RewardSlots: input.RewardSlots,
 	}
 }
@@ -303,7 +301,7 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			return nil, bountyMCPOutput{Message: "Bounty detail loaded.", Data: detail}, bountyMCPError(err)
 		})
 
-	mcp.AddTool(server, bountyMCPTool("open_source_bounties.list", "List promoted bounties", "List the promoted bounty board in deterministic promotion order. The board may be empty and has no default projects.", true, false, true),
+	mcp.AddTool(server, bountyMCPTool("open_source_bounties.list", "List public bounties", "List the public bounty board in deterministic publication order. The board may be empty and has no default projects.", true, false, true),
 		func(ctx context.Context, request *mcp.CallToolRequest, input bountyMCPListInput) (*mcp.CallToolResult, bountyMCPOutput, error) {
 			userId, err := bountyMCPUserId(request)
 			if err != nil {
@@ -365,7 +363,7 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			if err := model.DB.Table("open_source_bounty_challenges AS challenge").Joins("JOIN open_source_bounty_projects project ON project.id = challenge.project_id").Where("challenge.id = ? AND (challenge.participant_user_id = ? OR project.owner_user_id = ?)", input.ChallengeId, userId, userId).Select("challenge.*, project.title AS project_title, project.rules AS project_rules, project.updated_at AS project_updated_at").Scan(&evidenceSnapshot).Error; err != nil || evidenceSnapshot.Id == 0 {
 				return nil, bountyMCPOutput{}, bountyMCPError(&model.OpenSourceBountyError{Code: "OPEN_SOURCE_BOUNTY_FORBIDDEN", Message: "challenge is unavailable"})
 			}
-			message := fmt.Sprintf("Open a third-party dispute for challenge %d in %q with reason %q? The Issue, PR, encrypted review evidence, reward and tip amounts, and mutual ratings will be frozen for administrators and both parties.", input.ChallengeId, evidenceSnapshot.ProjectTitle, input.Reason)
+			message := fmt.Sprintf("Open a third-party dispute for challenge %d in %q with reason %q? The Issue, PR, verification notes, reward and tip amounts, and mutual ratings will be frozen for administrators and both parties.", input.ChallengeId, evidenceSnapshot.ProjectTitle, input.Reason)
 			confirmationPayload := map[string]any{"input": input, "evidence_snapshot": evidenceSnapshot}
 			pending, operation, err := bountyMCPConfirmedOperation(request, userId, "open_source_bounties.open_dispute", confirmationPayload, message)
 			if err != nil || pending != nil {
@@ -385,7 +383,7 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			return nil, bountyMCPOutput{Message: "Bounty paused.", Data: project}, bountyMCPError(err)
 		})
 
-	mcp.AddTool(server, bountyMCPTool("open_source_bounties.publish", "Publish and fund a bounty", "Spend the authenticated publisher's promotion quota, platform task fee, and fully escrow every reward slot. Requires explicit user confirmation.", false, true, false),
+	mcp.AddTool(server, bountyMCPTool("open_source_bounties.publish", "Publish and fund a bounty", "Charge the authenticated publisher the public platform task fee and fully escrow every reward slot. Daily check-in rewards in the same balance can cover the fee. Requires explicit user confirmation.", false, true, false),
 		func(ctx context.Context, request *mcp.CallToolRequest, input bountyMCPProjectInput) (*mcp.CallToolResult, bountyMCPOutput, error) {
 			userId, err := bountyMCPUserId(request)
 			if err != nil {
@@ -406,7 +404,7 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			if err != nil {
 				return nil, bountyMCPOutput{}, bountyMCPError(err)
 			}
-			message := fmt.Sprintf("Publish %q? This permanently spends %d promotion quota and a %0.2f%% platform task fee of %d, locks %d reward quota (%d × %d), and charges %d total from your own balance.", project.Title, charge.PromotionQuota, float64(charge.PlatformFeeRateBps)/100, charge.PlatformFeeQuota, charge.EscrowQuota, project.RewardQuota, project.RewardSlots, charge.TotalQuota)
+			message := fmt.Sprintf("Publish %q? This charges the public %0.2f%% platform task fee of %d, locks %d reward quota (%d × %d), and deducts %d total from your own balance. Daily check-in rewards credited to that balance can cover this fee.", project.Title, float64(charge.PlatformFeeRateBps)/100, charge.PlatformFeeQuota, charge.EscrowQuota, project.RewardQuota, project.RewardSlots, charge.TotalQuota)
 			confirmationPayload := map[string]any{"input": input, "project": project, "charge": charge, "remaining_quota": bountyMCPRemainingQuota(userId)}
 			pending, operation, err := bountyMCPConfirmedOperation(request, userId, "open_source_bounties.publish", confirmationPayload, message)
 			if err != nil || pending != nil {
@@ -509,13 +507,13 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			return nil, bountyMCPOutput{Message: "Bounty dispute resolved.", Data: map[string]any{"dispute": dispute, "transferred_quota": transferred}}, bountyMCPError(err)
 		})
 
-	mcp.AddTool(server, bountyMCPTool("open_source_bounties.submit", "Submit Issue and pull request evidence", "Submit matching GitHub Issue and PR links plus the LIghtJUNction encrypted review message for an accepted challenge.", false, false, false),
+	mcp.AddTool(server, bountyMCPTool("open_source_bounties.submit", "Submit Issue and pull request evidence", "Submit matching GitHub Issue and PR links for direct review by the bounty publisher.", false, false, false),
 		func(ctx context.Context, request *mcp.CallToolRequest, input bountyMCPSubmitInput) (*mcp.CallToolResult, bountyMCPOutput, error) {
 			userId, err := bountyMCPUserId(request)
 			if err != nil {
 				return nil, bountyMCPOutput{}, err
 			}
-			challenge, err := model.SubmitOpenSourceBountyChallenge(userId, input.ProjectId, input.IssueUrl, input.PullRequestUrl, input.EncryptedReviewMessage, input.SubmissionNote)
+			challenge, err := model.SubmitOpenSourceBountyChallenge(userId, input.ProjectId, input.IssueUrl, input.PullRequestUrl, input.SubmissionNote)
 			return nil, bountyMCPOutput{Message: "Bounty evidence submitted for review.", Data: challenge}, bountyMCPError(err)
 		})
 
@@ -590,7 +588,7 @@ func newOpenSourceBountyMCPServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name: "api.lmm.best-open-source-bounties", Version: common.Version,
 	}, &mcp.ServerOptions{
-		Instructions: "Manage the complete open-source bounty lifecycle for the authenticated user. The board has no default projects. Every publisher, including administrators and the site owner, pays promotion spend, the administrator-configured platform task fee, and escrow from their own balance. Never fabricate defects or evidence. Money, destructive, and public-rating actions return an input-required confirmation that must be shown to the user and explicitly accepted before retrying the tool.",
+		Instructions: "Manage the complete open-source bounty lifecycle for the authenticated user. The board has no default projects. Every publisher, including administrators and the site owner, pays the public administrator-configured platform task fee and escrow from their own balance; daily check-in rewards credited to that balance can cover the fee. Never fabricate defects or evidence. Money, destructive, and public-rating actions return an input-required confirmation that must be shown to the user and explicitly accepted before retrying the tool.",
 		Capabilities: &mcp.ServerCapabilities{},
 	})
 	server.AddPrompt(&mcp.Prompt{
@@ -598,7 +596,7 @@ func newOpenSourceBountyMCPServer() *mcp.Server {
 		Title:       "Open-source bounty operator",
 		Description: "Instructions for safely publishing, accepting, verifying, tipping, rating, and settling open-source bounties.",
 	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		text := strings.TrimSpace(`Use the connected api.lmm.best Open-source bounties MCP server to complete my request. Do not invent bugs, Issues, pull requests, tests, encrypted messages, scores, dispute facts, or review results. Read the current bounty, administrator-configured task fee, and balance state before mutating it. Publishing always spends my own promotion quota and platform task fee and locks the full reward pool, even if I am an administrator or site owner. When the server returns an input-required confirmation for publishing, approval/payment, rejection, closing/refunding, tipping, rating, opening or resolving a dispute, draft deletion, or withdrawal, show me the exact action, recipient, score, fee, and balance impact, then continue only after I explicitly confirm. Tips are independent, non-refundable transfers from my own balance and never reduce escrow. At review time, record a truthful 1-5 contributor score and public evaluation; after review, contributors may rate the publisher/verifier, and both sides can see mutual ratings and historical averages. If a party disputes rejection or payment, preserve the linked Issue, pull request, encrypted review evidence, reward and tip amounts, and mutual ratings for third-party administrator review. Administrators may force payment only from the remaining escrow after reviewing genuine evidence.`)
+		text := strings.TrimSpace(`Use the connected api.lmm.best Open-source bounties MCP server to complete my request. Do not invent bugs, Issues, pull requests, tests, scores, dispute facts, or review results. Read the current bounty, public administrator-configured task fee, and balance state before mutating it. Publishing charges only the task fee and locks the full reward pool from my own balance, even if I am an administrator or site owner. Daily check-in rewards are credited to the same balance and can cover some or all of the fee. When the server returns an input-required confirmation for publishing, approval/payment, rejection, closing/refunding, tipping, rating, opening or resolving a dispute, draft deletion, or withdrawal, show me the exact action, recipient, score, fee, and balance impact, then continue only after I explicitly confirm. Tips are independent, non-refundable transfers from my own balance and never reduce escrow. After a contributor submits the matching Issue, pull request, and optional verification note, the bounty publisher reviews the work directly. At review time, record a truthful 1-5 contributor score and public evaluation; after review, contributors may rate the publisher/verifier, and both sides can see mutual ratings and historical averages. If a party disputes rejection or payment, preserve the linked Issue, pull request, verification notes, reward and tip amounts, and mutual ratings for third-party administrator review. Administrators may force payment only from the remaining escrow after reviewing genuine evidence.`)
 		return &mcp.GetPromptResult{
 			Description: "Operate the authenticated user's open-source bounties end to end.",
 			Messages: []*mcp.PromptMessage{
@@ -614,7 +612,13 @@ func NewOpenSourceBountyMCPHandler() http.Handler {
 	server := newOpenSourceBountyMCPServer()
 	streamable := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server {
 		return server
-	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	}, &mcp.StreamableHTTPOptions{
+		Stateless:                    true,
+		JSONResponse:                 true,
+		// The public endpoint is bearer-protected and reached through a loopback reverse proxy.
+		DisableLocalhostProtection:   true,
+		PropagateRequestCancellation: true,
+	})
 	verifier := func(ctx context.Context, token string, request *http.Request) (*auth.TokenInfo, error) {
 		userId, err := model.VerifyOpenSourceBountyMCPToken(token)
 		if err != nil {

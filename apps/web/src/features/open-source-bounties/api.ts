@@ -144,7 +144,6 @@ export function submitChallenge(
   input: {
     issue_url: string
     pull_request_url: string
-    encrypted_review_message: string
     submission_note: string
   }
 ) {

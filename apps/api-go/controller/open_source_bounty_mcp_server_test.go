@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -105,6 +106,20 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 		})
 	}
 
+	t.Run("valid bearer behind loopback reverse proxy", func(t *testing.T) {
+		request, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"reverse-proxy-test","version":"1.0.0"}}}`))
+		require.NoError(t, err)
+		request.Host = "api.lmm.best"
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json, text/event-stream")
+
+		response, err := http.DefaultClient.Do(request)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		assert.Equal(t, http.StatusOK, response.StatusCode)
+	})
+
 	ctx := context.Background()
 	client := mcp.NewClient(&mcp.Implementation{Name: "open-source-bounty-test", Version: "1.0.0"}, &mcp.ClientOptions{
 		MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true},
@@ -127,6 +142,10 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	assert.Contains(t, names, "open_source_bounties.publish")
 	assert.Contains(t, names, "open_source_bounties.tip")
 	assert.Contains(t, names, "open_source_bounties.rate_owner")
+	toolSchema, err := json.Marshal(tools.Tools)
+	require.NoError(t, err)
+	assert.NotContains(t, string(toolSchema), "promotion_quota")
+	assert.NotContains(t, string(toolSchema), "encrypted_review_message")
 
 	listResult, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "open_source_bounties.list", Arguments: map[string]any{"page": 1, "page_size": 20}})
 	require.NoError(t, err)
@@ -135,9 +154,9 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 
 	project, err := model.CreateOpenSourceBountyDraft(user.Id, model.OpenSourceBountyDraftInput{
 		RepositoryUrl: "https://github.com/example/mcp-fee", Title: "Fix reproducible MCP defects",
-		Description:    "Find a reproducible defect and provide a focused fix with verification.",
-		Rules:          "The Issue must include reproduction, expected behavior, actual behavior, impact, and the linked pull request must include verification.",
-		PromotionQuota: 100, RewardQuota: 333, RewardSlots: 3,
+		Description: "Find a reproducible defect and provide a focused fix with verification.",
+		Rules:       "The Issue must include reproduction, expected behavior, actual behavior, impact, and the linked pull request must include verification.",
+		RewardQuota: 333, RewardSlots: 3,
 	})
 	require.NoError(t, err)
 
@@ -182,7 +201,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.False(t, second.NeedsInput())
 	var after model.User
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 8_876, after.Quota, "promotion, escrow, and the rounded-up 2.5% task fee debit exactly once")
+	assert.Equal(t, 8_976, after.Quota, "escrow and the rounded-up public 2.5% task fee debit exactly once")
 
 	replayed, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name: "open_source_bounties.publish", Arguments: map[string]any{"project_id": project.Id},
@@ -192,7 +211,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.NoError(t, err)
 	assert.False(t, replayed.IsError, "a response-loss retry returns the persisted operation result")
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 8_876, after.Quota, "replaying confirmation cannot debit twice")
+	assert.Equal(t, 8_976, after.Quota, "replaying confirmation cannot debit twice")
 
 	participant := model.User{Username: "mcp-contributor", Password: "password", AffCode: "mcp-contributor", Quota: 0, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&participant).Error)
@@ -214,14 +233,14 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	_, err = session.CallTool(ctx, tipConfirmed)
 	require.NoError(t, err, "a response-loss retry must recover the committed tip")
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 8_753, after.Quota, "the same confirmed tip debits the publisher exactly once")
+	assert.Equal(t, 8_853, after.Quota, "the same confirmed tip debits the publisher exactly once")
 	var participantAfter model.User
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
 	assert.Equal(t, 123, participantAfter.Quota, "the same confirmed tip credits the contributor exactly once")
 
 	challenge, err = model.SubmitOpenSourceBountyChallenge(participant.Id, project.Id,
 		"https://github.com/example/mcp-fee/issues/1", "https://github.com/example/mcp-fee/pull/2",
-		"encrypted-mcp-review-evidence", "MCP replay verification.")
+		"MCP replay verification.")
 	require.NoError(t, err)
 	approveRequest := &mcp.CallToolParams{Name: "open_source_bounties.approve", Arguments: map[string]any{
 		"challenge_id": challenge.Id, "review_note": "Verified and approved.", "rating_score": 5, "rating_comment": "Focused fix with clear verification.",
@@ -253,5 +272,5 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	_, err = session.CallTool(ctx, closeConfirmed)
 	require.NoError(t, err, "a response-loss retry must recover the committed escrow refund")
 	require.NoError(t, db.First(&after, user.Id).Error)
-	assert.Equal(t, 9_419, after.Quota, "the remaining escrow refund is credited exactly once")
+	assert.Equal(t, 9_519, after.Quota, "the remaining escrow refund is credited exactly once")
 }
