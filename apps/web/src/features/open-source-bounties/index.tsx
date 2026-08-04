@@ -2620,7 +2620,7 @@ function McpSettingsPanel() {
     typeof window === 'undefined'
       ? '/mcp'
       : `${window.location.origin}${connectionQuery.data?.endpoint ?? '/mcp'}`
-  const protocolVersion = connectionQuery.data?.protocol_version ?? '2026-07-28'
+  const protocolVersion = connectionQuery.data?.protocol_version ?? '2025-11-25'
   const prompt = useMemo(
     () => `Connect to the api.lmm.best Open-source bounties MCP server.
 
