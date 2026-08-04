@@ -93,8 +93,8 @@ exec 9>"$LOCK_FILE"
 flock -n 9 || die 'another Go deployment is running'
 write_status PREPARING
 
-new_record=$(pacman -Qp --print-format '%n %v' "$PACKAGE")
-rollback_record=$(pacman -Qp --print-format '%n %v' "$ROLLBACK_PACKAGE")
+new_record=$(pacman -Qp "$PACKAGE")
+rollback_record=$(pacman -Qp "$ROLLBACK_PACKAGE")
 [[ $new_record == "lmm-api-go $EXPECTED_VERSION-1" ]] || die "unexpected release package: $new_record"
 [[ $rollback_record == lmm-api-go\ * ]] || die "unexpected rollback package: $rollback_record"
 old_version=${rollback_record#lmm-api-go }
