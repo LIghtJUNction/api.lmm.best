@@ -111,6 +111,7 @@ import {
   type BountyProject,
   type BountyProjectDetail,
 } from './types'
+import { type BountyDraftErrors, validateBountyDraft } from './validation'
 
 const BOUNTY_QUERY_KEYS = [
   ['open-source-bounties'],
@@ -133,6 +134,18 @@ const STATUS_KEYS = {
 } as const
 
 const ERROR_KEYS: Record<string, string> = {
+  OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY:
+    'Enter a GitHub repository URL in the format https://github.com/owner/repository.',
+  OPEN_SOURCE_BOUNTY_INVALID_TITLE:
+    'Bounty title must contain 4 to 120 characters.',
+  OPEN_SOURCE_BOUNTY_INVALID_DESCRIPTION:
+    'Project and defect scope must contain 20 to 2000 characters.',
+  OPEN_SOURCE_BOUNTY_INVALID_RULES:
+    'Acceptance and verification rules must contain 20 to 5000 characters.',
+  OPEN_SOURCE_BOUNTY_INVALID_QUOTA:
+    'Promotion spend and reward per fix must both be greater than zero.',
+  OPEN_SOURCE_BOUNTY_INVALID_SLOTS:
+    'Reward slots must be a whole number between 1 and 100.',
   OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE:
     'Your balance is not enough to publish this bounty.',
   OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES:
@@ -210,6 +223,8 @@ export function OpenSourceBounties() {
     null
   )
   const [draft, setDraft] = useState<DraftForm>(EMPTY_DRAFT)
+  const [draftValidationAttempted, setDraftValidationAttempted] =
+    useState(false)
   const [acceptProject, setAcceptProject] = useState<BountyProject | null>(null)
   const [githubHandle, setGithubHandle] = useState('')
   const [submitTarget, setSubmitTarget] = useState<{
@@ -284,6 +299,7 @@ export function OpenSourceBounties() {
     draft.rewardAmount,
     draft.rewardSlots,
   ])
+  const draftErrors = draftValidationAttempted ? validateBountyDraft(draft) : {}
 
   const refresh = async (balanceChanged = false) => {
     await Promise.all(
@@ -327,16 +343,25 @@ export function OpenSourceBounties() {
   const openCreateDialog = () => {
     setEditingProject(null)
     setDraft(EMPTY_DRAFT)
+    setDraftValidationAttempted(false)
     setDraftOpen(true)
   }
 
   const openEditDialog = (project: BountyProject) => {
     setEditingProject(project)
     setDraft(projectToDraft(project))
+    setDraftValidationAttempted(false)
     setDraftOpen(true)
   }
 
   const saveDraft = async () => {
+    const validationErrors = validateBountyDraft(draft)
+    setDraftValidationAttempted(true)
+    const firstValidationError = Object.values(validationErrors)[0]
+    if (firstValidationError) {
+      toast.error(t(firstValidationError))
+      return
+    }
     const input: BountyDraftInput = {
       repository_url: draft.repositoryUrl.trim(),
       title: draft.title.trim(),
@@ -345,18 +370,6 @@ export function OpenSourceBounties() {
       promotion_quota: parseQuotaFromDollars(draft.promotionAmount),
       reward_quota: parseQuotaFromDollars(draft.rewardAmount),
       reward_slots: draft.rewardSlots,
-    }
-    if (
-      !input.repository_url ||
-      input.title.length < 4 ||
-      input.description.length < 20 ||
-      input.rules.length < 20 ||
-      input.promotion_quota <= 0 ||
-      input.reward_quota <= 0 ||
-      input.reward_slots < 1
-    ) {
-      toast.error(t('Complete every bounty field with valid values.'))
-      return
     }
     const success = await runAction(
       'save-draft',
@@ -820,6 +833,7 @@ export function OpenSourceBounties() {
         editing={Boolean(editingProject)}
         draft={draft}
         setDraft={setDraft}
+        errors={draftErrors}
         charge={draftCharge}
         availableQuota={user?.quota ?? 0}
         pending={pending === 'save-draft'}
@@ -1538,6 +1552,7 @@ function DraftDialog(props: {
   editing: boolean
   draft: DraftForm
   setDraft: (draft: DraftForm) => void
+  errors: BountyDraftErrors
   charge: {
     promotion: number
     escrow: number
@@ -1550,6 +1565,10 @@ function DraftDialog(props: {
   onSave: () => void
 }) {
   const { t } = useTranslation()
+  const errorFor = (field: keyof DraftForm) => {
+    const error = props.errors[field]
+    return error ? t(error) : undefined
+  }
   const update = <K extends keyof DraftForm>(key: K, value: DraftForm[K]) =>
     props.setDraft({ ...props.draft, [key]: value })
   return (
@@ -1578,70 +1597,132 @@ function DraftDialog(props: {
         </>
       }
     >
-      <Field label={t('GitHub repository URL')} htmlFor='bounty-repository'>
+      <Field
+        label={t('GitHub repository URL')}
+        htmlFor='bounty-repository'
+        error={errorFor('repositoryUrl')}
+      >
         <Input
           id='bounty-repository'
           value={props.draft.repositoryUrl}
           onChange={(e) => update('repositoryUrl', e.target.value)}
           placeholder='https://github.com/owner/repository'
+          aria-invalid={Boolean(props.errors.repositoryUrl)}
+          aria-describedby={
+            props.errors.repositoryUrl ? 'bounty-repository-error' : undefined
+          }
         />
       </Field>
-      <Field label={t('Bounty title')} htmlFor='bounty-title'>
+      <Field
+        label={t('Bounty title')}
+        htmlFor='bounty-title'
+        error={errorFor('title')}
+      >
         <Input
           id='bounty-title'
           value={props.draft.title}
+          minLength={4}
+          maxLength={120}
           onChange={(e) => update('title', e.target.value)}
+          aria-invalid={Boolean(props.errors.title)}
+          aria-describedby={
+            props.errors.title ? 'bounty-title-error' : undefined
+          }
         />
       </Field>
-      <Field label={t('Project and defect scope')} htmlFor='bounty-description'>
+      <Field
+        label={t('Project and defect scope')}
+        htmlFor='bounty-description'
+        error={errorFor('description')}
+      >
         <Textarea
           id='bounty-description'
           rows={4}
           value={props.draft.description}
+          minLength={20}
+          maxLength={2000}
           onChange={(e) => update('description', e.target.value)}
+          aria-invalid={Boolean(props.errors.description)}
+          aria-describedby={
+            props.errors.description ? 'bounty-description-error' : undefined
+          }
         />
       </Field>
       <Field
         label={t('Acceptance and verification rules')}
         htmlFor='bounty-rules'
+        error={errorFor('rules')}
       >
         <Textarea
           id='bounty-rules'
           rows={7}
           value={props.draft.rules}
+          minLength={20}
+          maxLength={5000}
           onChange={(e) => update('rules', e.target.value)}
+          aria-invalid={Boolean(props.errors.rules)}
+          aria-describedby={
+            props.errors.rules ? 'bounty-rules-error' : undefined
+          }
           placeholder={t(
             'Describe eligible defects, required tests, review criteria, and exclusions.'
           )}
         />
       </Field>
       <div className='grid gap-4 sm:grid-cols-3'>
-        <Field label={t('Promotion spend')} htmlFor='bounty-promotion'>
+        <Field
+          label={t('Promotion spend')}
+          htmlFor='bounty-promotion'
+          error={errorFor('promotionAmount')}
+        >
           <Input
             id='bounty-promotion'
             type='number'
             min={0}
             value={props.draft.promotionAmount}
             onChange={(e) => update('promotionAmount', Number(e.target.value))}
+            aria-invalid={Boolean(props.errors.promotionAmount)}
+            aria-describedby={
+              props.errors.promotionAmount
+                ? 'bounty-promotion-error'
+                : undefined
+            }
           />
         </Field>
-        <Field label={t('Reward per fix')} htmlFor='bounty-reward'>
+        <Field
+          label={t('Reward per fix')}
+          htmlFor='bounty-reward'
+          error={errorFor('rewardAmount')}
+        >
           <Input
             id='bounty-reward'
             type='number'
             min={0}
             value={props.draft.rewardAmount}
             onChange={(e) => update('rewardAmount', Number(e.target.value))}
+            aria-invalid={Boolean(props.errors.rewardAmount)}
+            aria-describedby={
+              props.errors.rewardAmount ? 'bounty-reward-error' : undefined
+            }
           />
         </Field>
-        <Field label={t('Reward slots')} htmlFor='bounty-slots'>
+        <Field
+          label={t('Reward slots')}
+          htmlFor='bounty-slots'
+          error={errorFor('rewardSlots')}
+        >
           <Input
             id='bounty-slots'
             type='number'
             min={1}
             max={100}
+            step={1}
             value={props.draft.rewardSlots}
             onChange={(e) => update('rewardSlots', Number(e.target.value))}
+            aria-invalid={Boolean(props.errors.rewardSlots)}
+            aria-describedby={
+              props.errors.rewardSlots ? 'bounty-slots-error' : undefined
+            }
           />
         </Field>
       </div>
@@ -1669,16 +1750,31 @@ function DraftDialog(props: {
 function Field({
   label,
   htmlFor,
+  error,
   children,
 }: {
   label: string
   htmlFor: string
+  error?: string
   children: React.ReactNode
 }) {
   return (
-    <div className='flex flex-col gap-2'>
+    <div
+      role='group'
+      data-invalid={Boolean(error)}
+      className='data-[invalid=true]:text-destructive flex flex-col gap-2'
+    >
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
+      {error ? (
+        <p
+          id={`${htmlFor}-error`}
+          role='alert'
+          className='text-destructive text-sm'
+        >
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }
