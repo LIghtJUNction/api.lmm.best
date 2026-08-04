@@ -116,6 +116,7 @@ import {
   type BountyCharge,
   type BountyDraftErrors,
   calculateBountyCharge,
+  parseBountyNumericInput,
   validateBountyDraft,
   validateBountySubmissionLinks,
 } from './validation'
@@ -178,8 +179,8 @@ type DraftForm = {
   title: string
   description: string
   rules: string
-  rewardAmount: number
-  rewardSlots: number
+  rewardAmount: string
+  rewardSlots: string
 }
 
 const EMPTY_DRAFT: DraftForm = {
@@ -187,8 +188,8 @@ const EMPTY_DRAFT: DraftForm = {
   title: '',
   description: '',
   rules: '',
-  rewardAmount: 0,
-  rewardSlots: 1,
+  rewardAmount: '',
+  rewardSlots: '1',
 }
 
 function projectToDraft(project: BountyProject): DraftForm {
@@ -197,8 +198,8 @@ function projectToDraft(project: BountyProject): DraftForm {
     title: project.title,
     description: project.description,
     rules: project.rules,
-    rewardAmount: quotaUnitsToDollars(project.reward_quota),
-    rewardSlots: project.reward_slots,
+    rewardAmount: String(quotaUnitsToDollars(project.reward_quota)),
+    rewardSlots: String(project.reward_slots),
   }
 }
 
@@ -292,9 +293,15 @@ export function OpenSourceBounties() {
   })
 
   const draftCharge = useMemo(() => {
-    const reward = parseQuotaFromDollars(draft.rewardAmount)
+    const reward = parseQuotaFromDollars(
+      parseBountyNumericInput(draft.rewardAmount)
+    )
     const feeRateBps = configQuery.data?.rate_basis_points ?? 0
-    return calculateBountyCharge(reward, draft.rewardSlots, feeRateBps)
+    return calculateBountyCharge(
+      reward,
+      parseBountyNumericInput(draft.rewardSlots),
+      feeRateBps
+    )
   }, [
     configQuery.data?.rate_basis_points,
     draft.rewardAmount,
@@ -368,8 +375,10 @@ export function OpenSourceBounties() {
       title: draft.title.trim(),
       description: draft.description.trim(),
       rules: draft.rules.trim(),
-      reward_quota: parseQuotaFromDollars(draft.rewardAmount),
-      reward_slots: draft.rewardSlots,
+      reward_quota: parseQuotaFromDollars(
+        parseBountyNumericInput(draft.rewardAmount)
+      ),
+      reward_slots: parseBountyNumericInput(draft.rewardSlots),
     }
     const success = await runAction(
       'save-draft',
@@ -1739,8 +1748,9 @@ function DraftDialog(props: {
             id='bounty-reward'
             type='number'
             min={0}
+            step='any'
             value={props.draft.rewardAmount}
-            onChange={(e) => update('rewardAmount', Number(e.target.value))}
+            onChange={(e) => update('rewardAmount', e.target.value)}
             aria-invalid={Boolean(props.errors.rewardAmount)}
             aria-describedby={
               props.errors.rewardAmount ? 'bounty-reward-error' : undefined
@@ -1759,7 +1769,7 @@ function DraftDialog(props: {
             max={100}
             step={1}
             value={props.draft.rewardSlots}
-            onChange={(e) => update('rewardSlots', Number(e.target.value))}
+            onChange={(e) => update('rewardSlots', e.target.value)}
             aria-invalid={Boolean(props.errors.rewardSlots)}
             aria-describedby={
               props.errors.rewardSlots ? 'bounty-slots-error' : undefined
