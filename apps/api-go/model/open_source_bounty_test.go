@@ -185,6 +185,14 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 	assert.Equal(t, float64(5), accepted[0].OwnerRatingAverage)
 	assert.Equal(t, int64(1), accepted[0].OwnerRatingCount)
 
+	detail, err := GetOpenSourceBountyDetail(owner.Id, project.Id)
+	require.NoError(t, err)
+	require.Len(t, detail.Challenges, 1)
+	assert.Equal(t, float64(4), detail.Challenges[0].ParticipantRatingAverage)
+	assert.Equal(t, int64(1), detail.Challenges[0].ParticipantRatingCount)
+	assert.Equal(t, float64(5), detail.Challenges[0].OwnerRatingAverage)
+	assert.Equal(t, int64(1), detail.Challenges[0].OwnerRatingCount)
+
 	var tipLedger OpenSourceBountyLedger
 	require.NoError(t, db.Where("challenge_id = ? AND kind = ?", challenge.Id, OpenSourceBountyLedgerTipTransfer).First(&tipLedger).Error)
 	assert.Equal(t, 250, tipLedger.Quota)
