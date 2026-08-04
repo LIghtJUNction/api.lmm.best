@@ -24,7 +24,6 @@ export type BountyDraftValidationInput = {
   title: string
   description: string
   rules: string
-  promotionAmount: number
   rewardAmount: number
   rewardSlots: number
 }
@@ -77,9 +76,6 @@ export function validateBountyDraft(
   if (rulesLength < 20 || rulesLength > 5000) {
     errors.rules =
       'Acceptance and verification rules must contain 20 to 5000 characters.'
-  }
-  if (!Number.isFinite(draft.promotionAmount) || draft.promotionAmount <= 0) {
-    errors.promotionAmount = 'Promotion spend must be greater than zero.'
   }
   if (!Number.isFinite(draft.rewardAmount) || draft.rewardAmount <= 0) {
     errors.rewardAmount = 'Reward per fix must be greater than zero.'

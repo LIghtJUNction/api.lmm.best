@@ -31,7 +31,6 @@ const VALID_DRAFT: BountyDraftValidationInput = {
     'Find and correct reproducible untranslated or incorrectly translated interface text.',
   rules:
     'Link a valid Issue and focused pull request, update every supported locale, and include passing verification.',
-  promotionAmount: 10,
   rewardAmount: 50,
   rewardSlots: 1,
 }
@@ -47,7 +46,6 @@ describe('bounty draft validation', () => {
       title: 'bug',
       description: 'too short',
       rules: 'too short',
-      promotionAmount: Number.NaN,
       rewardAmount: 0,
       rewardSlots: 1.5,
     })
@@ -57,7 +55,6 @@ describe('bounty draft validation', () => {
       'title',
       'description',
       'rules',
-      'promotionAmount',
       'rewardAmount',
       'rewardSlots',
     ])
