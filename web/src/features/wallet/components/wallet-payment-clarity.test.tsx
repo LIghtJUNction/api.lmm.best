@@ -322,6 +322,7 @@ describe('wallet payment clarity', () => {
     const paymentMethod = {
       name: 'LINUX DO Credit',
       settlement_unit: 'LDC',
+      topup_ratio: '0.5',
       type: 'epay',
       unit_price: '10',
     }
@@ -338,7 +339,7 @@ describe('wallet payment clarity', () => {
         onSelectPreset={() => undefined}
         topupAmount={1}
         onTopupAmountChange={() => undefined}
-        paymentAmount={1.12}
+        paymentAmount={0.56}
         calculating={false}
         onPaymentMethodSelect={() => undefined}
         paymentLoading={null}
@@ -351,17 +352,21 @@ describe('wallet payment clarity', () => {
 
     assert.equal(
       recharge.container.textContent?.includes(
-        'Selected method: LINUX DO Credit · Estimated payment: 1.12 LDC (original 1.4 LDC)'
+        'Selected method: LINUX DO Credit · Estimated payment: 0.56 LDC (original 0.7 LDC)'
       ),
       true
     )
     assert.equal(
       recharge.container.textContent?.includes(
-        'Selected method: LINUX DO Credit · Amount due: 1.12 LDC (actual payment)'
+        'Selected method: LINUX DO Credit · Amount due: 0.56 LDC (actual payment)'
       ),
       true
     )
     assert.equal(recharge.container.textContent?.includes('10 LDC / USD'), true)
+    assert.equal(
+      recharge.container.textContent?.includes('Channel multiplier ×0.5'),
+      true
+    )
     await unmount(recharge)
 
     const confirmation = await render(
@@ -370,7 +375,7 @@ describe('wallet payment clarity', () => {
         onOpenChange={() => undefined}
         onConfirm={() => undefined}
         topupAmount={1}
-        paymentAmount={1.12}
+        paymentAmount={0.56}
         paymentMethod={paymentMethod}
         calculating={false}
         processing={false}
@@ -379,7 +384,7 @@ describe('wallet payment clarity', () => {
     )
 
     assert.equal(
-      document.body.textContent?.includes('Top up 1 USD; pay 1.12 LDC'),
+      document.body.textContent?.includes('Top up 1 USD; pay 0.56 LDC'),
       true
     )
     await unmount(confirmation)

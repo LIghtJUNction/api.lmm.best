@@ -29,6 +29,27 @@ export type PaymentSettlementUnit = {
 }
 
 /**
+ * Normalize a server-owned per-method payment multiplier. Missing or invalid
+ * metadata keeps legacy payment methods at the neutral multiplier of 1.
+ */
+export function getPaymentTopupRatio(paymentMethod?: PaymentMethod): number {
+  if (usesDedicatedPaymentPricing(paymentMethod?.type)) return 1
+
+  const rawRatio = paymentMethod?.topup_ratio
+  if (typeof rawRatio === 'string') {
+    if (!POSITIVE_DECIMAL_PATTERN.test(rawRatio)) return 1
+    const parsedRatio = Number(rawRatio)
+    return Number.isFinite(parsedRatio) && parsedRatio > 0 ? parsedRatio : 1
+  }
+
+  return typeof rawRatio === 'number' &&
+    Number.isFinite(rawRatio) &&
+    rawRatio > 0
+    ? rawRatio
+    : 1
+}
+
+/**
  * Normalize optional gateway pricing metadata from a server-owned payment
  * method. Invalid values deliberately fall back to the standard currency UI.
  */
