@@ -13,7 +13,7 @@ func GetOpenSourceBountyMCPToken(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"status": status, "endpoint": "/mcp", "protocol_version": "2026-07-28",
+		"status": status, "endpoint": "/mcp", "protocol_version": openSourceBountyMCPProtocolVersion,
 	})
 }
 
@@ -24,7 +24,7 @@ func RotateOpenSourceBountyMCPToken(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"token": token, "status": status, "endpoint": "/mcp", "protocol_version": "2026-07-28",
+		"token": token, "status": status, "endpoint": "/mcp", "protocol_version": openSourceBountyMCPProtocolVersion,
 	})
 }
 

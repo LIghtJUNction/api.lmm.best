@@ -148,7 +148,7 @@ type OpenSourceBountyProjectView struct {
 	ApprovedChallengeCount int64                      `json:"approved_challenge_count"`
 	OwnerRatingAverage     float64                    `json:"owner_rating_average"`
 	OwnerRatingCount       int64                      `json:"owner_rating_count"`
-	ViewerChallenge        *OpenSourceBountyChallenge `json:"viewer_challenge,omitempty"`
+	ViewerChallenge        *OpenSourceBountyChallenge `json:"viewer_challenge,omitempty" gorm:"-"`
 }
 
 type OpenSourceBountyChallengeView struct {

@@ -160,7 +160,7 @@ func VerifyOpenSourceBountyMCPToken(rawToken string) (int, error) {
 	var token OpenSourceBountyMCPToken
 	err := DB.Table("open_source_bounty_mcp_tokens AS token").
 		Select("token.*").
-		Joins("JOIN users user ON user.id = token.user_id AND user.deleted_at IS NULL AND user.status = ?", common.UserStatusEnabled).
+		Joins("JOIN users AS token_user ON token_user.id = token.user_id AND token_user.deleted_at IS NULL AND token_user.status = ?", common.UserStatusEnabled).
 		Where("token.token_hash = ?", openSourceBountyMCPTokenHash(rawToken)).
 		First(&token).Error
 	if err != nil {
