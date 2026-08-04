@@ -21,7 +21,13 @@ import { afterEach, describe, test } from 'node:test'
 
 import { api } from '@/lib/api'
 
-import { listBounties, tipChallenge } from './api'
+import {
+  listBounties,
+  listReceivedBountyTips,
+  markReceivedBountyTipsRead,
+  thankBountyTip,
+  tipChallenge,
+} from './api'
 
 const originalGet = api.get
 const originalPost = api.post
@@ -90,6 +96,29 @@ describe('open-source bounty tips', () => {
         data: input,
         idempotencyKey,
       },
+    ])
+  })
+
+  test('uses recipient-scoped notification and thank endpoints', async () => {
+    const gets: string[] = []
+    const posts: string[] = []
+    api.get = (async (url) => {
+      gets.push(url)
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+    api.post = (async (url) => {
+      posts.push(url)
+      return { data: { success: true, data: null } }
+    }) as typeof api.post
+
+    await listReceivedBountyTips()
+    await markReceivedBountyTipsRead()
+    await thankBountyTip(17)
+
+    assert.deepEqual(gets, ['/api/open-source-bounties/tips/received'])
+    assert.deepEqual(posts, [
+      '/api/open-source-bounties/tips/received/read',
+      '/api/open-source-bounties/tips/17/thank',
     ])
   })
 })

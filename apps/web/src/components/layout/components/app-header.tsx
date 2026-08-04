@@ -136,6 +136,9 @@ export function AppHeader({
                 onTabChange={notifications.setActiveTab}
                 notice={notifications.notice}
                 announcements={notifications.announcements}
+                bountyTips={notifications.bountyTips}
+                thankingTipId={notifications.thankingTipId}
+                onThankTip={notifications.thankTip}
                 loading={notifications.loading}
               />
             )}

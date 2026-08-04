@@ -108,6 +108,37 @@ func ListAcceptedOpenSourceBounties(c *gin.Context) {
 	common.ApiSuccess(c, items)
 }
 
+func ListOpenSourceBountyTipNotifications(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	items, err := model.ListOpenSourceBountyTipNotifications(c.GetInt("id"), limit)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, items)
+}
+
+func MarkOpenSourceBountyTipNotificationsRead(c *gin.Context) {
+	if err := model.MarkOpenSourceBountyTipNotificationsRead(c.GetInt("id")); err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
+
+func ThankOpenSourceBountyTip(c *gin.Context) {
+	tipId, ok := openSourceBountyId(c, "tip_id")
+	if !ok {
+		return
+	}
+	notification, err := model.ThankOpenSourceBountyTip(c.GetInt("id"), tipId)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, notification)
+}
+
 func GetOpenSourceBounty(c *gin.Context) {
 	projectId, ok := openSourceBountyId(c, "id")
 	if !ok {
