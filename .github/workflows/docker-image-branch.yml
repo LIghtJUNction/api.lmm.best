@@ -42,8 +42,19 @@ jobs:
         env:
           BACKEND: ${{ inputs.backend }}
           BRANCH_NAME: ${{ inputs.branch }}
+          IMAGE_REPOSITORY: ${{ vars.DOCKER_IMAGE_REPOSITORY }}
         run: |
           set -euo pipefail
+          if [[ -z "$IMAGE_REPOSITORY" || "$IMAGE_REPOSITORY" == "calciumion/new-api" ]]; then
+            echo 'DOCKER_IMAGE_REPOSITORY must select this fork owned repository' >&2
+            exit 1
+          fi
+          case "$IMAGE_REPOSITORY" in
+            *[!A-Za-z0-9._/-]*|[[:space:]]*)
+              echo 'DOCKER_IMAGE_REPOSITORY is invalid' >&2
+              exit 1
+              ;;
+          esac
           base=$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//')
           base=${base:0:90}
           base=$(printf '%s' "$base" | sed -E 's/[.-]+$//')
@@ -53,13 +64,13 @@ jobs:
           short_revision=$(git rev-parse --short HEAD)
           case "$BACKEND" in
             go)
-              image=calciumion/new-api
+              image=$IMAGE_REPOSITORY
               dockerfile=Dockerfile
               tag_prefix=$base
               version="${base}-$(date +'%Y%m%d')-${short_revision}"
               ;;
             rust-preview)
-              image=calciumion/new-api-rust-preview
+              image=${IMAGE_REPOSITORY}-rust-preview
               dockerfile=Dockerfile.rust
               tag_prefix=${base}-preview
               version="${base}-$(date +'%Y%m%d')-${short_revision}-preview"
