@@ -59,6 +59,7 @@ import { cn } from '@/lib/utils'
 
 import {
   getPaymentIcon,
+  getPaymentTopupRatio,
   getDefaultPaymentType,
   getMinTopupAmount,
   calculatePresetPricing,
@@ -180,6 +181,7 @@ export function RechargeFormCard({
     selectedPaymentMethod ??
     topupInfo?.pay_methods?.find((method) => method.type === defaultPaymentType)
   const settlementUnit = getPaymentSettlementUnit(effectivePaymentMethod)
+  const paymentTopupRatio = getPaymentTopupRatio(effectivePaymentMethod)
   const selectedPaymentMethodName =
     effectivePaymentMethod?.name ?? t('Payment Method')
   const shouldShowSettlementRule = (paymentMethod: PaymentMethod) =>
@@ -207,7 +209,9 @@ export function RechargeFormCard({
       preset.discount || topupInfo?.discount?.[preset.value] || 1.0
     return calculatePresetPricing(
       preset.value,
-      (settlementUnit?.unitPrice ?? priceRatio) * topupGroupRatio,
+      (settlementUnit?.unitPrice ?? priceRatio) *
+        topupGroupRatio *
+        paymentTopupRatio,
       discount
     )
   })()
@@ -307,13 +311,15 @@ export function RechargeFormCard({
                           1.0
                         const defaultPricing = calculatePresetPricing(
                           preset.value,
-                          priceRatio * topupGroupRatio,
+                          priceRatio * topupGroupRatio * paymentTopupRatio,
                           discount
                         )
                         const configuredSettlementPrice = settlementUnit
                           ? calculatePresetPricing(
                               preset.value,
-                              settlementUnit.unitPrice * topupGroupRatio,
+                              settlementUnit.unitPrice *
+                                topupGroupRatio *
+                                paymentTopupRatio,
                               discount
                             )
                           : null
@@ -512,6 +518,7 @@ export function RechargeFormCard({
                         const settlementRule = shouldShowSettlementRule(method)
                           ? getSettlementRule(method)
                           : null
+                        const methodTopupRatio = getPaymentTopupRatio(method)
 
                         const button = (
                           <Button
@@ -553,6 +560,13 @@ export function RechargeFormCard({
                               {settlementRule && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
                                   {settlementRule}
+                                </span>
+                              )}
+                              {methodTopupRatio !== 1 && (
+                                <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
+                                  {t('Channel multiplier ×{{ratio}}', {
+                                    ratio: method.topup_ratio,
+                                  })}
                                 </span>
                               )}
                             </span>
