@@ -209,7 +209,7 @@ export const STATIC_I18N_KEYS = [
   'Resolve or reject active challenges before closing this bounty.',
   'All reward slots are currently occupied.',
   'You have already accepted this challenge.',
-  'The Issue and pull request must belong to the bounty repository.',
+  'Every submitted Issue or pull request must belong to the bounty repository.',
   'This pull request has already been submitted.',
   'promotion_spend',
   'escrow_fund',
@@ -220,7 +220,7 @@ export const STATIC_I18N_KEYS = [
   'Submit a focused fix',
   'Open a pull request that links the Issue and includes appropriate verification or tests.',
   'Settle directly with the publisher',
-  'Submit the Issue and pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
+  'Submit the Issue or pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
   'Escalate only disputed trades',
   'If either party disputes rejection or payment, open a platform ticket. A third-party administrator may review the preserved evidence and arbitrate the escrow.',
 

@@ -150,6 +150,22 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.NoError(t, err)
 	assert.NotContains(t, string(toolSchema), "promotion_quota")
 	assert.NotContains(t, string(toolSchema), "encrypted_review_message")
+	var submitTool *mcp.Tool
+	for _, tool := range tools.Tools {
+		if tool.Name == "open_source_bounties.submit" {
+			submitTool = tool
+			break
+		}
+	}
+	require.NotNil(t, submitTool)
+	submitSchema, ok := submitTool.InputSchema.(map[string]any)
+	require.True(t, ok)
+	requiredInputs, ok := submitSchema["required"].([]any)
+	require.True(t, ok)
+	assert.Contains(t, requiredInputs, "project_id")
+	assert.NotContains(t, requiredInputs, "issue_url")
+	assert.NotContains(t, requiredInputs, "pull_request_url")
+	assert.Contains(t, submitTool.Description, "at least one")
 
 	listResult, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "open_source_bounties.list", Arguments: map[string]any{"page": 1, "page_size": 20}})
 	require.NoError(t, err)
