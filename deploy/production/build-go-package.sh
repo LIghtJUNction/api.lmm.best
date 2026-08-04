@@ -57,7 +57,7 @@ install -Dm0755 "$BINARY" "$build_dir/lmm-api"
 matches=("$pkgdest/lmm-api-go-$version-1-x86_64.pkg.tar."*)
 [[ ${#matches[@]} -eq 1 && -f ${matches[0]} ]] || die 'expected exactly one package archive'
 archive=${matches[0]}
-package_record=$(pacman -Qp --print-format '%n %v' "$archive")
+package_record=$(pacman -Qp "$archive")
 [[ $package_record == "lmm-api-go $version-1" ]] || die "unexpected package record: $package_record"
 
 mkdir -p -- "$OUTPUT_DIR"
