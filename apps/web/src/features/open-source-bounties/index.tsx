@@ -117,6 +117,7 @@ import {
   type BountyDraftErrors,
   calculateBountyCharge,
   validateBountyDraft,
+  validateBountySubmissionLinks,
 } from './validation'
 
 const BOUNTY_QUERY_KEYS = [
@@ -163,7 +164,11 @@ const ERROR_KEYS: Record<string, string> = {
   OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED:
     'You have already accepted this challenge.',
   OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH:
-    'The Issue and pull request must belong to the bounty repository.',
+    'Every submitted Issue or pull request must belong to the bounty repository.',
+  OPEN_SOURCE_BOUNTY_EVIDENCE_REQUIRED:
+    'Provide at least one GitHub Issue or pull request URL.',
+  OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE:
+    'Enter a GitHub Issue URL ending in /issues/number or a pull request URL ending in /pull/number.',
   OPEN_SOURCE_BOUNTY_DUPLICATE_PULL_REQUEST:
     'This pull request has already been submitted.',
 }
@@ -434,6 +439,11 @@ export function OpenSourceBounties() {
 
   const handleSubmit = async () => {
     if (!submitTarget) return
+    const submissionLinkError = validateBountySubmissionLinks(submission)
+    if (submissionLinkError) {
+      toast.error(t(submissionLinkError))
+      return
+    }
     const success = await runAction(
       `submit-${submitTarget.challenge.id}`,
       () =>
@@ -777,7 +787,7 @@ export function OpenSourceBounties() {
                       </EmptyTitle>
                       <EmptyDescription>
                         {t(
-                          'Accept an available bounty, fix a real defect, and submit the matching Issue and pull request.'
+                          'Accept an available bounty, fix a real defect, and submit the matching Issue or pull request.'
                         )}
                       </EmptyDescription>
                     </EmptyHeader>
@@ -1370,7 +1380,12 @@ function OwnerProjectCard(props: {
                 onClick={props.onReview}
                 disabled={busy}
               >
-                {t('Review submissions')}
+                <HugeiconsIcon
+                  icon={UserAdd01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                />
+                {t('Challenges')}
               </Button>
               {project.status === 'published' ? (
                 <Button
@@ -1824,13 +1839,14 @@ function SubmissionDialog(props: {
   const { t } = useTranslation()
   const update = (key: keyof typeof props.submission, value: string) =>
     props.setSubmission({ ...props.submission, [key]: value })
+  const submissionLinkError = validateBountySubmissionLinks(props.submission)
   return (
     <Dialog
       open={Boolean(props.target)}
       onOpenChange={props.onOpenChange}
       title={t('Submit bounty work')}
       description={t(
-        'Submit the matching GitHub Issue and pull request. The bounty publisher will review the defect and fix directly.'
+        'Provide a GitHub Issue URL, pull request URL, or both. The bounty publisher will review the completed work directly.'
       )}
       contentClassName='sm:max-w-2xl'
       footer={
@@ -1842,7 +1858,10 @@ function SubmissionDialog(props: {
           >
             {t('Cancel')}
           </Button>
-          <Button onClick={props.onSubmit} disabled={props.pending}>
+          <Button
+            onClick={props.onSubmit}
+            disabled={props.pending || Boolean(submissionLinkError)}
+          >
             {t('Submit for review')}
           </Button>
         </>
@@ -1854,6 +1873,7 @@ function SubmissionDialog(props: {
             id='bounty-issue-url'
             value={props.submission.issueUrl}
             onChange={(e) => update('issueUrl', e.target.value)}
+            aria-describedby='bounty-completion-links-help'
           />
         </Field>
         <Field label={t('GitHub pull request URL')} htmlFor='bounty-pr-url'>
@@ -1861,10 +1881,17 @@ function SubmissionDialog(props: {
             id='bounty-pr-url'
             value={props.submission.pullRequestUrl}
             onChange={(e) => update('pullRequestUrl', e.target.value)}
+            aria-describedby='bounty-completion-links-help'
           />
         </Field>
+        <p
+          id='bounty-completion-links-help'
+          className='text-muted-foreground text-sm'
+        >
+          {t('Provide at least one GitHub Issue or pull request URL.')}
+        </p>
         <Field
-          label={t('Submission note (optional)')}
+          label={t('Completion note (optional)')}
           htmlFor='bounty-submission-note'
         >
           <Textarea
@@ -1917,14 +1944,40 @@ function ProjectReviewDialog(props: {
             >
               <div className='flex flex-wrap items-start justify-between gap-2'>
                 <div>
-                  <p className='font-medium'>@{challenge.github_handle}</p>
+                  <p className='font-medium'>
+                    {t('Username')}: {challenge.participant_username}
+                  </p>
                   <p className='text-muted-foreground text-xs'>
-                    {challenge.participant_username}
+                    {t('User ID')}: {challenge.participant_user_id}
                   </p>
                 </div>
                 <Badge variant='outline'>
                   {statusLabel(t, challenge.status)}
                 </Badge>
+              </div>
+              <div className='flex flex-wrap gap-2'>
+                <Button
+                  variant='outline'
+                  render={
+                    <a
+                      href={`https://github.com/${challenge.github_handle}`}
+                      target='_blank'
+                      rel='noreferrer'
+                    />
+                  }
+                >
+                  <HugeiconsIcon
+                    icon={GithubIcon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                  />
+                  @{challenge.github_handle}
+                  <HugeiconsIcon
+                    icon={ExternalLinkIcon}
+                    strokeWidth={2}
+                    data-icon='inline-end'
+                  />
+                </Button>
               </div>
               <div className='grid gap-2 sm:grid-cols-2'>
                 <Metric
@@ -2228,7 +2281,7 @@ function DisputeEvidence({ dispute }: { dispute: BountyDispute }) {
             current={!changed.has('projectRules')}
           />
           <DisputeEvidenceValue
-            label={t('Submission note (optional)')}
+            label={t('Completion note (optional)')}
             value={text(dispute.submission_note_snapshot)}
             current={!changed.has('submissionNote')}
           />
@@ -2290,7 +2343,7 @@ function DisputeEvidence({ dispute }: { dispute: BountyDispute }) {
             ) : null}
             {changed.has('submissionNote') ? (
               <DisputeEvidenceChange
-                label={t('Submission note (optional)')}
+                label={t('Completion note (optional)')}
                 original={text(dispute.submission_note_snapshot)}
                 current={text(dispute.submission_note)}
               />
@@ -2512,7 +2565,7 @@ function DisputesPanel({
                   </div>
                   <div className='bg-muted/40 rounded-lg border p-3'>
                     <p className='text-xs font-medium'>
-                      {t('Contributor submission note')}
+                      {t('Contributor completion note')}
                     </p>
                     <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
                       {dispute.submission_note_snapshot ||
@@ -2715,7 +2768,7 @@ Endpoint: ${endpoint}
 Protocol: MCP ${protocolVersion}, stateless Streamable HTTP
 Authorization: Bearer ${revealedToken || '<YOUR_PERSONAL_MCP_TOKEN>'}
 
-Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Treat every bounty as a peer-to-peer transaction between its publisher and contributor; an administrator intervenes only when either party opens a dispute. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing debits the gross listed price from my balance, credits the public administrator-configured platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit and the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. After a contributor submits the matching Issue and pull request, the bounty publisher reviews the work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
+Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Treat every bounty as a peer-to-peer transaction between its publisher and contributor; an administrator intervenes only when either party opens a dispute. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing debits the gross listed price from my balance, credits the public platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit and the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. A contributor may submit a matching GitHub Issue URL, pull request URL, or both, plus an optional completion note. The bounty publisher reviews the completed work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
     [endpoint, protocolVersion, revealedToken]
   )
 
@@ -2879,7 +2932,7 @@ function RulesPanel() {
     [
       '3',
       'Settle directly with the publisher',
-      'Submit the Issue and pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
+      'Submit the Issue or pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
     ],
     [
       '4',

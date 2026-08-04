@@ -23,6 +23,7 @@ import {
   type BountyDraftValidationInput,
   calculateBountyCharge,
   validateBountyDraft,
+  validateBountySubmissionLinks,
 } from '../validation'
 
 const VALID_DRAFT: BountyDraftValidationInput = {
@@ -102,5 +103,38 @@ describe('bounty publication charge', () => {
       feeRatePercent: 2.5,
       total: 999,
     })
+  })
+})
+
+describe('bounty completion evidence validation', () => {
+  test('accepts either an Issue link, a pull request link, or both', () => {
+    assert.equal(
+      validateBountySubmissionLinks({
+        issueUrl: 'https://github.com/example/project/issues/1',
+        pullRequestUrl: '',
+      }),
+      undefined
+    )
+    assert.equal(
+      validateBountySubmissionLinks({
+        issueUrl: '',
+        pullRequestUrl: 'https://github.com/example/project/pull/2',
+      }),
+      undefined
+    )
+    assert.equal(
+      validateBountySubmissionLinks({
+        issueUrl: 'https://github.com/example/project/issues/1',
+        pullRequestUrl: 'https://github.com/example/project/pull/2',
+      }),
+      undefined
+    )
+  })
+
+  test('requires at least one completion link', () => {
+    assert.equal(
+      validateBountySubmissionLinks({ issueUrl: '  ', pullRequestUrl: '' }),
+      'Provide at least one GitHub Issue or pull request URL.'
+    )
   })
 })
