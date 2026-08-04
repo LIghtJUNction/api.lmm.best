@@ -1,4 +1,4 @@
-name: Rust release bundle
+name: Go and web release bundle
 
 on:
   push:
@@ -6,6 +6,12 @@ on:
       - '*'
       - '!*-alpha*'
   workflow_dispatch:
+    inputs:
+      include_rust_preview:
+        description: 'Also build and sign optional Rust preview artifacts'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -14,28 +20,11 @@ env:
   RUST_TOOLCHAIN: '1.88.0'
 
 jobs:
-  gate:
-    name: Release gates on PostgreSQL 18
+  prepare:
+    name: Resolve immutable release identity
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     outputs:
       version: ${{ steps.identity.outputs.version }}
-      web_name: ${{ steps.web_package.outputs.name }}
-      web_sha256: ${{ steps.web_package.outputs.sha256 }}
-    services:
-      postgres:
-        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres-release
-          POSTGRES_DB: lmm_rehearsal
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d lmm_rehearsal"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
     steps:
       - name: Checkout exact release revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -43,366 +32,285 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.sha }}
 
-      - name: Install PostgreSQL client and repository tooling
+      - name: Resolve release version
+        id: identity
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client jq ripgrep
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            raw_version=$GITHUB_REF_NAME
+          else
+            raw_version="0.1.0-${GITHUB_SHA:0:12}"
+          fi
+          version=$(printf '%s' "$raw_version" | sed -E 's/[^A-Za-z0-9._+-]+/-/g')
+          [[ -n "$version" ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Set up pinned Rust toolchain
-        run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
-          rustup default "$RUST_TOOLCHAIN"
-          rustc --version --verbose
+  web:
+    name: Build and sign web artifact
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact release revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '1.3.14'
 
-      - name: Resolve immutable release identity
-        id: identity
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            raw_version="$GITHUB_REF_NAME"
-          else
-            raw_version="0.1.0-${GITHUB_SHA:0:12}"
-          fi
-          version="$(printf '%s' "$raw_version" | sed -E 's/[^A-Za-z0-9._+-]+/-/g')"
-          [[ -n "$version" ]]
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
 
-      - name: Verify route and migration provenance gates
-        run: |
-          bash rust/scripts/check-go-route-manifest.sh
-          bash rust/crates/lmm-db-migrate/scripts/verify-provenance.sh
+      - name: Build shared web frontend
+        env:
+          VITE_REACT_APP_VERSION: ${{ needs.prepare.outputs.version }}
+        run: bun run --filter @lmm/web build
 
-      - name: Require complete Rust production parity
+      - name: Package web artifact
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          export LC_ALL=C
-          legacy=rust/routes/legacy-go-routes.tsv
-          implemented=rust/routes/rust-implemented-routes.tsv
-          ownership=rust/routes/ownership.tsv
-          parity_tmp="$(mktemp -d "${RUNNER_TEMP}/lmm-route-parity.XXXXXX")"
-          trap 'rm -rf "$parity_tmp"' EXIT
-
-          awk -F '\t' 'NF == 3 { print $1 "\t" $2 }' "$legacy" | sort -u > "$parity_tmp/legacy"
-          awk -F '\t' '$0 !~ /^#/ && NF == 3 { print $1 "\t" $2 }' "$implemented" | sort -u > "$parity_tmp/implemented"
-          legacy_count="$(wc -l < "$parity_tmp/legacy")"
-          implemented_count="$(wc -l < "$parity_tmp/implemented")"
-          missing_count="$(comm -23 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
-          extra_count="$(comm -13 "$parity_tmp/legacy" "$parity_tmp/implemented" | wc -l)"
-
-          if [[ "$legacy_count" -ne 356 || "$implemented_count" -ne 356 ||
-                "$missing_count" -ne 0 || "$extra_count" -ne 0 ]]; then
-            echo "::error::release blocked: Rust route coverage is incomplete (implemented=${implemented_count}/356, missing=${missing_count}, extra=${extra_count})"
-            comm -23 "$parity_tmp/legacy" "$parity_tmp/implemented" | head -20 >&2
-            exit 1
-          fi
-
-          awk -F '\t' '
-            FNR == NR {
-              if ($0 ~ /^#/ || NF == 0) next
-              priority[++rules] = $1 + 0
-              kind[rules] = $2
-              pattern[rules] = $3
-              owner[rules] = $4
-              next
-            }
-            {
-              path = $2
-              best = -1
-              winners = 0
-              for (rule = 1; rule <= rules; rule++) {
-                applies = (kind[rule] == "exact" && path == pattern[rule]) ||
-                          (kind[rule] == "prefix" && index(path, pattern[rule]) == 1)
-                if (!applies) continue
-                if (priority[rule] > best) {
-                  best = priority[rule]
-                  winners = 1
-                  winner = rule
-                } else if (priority[rule] == best) {
-                  winners++
-                }
-              }
-              if (winners != 1) {
-                print "release blocked: route ownership is missing or ambiguous: " $1 " " path > "/dev/stderr"
-                failures++
-              } else if (owner[winner] != "rust") {
-                print "release blocked: route is not Rust-owned: " $1 " " path > "/dev/stderr"
-                failures++
-              } else {
-                rust_owned++
-              }
-            }
-            END {
-              if (rust_owned != 356) {
-                print "release blocked: Rust owns " (rust_owned + 0) "/356 routes" > "/dev/stderr"
-                failures++
-              }
-              exit failures != 0
-            }
-          ' "$ownership" "$legacy"
-          echo "Production parity gate passed: 356/356 routes are implemented and Rust-owned."
-
-      - name: Run Rust format, lint, and unit gates
-        working-directory: rust
-        run: |
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-          cargo test --workspace --all-targets --all-features --locked
-
-      - name: Assert PostgreSQL 18 and validate baseline catalog
-        env:
-          PGPASSWORD: postgres-release
-        run: |
-          set -euo pipefail
-          version="$(psql -XAt -h 127.0.0.1 -U postgres -d lmm_rehearsal -c 'SHOW server_version_num')"
-          [[ "$version" =~ ^18[0-9]{4}$ ]]
-          schema_dir=rust/crates/lmm-db-migrate/schema
-          catalog="$RUNNER_TEMP/postgres-catalog.json"
-          psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d lmm_rehearsal \
-            -f "$schema_dir/postgresql-baseline.sql" >/dev/null
-          psql -XAt -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres -d lmm_rehearsal \
-            -f "$schema_dir/export-postgres-catalog.sql" > "$catalog"
-          [[ "$(jq 'length' "$catalog")" == 34 ]]
-          [[ "$(jq '[.[].columns[]] | length' "$catalog")" == 421 ]]
-          [[ "$(jq '[.[].indexes[]] | length' "$catalog")" == 172 ]]
-          [[ "$(jq '[.[] | select(.sequence != null)] | length' "$catalog")" == 29 ]]
-          cargo run --quiet --locked --manifest-path rust/Cargo.toml -p lmm-db-migrate -- \
-            postgres-catalog-validate \
-            --manifest "$schema_dir/table-map.json" \
-            --catalog "$catalog"
-
-      - name: Run PostgreSQL 18 canonical equivalence gate
-        env:
-          PGPASSWORD: postgres-release
-          LMM_TEST_PG_SOCKET: 127.0.0.1
-          LMM_TEST_PG_PORT: '5432'
-          LMM_TEST_PG_DATABASE: lmm_rehearsal
-        working-directory: rust
-        run: >-
-          cargo test -p lmm-db-migrate --test postgres_equivalence --locked --
-          --ignored --exact --nocapture
-          sqlite_and_postgres_should_have_identical_canonical_table_hashes
-
-      - name: Run every PostgreSQL 18 schema contract gate
-        env:
-          LMM_TEST_DATABASE_URL: postgresql://postgres:postgres-release@127.0.0.1:5432/lmm_rehearsal
-        working-directory: rust
-        run: cargo test -p lmm-db-migrate --test schema_contract --locked -- --ignored --nocapture
-
-      - name: Run PostgreSQL 18 full-copy gate
-        env:
-          LMM_TEST_DATABASE_URL: postgresql://postgres:postgres-release@127.0.0.1:5432/lmm_rehearsal
-        working-directory: rust
-        run: >-
-          cargo test -p lmm-db-migrate --test full_copy --locked --
-          --ignored --exact --nocapture
-          full_copy_should_verify_all_tables_and_rollback_both_fault_phases
-
-      - name: Build independent web artifact
-        working-directory: web
-        env:
-          VITE_REACT_APP_VERSION: ${{ steps.identity.outputs.version }}
-        run: |
-          bun install --frozen-lockfile
-          bun run build
-
-      - name: Package independent web artifact metadata
-        id: web_package
-        env:
-          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
-          REVISION: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          name="lmm-api-web-${RELEASE_VERSION}"
           mkdir -p release-web
-          tar -czf "release-web/${name}.tar.gz" -C web dist
-          sha256="$(sha256sum "release-web/${name}.tar.gz" | awk '{print $1}')"
-          printf '%s  %s\n' "$sha256" "${name}.tar.gz" > "release-web/${name}.tar.gz.sha256"
-          cat > "release-web/${name}.metadata.json" <<EOF
-          {
-            "schema": 1,
-            "name": "${name}.tar.gz",
-            "sha256": "${sha256}",
-            "revision": "${REVISION}"
-          }
-          EOF
-          jq -e . "release-web/${name}.metadata.json" >/dev/null
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          archive="release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz"
+          tar -czf "$archive" -C apps/web dist
+          sha256sum "$archive" > "${archive}.sha256"
 
-      - name: Upload independent web artifact
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign web artifact
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          archive="release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz"
+          cosign sign-blob --yes --bundle "${archive}.sigstore.json" "$archive"
+
+      - name: Upload signed web release artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-web
           path: release-web/*
           if-no-files-found: error
 
-  build:
-    name: Build ${{ matrix.os }} Rust bundle
-    needs: gate
+      - name: Upload web assets for Go builds
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-web-dist
+          path: apps/web/dist
+          if-no-files-found: error
+
+  go-test:
+    name: Test Go default backend and independent relaykit
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact release revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: |
+            apps/api-go/go.sum
+            apps/api-go/relaykit/go.sum
+
+      - name: Download web artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-web-dist
+          path: release-web-download
+
+      - name: Synchronize web assets into Go embed tree
+        run: |
+          rm -rf apps/api-go/web/dist
+          mkdir -p apps/api-go/web/dist
+          cp -a release-web-download/. apps/api-go/web/dist/
+          test -f apps/api-go/web/dist/index.html
+
+      - name: Test default Go module
+        working-directory: apps/api-go
+        run: go test ./...
+
+      - name: Test and build independent relaykit module
+        working-directory: apps/api-go/relaykit
+        env:
+          GOWORK: 'off'
+        run: |
+          go test ./...
+          go build ./...
+
+  go-build:
+    name: Build and sign Go linux/${{ matrix.arch }} artifact
+    needs: [prepare, web, go-test]
     strategy:
       fail-fast: false
       matrix:
-        # The cutover bundle always includes the Unix-only lmm-db-migrate binary.
-        # Windows is intentionally not a server release target; Electron packaging is retired.
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        arch: [amd64, arm64]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Checkout gated release revision
+      - name: Checkout exact release revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: apps/api-go/go.sum
+
+      - name: Download web artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-web-dist
+          path: release-web-download
+
+      - name: Build static Go binary and package artifact
+        env:
+          GOARCH: ${{ matrix.arch }}
+          GOOS: linux
+          CGO_ENABLED: '0'
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf apps/api-go/web/dist
+          mkdir -p apps/api-go/web/dist
+          cp -a release-web-download/. apps/api-go/web/dist/
+
+          artifact="lmm-api-go-${RELEASE_VERSION}-linux-${GOARCH}"
+          bundle="release-go/${artifact}"
+          mkdir -p "$bundle"
+          (
+            cd apps/api-go
+            go build -trimpath \
+              -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${RELEASE_VERSION}" \
+              -o "../../${bundle}/lmm-api" .
+          )
+          file "$bundle/lmm-api"
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
+          printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"
+          tar -czf "release-go/${artifact}.tar.gz" -C release-go "$artifact"
+          sha256sum "release-go/${artifact}.tar.gz" > "release-go/${artifact}.tar.gz.sha256"
+          rm -rf "$bundle"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign Go artifact
+        env:
+          ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          archive="release-go/lmm-api-go-${RELEASE_VERSION}-linux-${ARCH}.tar.gz"
+          cosign sign-blob --yes --bundle "${archive}.sigstore.json" "$archive"
+
+      - name: Upload Go artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-go-linux-${{ matrix.arch }}
+          path: release-go/*
+          if-no-files-found: error
+
+  rust-preview:
+    name: Build and sign optional Rust preview artifact
+    if: github.event_name == 'workflow_dispatch' && inputs.include_rust_preview
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact release revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
           ref: ${{ github.sha }}
 
       - name: Set up pinned Rust toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
           rustup default "$RUST_TOOLCHAIN"
-          rustc --version --verbose
 
-      - name: Build Rust release components
-        working-directory: rust
+      - name: Verify Rust preview health
+        working-directory: apps/api-rust
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-targets --all-features --locked
+
+      - name: Build and package Rust preview binaries
         env:
           LMM_BUILD_REVISION: ${{ github.sha }}
-        run: cargo build --release --locked --package lmm-api-rs --package lmm-db-migrate
-
-      - name: Assemble content-addressed ReleaseBinding bundle
-        id: package
-        env:
-          RELEASE_VERSION: ${{ needs.gate.outputs.version }}
-          WEB_NAME: ${{ needs.gate.outputs.web_name }}
-          WEB_SHA256: ${{ needs.gate.outputs.web_sha256 }}
-          REVISION: ${{ github.sha }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          host="$(rustc -vV | sed -n 's/^host: //p')"
-          [[ -n "$host" ]]
-          artifact_name="lmm-api-rust-${RELEASE_VERSION}-${host}"
-          bundle="$PWD/release-artifacts/${artifact_name}"
-          components="$bundle/components"
-          mkdir -p "$components" "$bundle/build-inputs" "$bundle/oracles"
-
-          cp rust/target/release/lmm-api-rs "$components/api-server-binary"
-          printf '%s\n' "$REVISION" > "$components/api-server-revision"
-          cp rust/target/release/lmm-db-migrate "$components/db-migrator-binary"
-          cp rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql "$components/postgresql-baseline"
-          cp rust/crates/lmm-db-migrate/schema/table-map.json "$components/table-manifest"
-          cp rust/crates/lmm-db-migrate/schema/export-postgres-catalog.sql "$components/postgres-catalog-exporter"
-          cp rust/migrations/0001_schema_contract.sql "$components/platform-contract-sql"
-          cp rust/crates/lmm-db-migrate/schema/provenance.json "$components/migration-provenance"
-          cp rust/routes/legacy-go-routes.tsv "$components/legacy-route-oracle"
-          cp rust/routes/go-routes.sha256 "$bundle/oracles/legacy-go-routes.sha256"
-          cp rust/Cargo.lock "$bundle/build-inputs/Cargo.lock"
-          rustc --version --verbose > "$bundle/build-inputs/rust-toolchain.txt"
+          cargo build --manifest-path apps/api-rust/Cargo.toml --release --locked \
+            --package lmm-api-rs --package lmm-db-migrate
+          artifact="lmm-api-rust-preview-${RELEASE_VERSION}-linux-amd64"
+          bundle="release-rust-preview/${artifact}"
+          mkdir -p "$bundle"
+          cp apps/api-rust/target/release/lmm-api-rs "$bundle/"
+          cp apps/api-rust/target/release/lmm-db-migrate "$bundle/"
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
-
-          sha256_file() {
-            if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$1" | awk '{print $1}'
-            else
-              shasum -a 256 "$1" | awk '{print $1}'
-            fi
-          }
-
-          api_sha="$(sha256_file "$components/api-server-binary")"
-          revision_sha="$(sha256_file "$components/api-server-revision")"
-          migrator_sha="$(sha256_file "$components/db-migrator-binary")"
-          baseline_sha="$(sha256_file "$components/postgresql-baseline")"
-          table_sha="$(sha256_file "$components/table-manifest")"
-          catalog_sha="$(sha256_file "$components/postgres-catalog-exporter")"
-          contract_sha="$(sha256_file "$components/platform-contract-sql")"
-          provenance_sha="$(sha256_file "$components/migration-provenance")"
-          route_sha="$(sha256_file "$components/legacy-route-oracle")"
-          cargo_lock_sha="$(sha256_file "$bundle/build-inputs/Cargo.lock")"
-          expected_route_sha="$(awk 'NR == 1 {print $1}' "$bundle/oracles/legacy-go-routes.sha256")"
-          [[ "$route_sha" == "$expected_route_sha" ]]
-
-          mkdir -p "$PWD/release-artifacts"
-          archive="$PWD/release-artifacts/${artifact_name}.tar.gz"
-          tar -czf "$archive" -C "$PWD/release-artifacts" "$artifact_name"
-          release_sha="$(sha256_file "$archive")"
-          manifest="$PWD/release-artifacts/${artifact_name}.release.json"
-          cat > "$manifest" <<EOF
-          {
-            "schema": 1,
-            "release_binding": {
-              "contract_id": 1,
-              "contract_sha256": "${contract_sha}",
-              "readers": {
-                "minimum": 1,
-                "maximum": 1
-              },
-              "writers": {
-                "minimum": 1,
-                "maximum": 1
-              },
-              "release_id": "${RELEASE_VERSION}-${host}",
-              "release_sha256": "${release_sha}",
-              "components": {
-                "api-server-binary": "${api_sha}",
-                "api-server-revision": "${revision_sha}",
-                "db-migrator-binary": "${migrator_sha}",
-                "postgresql-baseline": "${baseline_sha}",
-                "table-manifest": "${table_sha}",
-                "postgres-catalog-exporter": "${catalog_sha}",
-                "platform-contract-sql": "${contract_sha}",
-                "migration-provenance": "${provenance_sha}",
-                "legacy-route-oracle": "${route_sha}"
-              }
-            },
-            "build": {
-              "revision": "${REVISION}",
-              "rust_toolchain": "${RUST_TOOLCHAIN}",
-              "cargo_lock_sha256": "${cargo_lock_sha}"
-            },
-            "artifacts": {
-              "backend_bundle": {
-                "name": "${artifact_name}.tar.gz",
-                "sha256": "${release_sha}"
-              },
-              "web": {
-                "name": "${WEB_NAME}.tar.gz",
-                "sha256": "${WEB_SHA256}",
-                "metadata": "${WEB_NAME}.metadata.json"
-              }
-            }
-          }
-          EOF
-          node -e "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))" "$manifest"
-          printf '%s  %s\n' "$release_sha" "${artifact_name}.tar.gz" > "${archive}.sha256"
+          printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"
+          tar -czf "release-rust-preview/${artifact}.tar.gz" -C release-rust-preview "$artifact"
+          sha256sum "release-rust-preview/${artifact}.tar.gz" > "release-rust-preview/${artifact}.tar.gz.sha256"
           rm -rf "$bundle"
-          echo "name=$artifact_name" >> "$GITHUB_OUTPUT"
 
-      - name: Upload platform release bundle
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign Rust preview artifact
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          archive="release-rust-preview/lmm-api-rust-preview-${RELEASE_VERSION}-linux-amd64.tar.gz"
+          cosign sign-blob --yes --bundle "${archive}.sigstore.json" "$archive"
+
+      - name: Upload Rust preview artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.package.outputs.name }}
-          path: release-artifacts/*
+          name: release-rust-preview-linux-amd64
+          path: release-rust-preview/*
           if-no-files-found: error
 
   publish:
-    name: Publish GitHub release assets
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [gate, build]
+    name: Publish signed release assets
+    if: >-
+      startsWith(github.ref, 'refs/tags/') &&
+      always() &&
+      needs.web.result == 'success' &&
+      needs.go-build.result == 'success' &&
+      (needs.rust-preview.result == 'skipped' || needs.rust-preview.result == 'success')
+    needs: [prepare, web, go-build, rust-preview]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download gated release artifacts
+      - name: Download signed release artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: release-artifacts
+          pattern: release-*
+          path: release-assets
           merge-multiple: true
 
-      - name: Publish immutable Rust and web artifacts
+      - name: Publish Go and web artifacts with optional Rust preview
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          files: release-artifacts/*
+          files: release-assets/*
           fail_on_unmatched_files: true
