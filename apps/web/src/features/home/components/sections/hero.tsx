@@ -112,10 +112,11 @@ export function Hero({ isAuthenticated = false }: HeroProps) {
               Included<span className='text-[#6F9589]'>.</span>
             </span>
           </h1>
-          <p className='landing-animate-fade-up mt-7 max-w-[38rem] border-l-2 border-[#141413] pl-5 text-base leading-7 text-pretty text-[#141413]/72 opacity-0 [animation-delay:120ms] sm:mt-9 sm:text-lg dark:border-[#FAF9F5] dark:text-[#FAF9F5]/72'>
-            {t(
-              'Access a vast selection of models via a standard, unified API protocol. Power AI applications, manage digital assets, and connect the Future.'
-            )}
+          <p
+            lang='zh-CN'
+            className='landing-animate-fade-up mt-7 max-w-[38rem] border-l-2 border-[#141413] pl-5 text-base leading-7 text-pretty text-[#141413]/72 opacity-0 [animation-delay:120ms] sm:mt-9 sm:text-lg dark:border-[#FAF9F5] dark:text-[#FAF9F5]/72'
+          >
+            尊重开源，支持开源，拥抱开源
           </p>
 
           <div className='landing-animate-fade-up mt-8 flex flex-col gap-3 opacity-0 [animation-delay:180ms] min-[420px]:flex-row min-[420px]:flex-wrap sm:mt-10'>

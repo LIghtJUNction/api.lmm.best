@@ -404,12 +404,35 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			if err != nil {
 				return nil, bountyMCPOutput{}, bountyMCPError(err)
 			}
-			message := fmt.Sprintf("Publish %q? This deducts the gross listing total of %d (%d × %d) from your balance, retains the public %0.2f%% platform fee of %d, and locks %d net reward quota (%d per approved fix) in escrow. Daily check-in rewards credited to the same balance can fund this listing.", project.Title, charge.GrossQuota, project.RewardQuota, project.RewardSlots, float64(charge.PlatformFeeRateBps)/100, charge.PlatformFeeQuota, charge.EscrowQuota, charge.NetRewardQuota)
-			confirmationPayload := map[string]any{"input": input, "project": project, "charge": charge, "remaining_quota": bountyMCPRemainingQuota(userId)}
+			feeRecipientUserId := 0
+			feeRecipientUsername := ""
+			publisherNetDebit := charge.GrossQuota
+			if charge.PlatformFeeQuota > 0 {
+				recipient, err := model.GetOpenSourceBountyPlatformFeeRecipient()
+				if err != nil {
+					return nil, bountyMCPOutput{}, bountyMCPError(err)
+				}
+				feeRecipientUserId = recipient.Id
+				feeRecipientUsername = recipient.Username
+				if recipient.Id == userId {
+					publisherNetDebit -= charge.PlatformFeeQuota
+				}
+			}
+			message := fmt.Sprintf("Publish %q? This debits the gross listing total of %d (%d × %d), locks %d net reward quota (%d per approved fix) in escrow, and leaves a net balance decrease of %d.", project.Title, charge.GrossQuota, project.RewardQuota, project.RewardSlots, charge.EscrowQuota, charge.NetRewardQuota, publisherNetDebit)
+			if charge.PlatformFeeQuota > 0 {
+				message = fmt.Sprintf("Publish %q? This debits the gross listing total of %d (%d × %d), credits the public %0.2f%% platform fee of %d to super administrator %q (user %d), and locks %d net reward quota (%d per approved fix) in escrow. Your net balance decrease is %d.", project.Title, charge.GrossQuota, project.RewardQuota, project.RewardSlots, float64(charge.PlatformFeeRateBps)/100, charge.PlatformFeeQuota, feeRecipientUsername, feeRecipientUserId, charge.EscrowQuota, charge.NetRewardQuota, publisherNetDebit)
+			}
+			message += " Daily check-in rewards credited to the same balance can fund this listing."
+			confirmationPayload := map[string]any{
+				"input": input, "project": project, "charge": charge,
+				"fee_recipient_user_id": feeRecipientUserId, "publisher_net_debit": publisherNetDebit,
+				"remaining_quota": bountyMCPRemainingQuota(userId),
+			}
 			pending, operation, err := bountyMCPConfirmedOperation(request, userId, "open_source_bounties.publish", confirmationPayload, message)
 			if err != nil || pending != nil {
 				return pending, bountyMCPOutput{}, err
 			}
+			operation.PlatformFeeRecipientUserId = feeRecipientUserId
 			updated, charged, err := model.PublishOpenSourceBountyWithMCPConfirmation(userId, input.ProjectId, *operation)
 			return nil, bountyMCPOutput{Message: "Bounty published and fully funded.", Data: map[string]any{"project": updated, "charged_quota": charged}, RemainingQuota: bountyMCPRemainingQuota(userId)}, bountyMCPError(err)
 		})
@@ -588,7 +611,7 @@ func newOpenSourceBountyMCPServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name: "api.lmm.best-open-source-bounties", Version: common.Version,
 	}, &mcp.ServerOptions{
-		Instructions: "Manage the complete open-source bounty lifecycle for the authenticated user. The board has no default projects. Every publisher, including administrators and the site owner, funds the gross listed price from their own balance; the public administrator-configured platform task fee is retained from that price and the remainder becomes contributor escrow. Daily check-in rewards credited to that balance can fund listings. Never fabricate defects or evidence. Money, destructive, and public-rating actions return an input-required confirmation that must be shown to the user and explicitly accepted before retrying the tool.",
+		Instructions: "Manage the complete peer-to-peer open-source bounty lifecycle for the authenticated user. The board has no default projects. Every publisher funds the gross listed price from their own balance; the public administrator-configured platform fee is credited to the enabled super administrator and the remainder becomes contributor escrow. The publisher and contributor settle directly, while a third-party administrator intervenes only when either party opens a dispute. Daily check-in rewards credited to the publisher balance can fund listings. Never fabricate defects or evidence. Money, destructive, and public-rating actions return an input-required confirmation that must be shown to the user and explicitly accepted before retrying the tool.",
 		Capabilities: &mcp.ServerCapabilities{},
 	})
 	server.AddPrompt(&mcp.Prompt{
@@ -596,7 +619,7 @@ func newOpenSourceBountyMCPServer() *mcp.Server {
 		Title:       "Open-source bounty operator",
 		Description: "Instructions for safely publishing, accepting, verifying, tipping, rating, and settling open-source bounties.",
 	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		text := strings.TrimSpace(`Use the connected api.lmm.best Open-source bounties MCP server to complete my request. Do not invent bugs, Issues, pull requests, tests, scores, dispute facts, or review results. Read the current bounty, public administrator-configured task fee, and balance state before mutating it. Publishing deducts the gross listed price from my own balance, retains the public platform fee from that amount, and locks the remaining net contributor rewards in escrow, even if I am an administrator or site owner. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When the server returns an input-required confirmation for publishing, approval/payment, rejection, closing/refunding, tipping, rating, opening or resolving a dispute, draft deletion, or withdrawal, show me the exact action, recipient, score, gross price, net reward, fee, and balance impact, then continue only after I explicitly confirm. Tips are independent, non-refundable transfers from my own balance and never reduce escrow. After a contributor submits the matching Issue, pull request, and optional verification note, the bounty publisher reviews the work directly. At review time, record a truthful 1-5 contributor score and public evaluation; after review, contributors may rate the publisher/verifier, and both sides can see mutual ratings and historical averages. If a party disputes rejection or payment, preserve the linked Issue, pull request, verification notes, reward and tip amounts, and mutual ratings for third-party administrator review. Administrators may force payment only from the remaining escrow after reviewing genuine evidence.`)
+		text := strings.TrimSpace(`Use the connected api.lmm.best Open-source bounties MCP server to complete my request. Treat each bounty as a peer-to-peer transaction between its publisher and contributor; a third-party administrator intervenes only when either party opens a dispute. Do not invent bugs, Issues, pull requests, tests, scores, dispute facts, or review results. Read the current bounty, public administrator-configured task fee, and balance state before mutating it. Publishing debits the gross listed price from my balance, credits the public platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit as well as the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When the server returns an input-required confirmation for publishing, approval/payment, rejection, closing/refunding, tipping, rating, opening or resolving a dispute, draft deletion, or withdrawal, show me the exact action, recipient, score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are independent, non-refundable transfers from my own balance and never reduce escrow. After a contributor submits the matching Issue, pull request, and optional verification note, the bounty publisher reviews the work directly. At review time, record a truthful 1-5 contributor score and public evaluation; after review, contributors may rate the publisher/verifier, and both sides can see mutual ratings and historical averages. If a party disputes rejection or payment, preserve the linked Issue, pull request, verification notes, reward and tip amounts, and mutual ratings for third-party administrator review. Administrators may force payment only from the remaining escrow after reviewing genuine evidence.`)
 		return &mcp.GetPromptResult{
 			Description: "Operate the authenticated user's open-source bounties end to end.",
 			Messages: []*mcp.PromptMessage{

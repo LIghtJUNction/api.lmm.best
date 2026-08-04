@@ -219,12 +219,10 @@ export const STATIC_I18N_KEYS = [
   'Open a valid Issue with the affected project, reproducible steps, expected behavior, actual behavior, and impact.',
   'Submit a focused fix',
   'Open a pull request that links the Issue and includes appropriate verification or tests.',
-  'Send encrypted review details',
-  'Open the LIghtJUNction encrypted channel. Include your handle plus the Issue and PR links, and use GitHub Issue to create the encrypted review message.',
-  'Email the review links',
-  'Email lightjunction.me@gmail.com with the Issue and PR links so the contribution is ready for review.',
-  'Submit and wait for review',
-  'Submit the evidence in Open-source bounties. The project owner verifies the defect and fix before approving payment.',
+  'Settle directly with the publisher',
+  'Submit the Issue and pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
+  'Escalate only disputed trades',
+  'If either party disputes rejection or payment, open a platform ticket. A third-party administrator may review the preserved evidence and arbitrate the escrow.',
 
   // User management (interpolated keys)
   'Remaining Quota ({{currency}})',
