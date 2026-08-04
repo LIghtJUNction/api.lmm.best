@@ -343,9 +343,13 @@ func normalizeGithubHandle(raw string) (string, error) {
 }
 
 func normalizeGithubEvidence(raw string, repositoryUrl string, kind string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
 	if err != nil || !strings.EqualFold(u.Scheme, "https") || !strings.EqualFold(u.Hostname(), "github.com") {
-		return "", bountyError("OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE", "Issue and pull request links must be GitHub HTTPS URLs")
+		return "", bountyError("OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE", "submitted Issue and pull request links must be GitHub HTTPS URLs")
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) != 4 || parts[2] != kind {
@@ -356,7 +360,7 @@ func normalizeGithubEvidence(raw string, repositoryUrl string, kind string) (str
 	}
 	repository, err := NormalizeGithubRepositoryUrl("https://github.com/" + parts[0] + "/" + parts[1])
 	if err != nil || !strings.EqualFold(repository, repositoryUrl) {
-		return "", bountyError("OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH", "Issue and pull request must belong to the bounty repository")
+		return "", bountyError("OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH", "every submitted Issue or pull request must belong to the bounty repository")
 	}
 	return repository + "/" + kind + "/" + parts[3], nil
 }
@@ -960,7 +964,7 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issueUrl string, pullRequestUrl string, submissionNote string) (*OpenSourceBountyChallenge, error) {
 	submissionNote = strings.TrimSpace(submissionNote)
 	if len(submissionNote) > 2000 {
-		return nil, bountyError("OPEN_SOURCE_BOUNTY_INVALID_SUBMISSION", "submission note must contain at most 2000 characters")
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_INVALID_SUBMISSION", "completion note must contain at most 2000 characters")
 	}
 	var challenge OpenSourceBountyChallenge
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -982,11 +986,16 @@ func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issue
 		if err != nil {
 			return err
 		}
+		if normalizedIssue == "" && normalizedPullRequest == "" {
+			return bountyError("OPEN_SOURCE_BOUNTY_EVIDENCE_REQUIRED", "provide at least one GitHub Issue or pull request URL")
+		}
 		var duplicate int64
-		if err := tx.Model(&OpenSourceBountyChallenge{}).
-			Where("project_id = ? AND id <> ? AND pull_request_url = ? AND status IN ?", projectId, challenge.Id, normalizedPullRequest,
-				[]string{OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved}).Count(&duplicate).Error; err != nil {
-			return err
+		if normalizedPullRequest != "" {
+			if err := tx.Model(&OpenSourceBountyChallenge{}).
+				Where("project_id = ? AND id <> ? AND pull_request_url = ? AND status IN ?", projectId, challenge.Id, normalizedPullRequest,
+					[]string{OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved}).Count(&duplicate).Error; err != nil {
+				return err
+			}
 		}
 		if duplicate > 0 {
 			return bountyError("OPEN_SOURCE_BOUNTY_DUPLICATE_PULL_REQUEST", "this pull request has already been submitted")

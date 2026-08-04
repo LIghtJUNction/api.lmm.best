@@ -1018,3 +1018,103 @@ func TestSubmitOpenSourceBountyRejectsEvidenceFromAnotherRepository(t *testing.T
 	)
 	assert.Equal(t, "OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH", OpenSourceBountyErrorCode(err))
 }
+
+func TestSubmitOpenSourceBountyAcceptsEitherIssueOrPullRequestEvidence(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "flexible-evidence-owner", 10_000, common.RoleCommonUser)
+	issueOnlyContributor := createOpenSourceBountyUser(t, db, "issue-only-contributor", 0, common.RoleCommonUser)
+	secondIssueContributor := createOpenSourceBountyUser(t, db, "second-issue-contributor", 0, common.RoleCommonUser)
+	pullRequestOnlyContributor := createOpenSourceBountyUser(t, db, "pull-request-only-contributor", 0, common.RoleCommonUser)
+	emptyEvidenceContributor := createOpenSourceBountyUser(t, db, "empty-evidence-contributor", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/flexible-evidence", 1_000, 4))
+	require.NoError(t, err)
+	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+
+	for _, contributor := range []User{issueOnlyContributor, secondIssueContributor, pullRequestOnlyContributor, emptyEvidenceContributor} {
+		_, err = AcceptOpenSourceBounty(contributor.Id, project.Id, contributor.Username)
+		require.NoError(t, err)
+	}
+
+	issueOnly, err := SubmitOpenSourceBountyChallenge(
+		issueOnlyContributor.Id,
+		project.Id,
+		"https://github.com/example/flexible-evidence/issues/1",
+		"",
+		"Issue documents the completed work.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/example/flexible-evidence/issues/1", issueOnly.IssueUrl)
+	assert.Empty(t, issueOnly.PullRequestUrl)
+
+	secondIssueOnly, err := SubmitOpenSourceBountyChallenge(
+		secondIssueContributor.Id,
+		project.Id,
+		"https://github.com/example/flexible-evidence/issues/2",
+		"",
+		"A second Issue-only completion must not collide on an empty PR URL.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "https://github.com/example/flexible-evidence/issues/2", secondIssueOnly.IssueUrl)
+	assert.Empty(t, secondIssueOnly.PullRequestUrl)
+
+	pullRequestOnly, err := SubmitOpenSourceBountyChallenge(
+		pullRequestOnlyContributor.Id,
+		project.Id,
+		"",
+		"https://github.com/example/flexible-evidence/pull/3",
+		"Pull request contains the completed work.",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, pullRequestOnly.IssueUrl)
+	assert.Equal(t, "https://github.com/example/flexible-evidence/pull/3", pullRequestOnly.PullRequestUrl)
+
+	_, err = SubmitOpenSourceBountyChallenge(emptyEvidenceContributor.Id, project.Id, "", "", "No link supplied.")
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_EVIDENCE_REQUIRED", OpenSourceBountyErrorCode(err))
+}
+
+func TestGetOpenSourceBountyDetailListsEveryChallengeParticipant(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "participant-list-owner", 10_000, common.RoleCommonUser)
+	acceptedContributor := createOpenSourceBountyUser(t, db, "accepted-participant", 0, common.RoleCommonUser)
+	submittedContributor := createOpenSourceBountyUser(t, db, "submitted-participant", 0, common.RoleCommonUser)
+	withdrawnContributor := createOpenSourceBountyUser(t, db, "withdrawn-participant", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/participant-list", 1_000, 3))
+	require.NoError(t, err)
+	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+
+	var withdrawnChallenge *OpenSourceBountyChallenge
+	for _, contributor := range []User{acceptedContributor, submittedContributor, withdrawnContributor} {
+		challenge, acceptErr := AcceptOpenSourceBounty(contributor.Id, project.Id, contributor.Username)
+		err = acceptErr
+		require.NoError(t, err)
+		if contributor.Id == withdrawnContributor.Id {
+			withdrawnChallenge = challenge
+		}
+	}
+	require.NotNil(t, withdrawnChallenge)
+	_, err = SubmitOpenSourceBountyChallenge(
+		submittedContributor.Id,
+		project.Id,
+		"https://github.com/example/participant-list/issues/1",
+		"",
+		"Issue-only completion.",
+	)
+	require.NoError(t, err)
+	_, err = WithdrawOpenSourceBountyChallenge(withdrawnContributor.Id, withdrawnChallenge.Id)
+	require.NoError(t, err)
+
+	detail, err := GetOpenSourceBountyDetail(owner.Id, project.Id)
+	require.NoError(t, err)
+	require.Len(t, detail.Challenges, 3)
+	byUsername := make(map[string]OpenSourceBountyChallengeView, len(detail.Challenges))
+	for _, challenge := range detail.Challenges {
+		byUsername[challenge.ParticipantUsername] = challenge
+	}
+	assert.Equal(t, OpenSourceBountyChallengeAccepted, byUsername[acceptedContributor.Username].Status)
+	assert.Equal(t, OpenSourceBountyChallengeSubmitted, byUsername[submittedContributor.Username].Status)
+	assert.Equal(t, OpenSourceBountyChallengeWithdrawn, byUsername[withdrawnContributor.Username].Status)
+	assert.Equal(t, acceptedContributor.Id, byUsername[acceptedContributor.Username].ParticipantUserId)
+	assert.Equal(t, acceptedContributor.Username, byUsername[acceptedContributor.Username].GithubHandle)
+}
