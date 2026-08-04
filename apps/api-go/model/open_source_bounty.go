@@ -658,7 +658,7 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 	if err := DB.Model(&OpenSourceBountyProject{}).Where("status IN ?", statuses).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	var views []OpenSourceBountyProjectView
+	views := make([]OpenSourceBountyProjectView, 0)
 	err := openSourceBountyProjectQuery().Where("p.status IN ?", statuses).
 		Order("p.promotion_quota DESC, p.published_at DESC, p.id DESC").
 		Offset((page - 1) * pageSize).Limit(pageSize).Scan(&views).Error
@@ -672,7 +672,7 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 }
 
 func ListOwnedOpenSourceBounties(ownerUserId int) ([]OpenSourceBountyProjectView, error) {
-	var views []OpenSourceBountyProjectView
+	views := make([]OpenSourceBountyProjectView, 0)
 	if err := openSourceBountyProjectQuery().Where("p.owner_user_id = ?", ownerUserId).
 		Order("p.created_at DESC, p.id DESC").Scan(&views).Error; err != nil {
 		return nil, err
@@ -750,7 +750,7 @@ func openSourceBountyChallengeViewQuery() *gorm.DB {
 }
 
 func ListAcceptedOpenSourceBounties(participantUserId int) ([]OpenSourceBountyChallengeView, error) {
-	var views []OpenSourceBountyChallengeView
+	views := make([]OpenSourceBountyChallengeView, 0)
 	if err := openSourceBountyChallengeViewQuery().Where("c.participant_user_id = ?", participantUserId).
 		Order("c.updated_at DESC, c.id DESC").Scan(&views).Error; err != nil {
 		return nil, err

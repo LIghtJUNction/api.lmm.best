@@ -21,12 +21,29 @@ import { afterEach, describe, test } from 'node:test'
 
 import { api } from '@/lib/api'
 
-import { tipChallenge } from './api'
+import { listBounties, tipChallenge } from './api'
 
+const originalGet = api.get
 const originalPost = api.post
 
 afterEach(() => {
+  api.get = originalGet
   api.post = originalPost
+})
+
+describe('open-source bounty lists', () => {
+  test('normalizes a null project list from an empty database to an array', async () => {
+    api.get = (async () => ({
+      data: {
+        success: true,
+        data: { items: null, total: 0 },
+      },
+    })) as typeof api.get
+
+    const result = await listBounties()
+
+    assert.deepEqual(result, { items: [], total: 0 })
+  })
 })
 
 describe('open-source bounty tips', () => {
