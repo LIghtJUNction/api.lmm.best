@@ -30,6 +30,8 @@ import {
   Wrench01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -55,6 +57,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { TitledCard } from '@/components/ui/titled-card'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { openBountyDispute } from '@/features/open-source-bounties/api'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -64,30 +67,53 @@ import {
 } from './lib'
 import {
   SUPPORT_TICKET_CATEGORIES,
+  BOUNTY_DISPUTE_REASONS,
+  type BountyDisputeReason,
   type SupportTicketCategory,
   type SupportTicketDraft,
   type SupportTicketLabels,
 } from './types'
 
-const supportTicketSchema = z.object({
-  category: z.enum(SUPPORT_TICKET_CATEGORIES),
-  contactEmail: z.string().trim().email('Enter a valid contact email'),
-  referenceId: z.string().trim().max(120, 'Reference ID is too long'),
-  subject: z
-    .string()
-    .trim()
-    .min(4, 'Subject must be at least 4 characters')
-    .max(100, 'Subject must be at most 100 characters'),
-  details: z
-    .string()
-    .trim()
-    .min(20, 'Details must be at least 20 characters')
-    .max(1200, 'Details must be at most 1200 characters'),
-})
+const supportTicketSchema = z
+  .object({
+    category: z.enum(SUPPORT_TICKET_CATEGORIES),
+    disputeReason: z.enum(BOUNTY_DISPUTE_REASONS),
+    contactEmail: z.string().trim().email('Enter a valid contact email'),
+    referenceId: z.string().trim().max(120, 'Reference ID is too long'),
+    subject: z
+      .string()
+      .trim()
+      .min(4, 'Subject must be at least 4 characters')
+      .max(100, 'Subject must be at most 100 characters'),
+    details: z
+      .string()
+      .trim()
+      .min(20, 'Details must be at least 20 characters')
+      .max(1200, 'Details must be at most 1200 characters'),
+  })
+  .superRefine((values, context) => {
+    if (
+      values.category === 'bounty_dispute' &&
+      !/^\d+$/.test(values.referenceId)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['referenceId'],
+        message: 'Enter a valid bounty challenge ID',
+      })
+    }
+  })
 
 type SupportTicketForm = z.infer<typeof supportTicketSchema>
 
 const CATEGORY_META = [
+  {
+    value: 'bounty_dispute',
+    labelKey: 'Open-source bounty dispute',
+    descriptionKey:
+      'Request third-party review of a bounty payment or acceptance disagreement.',
+    icon: UserShield01Icon,
+  },
   {
     value: 'refund',
     labelKey: 'Refund request',
@@ -131,26 +157,46 @@ const CATEGORY_META = [
   icon: typeof CustomerSupportIcon
 }>
 
-export function SupportTicket() {
+const DISPUTE_REASON_META = [
+  ['merged_but_unpaid', 'Fix merged but bounty unpaid'],
+  ['requirements_met_but_rejected', 'Requirements met but submission rejected'],
+  ['misleading_requirements', 'Misleading or changed requirements'],
+  ['abusive_conduct', 'Abusive conduct'],
+  ['other', 'Other bounty dispute'],
+] as const satisfies ReadonlyArray<readonly [BountyDisputeReason, string]>
+
+export function SupportTicket({
+  initialSearch,
+}: {
+  initialSearch?: {
+    category?: SupportTicketCategory
+    referenceId?: string
+  }
+}) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
+  const [submitting, setSubmitting] = useState(false)
   const {
     control,
     register,
     handleSubmit,
     getValues,
+    watch,
     trigger,
     formState: { errors },
   } = useForm<SupportTicketForm>({
     resolver: zodResolver(supportTicketSchema),
     defaultValues: {
-      category: 'technical',
+      category: initialSearch?.category ?? 'technical',
+      disputeReason: 'merged_but_unpaid',
       contactEmail: user?.email ?? '',
-      referenceId: '',
+      referenceId: initialSearch?.referenceId ?? '',
       subject: '',
       details: '',
     },
   })
+  const selectedCategory = watch('category')
 
   const labels: SupportTicketLabels = {
     ticketType: t('Ticket type'),
@@ -180,7 +226,37 @@ export function SupportTicket() {
     return { text, mailto: buildSupportMailto(subject, text) }
   }
 
-  const submitTicket = handleSubmit((values) => {
+  const submitTicket = handleSubmit(async (values) => {
+    if (values.category === 'bounty_dispute') {
+      const challengeId = Number(values.referenceId)
+      if (
+        !window.confirm(
+          t(
+            'Submit this bounty dispute for third-party administrator review? The linked evidence and mutual ratings will be visible to the reviewer.'
+          )
+        )
+      ) {
+        return
+      }
+      setSubmitting(true)
+      try {
+        await openBountyDispute(challengeId, {
+          reason: values.disputeReason,
+          statement: `${values.subject.trim()}\n\n${values.details.trim()}`,
+        })
+        await queryClient.invalidateQueries({
+          queryKey: ['open-source-bounties', 'disputes'],
+        })
+        toast.success(
+          t('Bounty dispute submitted for third-party administrator review.')
+        )
+      } catch {
+        toast.error(t('Unable to submit the bounty dispute.'))
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
     const { mailto } = prepareTicket(values)
     toast.info(t('Your email app will open with the ticket details filled in.'))
     window.location.assign(mailto)
@@ -292,6 +368,43 @@ export function SupportTicket() {
                       )}
                     />
 
+                    {selectedCategory === 'bounty_dispute' ? (
+                      <Controller
+                        control={control}
+                        name='disputeReason'
+                        render={({ field }) => (
+                          <FieldSet>
+                            <FieldLegend variant='label'>
+                              {t('Dispute reason')}
+                            </FieldLegend>
+                            <ToggleGroup
+                              value={[field.value]}
+                              onValueChange={(values) => {
+                                const next = values.find(
+                                  (value) => value !== field.value
+                                ) as BountyDisputeReason | undefined
+                                if (next) field.onChange(next)
+                              }}
+                              aria-label={t('Dispute reason')}
+                              variant='outline'
+                              spacing={2}
+                              className='grid w-full grid-cols-1 gap-2 sm:grid-cols-2'
+                            >
+                              {DISPUTE_REASON_META.map(([value, label]) => (
+                                <ToggleGroupItem
+                                  key={value}
+                                  value={value}
+                                  className='h-auto min-h-11 justify-start px-3 py-2 text-start'
+                                >
+                                  {t(label)}
+                                </ToggleGroupItem>
+                              ))}
+                            </ToggleGroup>
+                          </FieldSet>
+                        )}
+                      />
+                    ) : null}
+
                     <div className='grid gap-5 sm:grid-cols-2'>
                       <Field
                         data-invalid={errors.contactEmail ? true : undefined}
@@ -320,16 +433,28 @@ export function SupportTicket() {
                         data-invalid={errors.referenceId ? true : undefined}
                       >
                         <FieldLabel htmlFor='support-reference-id'>
-                          {t('Reference ID (optional)')}
+                          {selectedCategory === 'bounty_dispute'
+                            ? t('Bounty challenge ID')
+                            : t('Reference ID (optional)')}
                         </FieldLabel>
                         <Input
                           id='support-reference-id'
                           aria-invalid={errors.referenceId ? true : undefined}
-                          placeholder={t('Order ID, request ID, or log ID')}
+                          placeholder={
+                            selectedCategory === 'bounty_dispute'
+                              ? t('Numeric challenge ID')
+                              : t('Order ID, request ID, or log ID')
+                          }
                           {...register('referenceId')}
                         />
                         <FieldDescription>
-                          {t('This helps us find the relevant record faster.')}
+                          {selectedCategory === 'bounty_dispute'
+                            ? t(
+                                'The system automatically attaches the project, Issue, pull request, encrypted review message, payment history, and mutual ratings.'
+                              )
+                            : t(
+                                'This helps us find the relevant record faster.'
+                              )}
                         </FieldDescription>
                         <FieldError>
                           {errors.referenceId?.message
@@ -402,13 +527,15 @@ export function SupportTicket() {
                         />
                         {t('Copy request')}
                       </Button>
-                      <Button type='submit'>
+                      <Button type='submit' disabled={submitting}>
                         <HugeiconsIcon
                           icon={MailSend01Icon}
                           strokeWidth={2}
                           data-icon='inline-start'
                         />
-                        {t('Open email to submit')}
+                        {selectedCategory === 'bounty_dispute'
+                          ? t('Submit dispute ticket')
+                          : t('Open email to submit')}
                       </Button>
                     </div>
                   </FieldGroup>

@@ -21,6 +21,10 @@ import { api } from '@/lib/api'
 import type {
   BountyChallenge,
   BountyDraftInput,
+  BountyDispute,
+  BountyDisputeReason,
+  BountyFeeConfig,
+  BountyMcpConnection,
   BountyProject,
   BountyProjectDetail,
 } from './types'
@@ -48,6 +52,26 @@ export function listBounties() {
   return unwrap<{ items: BountyProject[]; total: number }>(
     api.get('/api/open-source-bounties?page=1&page_size=50')
   )
+}
+
+export function getBountyConfig() {
+  return unwrap<BountyFeeConfig>(api.get('/api/open-source-bounties/config'))
+}
+
+export function getMcpTokenStatus() {
+  return unwrap<BountyMcpConnection>(
+    api.get('/api/open-source-bounties/mcp-token')
+  )
+}
+
+export function rotateMcpToken() {
+  return unwrap<BountyMcpConnection & { token: string }>(
+    api.post('/api/open-source-bounties/mcp-token')
+  )
+}
+
+export function revokeMcpToken() {
+  return unwrap<null>(api.delete('/api/open-source-bounties/mcp-token'))
 }
 
 export function listOwnedBounties() {
@@ -137,11 +161,72 @@ export function withdrawChallenge(challengeId: number) {
 export function reviewChallenge(
   challengeId: number,
   action: 'approve' | 'reject',
-  reviewNote: string
+  input: {
+    review_note: string
+    rating_score: number
+    rating_comment: string
+  }
 ) {
   return unwrap<{ challenge: BountyChallenge; transferred_quota: number }>(
-    api.post(`/api/open-source-bounties/challenges/${challengeId}/${action}`, {
-      review_note: reviewNote,
-    })
+    api.post(
+      `/api/open-source-bounties/challenges/${challengeId}/${action}`,
+      input
+    )
+  )
+}
+
+export function tipChallenge(
+  challengeId: number,
+  input: { quota: number; note: string }
+) {
+  return unwrap<{
+    challenge: BountyChallenge
+    transferred_quota: number
+    remaining_quota: number
+  }>(api.post(`/api/open-source-bounties/challenges/${challengeId}/tip`, input))
+}
+
+export function rateBountyOwner(
+  challengeId: number,
+  input: { score: number; comment: string }
+) {
+  return unwrap<BountyChallenge>(
+    api.post(
+      `/api/open-source-bounties/challenges/${challengeId}/rate-owner`,
+      input
+    )
+  )
+}
+
+export function openBountyDispute(
+  challengeId: number,
+  input: { reason: BountyDisputeReason; statement: string }
+) {
+  return unwrap<BountyDispute>(
+    api.post(
+      `/api/open-source-bounties/challenges/${challengeId}/disputes`,
+      input
+    )
+  )
+}
+
+export function listMyBountyDisputes() {
+  return unwrap<BountyDispute[]>(
+    api.get('/api/open-source-bounties/disputes/mine')
+  )
+}
+
+export function listAdminBountyDisputes() {
+  return unwrap<BountyDispute[]>(
+    api.get('/api/open-source-bounties/disputes/admin')
+  )
+}
+
+export function resolveBountyDispute(
+  disputeId: number,
+  input: { action: 'pay' | 'deny'; resolution: string }
+) {
+  return unwrap<{ dispute: BountyDispute; transferred_quota: number }>(
+    api.post(`/api/open-source-bounties/disputes/${disputeId}/resolve`, input)
   )
 }

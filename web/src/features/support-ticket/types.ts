@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 export const SUPPORT_TICKET_CATEGORIES = [
+  'bounty_dispute',
   'refund',
   'invoice',
   'technical',
@@ -24,6 +25,16 @@ export const SUPPORT_TICKET_CATEGORIES = [
   'account',
   'other',
 ] as const
+
+export const BOUNTY_DISPUTE_REASONS = [
+  'merged_but_unpaid',
+  'requirements_met_but_rejected',
+  'misleading_requirements',
+  'abusive_conduct',
+  'other',
+] as const
+
+export type BountyDisputeReason = (typeof BOUNTY_DISPUTE_REASONS)[number]
 
 export type SupportTicketCategory = (typeof SUPPORT_TICKET_CATEGORIES)[number]
 
@@ -34,6 +45,7 @@ export interface SupportTicketDraft {
   referenceId?: string
   subject: string
   details: string
+  disputeReason?: BountyDisputeReason
 }
 
 export interface SupportTicketAccount {

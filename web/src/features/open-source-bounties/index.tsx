@@ -21,9 +21,12 @@ import {
   Bug01Icon,
   CancelCircleIcon,
   CheckmarkCircle02Icon,
+  Copy01Icon,
+  CustomerSupportIcon,
   Delete02Icon,
   ExternalLinkIcon,
   FileEditIcon,
+  GiftIcon,
   GithubIcon,
   Loading03Icon,
   Megaphone01Icon,
@@ -65,6 +68,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TitledCard } from '@/components/ui/titled-card'
 import { getSelf } from '@/lib/api'
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import {
   formatQuota,
   parseQuotaFromDollars,
@@ -77,20 +81,30 @@ import {
   closeBounty,
   createBounty,
   deleteBounty,
+  getBountyConfig,
   getBountyDetail,
+  getMcpTokenStatus,
   listAcceptedBounties,
+  listAdminBountyDisputes,
   listBounties,
+  listMyBountyDisputes,
   listOwnedBounties,
   pauseBounty,
   publishBounty,
+  rateBountyOwner,
+  resolveBountyDispute,
+  revokeMcpToken,
   resumeBounty,
   reviewChallenge,
+  rotateMcpToken,
   submitChallenge,
+  tipChallenge,
   updateBounty,
   withdrawChallenge,
 } from './api'
 import type {
   BountyChallenge,
+  BountyDispute,
   BountyDraftInput,
   BountyProject,
   BountyProjectDetail,
@@ -100,6 +114,7 @@ const BOUNTY_QUERY_KEYS = [
   ['open-source-bounties'],
   ['open-source-bounties', 'mine'],
   ['open-source-bounties', 'accepted'],
+  ['open-source-bounties', 'disputes'],
 ] as const
 
 const STATUS_KEYS = {
@@ -174,6 +189,14 @@ function availableSlots(project: BountyProject) {
   )
 }
 
+function disputeTicketHref(challenge: BountyChallenge) {
+  const params = new URLSearchParams({
+    category: 'bounty_dispute',
+    referenceId: String(challenge.id),
+  })
+  return `/support?${params.toString()}`
+}
+
 export function OpenSourceBounties() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -204,6 +227,14 @@ export function OpenSourceBounties() {
     action: 'approve' | 'reject'
   } | null>(null)
   const [reviewNote, setReviewNote] = useState('')
+  const [reviewRatingScore, setReviewRatingScore] = useState(5)
+  const [reviewRatingComment, setReviewRatingComment] = useState('')
+  const [tipTarget, setTipTarget] = useState<BountyChallenge | null>(null)
+  const [tipAmount, setTipAmount] = useState(0)
+  const [tipNote, setTipNote] = useState('')
+  const [ratingTarget, setRatingTarget] = useState<BountyChallenge | null>(null)
+  const [ownerRatingScore, setOwnerRatingScore] = useState(5)
+  const [ownerRatingComment, setOwnerRatingComment] = useState('')
 
   const bountyQuery = useQuery({
     queryKey: BOUNTY_QUERY_KEYS[0],
@@ -217,12 +248,40 @@ export function OpenSourceBounties() {
     queryKey: BOUNTY_QUERY_KEYS[2],
     queryFn: listAcceptedBounties,
   })
+  const disputesQuery = useQuery({
+    queryKey: BOUNTY_QUERY_KEYS[3],
+    queryFn: listMyBountyDisputes,
+  })
+  const isAdmin = (user?.role ?? 0) >= 10
+  const adminDisputesQuery = useQuery({
+    queryKey: ['open-source-bounties', 'disputes', 'admin'],
+    queryFn: listAdminBountyDisputes,
+    enabled: isAdmin,
+  })
+  const configQuery = useQuery({
+    queryKey: ['open-source-bounties', 'config'],
+    queryFn: getBountyConfig,
+  })
 
-  const totalDraftQuota = useMemo(() => {
+  const draftCharge = useMemo(() => {
     const promotion = parseQuotaFromDollars(draft.promotionAmount)
     const reward = parseQuotaFromDollars(draft.rewardAmount)
-    return promotion + reward * Math.max(0, draft.rewardSlots)
-  }, [draft.promotionAmount, draft.rewardAmount, draft.rewardSlots])
+    const escrow = reward * Math.max(0, draft.rewardSlots)
+    const feeRateBps = configQuery.data?.rate_basis_points ?? 0
+    const platformFee = Math.ceil((escrow * feeRateBps) / 10_000)
+    return {
+      promotion,
+      escrow,
+      platformFee,
+      feeRatePercent: feeRateBps / 100,
+      total: promotion + escrow + platformFee,
+    }
+  }, [
+    configQuery.data?.rate_basis_points,
+    draft.promotionAmount,
+    draft.rewardAmount,
+    draft.rewardSlots,
+  ])
 
   const refresh = async (balanceChanged = false) => {
     await Promise.all(
@@ -359,10 +418,23 @@ export function OpenSourceBounties() {
 
   const handleReview = async () => {
     if (!reviewTarget) return
+    if (
+      reviewRatingScore < 1 ||
+      reviewRatingScore > 5 ||
+      reviewRatingComment.trim().length < 2
+    ) {
+      toast.error(t('A 1–5 score and public evaluation are required.'))
+      return
+    }
     const { challenge, action } = reviewTarget
     const success = await runAction(
       `${action}-${challenge.id}`,
-      () => reviewChallenge(challenge.id, action, reviewNote.trim()),
+      () =>
+        reviewChallenge(challenge.id, action, {
+          review_note: reviewNote.trim(),
+          rating_score: reviewRatingScore,
+          rating_comment: reviewRatingComment.trim(),
+        }),
       action === 'approve'
         ? 'Submission approved and reward transferred.'
         : 'Submission rejected.',
@@ -371,7 +443,56 @@ export function OpenSourceBounties() {
     if (success) {
       setReviewTarget(null)
       setReviewNote('')
+      setReviewRatingScore(5)
+      setReviewRatingComment('')
       setDetail(await getBountyDetail(challenge.project_id))
+    }
+  }
+
+  const handleTip = async () => {
+    if (!tipTarget) return
+    const quota = parseQuotaFromDollars(tipAmount)
+    if (quota <= 0) {
+      toast.error(t('Enter a positive tip amount.'))
+      return
+    }
+    const success = await runAction(
+      `tip-${tipTarget.id}`,
+      () => tipChallenge(tipTarget.id, { quota, note: tipNote.trim() }),
+      'Tip sent to the contributor.',
+      true
+    )
+    if (success) {
+      setTipTarget(null)
+      setTipAmount(0)
+      setTipNote('')
+      setDetail(await getBountyDetail(tipTarget.project_id))
+    }
+  }
+
+  const handleRateOwner = async () => {
+    if (!ratingTarget) return
+    if (
+      ownerRatingScore < 1 ||
+      ownerRatingScore > 5 ||
+      ownerRatingComment.trim().length < 2
+    ) {
+      toast.error(t('A 1–5 score and public evaluation are required.'))
+      return
+    }
+    const success = await runAction(
+      `rate-owner-${ratingTarget.id}`,
+      () =>
+        rateBountyOwner(ratingTarget.id, {
+          score: ownerRatingScore,
+          comment: ownerRatingComment.trim(),
+        }),
+      'Publisher rating submitted.'
+    )
+    if (success) {
+      setRatingTarget(null)
+      setOwnerRatingScore(5)
+      setOwnerRatingComment('')
     }
   }
 
@@ -468,7 +589,7 @@ export function OpenSourceBounties() {
               </AlertTitle>
               <AlertDescription>
                 {t(
-                  'Publishing burns the promotion spend and locks the full reward pool. This rule also applies to administrators and the site owner.'
+                  'Publishing burns the promotion spend and administrator-configured task fee, then locks the full reward pool. This rule also applies to administrators and the site owner.'
                 )}
               </AlertDescription>
             </Alert>
@@ -482,6 +603,13 @@ export function OpenSourceBounties() {
                   {t('My bounty projects')}
                 </TabsTrigger>
                 <TabsTrigger value='accepted'>{t('My challenges')}</TabsTrigger>
+                <TabsTrigger value='disputes'>{t('My disputes')}</TabsTrigger>
+                {isAdmin ? (
+                  <TabsTrigger value='admin-disputes'>
+                    {t('Dispute cases')}
+                  </TabsTrigger>
+                ) : null}
+                <TabsTrigger value='mcp'>{t('MCP automation')}</TabsTrigger>
                 <TabsTrigger value='rules'>{t('Rules')}</TabsTrigger>
               </TabsList>
 
@@ -518,15 +646,56 @@ export function OpenSourceBounties() {
                         key={project.id}
                         project={project}
                         pending={pending}
+                        hasOpenDispute={(disputesQuery.data ?? []).some(
+                          (dispute) =>
+                            dispute.project_id === project.id &&
+                            dispute.status === 'open'
+                        )}
                         onEdit={() => openEditDialog(project)}
                         onReview={() => openProjectDetail(project.id)}
                         onPublish={() =>
-                          runAction(
-                            `publish-${project.id}`,
-                            () => publishBounty(project.id),
-                            'Bounty published and reward pool funded.',
-                            true
+                          window.confirm(
+                            t(
+                              'Publish now? Your own balance will pay {{promotion}} promotion, {{fee}} task fee ({{rate}}%), and {{escrow}} escrow, for {{total}} total.',
+                              {
+                                promotion: formatQuota(project.promotion_quota),
+                                fee: formatQuota(
+                                  Math.ceil(
+                                    (project.reward_quota *
+                                      project.reward_slots *
+                                      (configQuery.data?.rate_basis_points ??
+                                        0)) /
+                                      10_000
+                                  )
+                                ),
+                                rate:
+                                  (configQuery.data?.rate_basis_points ?? 0) /
+                                  100,
+                                escrow: formatQuota(
+                                  project.reward_quota * project.reward_slots
+                                ),
+                                total: formatQuota(
+                                  project.promotion_quota +
+                                    project.reward_quota *
+                                      project.reward_slots +
+                                    Math.ceil(
+                                      (project.reward_quota *
+                                        project.reward_slots *
+                                        (configQuery.data?.rate_basis_points ??
+                                          0)) /
+                                        10_000
+                                    )
+                                ),
+                              }
+                            )
                           )
+                            ? runAction(
+                                `publish-${project.id}`,
+                                () => publishBounty(project.id),
+                                'Bounty published and reward pool funded.',
+                                true
+                              )
+                            : undefined
                         }
                         onPause={() =>
                           runAction(
@@ -597,10 +766,36 @@ export function OpenSourceBounties() {
                             'Challenge withdrawn.'
                           )
                         }
+                        onRateOwner={() => {
+                          setRatingTarget(challenge)
+                          setOwnerRatingScore(5)
+                          setOwnerRatingComment('')
+                        }}
                       />
                     ))}
                   </div>
                 )}
+              </TabsContent>
+
+              <TabsContent value='disputes' className='mt-3 sm:mt-4'>
+                <DisputesPanel
+                  items={disputesQuery.data ?? []}
+                  loading={disputesQuery.isLoading}
+                />
+              </TabsContent>
+
+              {isAdmin ? (
+                <TabsContent value='admin-disputes' className='mt-3 sm:mt-4'>
+                  <DisputesPanel
+                    items={adminDisputesQuery.data ?? []}
+                    loading={adminDisputesQuery.isLoading}
+                    admin
+                  />
+                </TabsContent>
+              ) : null}
+
+              <TabsContent value='mcp' className='mt-3 sm:mt-4'>
+                <McpSettingsPanel />
               </TabsContent>
 
               <TabsContent value='rules' className='mt-3 sm:mt-4'>
@@ -617,7 +812,7 @@ export function OpenSourceBounties() {
         editing={Boolean(editingProject)}
         draft={draft}
         setDraft={setDraft}
-        totalQuota={totalDraftQuota}
+        charge={draftCharge}
         availableQuota={user?.quota ?? 0}
         pending={pending === 'save-draft'}
         onSave={saveDraft}
@@ -673,6 +868,13 @@ export function OpenSourceBounties() {
         onReview={(challenge, action) => {
           setReviewTarget({ challenge, action })
           setReviewNote('')
+          setReviewRatingScore(5)
+          setReviewRatingComment('')
+        }}
+        onTip={(challenge) => {
+          setTipTarget(challenge)
+          setTipAmount(0)
+          setTipNote('')
         }}
       />
 
@@ -703,7 +905,11 @@ export function OpenSourceBounties() {
               }
               onClick={handleReview}
               disabled={
-                pending.startsWith('approve-') || pending.startsWith('reject-')
+                pending.startsWith('approve-') ||
+                pending.startsWith('reject-') ||
+                reviewRatingScore < 1 ||
+                reviewRatingScore > 5 ||
+                reviewRatingComment.trim().length < 2
               }
             >
               {reviewTarget?.action === 'approve'
@@ -713,16 +919,151 @@ export function OpenSourceBounties() {
           </>
         }
       >
-        <div className='flex flex-col gap-2 py-2'>
-          <Label htmlFor='bounty-review-note'>
-            {t('Review note (optional)')}
-          </Label>
-          <Textarea
-            id='bounty-review-note'
-            rows={5}
-            value={reviewNote}
-            onChange={(event) => setReviewNote(event.target.value)}
-          />
+        <div className='flex flex-col gap-4 py-2'>
+          <Field
+            label={t('Contributor score (1–5)')}
+            htmlFor='bounty-review-score'
+          >
+            <Input
+              id='bounty-review-score'
+              type='number'
+              min={1}
+              max={5}
+              step={1}
+              value={reviewRatingScore}
+              onChange={(event) =>
+                setReviewRatingScore(Number(event.target.value))
+              }
+            />
+          </Field>
+          <Field
+            label={t('Public contributor evaluation')}
+            htmlFor='bounty-review-rating-comment'
+          >
+            <Textarea
+              id='bounty-review-rating-comment'
+              rows={4}
+              value={reviewRatingComment}
+              onChange={(event) => setReviewRatingComment(event.target.value)}
+            />
+          </Field>
+          <Field
+            label={t('Review note (optional)')}
+            htmlFor='bounty-review-note'
+          >
+            <Textarea
+              id='bounty-review-note'
+              rows={4}
+              value={reviewNote}
+              onChange={(event) => setReviewNote(event.target.value)}
+            />
+          </Field>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(tipTarget)}
+        onOpenChange={(open) => !open && setTipTarget(null)}
+        title={t('Tip the contributor')}
+        description={t(
+          'Tips are immediate, non-refundable transfers from your own balance. They do not reduce escrow or replace the formal reward.'
+        )}
+        contentClassName='sm:max-w-lg'
+        footer={
+          <>
+            <Button variant='outline' onClick={() => setTipTarget(null)}>
+              {t('Cancel')}
+            </Button>
+            <Button
+              onClick={handleTip}
+              disabled={tipAmount <= 0 || pending.startsWith('tip-')}
+            >
+              <HugeiconsIcon
+                icon={GiftIcon}
+                strokeWidth={2}
+                data-icon='inline-start'
+              />
+              {t('Send tip')}
+            </Button>
+          </>
+        }
+      >
+        <div className='flex flex-col gap-4 py-2'>
+          <Field label={t('Tip amount')} htmlFor='bounty-tip-amount'>
+            <Input
+              id='bounty-tip-amount'
+              type='number'
+              min={0}
+              value={tipAmount}
+              onChange={(event) => setTipAmount(Number(event.target.value))}
+            />
+          </Field>
+          <Field label={t('Tip note (optional)')} htmlFor='bounty-tip-note'>
+            <Textarea
+              id='bounty-tip-note'
+              rows={4}
+              value={tipNote}
+              onChange={(event) => setTipNote(event.target.value)}
+            />
+          </Field>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(ratingTarget)}
+        onOpenChange={(open) => !open && setRatingTarget(null)}
+        title={t('Rate the publisher and verifier')}
+        description={t(
+          'Your score and public evaluation are visible to both sides and contribute to the publisher’s history.'
+        )}
+        contentClassName='sm:max-w-lg'
+        footer={
+          <>
+            <Button variant='outline' onClick={() => setRatingTarget(null)}>
+              {t('Cancel')}
+            </Button>
+            <Button
+              onClick={handleRateOwner}
+              disabled={
+                ownerRatingScore < 1 ||
+                ownerRatingScore > 5 ||
+                ownerRatingComment.trim().length < 2 ||
+                pending.startsWith('rate-owner-')
+              }
+            >
+              {t('Submit rating')}
+            </Button>
+          </>
+        }
+      >
+        <div className='flex flex-col gap-4 py-2'>
+          <Field
+            label={t('Publisher score (1–5)')}
+            htmlFor='bounty-owner-score'
+          >
+            <Input
+              id='bounty-owner-score'
+              type='number'
+              min={1}
+              max={5}
+              step={1}
+              value={ownerRatingScore}
+              onChange={(event) =>
+                setOwnerRatingScore(Number(event.target.value))
+              }
+            />
+          </Field>
+          <Field
+            label={t('Public publisher evaluation')}
+            htmlFor='bounty-owner-rating-comment'
+          >
+            <Textarea
+              id='bounty-owner-rating-comment'
+              rows={4}
+              value={ownerRatingComment}
+              onChange={(event) => setOwnerRatingComment(event.target.value)}
+            />
+          </Field>
         </div>
       </Dialog>
     </Main>
@@ -805,7 +1146,7 @@ function BountyCard({
       <p className='text-muted-foreground line-clamp-3 text-sm leading-relaxed'>
         {project.description}
       </p>
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-3'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
         <Metric
           label={t('Reward per fix')}
           value={formatQuota(project.reward_quota)}
@@ -817,6 +1158,14 @@ function BountyCard({
         <Metric
           label={t('Promotion spend')}
           value={formatQuota(project.promotion_quota)}
+        />
+        <Metric
+          label={t('Publisher reputation')}
+          value={
+            project.owner_rating_count > 0
+              ? `${project.owner_rating_average.toFixed(1)}/5 · ${project.owner_rating_count}`
+              : t('No ratings yet')
+          }
         />
       </div>
       <div className='mt-auto flex flex-wrap gap-2'>
@@ -847,6 +1196,7 @@ function BountyCard({
 function OwnerProjectCard(props: {
   project: BountyProject
   pending: string
+  hasOpenDispute: boolean
   onEdit: () => void
   onReview: () => void
   onPublish: () => void
@@ -868,7 +1218,7 @@ function OwnerProjectCard(props: {
       action={<Badge variant='outline'>{statusLabel(t, project.status)}</Badge>}
     >
       <div className='flex flex-col gap-4'>
-        <div className='grid gap-2 sm:grid-cols-4'>
+        <div className='grid gap-2 sm:grid-cols-5'>
           <Metric
             label={t('Promotion spend')}
             value={formatQuota(project.promotion_quota)}
@@ -882,10 +1232,31 @@ function OwnerProjectCard(props: {
             value={formatQuota(project.escrow_quota)}
           />
           <Metric
+            label={t('Platform task fee')}
+            value={
+              project.status === 'draft'
+                ? t('Calculated at publish')
+                : `${formatQuota(project.platform_fee_quota)} (${(
+                    project.platform_fee_rate_bps / 100
+                  ).toFixed(2)}%)`
+            }
+          />
+          <Metric
             label={t('Challenges')}
             value={`${project.active_challenge_count} / ${project.approved_challenge_count}`}
           />
         </div>
+        {props.hasOpenDispute ? (
+          <Alert>
+            <HugeiconsIcon icon={MoneyLockIcon} strokeWidth={2} />
+            <AlertTitle>{t('Funds and reward slots are frozen')}</AlertTitle>
+            <AlertDescription>
+              {t(
+                'An open dispute prevents closing, refunding, releasing, or reusing the affected escrow until a third-party administrator resolves the case.'
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <div className='flex flex-wrap gap-2'>
           {project.status === 'draft' && (
             <>
@@ -958,7 +1329,7 @@ function OwnerProjectCard(props: {
               <Button
                 variant='destructive'
                 onClick={props.onClose}
-                disabled={busy}
+                disabled={busy || props.hasOpenDispute}
               >
                 <HugeiconsIcon
                   icon={CancelCircleIcon}
@@ -985,11 +1356,13 @@ function ChallengeCard({
   pending,
   onSubmit,
   onWithdraw,
+  onRateOwner,
 }: {
   challenge: BountyChallenge
   pending: string
   onSubmit: () => void
   onWithdraw: () => void
+  onRateOwner: () => void
 }) {
   const { t } = useTranslation()
   const actionable = challenge.status === 'accepted'
@@ -1004,15 +1377,38 @@ function ChallengeCard({
       disableHoverEffect
     >
       <div className='flex flex-col gap-4'>
-        <Metric
-          label={t('Locked reward')}
-          value={formatQuota(challenge.reward_quota)}
+        <div className='grid grid-cols-2 gap-2'>
+          <Metric
+            label={t('Locked reward')}
+            value={formatQuota(challenge.reward_quota)}
+          />
+          <Metric
+            label={t('Tips received')}
+            value={formatQuota(challenge.tip_quota)}
+          />
+        </div>
+        <RatingView
+          title={t('Verifier rating of your work')}
+          score={challenge.owner_rating_score}
+          comment={challenge.owner_rating_comment}
+          average={challenge.participant_rating_average}
+          count={challenge.participant_rating_count}
+        />
+        <RatingView
+          title={t('Your rating of the publisher')}
+          score={challenge.contributor_rating_score}
+          comment={challenge.contributor_rating_comment}
+          average={challenge.owner_rating_average}
+          count={challenge.owner_rating_count}
         />
         {challenge.review_note && (
           <p className='text-muted-foreground text-sm'>
             {challenge.review_note}
           </p>
         )}
+        {challenge.dispute ? (
+          <DisputeSummary dispute={challenge.dispute} />
+        ) : null}
         <div className='flex flex-wrap gap-2'>
           {challenge.repository_url && (
             <Button
@@ -1033,16 +1429,47 @@ function ChallengeCard({
               />
             </Button>
           )}
-          {actionable && <Button onClick={onSubmit}>{t('Submit work')}</Button>}
+          {actionable && (
+            <Button
+              onClick={onSubmit}
+              disabled={challenge.dispute?.status === 'open'}
+            >
+              {t('Submit work')}
+            </Button>
+          )}
           {withdrawable && (
             <Button
               variant='outline'
               onClick={onWithdraw}
-              disabled={pending !== ''}
+              disabled={pending !== '' || challenge.dispute?.status === 'open'}
             >
               {t('Withdraw')}
             </Button>
           )}
+          {(challenge.status === 'approved' ||
+            challenge.status === 'rejected') &&
+            challenge.contributor_rating_score === 0 && (
+              <Button
+                variant='outline'
+                onClick={onRateOwner}
+                disabled={pending !== ''}
+              >
+                {t('Rate publisher')}
+              </Button>
+            )}
+          {challenge.status !== 'withdrawn' && !challenge.dispute ? (
+            <Button
+              variant='outline'
+              render={<a href={disputeTicketHref(challenge)} />}
+            >
+              <HugeiconsIcon
+                icon={CustomerSupportIcon}
+                strokeWidth={2}
+                data-icon='inline-start'
+              />
+              {t('Submit dispute ticket')}
+            </Button>
+          ) : null}
         </div>
       </div>
     </TitledCard>
@@ -1058,13 +1485,58 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
+function RatingView({
+  title,
+  score,
+  comment,
+  average,
+  count,
+}: {
+  title: string
+  score: number
+  comment: string
+  average?: number
+  count?: number
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='bg-muted/30 flex flex-col gap-2 rounded-lg border p-3'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <p className='text-sm font-medium'>{title}</p>
+        <Badge variant='outline'>
+          {score > 0 ? `${score}/5` : t('Not rated')}
+        </Badge>
+      </div>
+      {comment ? (
+        <p className='text-muted-foreground text-sm whitespace-pre-wrap'>
+          {comment}
+        </p>
+      ) : null}
+      {(count ?? 0) > 0 ? (
+        <p className='text-muted-foreground text-xs'>
+          {t('Historical average: {{average}}/5 from {{count}} ratings', {
+            average: (average ?? 0).toFixed(1),
+            count,
+          })}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function DraftDialog(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
   editing: boolean
   draft: DraftForm
   setDraft: (draft: DraftForm) => void
-  totalQuota: number
+  charge: {
+    promotion: number
+    escrow: number
+    platformFee: number
+    feeRatePercent: number
+    total: number
+  }
   availableQuota: number
   pending: boolean
   onSave: () => void
@@ -1170,9 +1642,13 @@ function DraftDialog(props: {
         <AlertTitle>{t('Publish charge')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Total charged on publish: {{total}}. Current balance: {{balance}}.',
+            'Publish charge: {{promotion}} promotion + {{escrow}} escrow + {{fee}} task fee ({{rate}}%) = {{total}}. Current balance: {{balance}}.',
             {
-              total: formatQuota(props.totalQuota),
+              promotion: formatQuota(props.charge.promotion),
+              escrow: formatQuota(props.charge.escrow),
+              fee: formatQuota(props.charge.platformFee),
+              rate: props.charge.feeRatePercent.toFixed(2),
+              total: formatQuota(props.charge.total),
               balance: formatQuota(props.availableQuota),
             }
           )}
@@ -1292,6 +1768,7 @@ function ProjectReviewDialog(props: {
   detail: BountyProjectDetail | null
   pending: string
   onReview: (challenge: BountyChallenge, action: 'approve' | 'reject') => void
+  onTip: (challenge: BountyChallenge) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -1331,6 +1808,20 @@ function ProjectReviewDialog(props: {
                 <Badge variant='outline'>
                   {statusLabel(t, challenge.status)}
                 </Badge>
+              </div>
+              <div className='grid gap-2 sm:grid-cols-2'>
+                <Metric
+                  label={t('Contributor reputation')}
+                  value={
+                    (challenge.participant_rating_count ?? 0) > 0
+                      ? `${(challenge.participant_rating_average ?? 0).toFixed(1)}/5 · ${challenge.participant_rating_count}`
+                      : t('No ratings yet')
+                  }
+                />
+                <Metric
+                  label={t('Tips sent')}
+                  value={formatQuota(challenge.tip_quota)}
+                />
               </div>
               {(challenge.issue_url || challenge.pull_request_url) && (
                 <div className='flex flex-wrap gap-2'>
@@ -1384,11 +1875,60 @@ function ProjectReviewDialog(props: {
                   {challenge.review_note}
                 </p>
               )}
+              {challenge.dispute ? (
+                <DisputeSummary dispute={challenge.dispute} />
+              ) : null}
+              <RatingView
+                title={t('Your rating of the contributor')}
+                score={challenge.owner_rating_score}
+                comment={challenge.owner_rating_comment}
+                average={challenge.participant_rating_average}
+                count={challenge.participant_rating_count}
+              />
+              <RatingView
+                title={t('Contributor rating of you')}
+                score={challenge.contributor_rating_score}
+                comment={challenge.contributor_rating_comment}
+                average={challenge.owner_rating_average}
+                count={challenge.owner_rating_count}
+              />
+              {challenge.status !== 'withdrawn' && (
+                <div className='flex flex-wrap gap-2'>
+                  <Button
+                    variant='outline'
+                    onClick={() => props.onTip(challenge)}
+                    disabled={props.pending !== ''}
+                  >
+                    <HugeiconsIcon
+                      icon={GiftIcon}
+                      strokeWidth={2}
+                      data-icon='inline-start'
+                    />
+                    {t('Send tip')}
+                  </Button>
+                  {!challenge.dispute ? (
+                    <Button
+                      variant='outline'
+                      render={<a href={disputeTicketHref(challenge)} />}
+                    >
+                      <HugeiconsIcon
+                        icon={CustomerSupportIcon}
+                        strokeWidth={2}
+                        data-icon='inline-start'
+                      />
+                      {t('Submit dispute ticket')}
+                    </Button>
+                  ) : null}
+                </div>
+              )}
               {challenge.status === 'submitted' && (
                 <div className='flex flex-wrap gap-2'>
                   <Button
                     onClick={() => props.onReview(challenge, 'approve')}
-                    disabled={props.pending !== ''}
+                    disabled={
+                      props.pending !== '' ||
+                      challenge.dispute?.status === 'open'
+                    }
                   >
                     <HugeiconsIcon
                       icon={CheckmarkCircle02Icon}
@@ -1400,7 +1940,10 @@ function ProjectReviewDialog(props: {
                   <Button
                     variant='destructive'
                     onClick={() => props.onReview(challenge, 'reject')}
-                    disabled={props.pending !== ''}
+                    disabled={
+                      props.pending !== '' ||
+                      challenge.dispute?.status === 'open'
+                    }
                   >
                     {t('Reject')}
                   </Button>
@@ -1417,12 +1960,19 @@ function ProjectReviewDialog(props: {
               {props.detail?.ledger.map((entry) => (
                 <div
                   key={entry.id}
-                  className='flex items-center justify-between gap-4 rounded-lg border px-3 py-2 text-sm'
+                  className='rounded-lg border px-3 py-2 text-sm'
                 >
-                  <span>{t(entry.kind)}</span>
-                  <span className='font-medium'>
-                    {formatQuota(entry.quota)}
-                  </span>
+                  <div className='flex items-center justify-between gap-4'>
+                    <span>{t(entry.kind)}</span>
+                    <span className='font-medium'>
+                      {formatQuota(entry.quota)}
+                    </span>
+                  </div>
+                  {entry.note ? (
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {entry.note}
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -1430,6 +1980,570 @@ function ProjectReviewDialog(props: {
         )}
       </div>
     </Dialog>
+  )
+}
+
+const DISPUTE_REASON_KEYS = {
+  merged_but_unpaid: 'Fix merged but bounty unpaid',
+  requirements_met_but_rejected: 'Requirements met but submission rejected',
+  misleading_requirements: 'Misleading or changed requirements',
+  abusive_conduct: 'Abusive conduct',
+  other: 'Other bounty dispute',
+} as const
+
+const DISPUTE_STATUS_KEYS = {
+  open: 'Awaiting third-party review',
+  resolved_paid: 'Resolved with escrow payment',
+  resolved_denied: 'Claim denied',
+} as const
+
+function DisputeSummary({ dispute }: { dispute: BountyDispute }) {
+  const { t } = useTranslation()
+  return (
+    <Alert>
+      <HugeiconsIcon icon={CustomerSupportIcon} strokeWidth={2} />
+      <AlertTitle>{t(DISPUTE_STATUS_KEYS[dispute.status])}</AlertTitle>
+      <AlertDescription className='space-y-2'>
+        <p>{t(DISPUTE_REASON_KEYS[dispute.reason])}</p>
+        <p className='whitespace-pre-wrap'>{dispute.statement}</p>
+        {dispute.status === 'open' ? (
+          <p className='font-medium'>
+            {t(
+              'The affected escrow and reward slot remain frozen until third-party review is complete.'
+            )}
+          </p>
+        ) : null}
+        {dispute.resolution ? (
+          <p>
+            <span className='font-medium'>
+              {t('Administrator resolution')}:
+            </span>{' '}
+            {dispute.resolution}
+          </p>
+        ) : null}
+        {dispute.resolved_at > 0 ? (
+          <p className='text-xs'>
+            {t('Resolved at')}:{' '}
+            {new Date(dispute.resolved_at * 1000).toLocaleString()}
+          </p>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+function DisputesPanel({
+  items,
+  loading,
+  admin = false,
+}: {
+  items: BountyDispute[]
+  loading: boolean
+  admin?: boolean
+}) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [target, setTarget] = useState<{
+    dispute: BountyDispute
+    action: 'pay' | 'deny'
+  } | null>(null)
+  const [resolution, setResolution] = useState('')
+  const [pending, setPending] = useState(false)
+
+  const resolve = async () => {
+    if (!target || resolution.trim().length < 10) {
+      toast.error(
+        t('Enter an administrator resolution of at least 10 characters.')
+      )
+      return
+    }
+    const confirmation =
+      target.action === 'pay'
+        ? t(
+            'Pay {{amount}} from escrow to {{contributor}} and approve this challenge? This cannot be repeated.',
+            {
+              amount: formatQuota(target.dispute.reward_quota),
+              contributor: target.dispute.participant_username,
+            }
+          )
+        : t(
+            'Deny this dispute claim? The administrator resolution will be visible to both parties.'
+          )
+    if (!window.confirm(confirmation)) return
+
+    setPending(true)
+    try {
+      await resolveBountyDispute(target.dispute.id, {
+        action: target.action,
+        resolution: resolution.trim(),
+      })
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ['open-source-bounties', 'disputes'],
+        }),
+        ...BOUNTY_QUERY_KEYS.slice(0, 3).map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey })
+        ),
+      ])
+      toast.success(
+        target.action === 'pay'
+          ? t('Dispute resolved and escrow reward transferred.')
+          : t('Dispute claim denied.')
+      )
+      setTarget(null)
+      setResolution('')
+    } catch {
+      toast.error(t('Unable to resolve the bounty dispute.'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  if (loading) return <LoadingState label={t('Loading disputes...')} />
+  if (items.length === 0) {
+    return (
+      <Empty className='min-h-64 border'>
+        <EmptyHeader>
+          <EmptyMedia variant='icon'>
+            <HugeiconsIcon icon={CustomerSupportIcon} strokeWidth={2} />
+          </EmptyMedia>
+          <EmptyTitle>
+            {admin ? t('No dispute cases') : t('You have no bounty disputes')}
+          </EmptyTitle>
+          <EmptyDescription>
+            {admin
+              ? t(
+                  'Open bounty disputes requiring third-party review will appear here.'
+                )
+              : t(
+                  'If a bounty payment or acceptance decision is disputed, submit a ticket from the challenge card.'
+                )}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  return (
+    <>
+      <div className='grid gap-4'>
+        {items.map((dispute) => (
+          <TitledCard
+            key={dispute.id}
+            title={dispute.project_title}
+            description={`${dispute.opened_by_username} → ${dispute.against_username}`}
+            icon={
+              <HugeiconsIcon icon={CustomerSupportIcon} strokeWidth={1.8} />
+            }
+            iconTone={dispute.status === 'open' ? 'info' : 'neutral'}
+            disableHoverEffect
+            action={
+              <Badge variant='outline'>
+                {t(DISPUTE_STATUS_KEYS[dispute.status])}
+              </Badge>
+            }
+          >
+            <div className='flex flex-col gap-4'>
+              <div className='grid gap-2 sm:grid-cols-3'>
+                <Metric
+                  label={t('Escrow reward')}
+                  value={formatQuota(dispute.reward_quota)}
+                />
+                <Metric
+                  label={t('Tips already paid')}
+                  value={formatQuota(dispute.tip_quota)}
+                />
+                <Metric
+                  label={t('Challenge status')}
+                  value={statusLabel(t, dispute.challenge_status)}
+                />
+              </div>
+              <div>
+                <p className='text-sm font-medium'>
+                  {t(DISPUTE_REASON_KEYS[dispute.reason])}
+                </p>
+                <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                  {dispute.statement}
+                </p>
+              </div>
+              {dispute.status === 'open' ? (
+                <Alert>
+                  <HugeiconsIcon icon={MoneyLockIcon} strokeWidth={2} />
+                  <AlertTitle>
+                    {t('Funds and reward slots are frozen')}
+                  </AlertTitle>
+                  <AlertDescription>
+                    {t(
+                      'The affected escrow and reward slot remain frozen until third-party review is complete.'
+                    )}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <div className='grid gap-3 lg:grid-cols-2'>
+                <div className='bg-muted/40 rounded-lg border p-3'>
+                  <p className='text-xs font-medium'>
+                    {t('Published acceptance rules')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                    {dispute.project_rules_snapshot}
+                  </p>
+                </div>
+                <div className='bg-muted/40 rounded-lg border p-3'>
+                  <p className='text-xs font-medium'>
+                    {t('Contributor submission note')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                    {dispute.submission_note_snapshot || t('No note provided.')}
+                  </p>
+                </div>
+              </div>
+              <div className='flex flex-wrap gap-2'>
+                <Button
+                  variant='outline'
+                  render={
+                    <a
+                      href={dispute.repository_url}
+                      target='_blank'
+                      rel='noreferrer'
+                    />
+                  }
+                >
+                  {t('Repository')}
+                  <HugeiconsIcon
+                    icon={ExternalLinkIcon}
+                    strokeWidth={2}
+                    data-icon='inline-end'
+                  />
+                </Button>
+                {dispute.issue_url ? (
+                  <Button
+                    variant='outline'
+                    render={
+                      <a
+                        href={dispute.issue_url}
+                        target='_blank'
+                        rel='noreferrer'
+                      />
+                    }
+                  >
+                    {t('Issue')}
+                    <HugeiconsIcon
+                      icon={ExternalLinkIcon}
+                      strokeWidth={2}
+                      data-icon='inline-end'
+                    />
+                  </Button>
+                ) : null}
+                {dispute.pull_request_url ? (
+                  <Button
+                    variant='outline'
+                    render={
+                      <a
+                        href={dispute.pull_request_url}
+                        target='_blank'
+                        rel='noreferrer'
+                      />
+                    }
+                  >
+                    {t('Pull request')}
+                    <HugeiconsIcon
+                      icon={ExternalLinkIcon}
+                      strokeWidth={2}
+                      data-icon='inline-end'
+                    />
+                  </Button>
+                ) : null}
+              </div>
+              {dispute.encrypted_review_message ? (
+                <div className='bg-muted/40 rounded-lg border p-3'>
+                  <p className='text-xs font-medium'>
+                    {t('Encrypted review message')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                    {dispute.encrypted_review_message}
+                  </p>
+                </div>
+              ) : null}
+              {dispute.review_note ? (
+                <div className='bg-muted/40 rounded-lg border p-3'>
+                  <p className='text-xs font-medium'>
+                    {t('Publisher review note')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                    {dispute.review_note}
+                  </p>
+                </div>
+              ) : null}
+              <div className='grid gap-3 lg:grid-cols-2'>
+                <RatingView
+                  title={t('Publisher rating of contributor')}
+                  score={dispute.owner_rating_score}
+                  comment={dispute.owner_rating_comment}
+                />
+                <RatingView
+                  title={t('Contributor rating of publisher')}
+                  score={dispute.contributor_rating_score}
+                  comment={dispute.contributor_rating_comment}
+                />
+              </div>
+              {dispute.resolution ? (
+                <Alert>
+                  <AlertTitle>{t('Administrator resolution')}</AlertTitle>
+                  <AlertDescription className='whitespace-pre-wrap'>
+                    <p>{dispute.resolution}</p>
+                    {dispute.resolved_at > 0 ? (
+                      <p className='mt-2 text-xs'>
+                        {t('Resolved at')}:{' '}
+                        {new Date(dispute.resolved_at * 1000).toLocaleString()}
+                      </p>
+                    ) : null}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {admin && dispute.status === 'open' ? (
+                <div className='flex flex-wrap gap-2'>
+                  <Button
+                    onClick={() => {
+                      setTarget({ dispute, action: 'pay' })
+                      setResolution('')
+                    }}
+                  >
+                    <HugeiconsIcon
+                      icon={CheckmarkCircle02Icon}
+                      strokeWidth={2}
+                      data-icon='inline-start'
+                    />
+                    {t('Pay from escrow')}
+                  </Button>
+                  <Button
+                    variant='destructive'
+                    onClick={() => {
+                      setTarget({ dispute, action: 'deny' })
+                      setResolution('')
+                    }}
+                  >
+                    {t('Deny claim')}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          </TitledCard>
+        ))}
+      </div>
+      <Dialog
+        open={Boolean(target)}
+        onOpenChange={(open) => !open && setTarget(null)}
+        title={
+          target?.action === 'pay'
+            ? t('Resolve dispute and pay from escrow')
+            : t('Deny dispute claim')
+        }
+        description={t(
+          'Record a neutral third-party conclusion. It will be visible to the publisher and contributor.'
+        )}
+        contentClassName='sm:max-w-lg'
+        footer={
+          <>
+            <Button variant='outline' onClick={() => setTarget(null)}>
+              {t('Cancel')}
+            </Button>
+            <Button
+              variant={target?.action === 'deny' ? 'destructive' : 'default'}
+              onClick={resolve}
+              disabled={pending || resolution.trim().length < 10}
+            >
+              {target?.action === 'pay'
+                ? t('Confirm escrow payment')
+                : t('Confirm denial')}
+            </Button>
+          </>
+        }
+      >
+        <Field
+          label={t('Administrator resolution')}
+          htmlFor='bounty-dispute-resolution'
+        >
+          <Textarea
+            id='bounty-dispute-resolution'
+            rows={6}
+            value={resolution}
+            onChange={(event) => setResolution(event.target.value)}
+            placeholder={t(
+              'Explain the evidence reviewed and the reason for this decision.'
+            )}
+          />
+        </Field>
+      </Dialog>
+    </>
+  )
+}
+
+function McpSettingsPanel() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [revealedToken, setRevealedToken] = useState('')
+  const [pending, setPending] = useState(false)
+  const connectionQuery = useQuery({
+    queryKey: ['open-source-bounties', 'mcp-token'],
+    queryFn: getMcpTokenStatus,
+  })
+  const endpoint =
+    typeof window === 'undefined'
+      ? '/mcp'
+      : `${window.location.origin}${connectionQuery.data?.endpoint ?? '/mcp'}`
+  const protocolVersion = connectionQuery.data?.protocol_version ?? '2026-07-28'
+  const prompt = useMemo(
+    () => `Connect to the api.lmm.best Open-source bounties MCP server.
+
+Endpoint: ${endpoint}
+Protocol: MCP ${protocolVersion}, stateless Streamable HTTP
+Authorization: Bearer ${revealedToken || '<YOUR_PERSONAL_MCP_TOKEN>'}
+
+Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Never fabricate defects, Issues, pull requests, tests, encrypted messages, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing always spends my own promotion quota, the administrator-configured task fee, and the full reward escrow, including when I am an administrator or site owner. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, task fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
+    [endpoint, protocolVersion, revealedToken]
+  )
+
+  const rotate = async () => {
+    if (
+      connectionQuery.data?.status.configured &&
+      !window.confirm(
+        t(
+          'Rotate the personal MCP token? The previous token will stop working immediately.'
+        )
+      )
+    ) {
+      return
+    }
+    setPending(true)
+    try {
+      const connection = await rotateMcpToken()
+      setRevealedToken(connection.token)
+      await queryClient.invalidateQueries({
+        queryKey: ['open-source-bounties', 'mcp-token'],
+      })
+      toast.success(
+        t('Personal MCP token generated. Copy it now; it is shown only once.')
+      )
+    } catch {
+      toast.error(t('Unable to update the personal MCP token.'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const revoke = async () => {
+    if (
+      !window.confirm(
+        t(
+          'Revoke the personal MCP token? Connected AI clients will lose access immediately.'
+        )
+      )
+    ) {
+      return
+    }
+    setPending(true)
+    try {
+      await revokeMcpToken()
+      setRevealedToken('')
+      await queryClient.invalidateQueries({
+        queryKey: ['open-source-bounties', 'mcp-token'],
+      })
+      toast.success(t('Personal MCP token revoked.'))
+    } catch {
+      toast.error(t('Unable to revoke the personal MCP token.'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const copyPrompt = async () => {
+    const copied = await copyToClipboard(prompt)
+    if (copied) {
+      toast.success(t('AI prompt copied.'))
+    } else {
+      toast.error(
+        t(
+          'Copy failed. The complete prompt remains visible for manual copying.'
+        )
+      )
+    }
+  }
+
+  return (
+    <TitledCard
+      title={t('Open-source bounty MCP')}
+      description={t(
+        'Use one personal token to let an AI publish, accept, verify, dispute, tip, rate, and settle bounties through /mcp.'
+      )}
+      icon={<HugeiconsIcon icon={SourceCodeIcon} strokeWidth={1.8} />}
+      iconTone='info'
+      disableHoverEffect
+      action={<Badge variant='outline'>MCP {protocolVersion}</Badge>}
+    >
+      <div className='flex flex-col gap-4'>
+        <div className='grid gap-4 sm:grid-cols-2'>
+          <Field label={t('MCP endpoint')} htmlFor='bounty-mcp-endpoint'>
+            <Input id='bounty-mcp-endpoint' value={endpoint} readOnly />
+          </Field>
+          <Field label={t('Token status')} htmlFor='bounty-mcp-token-status'>
+            <Input
+              id='bounty-mcp-token-status'
+              value={
+                connectionQuery.data?.status.configured
+                  ? connectionQuery.data.status.token_hint
+                  : t('Not configured')
+              }
+              readOnly
+            />
+          </Field>
+        </div>
+        {revealedToken ? (
+          <Alert>
+            <AlertTitle>{t('Copy this token now')}</AlertTitle>
+            <AlertDescription>
+              {t(
+                'For security, the plaintext token will not be shown again after you leave this page.'
+              )}
+            </AlertDescription>
+            <Textarea
+              className='mt-3 font-mono text-xs'
+              value={revealedToken}
+              readOnly
+              rows={3}
+            />
+          </Alert>
+        ) : null}
+        <div className='flex flex-wrap gap-2'>
+          <Button onClick={rotate} disabled={pending}>
+            {connectionQuery.data?.status.configured
+              ? t('Rotate token')
+              : t('Generate token')}
+          </Button>
+          {connectionQuery.data?.status.configured ? (
+            <Button variant='destructive' onClick={revoke} disabled={pending}>
+              {t('Revoke token')}
+            </Button>
+          ) : null}
+          <Button variant='outline' onClick={copyPrompt} disabled={pending}>
+            <HugeiconsIcon
+              icon={Copy01Icon}
+              strokeWidth={2}
+              data-icon='inline-start'
+            />
+            {t('Copy AI prompt')}
+          </Button>
+        </div>
+        <Field label={t('AI prompt')} htmlFor='bounty-mcp-prompt'>
+          <Textarea
+            id='bounty-mcp-prompt'
+            value={prompt}
+            readOnly
+            rows={14}
+            className='font-mono text-xs'
+          />
+        </Field>
+      </div>
+    </TitledCard>
   )
 }
 

@@ -30,6 +30,50 @@ export type BountyChallengeStatus =
   | 'rejected'
   | 'withdrawn'
 
+export type BountyDisputeReason =
+  | 'merged_but_unpaid'
+  | 'requirements_met_but_rejected'
+  | 'misleading_requirements'
+  | 'abusive_conduct'
+  | 'other'
+
+export type BountyDisputeStatus = 'open' | 'resolved_paid' | 'resolved_denied'
+
+export interface BountyDispute {
+  id: number
+  challenge_id: number
+  project_id: number
+  opened_by_user_id: number
+  against_user_id: number
+  reason: BountyDisputeReason
+  statement: string
+  status: BountyDisputeStatus
+  resolution: string
+  resolved_by_user_id: number
+  created_at: number
+  updated_at: number
+  resolved_at: number
+  project_title: string
+  repository_url: string
+  project_rules_snapshot: string
+  submission_note_snapshot: string
+  challenge_status: BountyChallengeStatus
+  issue_url: string
+  pull_request_url: string
+  encrypted_review_message: string
+  review_note: string
+  reward_quota: number
+  tip_quota: number
+  owner_rating_score: number
+  owner_rating_comment: string
+  contributor_rating_score: number
+  contributor_rating_comment: string
+  owner_username: string
+  participant_username: string
+  opened_by_username: string
+  against_username: string
+}
+
 export interface BountyChallenge {
   id: number
   project_id: number
@@ -43,6 +87,17 @@ export interface BountyChallenge {
   submission_note: string
   review_note: string
   reward_quota: number
+  tip_quota: number
+  owner_rating_score: number
+  owner_rating_comment: string
+  owner_rated_at: number
+  contributor_rating_score: number
+  contributor_rating_comment: string
+  contributor_rated_at: number
+  participant_rating_average?: number
+  participant_rating_count?: number
+  owner_rating_average?: number
+  owner_rating_count?: number
   accepted_at: number
   submitted_at: number
   reviewed_at: number
@@ -50,6 +105,7 @@ export interface BountyChallenge {
   project_title?: string
   repository_url?: string
   owner_username?: string
+  dispute?: BountyDispute
 }
 
 export interface BountyProject {
@@ -64,6 +120,8 @@ export interface BountyProject {
   reward_quota: number
   reward_slots: number
   escrow_quota: number
+  platform_fee_rate_bps: number
+  platform_fee_quota: number
   status: BountyProjectStatus
   created_at: number
   updated_at: number
@@ -71,6 +129,8 @@ export interface BountyProject {
   closed_at: number
   active_challenge_count: number
   approved_challenge_count: number
+  owner_rating_average: number
+  owner_rating_count: number
   viewer_challenge?: BountyChallenge
 }
 
@@ -95,6 +155,26 @@ export interface BountyProjectDetail {
     counterparty_user_id: number
     kind: string
     quota: number
+    note: string
     created_at: number
   }>
+}
+
+export interface BountyFeeConfig {
+  rate_percent: number
+  rate_basis_points: number
+}
+
+export interface BountyMcpTokenStatus {
+  configured: boolean
+  token_hint: string
+  created_at: number
+  last_used_at: number
+}
+
+export interface BountyMcpConnection {
+  status: BountyMcpTokenStatus
+  endpoint: string
+  protocol_version: string
+  token?: string
 }
