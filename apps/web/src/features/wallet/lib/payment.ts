@@ -161,6 +161,34 @@ export function isStripePayment(paymentType: string): boolean {
 }
 
 /**
+ * Check if payment method is Creem
+ */
+export function isCreemPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.CREEM
+}
+
+/**
+ * Generic ePay-family methods for the shared form submission flow.
+ *
+ * Dedicated gateways (Stripe, Creem, Waffo, Waffo Pancake) render their own
+ * buttons and checkouts and must never be offered through the generic ePay
+ * form, otherwise the client sends `payment_method: "waffo_pancake"` to the
+ * plain ePay endpoint, which has no such method configured.
+ */
+export function getEpayMethods(
+  payMethods: PaymentMethod[] = []
+): PaymentMethod[] {
+  return payMethods.filter(
+    (m) =>
+      m?.type &&
+      !isStripePayment(m.type) &&
+      !isCreemPayment(m.type) &&
+      !isWaffoPayment(m.type) &&
+      !isWaffoPancakePayment(m.type)
+  )
+}
+
+/**
  * Check if payment method is Waffo
  */
 export function isWaffoPayment(paymentType: string): boolean {

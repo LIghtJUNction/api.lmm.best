@@ -25,6 +25,7 @@ import { PAYMENT_TYPES } from '../constants'
 import {
   cancelPaymentCheckout,
   dispatchSelectedPayment,
+  getEpayMethods,
   isSafeHttpCheckoutUrl,
   isPaymentMethodCurrencySupported,
   isStripePayment,
@@ -42,6 +43,27 @@ describe('payment type classification', () => {
     assert.equal(isWaffoPancakePayment(PAYMENT_TYPES.WAFFO_PANCAKE), true)
     assert.equal(isWaffoPancakePayment(PAYMENT_TYPES.WAFFO), false)
     assert.equal(isStripePayment(PAYMENT_TYPES.STRIPE), true)
+  })
+
+  test('keeps only generic ePay methods and excludes dedicated gateways', () => {
+    const epayMethods = getEpayMethods([
+      { name: 'Alipay', type: 'alipay' },
+      { name: 'WeChat Pay', type: 'wxpay' },
+      { name: 'Stripe', type: PAYMENT_TYPES.STRIPE },
+      { name: 'Creem', type: PAYMENT_TYPES.CREEM },
+      { name: 'Waffo', type: PAYMENT_TYPES.WAFFO },
+      { name: 'Waffo Pancake', type: PAYMENT_TYPES.WAFFO_PANCAKE },
+    ])
+
+    assert.deepEqual(
+      epayMethods.map((method) => method.type),
+      ['alipay', 'wxpay']
+    )
+  })
+
+  test('treats missing or empty payment method lists as no ePay methods', () => {
+    assert.deepEqual(getEpayMethods(), [])
+    assert.deepEqual(getEpayMethods([]), [])
   })
 
   test('fails closed only for Waffo Pancake when the configured gateway currency is CNY', () => {
