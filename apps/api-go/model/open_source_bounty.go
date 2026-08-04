@@ -25,14 +25,14 @@ const (
 	OpenSourceBountyChallengeRejected  = "rejected"
 	OpenSourceBountyChallengeWithdrawn = "withdrawn"
 
-	OpenSourceBountyLedgerPromotionSpend = "promotion_spend"
 	OpenSourceBountyLedgerEscrowFund     = "escrow_fund"
 	OpenSourceBountyLedgerRewardTransfer = "reward_transfer"
 	OpenSourceBountyLedgerEscrowRefund   = "escrow_refund"
 	OpenSourceBountyLedgerTipTransfer    = "tip_transfer"
 	OpenSourceBountyLedgerPlatformFee    = "platform_fee"
 
-	OpenSourceBountyFeeRateOptionKey = "OpenSourceBountyFeeRate"
+	OpenSourceBountyFeeRateOptionKey  = "OpenSourceBountyFeeRate"
+	defaultOpenSourceBountyFeeRateBps = 100
 )
 
 const (
@@ -70,7 +70,6 @@ type OpenSourceBountyProject struct {
 	Title              string `json:"title" gorm:"type:varchar(120);not null"`
 	Description        string `json:"description" gorm:"type:text;not null"`
 	Rules              string `json:"rules" gorm:"type:text;not null"`
-	PromotionQuota     int    `json:"promotion_quota" gorm:"not null;default:0;index"`
 	RewardQuota        int    `json:"reward_quota" gorm:"not null;default:0"`
 	RewardSlots        int    `json:"reward_slots" gorm:"not null;default:0"`
 	EscrowQuota        int    `json:"escrow_quota" gorm:"not null;default:0"`
@@ -93,7 +92,6 @@ type OpenSourceBountyChallenge struct {
 	Status                   string `json:"status" gorm:"type:varchar(20);not null;index"`
 	IssueUrl                 string `json:"issue_url" gorm:"type:varchar(512);not null;default:''"`
 	PullRequestUrl           string `json:"pull_request_url" gorm:"type:varchar(512);not null;default:'';index"`
-	EncryptedReviewMessage   string `json:"encrypted_review_message" gorm:"type:text;not null;default:''"`
 	SubmissionNote           string `json:"submission_note" gorm:"type:text;not null;default:''"`
 	ReviewNote               string `json:"review_note" gorm:"type:text;not null;default:''"`
 	RewardQuota              int    `json:"reward_quota" gorm:"not null;default:0"`
@@ -132,13 +130,12 @@ type OpenSourceBountyLedger struct {
 func (OpenSourceBountyLedger) TableName() string { return "open_source_bounty_ledgers" }
 
 type OpenSourceBountyDraftInput struct {
-	RepositoryUrl  string `json:"repository_url"`
-	Title          string `json:"title"`
-	Description    string `json:"description"`
-	Rules          string `json:"rules"`
-	PromotionQuota int    `json:"promotion_quota"`
-	RewardQuota    int    `json:"reward_quota"`
-	RewardSlots    int    `json:"reward_slots"`
+	RepositoryUrl string `json:"repository_url"`
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	Rules         string `json:"rules"`
+	RewardQuota   int    `json:"reward_quota"`
+	RewardSlots   int    `json:"reward_slots"`
 }
 
 type OpenSourceBountyProjectView struct {
@@ -176,7 +173,6 @@ type OpenSourceBountyFeeConfig struct {
 }
 
 type OpenSourceBountyPublicationCharge struct {
-	PromotionQuota     int `json:"promotion_quota"`
 	EscrowQuota        int `json:"escrow_quota"`
 	PlatformFeeQuota   int `json:"platform_fee_quota"`
 	PlatformFeeRateBps int `json:"platform_fee_rate_bps"`
@@ -189,7 +185,7 @@ func GetOpenSourceBountyFeeConfig() OpenSourceBountyFeeConfig {
 	common.OptionMapRWMutex.RUnlock()
 	basisPoints, err := parseOpenSourceBountyFeeRateBasisPoints(raw)
 	if err != nil {
-		basisPoints = 0
+		basisPoints = defaultOpenSourceBountyFeeRateBps
 	}
 	return OpenSourceBountyFeeConfig{RatePercent: float64(basisPoints) / 100, RateBasisPoints: basisPoints}
 }
@@ -222,7 +218,7 @@ func parseOpenSourceBountyFeeRateBasisPoints(raw string) (int, error) {
 }
 
 func CalculateOpenSourceBountyPublicationCharge(project *OpenSourceBountyProject) (OpenSourceBountyPublicationCharge, error) {
-	baseTotal, err := bountyCharge(project.PromotionQuota, project.RewardQuota, project.RewardSlots)
+	baseTotal, err := bountyCharge(project.RewardQuota, project.RewardSlots)
 	if err != nil {
 		return OpenSourceBountyPublicationCharge{}, err
 	}
@@ -235,7 +231,7 @@ func CalculateOpenSourceBountyPublicationCharge(project *OpenSourceBountyProject
 		return OpenSourceBountyPublicationCharge{}, bountyError("OPEN_SOURCE_BOUNTY_INVALID_QUOTA", "bounty quota is too large")
 	}
 	return OpenSourceBountyPublicationCharge{
-		PromotionQuota: project.PromotionQuota, EscrowQuota: escrow,
+		EscrowQuota:      escrow,
 		PlatformFeeQuota: int(fee64), PlatformFeeRateBps: config.RateBasisPoints,
 		TotalQuota: baseTotal + int(fee64),
 	}, nil
@@ -259,28 +255,24 @@ func normalizeBountyDraft(input OpenSourceBountyDraftInput) (OpenSourceBountyDra
 	if len(input.Rules) < 20 || len(input.Rules) > 5000 {
 		return input, bountyError("OPEN_SOURCE_BOUNTY_INVALID_RULES", "rules must contain 20 to 5000 characters")
 	}
-	if input.PromotionQuota <= 0 || input.RewardQuota <= 0 {
-		return input, bountyError("OPEN_SOURCE_BOUNTY_INVALID_QUOTA", "promotion and reward quota must be positive")
+	if input.RewardQuota <= 0 {
+		return input, bountyError("OPEN_SOURCE_BOUNTY_INVALID_QUOTA", "reward quota must be positive")
 	}
 	if input.RewardSlots < 1 || input.RewardSlots > 100 {
 		return input, bountyError("OPEN_SOURCE_BOUNTY_INVALID_SLOTS", "reward slots must be between 1 and 100")
 	}
-	if _, err := bountyCharge(input.PromotionQuota, input.RewardQuota, input.RewardSlots); err != nil {
+	if _, err := bountyCharge(input.RewardQuota, input.RewardSlots); err != nil {
 		return input, err
 	}
 	return input, nil
 }
 
-func bountyCharge(promotionQuota int, rewardQuota int, rewardSlots int) (int, error) {
+func bountyCharge(rewardQuota int, rewardSlots int) (int, error) {
 	maxInt := int(^uint(0) >> 1)
 	if rewardQuota <= 0 || rewardSlots <= 0 || rewardQuota > maxInt/rewardSlots {
 		return 0, bountyError("OPEN_SOURCE_BOUNTY_INVALID_QUOTA", "bounty quota is too large")
 	}
-	escrow := rewardQuota * rewardSlots
-	if promotionQuota <= 0 || promotionQuota > maxInt-escrow {
-		return 0, bountyError("OPEN_SOURCE_BOUNTY_INVALID_QUOTA", "bounty quota is too large")
-	}
-	return promotionQuota + escrow, nil
+	return rewardQuota * rewardSlots, nil
 }
 
 func NormalizeGithubRepositoryUrl(raw string) (string, error) {
@@ -338,7 +330,7 @@ func CreateOpenSourceBountyDraft(ownerUserId int, input OpenSourceBountyDraftInp
 	now := common.GetTimestamp()
 	project := &OpenSourceBountyProject{
 		OwnerUserId: ownerUserId, RepositoryUrl: normalized.RepositoryUrl, Title: normalized.Title,
-		Description: normalized.Description, Rules: normalized.Rules, PromotionQuota: normalized.PromotionQuota,
+		Description: normalized.Description, Rules: normalized.Rules,
 		RewardQuota: normalized.RewardQuota, RewardSlots: normalized.RewardSlots, Status: OpenSourceBountyStatusDraft,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -357,7 +349,7 @@ func UpdateOpenSourceBountyDraft(ownerUserId int, projectId int, input OpenSourc
 		Where("id = ? AND owner_user_id = ? AND status = ?", projectId, ownerUserId, OpenSourceBountyStatusDraft).
 		Updates(map[string]interface{}{
 			"repository_url": normalized.RepositoryUrl, "title": normalized.Title, "description": normalized.Description,
-			"rules": normalized.Rules, "promotion_quota": normalized.PromotionQuota, "reward_quota": normalized.RewardQuota,
+			"rules": normalized.Rules, "reward_quota": normalized.RewardQuota,
 			"reward_slots": normalized.RewardSlots, "updated_at": common.GetTimestamp(),
 		})
 	if result.Error != nil {
@@ -448,7 +440,6 @@ func publishOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSour
 			return err
 		}
 		entries := []OpenSourceBountyLedger{
-			{ProjectId: project.Id, UserId: ownerUserId, Kind: OpenSourceBountyLedgerPromotionSpend, Quota: project.PromotionQuota, CreatedAt: now},
 			{ProjectId: project.Id, UserId: ownerUserId, Kind: OpenSourceBountyLedgerEscrowFund, Quota: charge.EscrowQuota, CreatedAt: now},
 		}
 		if charge.PlatformFeeQuota > 0 {
@@ -660,7 +651,7 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 	}
 	views := make([]OpenSourceBountyProjectView, 0)
 	err := openSourceBountyProjectQuery().Where("p.status IN ?", statuses).
-		Order("p.promotion_quota DESC, p.published_at DESC, p.id DESC").
+		Order("p.published_at DESC, p.id DESC").
 		Offset((page - 1) * pageSize).Limit(pageSize).Scan(&views).Error
 	if err != nil {
 		return nil, 0, err
@@ -804,7 +795,7 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 			}
 			return tx.Model(&challenge).Updates(map[string]interface{}{
 				"github_handle": handle, "status": OpenSourceBountyChallengeAccepted, "issue_url": "", "pull_request_url": "",
-				"encrypted_review_message": "", "submission_note": "", "review_note": "", "reward_quota": project.RewardQuota,
+				"submission_note": "", "review_note": "", "reward_quota": project.RewardQuota,
 				"accepted_at": now, "submitted_at": 0, "reviewed_at": 0, "rejected_at": 0, "paid_at": 0, "updated_at": now,
 			}).Error
 		}
@@ -824,11 +815,10 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 	return &challenge, DB.First(&challenge, challenge.Id).Error
 }
 
-func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issueUrl string, pullRequestUrl string, encryptedReviewMessage string, submissionNote string) (*OpenSourceBountyChallenge, error) {
-	encryptedReviewMessage = strings.TrimSpace(encryptedReviewMessage)
+func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issueUrl string, pullRequestUrl string, submissionNote string) (*OpenSourceBountyChallenge, error) {
 	submissionNote = strings.TrimSpace(submissionNote)
-	if len(encryptedReviewMessage) < 4 || len(encryptedReviewMessage) > 2000 || len(submissionNote) > 2000 {
-		return nil, bountyError("OPEN_SOURCE_BOUNTY_INVALID_SUBMISSION", "encrypted review message and submission note are invalid")
+	if len(submissionNote) > 2000 {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_INVALID_SUBMISSION", "submission note must contain at most 2000 characters")
 	}
 	var challenge OpenSourceBountyChallenge
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -862,8 +852,8 @@ func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issue
 		now := common.GetTimestamp()
 		return tx.Model(&challenge).Updates(map[string]interface{}{
 			"issue_url": normalizedIssue, "pull_request_url": normalizedPullRequest,
-			"encrypted_review_message": encryptedReviewMessage, "submission_note": submissionNote,
-			"status": OpenSourceBountyChallengeSubmitted, "submitted_at": now, "updated_at": now,
+			"submission_note": submissionNote,
+			"status":          OpenSourceBountyChallengeSubmitted, "submitted_at": now, "updated_at": now,
 		}).Error
 	})
 	if err != nil {

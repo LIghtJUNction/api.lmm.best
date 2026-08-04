@@ -21,9 +21,9 @@ func TestOpenSourceBountyTipHTTPIdempotencyReplay(t *testing.T) {
 	require.NoError(t, db.Create(&participant).Error)
 	project, err := model.CreateOpenSourceBountyDraft(owner.Id, model.OpenSourceBountyDraftInput{
 		RepositoryUrl: "https://github.com/example/http-tip", Title: "Fix reproducible defects",
-		Description:    "Find and fix a reproducible defect with focused verification.",
-		Rules:          "Link the Issue and pull request and include appropriate tests.",
-		PromotionQuota: 100, RewardQuota: 1_000, RewardSlots: 1,
+		Description: "Find and fix a reproducible defect with focused verification.",
+		Rules:       "Link the Issue and pull request and include appropriate tests.",
+		RewardQuota: 1_000, RewardSlots: 1,
 	})
 	require.NoError(t, err)
 	project, _, err = model.PublishOpenSourceBounty(owner.Id, project.Id)
