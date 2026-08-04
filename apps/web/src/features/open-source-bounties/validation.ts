@@ -40,6 +40,11 @@ export type BountyCharge = {
   total: number
 }
 
+export type BountySubmissionLinks = {
+  issueUrl: string
+  pullRequestUrl: string
+}
+
 export function calculateBountyCharge(
   rewardQuota: number,
   rewardSlots: number,
@@ -118,4 +123,16 @@ export function validateBountyDraft(
   }
 
   return errors
+}
+
+export function validateBountySubmissionLinks(
+  submission: BountySubmissionLinks
+): string | undefined {
+  if (
+    submission.issueUrl.trim().length === 0 &&
+    submission.pullRequestUrl.trim().length === 0
+  ) {
+    return 'Provide at least one GitHub Issue or pull request URL.'
+  }
+  return undefined
 }
