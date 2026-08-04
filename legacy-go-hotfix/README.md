@@ -18,6 +18,33 @@ The patch creates an append-only bounty ledger alongside project and challenge
 state so every promotion spend, escrow funding, reward transfer, and refund is
 auditable.
 
+`open-source-bounties-mcp.patch` extends that lifecycle with the latest MCP
+Streamable HTTP endpoint at `/mcp`, one revocable personal token per user,
+multi-round-trip confirmations, administrator-configured task fees, partial-work
+tips, mutual one-time ratings, and third-party dispute handling. Money-bearing
+MCP confirmations bind the current project, fee, escrow, recipient, and balance
+snapshot. Every confirmed mutation persists its operation result in the same
+database transaction as the business change, including publication, review,
+refund, tip, rating, dispute, draft deletion, and withdrawal. A retry after
+response loss returns the completed operation instead of charging, paying,
+rating, deleting, or freezing twice.
+
+Rejecting a submission starts a seven-day appeal window that keeps its reward
+slot and escrow reserved even before a dispute is filed. Opening a dispute
+freezes an immutable snapshot of the published rules, reward,
+Issue, pull request, encrypted review message, submission/review notes, tip, and
+both ratings. An open case keeps its reward slot and escrow reserved and blocks
+withdrawal or project close/refund. Administrator payment is allowed only for a
+contributor claim against the matching project owner, in a submitted or rejected
+state, after the administrator role and conflicts of interest are rechecked
+inside the payout transaction. A project owner or challenge participant cannot
+adjudicate that challenge even when they are an administrator.
+The original rejection note and score remain visible as case evidence; an
+overturned rejection score is excluded from ordinary contributor reputation.
+Unique party-case, open-case, and reward-payout keys prevent the same party from
+reopening a resolved case, allow only one pending case per challenge, and enforce
+one reward transfer per challenge at the database boundary.
+
 This directory is a self-contained, reproducible production hotfix for the Go
 baseline `3e39995a092f960882db6bf455b371d32591dc47`. It deliberately does not
 touch the active Rust or Web migration worktree.
@@ -100,9 +127,9 @@ bash legacy-go-hotfix/build-production-binary.sh --web-dist /path/to/verified/we
 ```
 
 The builder requires `--web-dist`, performs a clean `git archive`, checks and
-applies the patch, copies that distribution into the temporary source tree,
+applies all three patches in order, copies that distribution into the temporary source tree,
 and runs the root build with `GOPROXY=off`, `CGO_ENABLED=0`, `-trimpath`,
-`-buildvcs=false`, the production version `0.1.0.r29.g3e39995.payrate2`, and
+`-buildvcs=false`, the production version `0.1.0.r32.g3e39995.bounty-mcp-dispute`, and
 static linker flags.
 Missing cached Go dependencies or a static-link failure fail explicitly instead
 of downloading or falling back. On success it verifies `--version`, confirms

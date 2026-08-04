@@ -17,9 +17,30 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute } from '@tanstack/react-router'
+import { z } from 'zod'
 
 import { SupportTicket } from '@/features/support-ticket'
 
-export const Route = createFileRoute('/_authenticated/support/')({
-  component: SupportTicket,
+const supportSearchSchema = z.object({
+  category: z
+    .enum([
+      'bounty_dispute',
+      'refund',
+      'invoice',
+      'technical',
+      'billing',
+      'account',
+      'other',
+    ])
+    .optional(),
+  referenceId: z.string().optional(),
 })
+
+export const Route = createFileRoute('/_authenticated/support/')({
+  component: RouteComponent,
+  validateSearch: supportSearchSchema,
+})
+
+function RouteComponent() {
+  return <SupportTicket initialSearch={Route.useSearch()} />
+}

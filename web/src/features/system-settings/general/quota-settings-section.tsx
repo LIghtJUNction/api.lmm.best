@@ -55,6 +55,7 @@ const quotaSchema = z.object({
   PreConsumedQuota: z.coerce.number().min(0),
   QuotaForInviter: z.coerce.number().min(0),
   QuotaForInvitee: z.coerce.number().min(0),
+  OpenSourceBountyFeeRate: z.coerce.number().min(0).max(100),
   TopUpLink: z.string(),
   general_setting: z.object({
     docs_link: z.string(),
@@ -231,6 +232,35 @@ export function QuotaSettingsSection({
                     {t('Quota given to invited users ({{formattedQuota}})', {
                       formattedQuota: formatQuotaInputValue(field.value),
                     })}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='OpenSourceBountyFeeRate'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Open-source bounty task fee')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={100}
+                      step={0.01}
+                      value={field.value ?? ''}
+                      onChange={handleNumberChange(field.onChange)}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Percentage of the full reward pool charged to the publisher when a bounty is published. Promotion spend and escrow are charged separately.'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
