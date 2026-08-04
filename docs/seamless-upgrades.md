@@ -4,7 +4,7 @@ The frontend and backend have different safety boundaries and are released indep
 
 ## Frontend: zero-downtime static releases
 
-Build `web/dist` in CI or a build workspace, then copy that immutable directory to the server. Publishing does not restart the Go service or nginx:
+Build `apps/web/dist` in CI or a build workspace, then copy that immutable directory to the server. Publishing does not restart the Go service or nginx:
 
 ```bash
 sudo deploy/frontend-release.sh publish \
@@ -32,11 +32,11 @@ The installer serializes with `flock`, reserves a unique non-overwritable backup
 
 The server-scoped template explicitly includes `/etc/nginx/lmm-api-mime.types`; do not remove it or rely on a global include, because production's `http` context otherwise defaults to `application/octet-stream` and browsers reject JavaScript modules served with that MIME type. The template sends every known backend route family to port 3000, preserves WebSocket/SSE behavior, serves the shared `/static` asset store with immutable caching, and makes entry points revalidate. Missing static or root-public assets return 404 instead of SPA HTML. The production `/terms` and `/privacy` semantics are preserved as exact aliases to `/var/www/api.lmm.best/legal/terms.html` and `privacy.html`; nginx serves both as UTF-8 HTML with `X-Content-Type-Options: nosniff`, independently of a frontend release.
 
-Run `make check-frontend-split` whenever routers or deployment files change. Adding a new top-level backend router family requires updating the nginx split and its check in the same change.
+Run `bash deploy/check-frontend-split.sh` whenever routers or deployment files change. Adding a new top-level backend router family requires updating the nginx split and its check in the same change.
 
 ## Go backend today: autonomous, bounded interruption
 
-Production currently uses one Go process and SQLite. The 2026-08-01 gate snapshot has Go owning all 356 legacy routes; always read `rust/routes/migration-gate.tsv` rather than treating this prose as the current ownership source. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
+Production currently uses one Go process and SQLite. The 2026-08-01 gate snapshot has Go owning all 356 legacy routes; always read `apps/api-rust/routes/migration-gate.tsv` rather than treating this prose as the current ownership source. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
 
 Do not run old and new backend binaries concurrently against the SQLite database. Two writers, startup migrations, and background jobs make that unsafe; copying SQLite for each process would instead create divergent state.
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-![new-api](/web/public/logo.png)
+![new-api](/apps/web/public/logo.png)
 
 # LMM API
 

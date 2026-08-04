@@ -1,0 +1,15 @@
+{
+  "name": "@lmm/api-rust",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "cargo run --locked --package lmm-api-rs",
+    "run": "cargo run --locked --release --package lmm-api-rs",
+    "build": "cargo build --locked --release --package lmm-api-rs",
+    "test": "cargo test --locked --workspace --all-targets",
+    "typecheck": "cargo check --locked --workspace --all-targets",
+    "lint": "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+    "format": "cargo fmt --all",
+    "format:check": "cargo fmt --all --check"
+  }
+}

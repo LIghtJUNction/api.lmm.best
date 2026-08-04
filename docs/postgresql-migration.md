@@ -10,7 +10,7 @@ CI verifies provenance and hard-runs a native PostgreSQL 18 cluster. It validate
 
 ## Commands
 
-Run from `rust/`:
+Run from `apps/api-rust/`:
 
 ```bash
 cargo run -p lmm-db-migrate -- manifest-validate \

@@ -64,7 +64,7 @@ do_body=$(sed -n '/^DO \$\$/, /^END \$\$;/p' "$SCRIPT")
 grep -Fq "current_setting('lmm.sanitized_schema', true)" <<<"$do_body"
 grep -Fq ":'schema'" <<<"$do_body" && { echo 'psql variables must not appear inside DO dollar quoting' >&2; exit 1; }
 grep -Fq "dependency.deptype IN ('a', 'i')" "$SCRIPT"
-baseline_source="$HERE/../../rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql"
+baseline_source="$HERE/../../apps/api-rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql"
 if [[ ! -r $baseline_source ]]; then
   baseline_source=/usr/share/lmm-api-rs/migration/postgresql-baseline.sql
 fi
