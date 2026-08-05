@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
 
+import { AccessRestrictionNotice } from '@/components/access-restriction-notice'
 import { BrandLogo } from '@/components/brand-logo'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useSystemConfig } from '@/hooks/use-system-config'
@@ -30,7 +31,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   const { systemName, logo, loading } = useSystemConfig()
 
   return (
-    <div className='relative grid h-svh max-w-none'>
+    <div className='relative grid min-h-svh max-w-none grid-rows-[1fr_auto]'>
       <Link
         to='/'
         className='absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity hover:opacity-80 sm:top-8 sm:left-8'
@@ -53,6 +54,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
           {children}
         </div>
       </div>
+      <AccessRestrictionNotice />
     </div>
   )
 }

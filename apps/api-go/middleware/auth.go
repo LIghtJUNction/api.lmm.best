@@ -22,8 +22,16 @@ import (
 )
 
 const authIdentityContextKey = "auth_identity"
+const dashboardCredentialContextKey = "dashboard_credential"
 
 type dashboardCredentialKind int
+
+type dashboardCredentialResult struct {
+	user           *model.UserBase
+	identity       service.AuthIdentity
+	credentialKind dashboardCredentialKind
+	err            error
+}
 
 const (
 	dashboardCredentialUnmatched dashboardCredentialKind = iota
@@ -148,6 +156,21 @@ func authenticateDashboardRequest(c *gin.Context) (*model.UserBase, service.Auth
 }
 
 func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
+	if cached, ok := c.Get(dashboardCredentialContextKey); ok {
+		result := cached.(dashboardCredentialResult)
+		return result.user, result.identity, result.credentialKind, result.err
+	}
+	user, identity, credentialKind, err := classifyDashboardCredentialUncached(c)
+	c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
+		user:           user,
+		identity:       identity,
+		credentialKind: credentialKind,
+		err:            err,
+	})
+	return user, identity, credentialKind, err
+}
+
+func classifyDashboardCredentialUncached(c *gin.Context) (*model.UserBase, service.AuthIdentity, dashboardCredentialKind, error) {
 	raw, ok := authorizationToken(c.GetHeader("Authorization"))
 	if !ok {
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
@@ -175,6 +198,71 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
 	}
 	return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: user.AuthVersion}, dashboardCredentialPAT, nil
+}
+
+// ConsoleAccessGate keeps the contributor workspace deliberately small until
+// the account creates its first relay credential. It reuses the authentication
+// result in UserAuth so activated users do not pay for a second session lookup.
+func ConsoleAccessGate() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		user, _, credentialKind, err := classifyDashboardCredential(c)
+		if err != nil || credentialKind == dashboardCredentialUnmatched || user == nil {
+			c.Next()
+			return
+		}
+		if user.Role >= common.RoleAdminUser || user.ConsoleActivatedAt > 0 || preActivationRouteAllowed(c.Request.Method, c.Request.URL.Path) {
+			c.Next()
+			return
+		}
+		abortRelayAsNotFound(c)
+	}
+}
+
+func preActivationRouteAllowed(method string, path string) bool {
+	path = strings.TrimSuffix(path, "/")
+
+	if path == "/api/open-source-bounties" {
+		return method == http.MethodGet
+	}
+	if strings.HasPrefix(path, "/api/open-source-bounties/projects/") {
+		projectPath := strings.TrimPrefix(path, "/api/open-source-bounties/projects/")
+		segments := strings.Split(projectPath, "/")
+		if len(segments) == 1 && segments[0] != "" {
+			return method == http.MethodGet
+		}
+		return len(segments) == 2 && segments[0] != "" && segments[1] == "accept" && method == http.MethodPost
+	}
+	if path == "/api/subscription" || strings.HasPrefix(path, "/api/subscription/") {
+		return path != "/api/subscription/admin" && !strings.HasPrefix(path, "/api/subscription/admin/")
+	}
+
+	switch path {
+	case "/api/setup", "/api/status", "/api/notice", "/api/user-agreement", "/api/privacy-policy", "/api/about", "/api/home_page_content":
+		return method == http.MethodGet
+	case "/api/verification", "/api/reset_password":
+		return method == http.MethodGet
+	case "/api/user/register", "/api/user/login", "/api/user/login/2fa", "/api/user/reset", "/api/user/auth/refresh", "/api/user/auth/logout":
+		return method == http.MethodPost
+	case "/api/verify":
+		return method == http.MethodPost
+	case "/api/token":
+		return method == http.MethodPost
+	case "/api/user/self":
+		return method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete
+	case "/api/user/passkey":
+		return method == http.MethodGet || method == http.MethodDelete
+	case "/api/user/groups", "/api/user/sessions", "/api/user/self/groups", "/api/user/aff", "/api/user/topup/info", "/api/user/topup/self", "/api/user/oauth/bindings", "/api/user/2fa/status":
+		return method == http.MethodGet
+	case "/api/user/sessions/revoke-others", "/api/user/passkey/register/begin", "/api/user/passkey/register/finish", "/api/user/passkey/verify/begin", "/api/user/passkey/verify/finish", "/api/user/2fa/setup", "/api/user/2fa/enable", "/api/user/2fa/disable", "/api/user/2fa/backup_codes", "/api/user/topup", "/api/user/pay", "/api/user/fastpay/pay", "/api/user/amount", "/api/user/stripe/pay", "/api/user/stripe/amount", "/api/user/creem/pay", "/api/user/waffo/amount", "/api/user/waffo/pay", "/api/user/waffo-pancake/amount", "/api/user/waffo-pancake/pay", "/api/user/aff_transfer":
+		return method == http.MethodPost
+	case "/api/user/setting":
+		return method == http.MethodPut
+	}
+
+	if strings.HasPrefix(path, "/api/user/sessions/") || strings.HasPrefix(path, "/api/user/oauth/bindings/") {
+		return method == http.MethodDelete
+	}
+	return false
 }
 
 func authorizationToken(header string) (string, bool) {

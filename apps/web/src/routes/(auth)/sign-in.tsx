@@ -21,6 +21,7 @@ import { z } from 'zod'
 
 import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 import { SignIn } from '@/features/auth/sign-in'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 const searchSchema = z.object({
@@ -37,7 +38,7 @@ export const Route = createFileRoute('/(auth)/sign-in')({
     if (auth.user) {
       const target =
         sanitizeAuthRedirect(search?.redirect, window.location.origin) ??
-        '/dashboard'
+        (isConsoleActivated(auth.user) ? '/dashboard' : '/workspace')
       throw redirect({ href: target, replace: true })
     }
   },

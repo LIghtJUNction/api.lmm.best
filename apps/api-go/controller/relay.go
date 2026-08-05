@@ -403,15 +403,7 @@ func RelayNotImplemented(c *gin.Context) {
 }
 
 func RelayNotFound(c *gin.Context) {
-	err := types.OpenAIError{
-		Message: fmt.Sprintf("Invalid URL (%s %s)", c.Request.Method, c.Request.URL.Path),
-		Type:    "invalid_request_error",
-		Param:   "",
-		Code:    "",
-	}
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": err,
-	})
+	c.JSON(http.StatusNotFound, gin.H{"message": "Not Found"})
 }
 
 func RelayTaskFetch(c *gin.Context) {

@@ -24,6 +24,7 @@ import {
   sanitizeAuthRedirect,
 } from '@/features/auth/lib/auth-redirect'
 import { applyAuthBundle } from '@/lib/api'
+import { isConsoleActivated } from '@/lib/console-activation'
 import type { AuthBundle } from '@/stores/auth-store'
 
 /**
@@ -47,8 +48,13 @@ export function useAuthRedirect() {
       await i18n.changeLanguage(savedLang)
     }
 
+    const requestedPath = sanitizeAuthRedirect(
+      redirectTo,
+      window.location.origin
+    )
     const targetPath =
-      sanitizeAuthRedirect(redirectTo, window.location.origin) ?? '/dashboard'
+      requestedPath ??
+      (isConsoleActivated(bundle.user) ? '/dashboard' : '/workspace')
     navigate({ href: targetPath, replace: true })
   }
 

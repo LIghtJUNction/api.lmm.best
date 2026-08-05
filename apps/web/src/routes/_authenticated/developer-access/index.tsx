@@ -16,8 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ForgeHome } from '@/features/forge/forge-home'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-export function Home() {
-  return <ForgeHome />
-}
+import { DeveloperAccessPage } from '@/features/forge/developer-access-page'
+import { isConsoleActivated } from '@/lib/console-activation'
+import { useAuthStore } from '@/stores/auth-store'
+
+export const Route = createFileRoute('/_authenticated/developer-access/')({
+  beforeLoad: () => {
+    if (isConsoleActivated(useAuthStore.getState().auth.user)) {
+      throw redirect({ to: '/keys' })
+    }
+  },
+  component: DeveloperAccessPage,
+})

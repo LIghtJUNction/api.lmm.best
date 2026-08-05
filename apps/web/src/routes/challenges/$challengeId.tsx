@@ -16,8 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ForgeHome } from '@/features/forge/forge-home'
+import { createFileRoute } from '@tanstack/react-router'
 
-export function Home() {
-  return <ForgeHome />
+import { ChallengeDetailPage } from '@/features/forge/challenge-detail-page'
+
+export const Route = createFileRoute('/challenges/$challengeId')({
+  component: ChallengeRoute,
+})
+
+function ChallengeRoute() {
+  const params = Route.useParams()
+  return <ChallengeDetailPage challengeId={Number(params.challengeId)} />
 }

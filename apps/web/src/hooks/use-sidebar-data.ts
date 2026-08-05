@@ -32,14 +32,18 @@ import {
   ServerCog,
   Settings,
   Ticket,
+  Trophy,
   User,
   Users,
   Wallet,
+  KeyRound,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -49,6 +53,40 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const user = useAuthStore((state) => state.auth.user)
+
+  if (!isConsoleActivated(user)) {
+    return {
+      navGroups: [
+        {
+          id: 'contributor',
+          title: t('Contributor workspace'),
+          items: [
+            {
+              title: t('Challenges'),
+              url: '/workspace',
+              icon: Trophy,
+            },
+            {
+              title: t('Wallet'),
+              url: '/wallet',
+              icon: Wallet,
+            },
+            {
+              title: t('Developer access'),
+              url: '/developer-access',
+              icon: KeyRound,
+            },
+            {
+              title: t('Profile'),
+              url: '/profile',
+              icon: User,
+            },
+          ],
+        },
+      ],
+    }
+  }
 
   return {
     navGroups: [
