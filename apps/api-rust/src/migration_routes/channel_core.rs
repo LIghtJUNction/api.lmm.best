@@ -353,7 +353,7 @@ impl ChannelInput {
         validate_json_object(&self.settings, "渠道额外设置[channel setting] 格式错误")?;
         if self.r#type == 60 && self.base_url.trim().is_empty() {
             return Err(ChannelError::Invalid(
-                "New API channel base URL cannot be empty",
+                "compatible relay channel base URL cannot be empty",
             ));
         }
         if self.r#type == 41 {
@@ -1386,7 +1386,7 @@ mod tests {
         assert!(matches!(
             new_api.validate(true),
             Err(ChannelError::Invalid(
-                "New API channel base URL cannot be empty"
+                "compatible relay channel base URL cannot be empty"
             ))
         ));
 
