@@ -165,3 +165,20 @@ jobs:
         run: |
           bash check-docker-image-namespace.sh
           bash test-docker-image-namespace.sh
+
+  aur-bin-package:
+    name: AUR prebuilt package contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: archlinux:base-devel
+    steps:
+      - name: Install checkout and package validation tools
+        run: |
+          pacman --sync --refresh --noconfirm git shellcheck
+          useradd --create-home package-builder
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate prebuilt AUR package
+        run: runuser --user package-builder -- bash packaging/aur/lmm-api-bin/test-package.sh
