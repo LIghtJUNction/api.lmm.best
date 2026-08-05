@@ -324,17 +324,7 @@ async function main() {
         force: true,
       })
     }
-    if (Object.keys(untranslated).length > 0) {
-      await fs.writeFile(
-        path.join(reportsDir, `${locale}.untranslated.json`),
-        stableStringify(untranslated),
-        'utf8'
-      )
-    } else {
-      await fs.rm(path.join(reportsDir, `${locale}.untranslated.json`), {
-        force: true,
-      })
-    }
+    // Untranslated details are reported through _sync-report.json only.
 
     // Rewrite locale file in base order (even for en to normalize formatting)
     await fs.writeFile(full, stableStringify(fixed), 'utf8')
