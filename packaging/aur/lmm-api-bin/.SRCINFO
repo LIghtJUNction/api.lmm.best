@@ -1,36 +1,36 @@
 pkgbase = lmm-api-bin
-	pkgdesc = LMM API model management and distribution system (prebuilt binary)
-	pkgver = 0.1.0
+	pkgdesc = LMM API shared launcher, service, configuration, and web frontend (prebuilt)
+	pkgver = 0.1.1
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/api.lmm.best
-	arch = x86_64
-	arch = aarch64
+	install = lmm-api-bin.install
+	arch = any
 	license = AGPL-3.0-only
 	makedepends = cosign
+	depends = bash
 	depends = ca-certificates
+	depends = coreutils
+	depends = sed
+	depends = systemd
 	depends = tzdata
-	provides = lmm-api=0.1.0
-	provides = new-api=0.1.0
+	optdepends = lmm-api-go: Go backend provider
+	optdepends = lmm-api-rs: Rust backend provider
+	provides = lmm-api=0.1.1
 	conflicts = lmm-api
 	conflicts = lmm-api-git
 	conflicts = new-api
 	conflicts = new-api-bin
 	conflicts = new-api-git
-	noextract = lmm-api-go-0.1.0-linux-amd64.tar.gz
-	noextract = lmm-api-go-0.1.0-linux-arm64.tar.gz
+	replaces = new-api-bin
+	noextract = lmm-api-core-0.1.1.tar.gz
 	options = !strip
+	backup = etc/lmm-api/backend.conf
 	backup = etc/lmm-api/lmm-api.env
-	source_x86_64 = lmm-api-go-0.1.0-linux-amd64.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.0/lmm-api-go-0.1.0-linux-amd64.tar.gz
-	source_x86_64 = lmm-api-go-0.1.0-linux-amd64.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.0/lmm-api-go-0.1.0-linux-amd64.tar.gz.sha256
-	source_x86_64 = lmm-api-go-0.1.0-linux-amd64.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.0/lmm-api-go-0.1.0-linux-amd64.tar.gz.sigstore.json
-	sha256sums_x86_64 = SKIP
-	sha256sums_x86_64 = SKIP
-	sha256sums_x86_64 = SKIP
-	source_aarch64 = lmm-api-go-0.1.0-linux-arm64.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.0/lmm-api-go-0.1.0-linux-arm64.tar.gz
-	source_aarch64 = lmm-api-go-0.1.0-linux-arm64.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.0/lmm-api-go-0.1.0-linux-arm64.tar.gz.sha256
-	source_aarch64 = lmm-api-go-0.1.0-linux-arm64.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.0/lmm-api-go-0.1.0-linux-arm64.tar.gz.sigstore.json
-	sha256sums_aarch64 = SKIP
-	sha256sums_aarch64 = SKIP
-	sha256sums_aarch64 = SKIP
+	source = lmm-api-core-0.1.1.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.1/lmm-api-core-0.1.1.tar.gz
+	source = lmm-api-core-0.1.1.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.1/lmm-api-core-0.1.1.tar.gz.sha256
+	source = lmm-api-core-0.1.1.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.1/lmm-api-core-0.1.1.tar.gz.sigstore.json
+	sha256sums = SKIP
+	sha256sums = SKIP
+	sha256sums = SKIP
 
 pkgname = lmm-api-bin

@@ -1,0 +1,19 @@
+pkgbase = lmm-api-go-git
+	pkgdesc = LMM API Go backend (git)
+	pkgver = 0.1.0.r1.ge68b73186
+	pkgrel = 1
+	url = https://github.com/LIghtJUNction/api.lmm.best
+	arch = x86_64
+	arch = aarch64
+	license = AGPL-3.0-only
+	makedepends = git
+	makedepends = go>=1.25.1
+	depends = lmm-api
+	provides = lmm-api-go
+	conflicts = lmm-api-go
+	conflicts = lmm-api-go-bin
+	options = !strip
+	source = lmm-api::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main
+	sha256sums = SKIP
+
+pkgname = lmm-api-go-git

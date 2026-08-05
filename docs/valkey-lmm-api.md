@@ -37,9 +37,9 @@ sudo deploy/valkey/deploy-valkey-lmm-api.sh install
 sudo deploy/valkey/deploy-valkey-lmm-api.sh health
 ```
 
-`lmm-api-rs-bin` also carries these immutable inputs under
-`/usr/lib/lmm-api-rs/deploy/valkey`, so a test host can validate the exact
-packaged release before an explicit operation:
+The local-only `lmm-api-rs-fallback-bin` package also carries these immutable
+inputs under `/usr/lib/lmm-api-rs/deploy/valkey`, so a test host can validate
+the exact packaged release before an explicit operation:
 
 ```bash
 sudo /usr/lib/lmm-api-rs/deploy/valkey/check-valkey-deployment.sh

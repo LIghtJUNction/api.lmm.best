@@ -79,10 +79,10 @@ while (($#)); do
   esac
 done
 
-[[ $(uname -m) == x86_64 ]] || die 'lmm-api-rs-bin only packages a locally built x86_64 binary'
+[[ $(uname -m) == x86_64 ]] || die 'lmm-api-rs-fallback-bin only packages a locally built x86_64 binary'
 [[ -f $MANIFEST_PATH && ! -L $MANIFEST_PATH ]] || die "Rust workspace manifest is missing: $MANIFEST_PATH"
 [[ -f $SCRIPT_DIR/PKGBUILD && ! -L $SCRIPT_DIR/PKGBUILD ]] || die "PKGBUILD is missing: $SCRIPT_DIR/PKGBUILD"
-[[ -f $SCRIPT_DIR/lmm-api-rs-bin.install && ! -L $SCRIPT_DIR/lmm-api-rs-bin.install ]] || \
+[[ -f $SCRIPT_DIR/lmm-api-rs-fallback-bin.install && ! -L $SCRIPT_DIR/lmm-api-rs-fallback-bin.install ]] || \
   die 'install scriptlet template is missing'
 [[ -x $MANIFEST_BUILDER && ! -L $MANIFEST_BUILDER ]] || die 'source manifest builder is missing or not executable'
 
@@ -107,7 +107,7 @@ OUTPUT_DIR=$(cd -- "$OUTPUT_DIR" && pwd -P)
 workspace_version=$(sed -nE 's/^version = "([0-9][0-9A-Za-z._]*)"$/\1/p' "$MANIFEST_PATH" | head -n1)
 [[ -n $workspace_version ]] || die 'could not determine workspace version'
 
-build_dir=$(mktemp -d "${TMPDIR:-/tmp}/lmm-api-rs-bin.XXXXXXXX")
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/lmm-api-rs-fallback-bin.XXXXXXXX")
 cleanup() { rm -rf -- "$build_dir"; }
 trap cleanup EXIT
 makepkg_build_dir="$build_dir/makepkg"
@@ -132,8 +132,8 @@ for path in "${FALLBACK_ASSETS[@]}" "${MIGRATION_ASSETS[@]}"; do
   manifest_args+=(--path "$path")
 done
 manifest_args+=(
-  --path packaging/aur/lmm-api-rs-bin/PKGBUILD
-  --path packaging/aur/lmm-api-rs-bin/lmm-api-rs-bin.install
+  --path packaging/local/lmm-api-rs-fallback-bin/PKGBUILD
+  --path packaging/local/lmm-api-rs-fallback-bin/lmm-api-rs-fallback-bin.install
 )
 "$MANIFEST_BUILDER" "${manifest_args[@]}"
 manifest_sha=$(<"$source_manifest_sha")
@@ -158,7 +158,8 @@ chmod 0644 "$build_dir/revision.txt"
 chmod 0644 "$build_dir/payload.sha256"
 install -Dm0644 "$source_manifest" "$build_dir/source-manifest.tsv"
 install -Dm0644 "$source_manifest_sha" "$build_dir/source-manifest.sha256"
-install -Dm0644 "$SCRIPT_DIR/lmm-api-rs-bin.install" "$build_dir/lmm-api-rs-bin.install"
+install -Dm0644 "$SCRIPT_DIR/lmm-api-rs-fallback-bin.install" \
+  "$build_dir/lmm-api-rs-fallback-bin.install"
 
 # Transport only the declared runtime files. The PKGBUILD installs each path
 # explicitly, so this archive can never become an installed deploy-tree mirror.
@@ -183,7 +184,7 @@ printf 'Packaging fallback single-instance assets...\n' >&2
     makepkg --force --nodeps --noconfirm --cleanbuild >&2
 )
 
-packages=("$build_dir"/lmm-api-rs-bin-"$pkgver"-1-x86_64.pkg.tar.zst)
+packages=("$build_dir"/lmm-api-rs-fallback-bin-"$pkgver"-1-x86_64.pkg.tar.zst)
 [[ ${#packages[@]} -eq 1 && -f ${packages[0]} && ! -L ${packages[0]} ]] || \
   die 'makepkg did not produce exactly the expected .pkg.tar.zst artifact'
 
