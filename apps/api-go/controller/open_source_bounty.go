@@ -297,6 +297,19 @@ func WithdrawOpenSourceBountyChallenge(c *gin.Context) {
 	common.ApiSuccess(c, challenge)
 }
 
+func CancelOpenSourceBountyChallenge(c *gin.Context) {
+	challengeId, ok := openSourceBountyId(c, "challenge_id")
+	if !ok {
+		return
+	}
+	challenge, err := model.CancelOpenSourceBountyChallenge(c.GetInt("id"), challengeId)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, challenge)
+}
+
 func ApproveOpenSourceBountyChallenge(c *gin.Context) {
 	reviewOpenSourceBountyChallenge(c, true)
 }

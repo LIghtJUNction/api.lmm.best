@@ -162,8 +162,8 @@ func openOpenSourceBountyDispute(userId int, challengeId int, reason string, sta
 		if userId != challenge.ParticipantUserId && userId != project.OwnerUserId {
 			return bountyError("OPEN_SOURCE_BOUNTY_FORBIDDEN", "only a bounty party can open a dispute")
 		}
-		if challenge.Status == OpenSourceBountyChallengeWithdrawn {
-			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", "withdrawn challenges cannot be disputed")
+		if challenge.Status == OpenSourceBountyChallengeWithdrawn || challenge.Status == OpenSourceBountyChallengeCancelled {
+			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", "inactive challenges cannot be disputed")
 		}
 		if challenge.Status == OpenSourceBountyChallengeRejected && challenge.RejectedAt <= common.GetTimestamp()-OpenSourceBountyAppealWindowSeconds {
 			return bountyError("OPEN_SOURCE_BOUNTY_DISPUTE_WINDOW_EXPIRED", "the seven-day dispute window for this rejected challenge has expired")

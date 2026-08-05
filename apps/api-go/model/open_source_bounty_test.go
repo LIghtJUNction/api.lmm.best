@@ -1030,6 +1030,62 @@ func TestCloseOpenSourceBountyRefundsOnlyUnusedEscrow(t *testing.T) {
 	assert.Equal(t, 10_000, ownerAfter.Quota, "closing refunds all unused escrow when the fee rate is zero")
 }
 
+func TestOwnerCanCancelUnsubmittedChallengeBeforeClosingBounty(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "cancel-owner", 10_000, common.RoleCommonUser)
+	participant := createOpenSourceBountyUser(t, db, "cancel-participant", 0, common.RoleCommonUser)
+	other := createOpenSourceBountyUser(t, db, "cancel-other", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/cancel", 1_000, 1))
+	require.NoError(t, err)
+	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "cancel-participant")
+	require.NoError(t, err)
+
+	_, err = CancelOpenSourceBountyChallenge(other.Id, challenge.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_FORBIDDEN", OpenSourceBountyErrorCode(err))
+	_, _, err = CloseOpenSourceBounty(owner.Id, project.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES", OpenSourceBountyErrorCode(err))
+
+	challenge, err = CancelOpenSourceBountyChallenge(owner.Id, challenge.Id)
+	require.NoError(t, err)
+	assert.Equal(t, OpenSourceBountyChallengeCancelled, challenge.Status)
+	_, _, err = TipOpenSourceBountyChallenge(owner.Id, challenge.Id, 100, "Cancelled challenges must remain inactive.")
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", OpenSourceBountyErrorCode(err))
+	_, err = OpenOpenSourceBountyDispute(participant.Id, challenge.Id, "other", "A cancelled challenge cannot be reopened through the dispute workflow.")
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", OpenSourceBountyErrorCode(err))
+
+	project, refunded, err := CloseOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 1_000, refunded)
+	assert.Equal(t, OpenSourceBountyStatusClosed, project.Status)
+}
+
+func TestOwnerCannotCancelSubmittedChallenge(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "cancel-submitted-owner", 10_000, common.RoleCommonUser)
+	participant := createOpenSourceBountyUser(t, db, "cancel-submitted-participant", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/cancel-submitted", 1_000, 1))
+	require.NoError(t, err)
+	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	challenge, err := AcceptOpenSourceBounty(participant.Id, project.Id, "cancel-submitted-participant")
+	require.NoError(t, err)
+	challenge, err = SubmitOpenSourceBountyChallenge(
+		participant.Id,
+		project.Id,
+		"https://github.com/example/cancel-submitted/issues/1",
+		"",
+		"Submitted work must be reviewed instead of cancelled.",
+	)
+	require.NoError(t, err)
+
+	_, err = CancelOpenSourceBountyChallenge(owner.Id, challenge.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", OpenSourceBountyErrorCode(err))
+	_, _, err = CloseOpenSourceBounty(owner.Id, project.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES", OpenSourceBountyErrorCode(err))
+}
+
 func TestPublishOpenSourceBountyInsufficientBalanceIsAtomic(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	owner := createOpenSourceBountyUser(t, db, "poor-owner", 999, common.RoleCommonUser)
