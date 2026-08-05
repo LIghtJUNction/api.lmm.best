@@ -4019,6 +4019,7 @@
     "Regex": "正则",
     "Regex Pattern": "正则表达式",
     "Regex Replace": "正则替换",
+    "Regional access statement": "地区访问声明：如当地法律或制裁措施禁止使用，本服务不会向该地区提供。注册或付款前，请确认您所在地区允许使用本服务。",
     "Register each URL into the matching Test Mode / Production Mode webhook slot in the Pancake dashboard. Separate endpoints prevent test traffic from accidentally crediting production accounts.": "请在 Pancake 控制台中将每个 URL 注册到对应的测试模式/生产模式 webhook 槽位。分离端点可以避免测试流量误入生产账户。",
     "Register Passkey": "注册 Passkey",
     "Registered a passkey": "注册了一个 Passkey",

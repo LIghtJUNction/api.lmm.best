@@ -4019,6 +4019,7 @@
     "Regex": "Регулярное выражение",
     "Regex Pattern": "Регулярное выражение",
     "Regex Replace": "Замена по regex",
+    "Regional access statement": "Региональный доступ: сервис не предоставляется там, где его использование запрещено местным законодательством или санкциями. Перед регистрацией или оплатой убедитесь, что использование разрешено в вашем регионе.",
     "Register each URL into the matching Test Mode / Production Mode webhook slot in the Pancake dashboard. Separate endpoints prevent test traffic from accidentally crediting production accounts.": "Зарегистрируйте каждый URL в соответствующем слоте вебхука Test Mode / Production Mode в панели Pancake. Раздельные конечные точки предотвращают случайное зачисление тестового трафика на производственные аккаунты.",
     "Register Passkey": "Регистрация Passkey",
     "Registered a passkey": "Ключ доступа зарегистрирован",
