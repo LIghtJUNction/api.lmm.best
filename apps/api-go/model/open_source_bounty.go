@@ -87,8 +87,8 @@ func (OpenSourceBountyProject) TableName() string { return "open_source_bounty_p
 
 type OpenSourceBountyChallenge struct {
 	Id                       int    `json:"id"`
-	ProjectId                int    `json:"project_id" gorm:"not null;uniqueIndex:idx_open_source_bounty_participant;index"`
-	ParticipantUserId        int    `json:"participant_user_id" gorm:"not null;uniqueIndex:idx_open_source_bounty_participant;index"`
+	ProjectId                int    `json:"project_id" gorm:"not null;index;index:idx_open_source_bounty_project_participant,priority:1"`
+	ParticipantUserId        int    `json:"participant_user_id" gorm:"not null;index;index:idx_open_source_bounty_project_participant,priority:2"`
 	GithubHandle             string `json:"github_handle" gorm:"type:varchar(100);not null"`
 	Status                   string `json:"status" gorm:"type:varchar(20);not null;index"`
 	IssueUrl                 string `json:"issue_url" gorm:"type:varchar(512);not null;default:''"`
@@ -754,6 +754,21 @@ func ThankOpenSourceBountyTip(recipientUserId int, tipId int) (*OpenSourceBounty
 	return &notification, nil
 }
 
+func openSourceBountyViewerChallengePriority(status string) int {
+	switch status {
+	case OpenSourceBountyChallengeApproved:
+		return 4
+	case OpenSourceBountyChallengeAccepted, OpenSourceBountyChallengeSubmitted:
+		return 3
+	case OpenSourceBountyChallengeRejected:
+		return 2
+	case OpenSourceBountyChallengeWithdrawn:
+		return 1
+	default:
+		return 0
+	}
+}
+
 func attachViewerChallenges(views []OpenSourceBountyProjectView, viewerUserId int) error {
 	if viewerUserId <= 0 || len(views) == 0 {
 		return nil
@@ -769,7 +784,16 @@ func attachViewerChallenges(views []OpenSourceBountyProjectView, viewerUserId in
 	byProject := make(map[int]*OpenSourceBountyChallenge, len(challenges))
 	for i := range challenges {
 		challenge := challenges[i]
-		byProject[challenge.ProjectId] = &challenge
+		current, exists := byProject[challenge.ProjectId]
+		candidatePriority := openSourceBountyViewerChallengePriority(challenge.Status)
+		currentPriority := -1
+		if exists {
+			currentPriority = openSourceBountyViewerChallengePriority(current.Status)
+		}
+		if !exists || candidatePriority > currentPriority ||
+			(candidatePriority == currentPriority && challenge.Id > current.Id) {
+			byProject[challenge.ProjectId] = &challenge
+		}
 	}
 	for i := range views {
 		views[i].ViewerChallenge = byProject[views[i].Id]
@@ -911,8 +935,38 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 		if project.OwnerUserId == participantUserId {
 			return bountyError("OPEN_SOURCE_BOUNTY_OWNER_CANNOT_ACCEPT", "bounty owner cannot accept their own challenge")
 		}
-		var occupied int64
+		var previousAttempts []OpenSourceBountyChallenge
+		if err := lockForUpdate(tx).Where("project_id = ? AND participant_user_id = ?", projectId, participantUserId).
+			Order("id DESC").Find(&previousAttempts).Error; err != nil {
+			return err
+		}
 		appealCutoff := common.GetTimestamp() - OpenSourceBountyAppealWindowSeconds
+		for _, attempt := range previousAttempts {
+			switch attempt.Status {
+			case OpenSourceBountyChallengeAccepted, OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved:
+				return bountyError("OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", "this bounty already has an active or completed attempt")
+			case OpenSourceBountyChallengeRejected:
+				var openDisputes int64
+				if err := tx.Model(&OpenSourceBountyDispute{}).
+					Where("challenge_id = ? AND status = ?", attempt.Id, OpenSourceBountyDisputeOpen).
+					Count(&openDisputes).Error; err != nil {
+					return err
+				}
+				if openDisputes > 0 {
+					return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
+				}
+				var deniedDisputes int64
+				if err := tx.Model(&OpenSourceBountyDispute{}).
+					Where("challenge_id = ? AND status = ?", attempt.Id, OpenSourceBountyDisputeResolvedDenied).
+					Count(&deniedDisputes).Error; err != nil {
+					return err
+				}
+				if deniedDisputes == 0 && attempt.RejectedAt > appealCutoff {
+					return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
+				}
+			}
+		}
+		var occupied int64
 		if err := tx.Model(&OpenSourceBountyChallenge{}).Where(`project_id = ? AND (
 			status IN ? OR
 			(status = ? AND rejected_at > ? AND NOT EXISTS (
@@ -933,20 +987,6 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 		netRewardQuota := project.NetRewardQuota
 		if netRewardQuota <= 0 {
 			netRewardQuota = project.RewardQuota
-		}
-		result := tx.Where("project_id = ? AND participant_user_id = ?", projectId, participantUserId).First(&challenge)
-		if result.Error == nil {
-			if challenge.Status != OpenSourceBountyChallengeWithdrawn {
-				return bountyError("OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", "this challenge has already been accepted")
-			}
-			return tx.Model(&challenge).Updates(map[string]interface{}{
-				"github_handle": handle, "status": OpenSourceBountyChallengeAccepted, "issue_url": "", "pull_request_url": "",
-				"submission_note": "", "review_note": "", "reward_quota": netRewardQuota,
-				"accepted_at": now, "submitted_at": 0, "reviewed_at": 0, "rejected_at": 0, "paid_at": 0, "updated_at": now,
-			}).Error
-		}
-		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return result.Error
 		}
 		challenge = OpenSourceBountyChallenge{
 			ProjectId: projectId, ParticipantUserId: participantUserId, GithubHandle: handle,
@@ -972,7 +1012,8 @@ func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issue
 		if err := tx.Where("id = ?", projectId).First(&project).Error; err != nil {
 			return bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
 		}
-		if err := lockForUpdate(tx).Where("project_id = ? AND participant_user_id = ?", projectId, participantUserId).First(&challenge).Error; err != nil {
+		if err := lockForUpdate(tx).Where("project_id = ? AND participant_user_id = ? AND status = ?", projectId, participantUserId, OpenSourceBountyChallengeAccepted).
+			Order("id DESC").First(&challenge).Error; err != nil {
 			return bountyError("OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND", "accepted challenge was not found")
 		}
 		if challenge.Status != OpenSourceBountyChallengeAccepted {

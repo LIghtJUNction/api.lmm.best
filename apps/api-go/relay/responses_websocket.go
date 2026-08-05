@@ -81,6 +81,7 @@ type responsesWSSession struct {
 
 var loadResponsesWSLockedChannel = appmodel.CacheGetChannel
 var isResponsesWSChannelAvailable = appmodel.IsChannelEnabledForGroupModel
+var postResponsesWSConsumeQuota = service.PostTextConsumeQuota
 
 func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.NewAPIError {
 	session := &responsesWSSession{c: c, client: client}
@@ -670,8 +671,9 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
 		terminal = true
 		success = true
 	case "response.incomplete", "response.failed", "response.cancelled", "response.canceled", "response.error", "error":
-		state.images.Reset()
+		s.applyTerminalResponseUsage(state, streamResponse.Response)
 		terminal = true
+		success = responsesWSHasBillablePartialLocked(state)
 	case "response.output_text.delta":
 		state.outputText.WriteString(streamResponse.Delta)
 	case dto.ResponsesOutputTypeItemDone:
@@ -716,6 +718,15 @@ func (s *responsesWSSession) finishCall(state *responsesWSCallState, success boo
 	}
 	defer s.completeFinish(state)
 	if !success {
+		state.dataMu.Lock()
+		if responsesWSHasBillablePartialLocked(state) {
+			success = true
+		} else {
+			state.images.Reset()
+		}
+		state.dataMu.Unlock()
+	}
+	if !success {
 		state.refund(s.c)
 		if state.commitRate != nil {
 			state.commitRate(false)
@@ -726,10 +737,31 @@ func (s *responsesWSSession) finishCall(state *responsesWSCallState, success boo
 	state.images.Commit(state.info)
 	finalizeResponsesWSUsage(state)
 	state.dataMu.Unlock()
-	service.PostTextConsumeQuota(s.c, state.info, state.usage, nil)
+	postResponsesWSConsumeQuota(s.c, state.info, state.usage, nil)
 	if state.commitRate != nil {
 		state.commitRate(true)
 	}
+}
+
+func responsesWSHasBillablePartialLocked(state *responsesWSCallState) bool {
+	if state == nil {
+		return false
+	}
+	if state.usage != nil && (state.usage.PromptTokens != 0 || state.usage.CompletionTokens != 0 || state.usage.TotalTokens != 0 || state.usage.InputTokens != 0 || state.usage.OutputTokens != 0) {
+		return true
+	}
+	if state.outputText.Len() != 0 || state.images.Count() != 0 {
+		return true
+	}
+	if state.info == nil || state.info.ResponsesUsageInfo == nil {
+		return false
+	}
+	for _, tool := range state.info.ResponsesUsageInfo.BuiltInTools {
+		if tool != nil && tool.CallCount > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func finalizeResponsesWSUsage(state *responsesWSCallState) {

@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "source": {"revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9", "synthetic": true},
-  "route": {"id": "GET /mj/task/:id/fetch (owner miss)", "middleware": ["TokenAuth", "Distribute"], "side_effects": ["reads Midjourney by user_id and mj_id"]},
-  "request": {"method": "GET", "path": "/mj/task/stub-job-owned-by-another-user/fetch", "headers": {"authorization": "Bearer <VALID_TOKEN>", "accept": "application/json"}, "body": null},
-  "response": {"status": 400, "selected_headers": {"content-type": "application/json; charset=utf-8"}, "body": {"code": 4, "description": "task_no_found ", "type": "upstream_error"}, "sse_frames": []},
-  "effects": {"database": {"inserted": [], "updated": [], "deleted": []}, "valkey": {"added": [], "changed": [], "removed": []}},
-  "normalization": {"rules": []}
-}

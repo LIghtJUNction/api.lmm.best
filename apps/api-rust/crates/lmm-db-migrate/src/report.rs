@@ -47,46 +47,14 @@ pub fn write_atomic<T: Serialize>(path: &Path, report: &T) -> Result<(), Migrati
         file.sync_all()?;
         drop(file);
         reject_symlink_target(path)?;
-        publish_temporary(&temporary, path)?;
-        sync_parent(parent)?;
+        fs::rename(&temporary, path)?;
+        OpenOptions::new().read(true).open(parent)?.sync_all()?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
-}
-
-#[cfg(not(windows))]
-fn publish_temporary(temporary: &Path, path: &Path) -> Result<(), MigrationError> {
-    fs::rename(temporary, path)?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn publish_temporary(temporary: &Path, path: &Path) -> Result<(), MigrationError> {
-    // Windows' std::fs::rename cannot replace an existing file. Refuse the
-    // update instead of deleting the last valid report and risking data loss.
-    if path.exists() {
-        return Err(MigrationError::Io(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "report target already exists on Windows",
-        )));
-    }
-    fs::rename(temporary, path)?;
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn sync_parent(parent: &Path) -> Result<(), MigrationError> {
-    OpenOptions::new().read(true).open(parent)?.sync_all()?;
-    Ok(())
-}
-
-#[cfg(windows)]
-fn sync_parent(_parent: &Path) -> Result<(), MigrationError> {
-    // Windows does not expose portable directory fsync through std::fs.
-    Ok(())
 }
 
 fn reject_symlink_target(path: &Path) -> Result<(), MigrationError> {
@@ -107,7 +75,6 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
 
-    #[cfg(not(windows))]
     #[test]
     fn report_should_atomically_replace_existing_file() {
         let directory = tempfile::tempdir().unwrap();
@@ -123,16 +90,6 @@ mod tests {
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o600
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn report_should_preserve_existing_file_when_replacement_is_unsupported() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("report.json");
-        fs::write(&path, "old").unwrap();
-        assert!(write_atomic(&path, &serde_json::json!({"status": "ok"})).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
     }
 
     #[cfg(unix)]

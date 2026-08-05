@@ -89,7 +89,6 @@ services:
       LMM_SCHEMA_CONTRACT: ${LMM_RS_PREVIEW_SCHEMA_CONTRACT:-1}
       LMM_RS_LISTEN_ADDR: 0.0.0.0:3000
       LMM_RS_SLOT: preview
-      LMM_WEB_DIST_DIR: /opt/lmm-api-rs/web/dist
       TZ: ${TZ:-Asia/Shanghai}
     entrypoint: ["/bin/sh", "-ec"]
     command:

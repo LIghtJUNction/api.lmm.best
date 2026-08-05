@@ -49,7 +49,7 @@ just test
 just build
 ```
 
-`just build` produces the shared frontend, synchronizes it into `apps/api-go/web/dist`, and builds the default Go executable. PostgreSQL and Valkey are the default Compose services; the Go backend also retains its inherited SQLite and MySQL compatibility.
+`just build` produces independent frontend and Go backend artifacts in `apps/web/dist` and `apps/api-go/out`. PostgreSQL and Valkey are the default Compose services; the Go backend also retains its inherited SQLite and MySQL compatibility.
 
 ## Production notes
 
