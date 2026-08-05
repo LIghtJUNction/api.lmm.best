@@ -138,6 +138,22 @@ func TestProcessHeaderOverride_PassthroughSkipsAcceptEncoding(t *testing.T) {
 	require.False(t, hasAcceptEncoding)
 }
 
+func TestProcessHeaderOverride_PassthroughSkipsWebSocketSubprotocol(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	ctx.Request.Header.Set("Sec-WebSocket-Protocol", "responses, openai-insecure-api-key.client-secret")
+	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{HeadersOverride: map[string]any{"*": ""}}}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.NotContains(t, headers, "sec-websocket-protocol")
+	require.Equal(t, "trace-123", headers["x-trace-id"])
+}
+
 func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.T) {
 	t.Parallel()
 

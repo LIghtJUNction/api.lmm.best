@@ -243,7 +243,9 @@ export function QuotaSettingsSection({
               name='OpenSourceBountyFeeRate'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Open-source bounty task fee')}</FormLabel>
+                  <FormLabel>
+                    {t('Open-source bounty platform fee (%)')}
+                  </FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -259,7 +261,7 @@ export function QuotaSettingsSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Percentage of the full reward pool charged to the publisher when a bounty is published. Promotion spend and escrow are charged separately.'
+                      'Public percentage deducted from each listed reward when a bounty is published. The fee is credited to the enabled super administrator account, and the remainder is locked as contributor escrow.'
                     )}
                   </FormDescription>
                   <FormMessage />

@@ -12,12 +12,12 @@ The target architecture uses a dedicated native Valkey instance for lmm-api. It 
 | ACL | `/etc/valkey/lmm-api.acl` (`0640 root:valkey`) |
 | Application environment | `/etc/lmm-api/valkey.env` (`0600 root:root`) |
 | Persistent state | `/var/lib/valkey-lmm-api` |
-| Cache memory | `64 MiB`, `allkeys-lru` |
+| Cache memory | `64 MiB`, `noeviction` |
 | Unit memory ceiling | `MemoryHigh=80M`, `MemoryMax=112M`, `MemorySwapMax=32M` |
 | Persistence | AOF, `appendfsync everysec` |
 | Kernel tuning | `vm.overcommit_memory=1`; THP `madvise` |
 
-After the approved PostgreSQL 18 cutover, PostgreSQL is the sole persistent authority. Valkey accelerates shared sessions, revocation propagation, and rate limiting; its AOF improves warm restarts but is not a database backup. The default user is disabled. The `lmm-api` ACL user may access keys and scripting but is denied Valkey's `@dangerous` command category. Protected mode and loopback binding provide independent network containment.
+After the approved PostgreSQL 18 cutover, PostgreSQL is the sole persistent authority. Valkey accelerates shared sessions, revocation propagation, and rate limiting, and it holds security-sensitive revocation fences and rate-limit counters. The `noeviction` policy preserves that runtime security state under memory pressure; writes fail at the memory limit so security-sensitive callers can fail closed rather than silently resetting their state. Its AOF improves warm restarts but is not a database backup. The default user is disabled. The `lmm-api` ACL user may access keys and scripting but is denied Valkey's `@dangerous` command category. Protected mode and loopback binding provide independent network containment.
 
 The project uses go-redis v8 and accepts the generated URL without modification:
 

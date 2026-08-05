@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/wsmanager"
 	"github.com/QuantumNous/new-api/relay"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/router"
@@ -84,6 +85,7 @@ func main() {
 		common.SysLog(fmt.Sprintf("sync frequency: %d seconds", common.SyncFrequency))
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
+	wsmanager.StartSubscriber(context.Background())
 
 	// Perform one bounded synchronous warm before the server starts accepting
 	// traffic. Transient failure keeps the process alive but readiness remains

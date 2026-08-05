@@ -251,6 +251,7 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
+	backfillConsoleActivation := ConsoleActivationNeedsLegacyBackfill()
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
@@ -307,6 +308,9 @@ func migrateDB() error {
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
+	if err := InitializeLegacyConsoleActivations(backfillConsoleActivation); err != nil {
+		return err
+	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
 		return err
 	}
@@ -323,6 +327,7 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	backfillConsoleActivation := ConsoleActivationNeedsLegacyBackfill()
 
 	var wg sync.WaitGroup
 
@@ -394,6 +399,9 @@ func migrateDBFast() error {
 		}
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
+		return err
+	}
+	if err := InitializeLegacyConsoleActivations(backfillConsoleActivation); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
