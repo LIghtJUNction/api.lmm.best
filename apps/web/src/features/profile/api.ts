@@ -198,6 +198,18 @@ export async function unbindCustomOAuth(
   return res.data
 }
 
+/**
+ * Unbind a built-in OAuth provider for the current user
+ */
+export async function unbindBuiltInOAuth(
+  bindingType: string
+): Promise<ApiResponse> {
+  const res = await api.delete(
+    `/api/user/bindings/${encodeURIComponent(bindingType)}`
+  )
+  return res.data
+}
+
 // ============================================================================
 // Checkin APIs
 // ============================================================================

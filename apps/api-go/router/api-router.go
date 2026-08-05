@@ -131,6 +131,7 @@ func SetApiRouter(router *gin.Engine) {
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
+				selfRoute.DELETE("/bindings/:binding_type", controller.ClearSelfOAuthBinding)
 			}
 
 			adminRoute := userRoute.Group("/")
@@ -308,6 +309,7 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/projects/:id/accept", controller.AcceptOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/submit", controller.SubmitOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/withdraw", controller.WithdrawOpenSourceBountyChallenge)
+			openSourceBountyRoute.POST("/challenges/:challenge_id/cancel", controller.CancelOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/approve", middleware.CriticalRateLimit(), controller.ApproveOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/reject", controller.RejectOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/tip", middleware.CriticalRateLimit(), controller.TipOpenSourceBountyChallenge)

@@ -29,6 +29,7 @@ export type BountyChallengeStatus =
   | 'approved'
   | 'rejected'
   | 'withdrawn'
+  | 'cancelled'
 
 export type BountyDisputeReason =
   | 'merged_but_unpaid'

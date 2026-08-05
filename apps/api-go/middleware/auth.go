@@ -259,7 +259,7 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodPut
 	}
 
-	if strings.HasPrefix(path, "/api/user/sessions/") || strings.HasPrefix(path, "/api/user/oauth/bindings/") {
+	if strings.HasPrefix(path, "/api/user/sessions/") || strings.HasPrefix(path, "/api/user/oauth/bindings/") || strings.HasPrefix(path, "/api/user/bindings/") {
 		return method == http.MethodDelete
 	}
 	return false
