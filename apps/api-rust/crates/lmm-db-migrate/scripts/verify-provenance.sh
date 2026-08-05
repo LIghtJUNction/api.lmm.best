@@ -9,7 +9,7 @@ for command_name in awk cmp find git jq mktemp sha256sum sort; do
 done
 
 crate_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-repo_root=$(cd -- "${crate_dir}/../../.." && pwd)
+repo_root=$(cd -- "${crate_dir}/../../../.." && pwd)
 schema_provenance="${crate_dir}/schema/provenance.json"
 verification_tmp=$(mktemp -d "${TMPDIR:-/tmp}/lmm-provenance.XXXXXX")
 
@@ -39,10 +39,20 @@ hash_file() {
   sha256sum "$1" | awk '{print $1}'
 }
 
+repository_path() {
+  local relative_path=$1
+  local current_path
+  current_path="${repo_root}/${relative_path}"
+  if [[ ! -e "${current_path}" && "${relative_path}" == rust/* ]]; then
+    current_path="${repo_root}/apps/api-rust/${relative_path#rust/}"
+  fi
+  printf '%s\n' "${current_path}"
+}
+
 schema_path() {
   local relative_path
   relative_path=$(jq -er "$1" "${schema_provenance}")
-  printf '%s/%s\n' "${repo_root}" "${relative_path}"
+  repository_path "${relative_path}"
 }
 
 legacy_provenance=$(schema_path '.legacy_source.provenance')
@@ -294,8 +304,9 @@ while IFS=$'\t' read -r source_path frozen_path expected_mode expected_blob \
     sha256sum | awk '{print $1}')
   assert_equal "${actual_sha256}" "${expected_sha256}" \
     "source contract hash for ${source_path}"
-  [[ -f "${repo_root}/${frozen_path}" ]] || fail "missing frozen contract: ${frozen_path}"
-  assert_equal "$(hash_file "${repo_root}/${frozen_path}")" "${expected_sha256}" \
+  frozen_file=$(repository_path "${frozen_path}")
+  [[ -f "${frozen_file}" ]] || fail "missing frozen contract: ${frozen_path}"
+  assert_equal "$(hash_file "${frozen_file}")" "${expected_sha256}" \
     "frozen contract hash for ${frozen_path}"
 
   printf '%s  %s -> %s\n' "${actual_sha256}" "${source_path}" "${frozen_path}" >> \
@@ -319,7 +330,8 @@ assert_equal "$(hash_file "${verification_tmp}/contract-content")" \
 assert_equal "${golden_count}" \
   "$(jq -er '.frozen_contracts.relayconvert_golden_count' "${legacy_provenance}")" \
   "RelayKit golden fixture count"
-actual_golden_count=$(find "${repo_root}/rust/fixtures/legacy-relayconvert/golden" \
+golden_root=$(repository_path 'rust/fixtures/legacy-relayconvert/golden')
+actual_golden_count=$(find "${golden_root}" \
   -type f -name '*.golden.json' -print | wc -l | awk '{print $1}')
 assert_equal "${actual_golden_count}" "${golden_count}" \
   "copied RelayKit golden fixture count"

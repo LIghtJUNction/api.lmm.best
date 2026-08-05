@@ -15,10 +15,9 @@ type openSourceBountyAcceptRequest struct {
 }
 
 type openSourceBountySubmitRequest struct {
-	IssueUrl               string `json:"issue_url"`
-	PullRequestUrl         string `json:"pull_request_url"`
-	EncryptedReviewMessage string `json:"encrypted_review_message"`
-	SubmissionNote         string `json:"submission_note"`
+	IssueUrl       string `json:"issue_url"`
+	PullRequestUrl string `json:"pull_request_url"`
+	SubmissionNote string `json:"submission_note"`
 }
 
 type openSourceBountyReviewRequest struct {
@@ -107,6 +106,37 @@ func ListAcceptedOpenSourceBounties(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, items)
+}
+
+func ListOpenSourceBountyTipNotifications(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	items, err := model.ListOpenSourceBountyTipNotifications(c.GetInt("id"), limit)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, items)
+}
+
+func MarkOpenSourceBountyTipNotificationsRead(c *gin.Context) {
+	if err := model.MarkOpenSourceBountyTipNotificationsRead(c.GetInt("id")); err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
+
+func ThankOpenSourceBountyTip(c *gin.Context) {
+	tipId, ok := openSourceBountyId(c, "tip_id")
+	if !ok {
+		return
+	}
+	notification, err := model.ThankOpenSourceBountyTip(c.GetInt("id"), tipId)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, notification)
 }
 
 func GetOpenSourceBounty(c *gin.Context) {
@@ -245,7 +275,7 @@ func SubmitOpenSourceBountyChallenge(c *gin.Context) {
 	}
 	challenge, err := model.SubmitOpenSourceBountyChallenge(
 		c.GetInt("id"), projectId, request.IssueUrl, request.PullRequestUrl,
-		request.EncryptedReviewMessage, request.SubmissionNote,
+		request.SubmissionNote,
 	)
 	if err != nil {
 		openSourceBountyApiError(c, err)

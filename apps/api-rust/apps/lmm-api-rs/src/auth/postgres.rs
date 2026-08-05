@@ -1226,7 +1226,10 @@ COALESCE(wechat_id, '') AS wechat_id, COALESCE(telegram_id, '') AS telegram_id,
 COALESCE("group", 'default') AS user_group, COALESCE(quota, 0) AS quota, COALESCE(used_quota, 0) AS used_quota, COALESCE(request_count, 0) AS request_count,
 COALESCE(aff_code, '') AS aff_code, COALESCE(aff_count, 0) AS aff_count, COALESCE(aff_quota, 0) AS aff_quota, COALESCE(aff_history, 0) AS aff_history_quota,
 COALESCE(inviter_id, 0) AS inviter_id, COALESCE(linux_do_id, '') AS linux_do_id, COALESCE(setting, '') AS setting,
-COALESCE(stripe_customer, '') AS stripe_customer, auth_version
+COALESCE(stripe_customer, '') AS stripe_customer, auth_version,
+CASE WHEN to_jsonb(users) ? 'console_activated_at'
+  THEN COALESCE((to_jsonb(users)->>'console_activated_at')::BIGINT, 0)
+  ELSE 1 END AS console_activated_at
 FROM users WHERE (username = $1 OR email = $1) AND deleted_at IS NULL LIMIT 1"#
 );
 
@@ -1239,7 +1242,10 @@ COALESCE(wechat_id, '') AS wechat_id, COALESCE(telegram_id, '') AS telegram_id,
 COALESCE("group", 'default') AS user_group, COALESCE(quota, 0) AS quota, COALESCE(used_quota, 0) AS used_quota, COALESCE(request_count, 0) AS request_count,
 COALESCE(aff_code, '') AS aff_code, COALESCE(aff_count, 0) AS aff_count, COALESCE(aff_quota, 0) AS aff_quota, COALESCE(aff_history, 0) AS aff_history_quota,
 COALESCE(inviter_id, 0) AS inviter_id, COALESCE(linux_do_id, '') AS linux_do_id, COALESCE(setting, '') AS setting,
-COALESCE(stripe_customer, '') AS stripe_customer, auth_version
+COALESCE(stripe_customer, '') AS stripe_customer, auth_version,
+CASE WHEN to_jsonb(users) ? 'console_activated_at'
+  THEN COALESCE((to_jsonb(users)->>'console_activated_at')::BIGINT, 0)
+  ELSE 1 END AS console_activated_at
 FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1"#
 );
 
@@ -1255,7 +1261,10 @@ COALESCE(wechat_id, '') AS wechat_id, COALESCE(telegram_id, '') AS telegram_id,
 COALESCE("group", 'default') AS user_group, COALESCE(quota, 0) AS quota, COALESCE(used_quota, 0) AS used_quota, COALESCE(request_count, 0) AS request_count,
 COALESCE(aff_code, '') AS aff_code, COALESCE(aff_count, 0) AS aff_count, COALESCE(aff_quota, 0) AS aff_quota, COALESCE(aff_history, 0) AS aff_history_quota,
 COALESCE(inviter_id, 0) AS inviter_id, COALESCE(linux_do_id, '') AS linux_do_id, COALESCE(setting, '') AS setting,
-COALESCE(stripe_customer, '') AS stripe_customer, auth_version
+COALESCE(stripe_customer, '') AS stripe_customer, auth_version,
+CASE WHEN to_jsonb(users) ? 'console_activated_at'
+  THEN COALESCE((to_jsonb(users)->>'console_activated_at')::BIGINT, 0)
+  ELSE 1 END AS console_activated_at
 FROM users WHERE access_token = $1 AND deleted_at IS NULL LIMIT 1"#
 );
 
@@ -1304,6 +1313,7 @@ struct UserRecord {
     setting: String,
     stripe_customer: String,
     auth_version: i64,
+    console_activated_at: i64,
 }
 
 impl UserRecord {
@@ -1339,7 +1349,7 @@ impl UserRecord {
             setting: self.setting,
             stripe_customer: self.stripe_customer,
             sidebar_modules,
-            permissions: permissions(self.role, admin_permissions),
+            permissions: permissions(self.role, self.console_activated_at, admin_permissions),
         }
     }
 }
@@ -1435,6 +1445,7 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRecord, AuthError> {
         setting: row.try_get("setting").map_err(internal)?,
         stripe_customer: row.try_get("stripe_customer").map_err(internal)?,
         auth_version: row.try_get("auth_version").map_err(internal)?,
+        console_activated_at: row.try_get("console_activated_at").map_err(internal)?,
     })
 }
 
@@ -1459,7 +1470,7 @@ fn session_from_row(row: &sqlx::postgres::PgRow) -> Result<SessionRecord, AuthEr
     })
 }
 
-fn permissions(role: i64, admin_permissions: Value) -> Value {
+fn permissions(role: i64, console_activated_at: i64, admin_permissions: Value) -> Value {
     let (sidebar_settings, sidebar_modules) = if role == 100 {
         (false, json!({}))
     } else if role == 10 {
@@ -1471,6 +1482,14 @@ fn permissions(role: i64, admin_permissions: Value) -> Value {
     result.insert("sidebar_settings".to_owned(), json!(sidebar_settings));
     result.insert("sidebar_modules".to_owned(), sidebar_modules);
     result.insert("admin_permissions".to_owned(), admin_permissions);
+    result.insert(
+        "console_activated_at".to_owned(),
+        json!(if role >= 10 && console_activated_at == 0 {
+            1
+        } else {
+            console_activated_at
+        }),
+    );
     Value::Object(result)
 }
 

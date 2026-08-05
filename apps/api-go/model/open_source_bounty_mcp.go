@@ -55,9 +55,10 @@ type OpenSourceBountyMCPOperation struct {
 }
 
 type OpenSourceBountyMCPConfirmedOperation struct {
-	State       string
-	ToolName    string
-	PayloadHash string
+	State                      string
+	ToolName                   string
+	PayloadHash                string
+	PlatformFeeRecipientUserId int
 }
 
 func (OpenSourceBountyMCPOperation) TableName() string {

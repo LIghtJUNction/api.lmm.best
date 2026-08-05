@@ -40,6 +40,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Heart } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -111,6 +112,14 @@ import {
   type BountyProject,
   type BountyProjectDetail,
 } from './types'
+import {
+  type BountyCharge,
+  type BountyDraftErrors,
+  calculateBountyCharge,
+  parseBountyNumericInput,
+  validateBountyDraft,
+  validateBountySubmissionLinks,
+} from './validation'
 
 const BOUNTY_QUERY_KEYS = [
   ['open-source-bounties'],
@@ -133,6 +142,21 @@ const STATUS_KEYS = {
 } as const
 
 const ERROR_KEYS: Record<string, string> = {
+  OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY:
+    'Enter a GitHub repository URL in the format https://github.com/owner/repository.',
+  OPEN_SOURCE_BOUNTY_INVALID_TITLE:
+    'Bounty title must contain 4 to 120 characters.',
+  OPEN_SOURCE_BOUNTY_INVALID_DESCRIPTION:
+    'Project and defect scope must contain 20 to 2000 characters.',
+  OPEN_SOURCE_BOUNTY_INVALID_RULES:
+    'Acceptance and verification rules must contain 20 to 5000 characters.',
+  OPEN_SOURCE_BOUNTY_INVALID_QUOTA: 'Reward per fix must be greater than zero.',
+  OPEN_SOURCE_BOUNTY_INVALID_FEE:
+    'The platform fee leaves no contributor reward.',
+  OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND:
+    'An enabled super administrator is required to receive the platform fee.',
+  OPEN_SOURCE_BOUNTY_INVALID_SLOTS:
+    'Reward slots must be a whole number between 1 and 100.',
   OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE:
     'Your balance is not enough to publish this bounty.',
   OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES:
@@ -141,7 +165,11 @@ const ERROR_KEYS: Record<string, string> = {
   OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED:
     'You have already accepted this challenge.',
   OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH:
-    'The Issue and pull request must belong to the bounty repository.',
+    'Every submitted Issue or pull request must belong to the bounty repository.',
+  OPEN_SOURCE_BOUNTY_EVIDENCE_REQUIRED:
+    'Provide at least one GitHub Issue or pull request URL.',
+  OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE:
+    'Enter a GitHub Issue URL ending in /issues/number or a pull request URL ending in /pull/number.',
   OPEN_SOURCE_BOUNTY_DUPLICATE_PULL_REQUEST:
     'This pull request has already been submitted.',
 }
@@ -151,9 +179,8 @@ type DraftForm = {
   title: string
   description: string
   rules: string
-  promotionAmount: number
-  rewardAmount: number
-  rewardSlots: number
+  rewardAmount: string
+  rewardSlots: string
 }
 
 const EMPTY_DRAFT: DraftForm = {
@@ -161,9 +188,8 @@ const EMPTY_DRAFT: DraftForm = {
   title: '',
   description: '',
   rules: '',
-  promotionAmount: 0,
-  rewardAmount: 0,
-  rewardSlots: 1,
+  rewardAmount: '',
+  rewardSlots: '1',
 }
 
 function projectToDraft(project: BountyProject): DraftForm {
@@ -172,9 +198,8 @@ function projectToDraft(project: BountyProject): DraftForm {
     title: project.title,
     description: project.description,
     rules: project.rules,
-    promotionAmount: quotaUnitsToDollars(project.promotion_quota),
-    rewardAmount: quotaUnitsToDollars(project.reward_quota),
-    rewardSlots: project.reward_slots,
+    rewardAmount: String(quotaUnitsToDollars(project.reward_quota)),
+    rewardSlots: String(project.reward_slots),
   }
 }
 
@@ -210,6 +235,8 @@ export function OpenSourceBounties() {
     null
   )
   const [draft, setDraft] = useState<DraftForm>(EMPTY_DRAFT)
+  const [draftValidationAttempted, setDraftValidationAttempted] =
+    useState(false)
   const [acceptProject, setAcceptProject] = useState<BountyProject | null>(null)
   const [githubHandle, setGithubHandle] = useState('')
   const [submitTarget, setSubmitTarget] = useState<{
@@ -219,7 +246,6 @@ export function OpenSourceBounties() {
   const [submission, setSubmission] = useState({
     issueUrl: '',
     pullRequestUrl: '',
-    encryptedReviewMessage: '',
     submissionNote: '',
   })
   const [detail, setDetail] = useState<BountyProjectDetail | null>(null)
@@ -255,6 +281,7 @@ export function OpenSourceBounties() {
     queryFn: listMyBountyDisputes,
   })
   const isAdmin = (user?.role ?? 0) >= 10
+  const isSuperAdmin = (user?.role ?? 0) >= 100
   const adminDisputesQuery = useQuery({
     queryKey: ['open-source-bounties', 'disputes', 'admin'],
     queryFn: listAdminBountyDisputes,
@@ -266,24 +293,21 @@ export function OpenSourceBounties() {
   })
 
   const draftCharge = useMemo(() => {
-    const promotion = parseQuotaFromDollars(draft.promotionAmount)
-    const reward = parseQuotaFromDollars(draft.rewardAmount)
-    const escrow = reward * Math.max(0, draft.rewardSlots)
+    const reward = parseQuotaFromDollars(
+      parseBountyNumericInput(draft.rewardAmount)
+    )
     const feeRateBps = configQuery.data?.rate_basis_points ?? 0
-    const platformFee = Math.ceil((escrow * feeRateBps) / 10_000)
-    return {
-      promotion,
-      escrow,
-      platformFee,
-      feeRatePercent: feeRateBps / 100,
-      total: promotion + escrow + platformFee,
-    }
+    return calculateBountyCharge(
+      reward,
+      parseBountyNumericInput(draft.rewardSlots),
+      feeRateBps
+    )
   }, [
     configQuery.data?.rate_basis_points,
-    draft.promotionAmount,
     draft.rewardAmount,
     draft.rewardSlots,
   ])
+  const draftErrors = draftValidationAttempted ? validateBountyDraft(draft) : {}
 
   const refresh = async (balanceChanged = false) => {
     await Promise.all(
@@ -327,36 +351,34 @@ export function OpenSourceBounties() {
   const openCreateDialog = () => {
     setEditingProject(null)
     setDraft(EMPTY_DRAFT)
+    setDraftValidationAttempted(false)
     setDraftOpen(true)
   }
 
   const openEditDialog = (project: BountyProject) => {
     setEditingProject(project)
     setDraft(projectToDraft(project))
+    setDraftValidationAttempted(false)
     setDraftOpen(true)
   }
 
   const saveDraft = async () => {
+    const validationErrors = validateBountyDraft(draft)
+    setDraftValidationAttempted(true)
+    const firstValidationError = Object.values(validationErrors)[0]
+    if (firstValidationError) {
+      toast.error(t(firstValidationError))
+      return
+    }
     const input: BountyDraftInput = {
       repository_url: draft.repositoryUrl.trim(),
       title: draft.title.trim(),
       description: draft.description.trim(),
       rules: draft.rules.trim(),
-      promotion_quota: parseQuotaFromDollars(draft.promotionAmount),
-      reward_quota: parseQuotaFromDollars(draft.rewardAmount),
-      reward_slots: draft.rewardSlots,
-    }
-    if (
-      !input.repository_url ||
-      input.title.length < 4 ||
-      input.description.length < 20 ||
-      input.rules.length < 20 ||
-      input.promotion_quota <= 0 ||
-      input.reward_quota <= 0 ||
-      input.reward_slots < 1
-    ) {
-      toast.error(t('Complete every bounty field with valid values.'))
-      return
+      reward_quota: parseQuotaFromDollars(
+        parseBountyNumericInput(draft.rewardAmount)
+      ),
+      reward_slots: parseBountyNumericInput(draft.rewardSlots),
     }
     const success = await runAction(
       'save-draft',
@@ -381,6 +403,36 @@ export function OpenSourceBounties() {
     }
   }
 
+  const confirmPublication = (project: BountyProject) => {
+    const charge = calculateBountyCharge(
+      project.reward_quota,
+      project.reward_slots,
+      configQuery.data?.rate_basis_points ?? 0
+    )
+    if (
+      !window.confirm(
+        t(
+          'Publish now? Your balance will be debited {{gross}} gross. The public {{rate}}% platform fee of {{fee}} is credited to the super administrator, leaving {{netReward}} per approved fix and {{escrow}} total escrow.',
+          {
+            gross: formatQuota(charge.gross),
+            rate: charge.feeRatePercent,
+            fee: formatQuota(charge.platformFee),
+            netReward: formatQuota(charge.netReward),
+            escrow: formatQuota(charge.escrow),
+          }
+        )
+      )
+    ) {
+      return
+    }
+    void runAction(
+      `publish-${project.id}`,
+      () => publishBounty(project.id),
+      'Bounty published and reward pool funded.',
+      true
+    )
+  }
+
   const handleAccept = async () => {
     if (!acceptProject || githubHandle.trim().length < 1) return
     const success = await runAction(
@@ -396,13 +448,17 @@ export function OpenSourceBounties() {
 
   const handleSubmit = async () => {
     if (!submitTarget) return
+    const submissionLinkError = validateBountySubmissionLinks(submission)
+    if (submissionLinkError) {
+      toast.error(t(submissionLinkError))
+      return
+    }
     const success = await runAction(
       `submit-${submitTarget.challenge.id}`,
       () =>
         submitChallenge(submitTarget.projectId, {
           issue_url: submission.issueUrl.trim(),
           pull_request_url: submission.pullRequestUrl.trim(),
-          encrypted_review_message: submission.encryptedReviewMessage.trim(),
           submission_note: submission.submissionNote.trim(),
         }),
       'Bounty work submitted for review.'
@@ -412,7 +468,6 @@ export function OpenSourceBounties() {
       setSubmission({
         issueUrl: '',
         pullRequestUrl: '',
-        encryptedReviewMessage: '',
         submissionNote: '',
       })
     }
@@ -509,7 +564,6 @@ export function OpenSourceBounties() {
     setSubmission({
       issueUrl: challenge.issue_url || '',
       pullRequestUrl: challenge.pull_request_url || '',
-      encryptedReviewMessage: challenge.encrypted_review_message || '',
       submissionNote: challenge.submission_note || '',
     })
   }
@@ -524,7 +578,7 @@ export function OpenSourceBounties() {
           <EmptyMedia variant='icon'>
             <HugeiconsIcon icon={Megaphone01Icon} strokeWidth={2} />
           </EmptyMedia>
-          <EmptyTitle>{t('No promoted bounty projects yet')}</EmptyTitle>
+          <EmptyTitle>{t('No public bounty projects yet')}</EmptyTitle>
           <EmptyDescription>
             {t(
               'The board starts empty. Publish the first project by spending your own balance and funding its reward pool.'
@@ -539,10 +593,16 @@ export function OpenSourceBounties() {
   } else {
     bountyBoardContent = (
       <div className='grid gap-4 lg:grid-cols-2'>
-        {bountyQuery.data?.items.map((project) => (
+        {bountyQuery.data?.items.map((project, index) => (
           <BountyCard
             key={project.id}
             project={project}
+            rank={
+              ((bountyQuery.data?.page ?? 1) - 1) *
+                (bountyQuery.data?.page_size ?? 50) +
+              index +
+              1
+            }
             viewerUserId={user?.id ?? 0}
             pending={pending}
             onAccept={() => setAcceptProject(project)}
@@ -596,9 +656,36 @@ export function OpenSourceBounties() {
                 {t('Every publisher pays from their own balance')}
               </AlertTitle>
               <AlertDescription>
-                {t(
-                  'Publishing burns the promotion spend and administrator-configured task fee, then locks the full reward pool. This rule also applies to administrators and the site owner.'
-                )}
+                <div className='flex flex-col gap-3'>
+                  <p>
+                    {t(
+                      'Publishing deducts the gross listing total from your balance. The public administrator-configured platform fee is credited to the super administrator account, and the remainder becomes contributor escrow. Publishers and contributors settle directly; administrators intervene only in disputes.'
+                    )}
+                  </p>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Badge variant='secondary'>
+                      {t('Public platform fee: {{rate}}%', {
+                        rate: (
+                          (configQuery.data?.rate_basis_points ?? 0) / 100
+                        ).toFixed(2),
+                      })}
+                    </Badge>
+                    {isSuperAdmin ? (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        render={<a href='/system-settings/billing/quota' />}
+                      >
+                        <HugeiconsIcon
+                          icon={FileEditIcon}
+                          strokeWidth={2}
+                          data-icon='inline-start'
+                        />
+                        {t('Fee settings')}
+                      </Button>
+                    ) : null}
+                  </div>
+                </div>
               </AlertDescription>
             </Alert>
           </CardStaggerItem>
@@ -661,50 +748,7 @@ export function OpenSourceBounties() {
                         )}
                         onEdit={() => openEditDialog(project)}
                         onReview={() => openProjectDetail(project.id)}
-                        onPublish={() =>
-                          window.confirm(
-                            t(
-                              'Publish now? Your own balance will pay {{promotion}} promotion, {{fee}} task fee ({{rate}}%), and {{escrow}} escrow, for {{total}} total.',
-                              {
-                                promotion: formatQuota(project.promotion_quota),
-                                fee: formatQuota(
-                                  Math.ceil(
-                                    (project.reward_quota *
-                                      project.reward_slots *
-                                      (configQuery.data?.rate_basis_points ??
-                                        0)) /
-                                      10_000
-                                  )
-                                ),
-                                rate:
-                                  (configQuery.data?.rate_basis_points ?? 0) /
-                                  100,
-                                escrow: formatQuota(
-                                  project.reward_quota * project.reward_slots
-                                ),
-                                total: formatQuota(
-                                  project.promotion_quota +
-                                    project.reward_quota *
-                                      project.reward_slots +
-                                    Math.ceil(
-                                      (project.reward_quota *
-                                        project.reward_slots *
-                                        (configQuery.data?.rate_basis_points ??
-                                          0)) /
-                                        10_000
-                                    )
-                                ),
-                              }
-                            )
-                          )
-                            ? runAction(
-                                `publish-${project.id}`,
-                                () => publishBounty(project.id),
-                                'Bounty published and reward pool funded.',
-                                true
-                              )
-                            : undefined
-                        }
+                        onPublish={() => confirmPublication(project)}
                         onPause={() =>
                           runAction(
                             `pause-${project.id}`,
@@ -752,7 +796,7 @@ export function OpenSourceBounties() {
                       </EmptyTitle>
                       <EmptyDescription>
                         {t(
-                          'Accept an available bounty, fix a real defect, and submit the matching Issue and pull request.'
+                          'Accept an available bounty, fix a real defect, and submit the matching Issue or pull request.'
                         )}
                       </EmptyDescription>
                     </EmptyHeader>
@@ -820,6 +864,7 @@ export function OpenSourceBounties() {
         editing={Boolean(editingProject)}
         draft={draft}
         setDraft={setDraft}
+        errors={draftErrors}
         charge={draftCharge}
         availableQuota={user?.quota ?? 0}
         pending={pending === 'save-draft'}
@@ -1093,12 +1138,14 @@ function LoadingState({ label }: { label: string }) {
 
 function BountyCard({
   project,
+  rank,
   viewerUserId,
   pending,
   onAccept,
   onSubmit,
 }: {
   project: BountyProject
+  rank: number
   viewerUserId: number
   pending: string
   onAccept: () => void
@@ -1148,24 +1195,25 @@ function BountyCard({
       description={`${project.owner_username} · ${statusLabel(t, project.status)}`}
       icon={<HugeiconsIcon icon={Bug01Icon} strokeWidth={1.8} />}
       iconTone='primary'
+      action={<BountyRankBadge rank={rank} />}
       disableHoverEffect
       contentClassName='flex h-full flex-col gap-4'
     >
       <p className='text-muted-foreground line-clamp-3 text-sm leading-relaxed'>
         {project.description}
       </p>
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
+      <div className='grid grid-cols-2 gap-2 sm:grid-cols-5'>
         <Metric
           label={t('Reward per fix')}
           value={formatQuota(project.reward_quota)}
         />
         <Metric
-          label={t('Available slots')}
-          value={`${slots}/${project.reward_slots}`}
+          label={t('Locked reward')}
+          value={formatQuota(project.net_reward_quota || project.reward_quota)}
         />
         <Metric
-          label={t('Promotion spend')}
-          value={formatQuota(project.promotion_quota)}
+          label={t('Available slots')}
+          value={`${slots}/${project.reward_slots}`}
         />
         <Metric
           label={t('Publisher reputation')}
@@ -1173,6 +1221,15 @@ function BountyCard({
             project.owner_rating_count > 0
               ? `${project.owner_rating_average.toFixed(1)}/5 · ${project.owner_rating_count}`
               : t('No ratings yet')
+          }
+        />
+        <Metric
+          label={t('Thanks received')}
+          value={
+            <span className='inline-flex items-center gap-1.5'>
+              <Heart className='size-4 fill-rose-500 text-rose-500' />
+              {project.owner_thank_heart_count ?? 0}
+            </span>
           }
         />
       </div>
@@ -1198,6 +1255,29 @@ function BountyCard({
         {viewerAction}
       </div>
     </TitledCard>
+  )
+}
+
+function BountyRankBadge({ rank }: { rank: number }) {
+  let className = 'border-border bg-background text-muted-foreground'
+  if (rank === 1) {
+    className =
+      'border-amber-500/70 bg-amber-400 text-amber-950 dark:border-amber-300/70 dark:bg-amber-300 dark:text-amber-950'
+  } else if (rank === 2) {
+    className =
+      'border-zinc-400/70 bg-zinc-200 text-zinc-800 dark:border-zinc-300/60 dark:bg-zinc-300 dark:text-zinc-950'
+  } else if (rank === 3) {
+    className =
+      'border-orange-500/60 bg-orange-200 text-orange-950 dark:border-orange-300/60 dark:bg-orange-300 dark:text-orange-950'
+  }
+
+  return (
+    <Badge
+      variant='outline'
+      className={`h-7 min-w-10 px-2 font-mono text-xs font-semibold tabular-nums ${className}`}
+    >
+      #{rank}
+    </Badge>
   )
 }
 
@@ -1228,12 +1308,16 @@ function OwnerProjectCard(props: {
       <div className='flex flex-col gap-4'>
         <div className='grid gap-2 sm:grid-cols-5'>
           <Metric
-            label={t('Promotion spend')}
-            value={formatQuota(project.promotion_quota)}
-          />
-          <Metric
             label={t('Reward per fix')}
             value={formatQuota(project.reward_quota)}
+          />
+          <Metric
+            label={t('Locked reward')}
+            value={
+              project.status === 'draft'
+                ? t('Calculated at publish')
+                : formatQuota(project.net_reward_quota || project.reward_quota)
+            }
           />
           <Metric
             label={t('Escrow remaining')}
@@ -1305,7 +1389,12 @@ function OwnerProjectCard(props: {
                 onClick={props.onReview}
                 disabled={busy}
               >
-                {t('Review submissions')}
+                <HugeiconsIcon
+                  icon={UserAdd01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                />
+                {t('Challenges')}
               </Button>
               {project.status === 'published' ? (
                 <Button
@@ -1484,7 +1573,7 @@ function ChallengeCard({
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className='bg-muted/50 rounded-lg border p-3'>
       <p className='text-muted-foreground text-xs'>{label}</p>
@@ -1538,18 +1627,17 @@ function DraftDialog(props: {
   editing: boolean
   draft: DraftForm
   setDraft: (draft: DraftForm) => void
-  charge: {
-    promotion: number
-    escrow: number
-    platformFee: number
-    feeRatePercent: number
-    total: number
-  }
+  errors: BountyDraftErrors
+  charge: BountyCharge
   availableQuota: number
   pending: boolean
   onSave: () => void
 }) {
   const { t } = useTranslation()
+  const errorFor = (field: keyof DraftForm) => {
+    const error = props.errors[field]
+    return error ? t(error) : undefined
+  }
   const update = <K extends keyof DraftForm>(key: K, value: DraftForm[K]) =>
     props.setDraft({ ...props.draft, [key]: value })
   return (
@@ -1578,70 +1666,114 @@ function DraftDialog(props: {
         </>
       }
     >
-      <Field label={t('GitHub repository URL')} htmlFor='bounty-repository'>
+      <Field
+        label={t('GitHub repository URL')}
+        htmlFor='bounty-repository'
+        error={errorFor('repositoryUrl')}
+      >
         <Input
           id='bounty-repository'
           value={props.draft.repositoryUrl}
           onChange={(e) => update('repositoryUrl', e.target.value)}
           placeholder='https://github.com/owner/repository'
+          aria-invalid={Boolean(props.errors.repositoryUrl)}
+          aria-describedby={
+            props.errors.repositoryUrl ? 'bounty-repository-error' : undefined
+          }
         />
       </Field>
-      <Field label={t('Bounty title')} htmlFor='bounty-title'>
+      <Field
+        label={t('Bounty title')}
+        htmlFor='bounty-title'
+        error={errorFor('title')}
+      >
         <Input
           id='bounty-title'
           value={props.draft.title}
+          minLength={4}
+          maxLength={120}
           onChange={(e) => update('title', e.target.value)}
+          aria-invalid={Boolean(props.errors.title)}
+          aria-describedby={
+            props.errors.title ? 'bounty-title-error' : undefined
+          }
         />
       </Field>
-      <Field label={t('Project and defect scope')} htmlFor='bounty-description'>
+      <Field
+        label={t('Project and defect scope')}
+        htmlFor='bounty-description'
+        error={errorFor('description')}
+      >
         <Textarea
           id='bounty-description'
           rows={4}
           value={props.draft.description}
+          minLength={20}
+          maxLength={2000}
           onChange={(e) => update('description', e.target.value)}
+          aria-invalid={Boolean(props.errors.description)}
+          aria-describedby={
+            props.errors.description ? 'bounty-description-error' : undefined
+          }
         />
       </Field>
       <Field
         label={t('Acceptance and verification rules')}
         htmlFor='bounty-rules'
+        error={errorFor('rules')}
       >
         <Textarea
           id='bounty-rules'
           rows={7}
           value={props.draft.rules}
+          minLength={20}
+          maxLength={5000}
           onChange={(e) => update('rules', e.target.value)}
+          aria-invalid={Boolean(props.errors.rules)}
+          aria-describedby={
+            props.errors.rules ? 'bounty-rules-error' : undefined
+          }
           placeholder={t(
             'Describe eligible defects, required tests, review criteria, and exclusions.'
           )}
         />
       </Field>
-      <div className='grid gap-4 sm:grid-cols-3'>
-        <Field label={t('Promotion spend')} htmlFor='bounty-promotion'>
-          <Input
-            id='bounty-promotion'
-            type='number'
-            min={0}
-            value={props.draft.promotionAmount}
-            onChange={(e) => update('promotionAmount', Number(e.target.value))}
-          />
-        </Field>
-        <Field label={t('Reward per fix')} htmlFor='bounty-reward'>
+      <div className='grid gap-4 sm:grid-cols-2'>
+        <Field
+          label={t('Reward per fix')}
+          htmlFor='bounty-reward'
+          error={errorFor('rewardAmount')}
+        >
           <Input
             id='bounty-reward'
             type='number'
             min={0}
+            step='any'
             value={props.draft.rewardAmount}
-            onChange={(e) => update('rewardAmount', Number(e.target.value))}
+            onChange={(e) => update('rewardAmount', e.target.value)}
+            aria-invalid={Boolean(props.errors.rewardAmount)}
+            aria-describedby={
+              props.errors.rewardAmount ? 'bounty-reward-error' : undefined
+            }
           />
         </Field>
-        <Field label={t('Reward slots')} htmlFor='bounty-slots'>
+        <Field
+          label={t('Reward slots')}
+          htmlFor='bounty-slots'
+          error={errorFor('rewardSlots')}
+        >
           <Input
             id='bounty-slots'
             type='number'
             min={1}
             max={100}
+            step={1}
             value={props.draft.rewardSlots}
-            onChange={(e) => update('rewardSlots', Number(e.target.value))}
+            onChange={(e) => update('rewardSlots', e.target.value)}
+            aria-invalid={Boolean(props.errors.rewardSlots)}
+            aria-describedby={
+              props.errors.rewardSlots ? 'bounty-slots-error' : undefined
+            }
           />
         </Field>
       </div>
@@ -1650,12 +1782,12 @@ function DraftDialog(props: {
         <AlertTitle>{t('Publish charge')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Publish charge: {{promotion}} promotion + {{escrow}} escrow + {{fee}} task fee ({{rate}}%) = {{total}}. Current balance: {{balance}}.',
+            'Publish charge: {{total}} gross listing total. Of that amount, {{fee}} public platform fee ({{rate}}%) is credited to the super administrator, leaving {{netReward}} per approved fix and {{escrow}} total escrow. Current balance: {{balance}}.',
             {
-              promotion: formatQuota(props.charge.promotion),
               escrow: formatQuota(props.charge.escrow),
               fee: formatQuota(props.charge.platformFee),
               rate: props.charge.feeRatePercent.toFixed(2),
+              netReward: formatQuota(props.charge.netReward),
               total: formatQuota(props.charge.total),
               balance: formatQuota(props.availableQuota),
             }
@@ -1669,16 +1801,31 @@ function DraftDialog(props: {
 function Field({
   label,
   htmlFor,
+  error,
   children,
 }: {
   label: string
   htmlFor: string
+  error?: string
   children: React.ReactNode
 }) {
   return (
-    <div className='flex flex-col gap-2'>
+    <div
+      role='group'
+      data-invalid={Boolean(error)}
+      className='data-[invalid=true]:text-destructive flex flex-col gap-2'
+    >
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
+      {error ? (
+        <p
+          id={`${htmlFor}-error`}
+          role='alert'
+          className='text-destructive text-sm'
+        >
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }
@@ -1689,13 +1836,11 @@ function SubmissionDialog(props: {
   submission: {
     issueUrl: string
     pullRequestUrl: string
-    encryptedReviewMessage: string
     submissionNote: string
   }
   setSubmission: (value: {
     issueUrl: string
     pullRequestUrl: string
-    encryptedReviewMessage: string
     submissionNote: string
   }) => void
   pending: boolean
@@ -1704,13 +1849,14 @@ function SubmissionDialog(props: {
   const { t } = useTranslation()
   const update = (key: keyof typeof props.submission, value: string) =>
     props.setSubmission({ ...props.submission, [key]: value })
+  const submissionLinkError = validateBountySubmissionLinks(props.submission)
   return (
     <Dialog
       open={Boolean(props.target)}
       onOpenChange={props.onOpenChange}
       title={t('Submit bounty work')}
       description={t(
-        'Submit matching GitHub evidence and the LIghtJUNction encrypted review message used for verification.'
+        'Provide a GitHub Issue URL, pull request URL, or both. The bounty publisher will review the completed work directly.'
       )}
       contentClassName='sm:max-w-2xl'
       footer={
@@ -1722,7 +1868,10 @@ function SubmissionDialog(props: {
           >
             {t('Cancel')}
           </Button>
-          <Button onClick={props.onSubmit} disabled={props.pending}>
+          <Button
+            onClick={props.onSubmit}
+            disabled={props.pending || Boolean(submissionLinkError)}
+          >
             {t('Submit for review')}
           </Button>
         </>
@@ -1734,6 +1883,7 @@ function SubmissionDialog(props: {
             id='bounty-issue-url'
             value={props.submission.issueUrl}
             onChange={(e) => update('issueUrl', e.target.value)}
+            aria-describedby='bounty-completion-links-help'
           />
         </Field>
         <Field label={t('GitHub pull request URL')} htmlFor='bounty-pr-url'>
@@ -1741,21 +1891,17 @@ function SubmissionDialog(props: {
             id='bounty-pr-url'
             value={props.submission.pullRequestUrl}
             onChange={(e) => update('pullRequestUrl', e.target.value)}
+            aria-describedby='bounty-completion-links-help'
           />
         </Field>
-        <Field
-          label={t('Encrypted review message')}
-          htmlFor='bounty-encrypted-message'
+        <p
+          id='bounty-completion-links-help'
+          className='text-muted-foreground text-sm'
         >
-          <Textarea
-            id='bounty-encrypted-message'
-            rows={5}
-            value={props.submission.encryptedReviewMessage}
-            onChange={(e) => update('encryptedReviewMessage', e.target.value)}
-          />
-        </Field>
+          {t('Provide at least one GitHub Issue or pull request URL.')}
+        </p>
         <Field
-          label={t('Submission note (optional)')}
+          label={t('Completion note (optional)')}
           htmlFor='bounty-submission-note'
         >
           <Textarea
@@ -1808,14 +1954,40 @@ function ProjectReviewDialog(props: {
             >
               <div className='flex flex-wrap items-start justify-between gap-2'>
                 <div>
-                  <p className='font-medium'>@{challenge.github_handle}</p>
+                  <p className='font-medium'>
+                    {t('Username')}: {challenge.participant_username}
+                  </p>
                   <p className='text-muted-foreground text-xs'>
-                    {challenge.participant_username}
+                    {t('User ID')}: {challenge.participant_user_id}
                   </p>
                 </div>
                 <Badge variant='outline'>
                   {statusLabel(t, challenge.status)}
                 </Badge>
+              </div>
+              <div className='flex flex-wrap gap-2'>
+                <Button
+                  variant='outline'
+                  render={
+                    <a
+                      href={`https://github.com/${challenge.github_handle}`}
+                      target='_blank'
+                      rel='noreferrer'
+                    />
+                  }
+                >
+                  <HugeiconsIcon
+                    icon={GithubIcon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                  />
+                  @{challenge.github_handle}
+                  <HugeiconsIcon
+                    icon={ExternalLinkIcon}
+                    strokeWidth={2}
+                    data-icon='inline-end'
+                  />
+                </Button>
               </div>
               <div className='grid gap-2 sm:grid-cols-2'>
                 <Metric
@@ -1872,11 +2044,6 @@ function ProjectReviewDialog(props: {
                     </Button>
                   )}
                 </div>
-              )}
-              {challenge.encrypted_review_message && (
-                <p className='bg-muted/50 rounded-lg border p-3 text-sm whitespace-pre-wrap'>
-                  {challenge.encrypted_review_message}
-                </p>
               )}
               {challenge.review_note && (
                 <p className='text-muted-foreground text-sm'>
@@ -2124,7 +2291,7 @@ function DisputeEvidence({ dispute }: { dispute: BountyDispute }) {
             current={!changed.has('projectRules')}
           />
           <DisputeEvidenceValue
-            label={t('Submission note (optional)')}
+            label={t('Completion note (optional)')}
             value={text(dispute.submission_note_snapshot)}
             current={!changed.has('submissionNote')}
           />
@@ -2184,16 +2351,9 @@ function DisputeEvidence({ dispute }: { dispute: BountyDispute }) {
                 current={text(dispute.pull_request_url)}
               />
             ) : null}
-            {changed.has('encryptedReviewMessage') ? (
-              <DisputeEvidenceChange
-                label={t('Encrypted review message')}
-                original={text(dispute.encrypted_review_message_snapshot)}
-                current={text(dispute.encrypted_review_message)}
-              />
-            ) : null}
             {changed.has('submissionNote') ? (
               <DisputeEvidenceChange
-                label={t('Submission note (optional)')}
+                label={t('Completion note (optional)')}
                 original={text(dispute.submission_note_snapshot)}
                 current={text(dispute.submission_note)}
               />
@@ -2415,7 +2575,7 @@ function DisputesPanel({
                   </div>
                   <div className='bg-muted/40 rounded-lg border p-3'>
                     <p className='text-xs font-medium'>
-                      {t('Contributor submission note')}
+                      {t('Contributor completion note')}
                     </p>
                     <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
                       {dispute.submission_note_snapshot ||
@@ -2481,16 +2641,6 @@ function DisputesPanel({
                   </Button>
                 ) : null}
               </div>
-              {dispute.encrypted_review_message ? (
-                <div className='bg-muted/40 rounded-lg border p-3'>
-                  <p className='text-xs font-medium'>
-                    {t('Encrypted review message')}
-                  </p>
-                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
-                    {dispute.encrypted_review_message}
-                  </p>
-                </div>
-              ) : null}
               {dispute.review_note ? (
                 <div className='bg-muted/40 rounded-lg border p-3'>
                   <p className='text-xs font-medium'>
@@ -2620,7 +2770,7 @@ function McpSettingsPanel() {
     typeof window === 'undefined'
       ? '/mcp'
       : `${window.location.origin}${connectionQuery.data?.endpoint ?? '/mcp'}`
-  const protocolVersion = connectionQuery.data?.protocol_version ?? '2025-11-25'
+  const protocolVersion = connectionQuery.data?.protocol_version ?? '2026-07-28'
   const prompt = useMemo(
     () => `Connect to the api.lmm.best Open-source bounties MCP server.
 
@@ -2628,7 +2778,7 @@ Endpoint: ${endpoint}
 Protocol: MCP ${protocolVersion}, stateless Streamable HTTP
 Authorization: Bearer ${revealedToken || '<YOUR_PERSONAL_MCP_TOKEN>'}
 
-Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Never fabricate defects, Issues, pull requests, tests, encrypted messages, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing always spends my own promotion quota, the administrator-configured task fee, and the full reward escrow, including when I am an administrator or site owner. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, task fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
+Use the open_source_bounty_operator prompt and the open_source_bounties.* tools to manage my bounties end to end. Treat every bounty as a peer-to-peer transaction between its publisher and contributor; an administrator intervenes only when either party opens a dispute. Never fabricate defects, Issues, pull requests, tests, review results, dispute evidence, tips, or ratings. Read current state before changing anything. Publishing debits the gross listed price from my balance, credits the public platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit and the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When any tool returns input_required for publishing, approval/payment, rejection, closing/refunding, tipping, rating, dispute opening/resolution, draft deletion, or withdrawal, show me the exact action, recipient, public score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are non-refundable and separate from escrow. A contributor may submit a matching GitHub Issue URL, pull request URL, or both, plus an optional completion note. The bounty publisher reviews the completed work directly. Reviewers must record a truthful 1-5 contributor score and public evaluation; contributors may rate the publisher/verifier after review, and both sides can see mutual ratings and historical averages. If the parties disagree, open a dispute with the real challenge ID and evidence. Treat an open dispute as frozen until a third-party administrator records a conclusion and, when justified, transfers the locked reward from escrow.`,
     [endpoint, protocolVersion, revealedToken]
   )
 
@@ -2791,18 +2941,13 @@ function RulesPanel() {
     ],
     [
       '3',
-      'Send encrypted review details',
-      'Open the LIghtJUNction encrypted channel. Include your handle plus the Issue and PR links, and use GitHub Issue to create the encrypted review message.',
+      'Settle directly with the publisher',
+      'Submit the Issue or pull request in Open-source bounties. The publisher verifies the work, rates the contributor, and releases the escrowed reward directly.',
     ],
     [
       '4',
-      'Email the review links',
-      'Email lightjunction.me@gmail.com with the Issue and PR links so the contribution is ready for review.',
-    ],
-    [
-      '5',
-      'Submit and wait for review',
-      'Submit the evidence in Open-source bounties. The project owner verifies the defect and fix before approving payment.',
+      'Escalate only disputed trades',
+      'If either party disputes rejection or payment, open a platform ticket. A third-party administrator may review the preserved evidence and arbitrate the escrow.',
     ],
   ] as const
   return (

@@ -42,6 +42,10 @@ import {
   clearAuthentication,
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
+import {
+  isConsoleActivated,
+  isRestrictedPublicRoute,
+} from '@/lib/console-activation'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -176,6 +180,13 @@ export const Route = createRootRouteWithContext<{
       setSetupStatusCache(true)
     } else {
       await authBootstrap
+    }
+
+    if (
+      isRestrictedPublicRoute(pathname) &&
+      !isConsoleActivated(useAuthStore.getState().auth.user)
+    ) {
+      throw redirect({ to: '/challenges' })
     }
   },
   component: RootComponent,

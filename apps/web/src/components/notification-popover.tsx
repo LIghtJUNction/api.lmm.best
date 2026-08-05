@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { TFunction } from 'i18next'
-import { Bell, Megaphone } from 'lucide-react'
+import { Bell, Gift, Heart, Megaphone } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { RichContent } from '@/components/rich-content'
@@ -40,9 +40,13 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import type { BountyTipNotification } from '@/features/open-source-bounties/types'
 import { getAnnouncementColorClass } from '@/lib/colors'
+import { formatQuota } from '@/lib/format'
 import { formatDateTimeObject } from '@/lib/time'
 import { cn } from '@/lib/utils'
+
+export type NotificationTab = 'notice' | 'announcements' | 'bounty-tips'
 
 interface AnnouncementItem {
   id?: number | string
@@ -56,10 +60,13 @@ interface NotificationPopoverProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   unreadCount: number
-  activeTab: 'notice' | 'announcements'
-  onTabChange: (tab: 'notice' | 'announcements') => void
+  activeTab: NotificationTab
+  onTabChange: (tab: NotificationTab) => void
   notice: string
   announcements: AnnouncementItem[]
+  bountyTips: BountyTipNotification[]
+  thankingTipId: number
+  onThankTip: (tipId: number) => void
   loading: boolean
   className?: string
 }
@@ -287,6 +294,82 @@ function AnnouncementsContent({
   )
 }
 
+function BountyTipsContent({
+  items,
+  loading,
+  thankingTipId,
+  onThankTip,
+  t,
+}: {
+  items: BountyTipNotification[]
+  loading: boolean
+  thankingTipId: number
+  onThankTip: (tipId: number) => void
+  t: TFunction
+}) {
+  if (loading) {
+    return <EmptyState icon={<Gift />} title={t('Loading...')} />
+  }
+  if (items.length === 0) {
+    return <EmptyState icon={<Gift />} title={t('No bounty tips yet')} />
+  }
+  return (
+    <ScrollArea className='h-[min(52vh,28rem)] pr-3'>
+      <div className='flex flex-col'>
+        {items.map((item, index) => {
+          const createdAt = new Date(item.created_at * 1000)
+          return (
+            <div key={item.id}>
+              <div className='flex items-start gap-3 py-3'>
+                <Gift className='text-primary mt-0.5 size-4 shrink-0' />
+                <div className='flex min-w-0 flex-1 flex-col gap-2'>
+                  <p className='text-sm'>
+                    <span className='font-medium'>@{item.sender_username}</span>{' '}
+                    {t('sent you a tip of')}{' '}
+                    <span className='font-semibold'>
+                      {formatQuota(item.quota)}
+                    </span>
+                  </p>
+                  <p className='text-muted-foreground text-xs'>
+                    {item.project_title}
+                  </p>
+                  {item.note ? (
+                    <p className='text-muted-foreground text-sm'>{item.note}</p>
+                  ) : null}
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <span className='text-muted-foreground text-xs'>
+                      {getRelativeTime(createdAt, t)}
+                    </span>
+                    <Button
+                      size='sm'
+                      variant={item.thanked_at > 0 ? 'secondary' : 'outline'}
+                      disabled={
+                        item.thanked_at > 0 || thankingTipId === item.id
+                      }
+                      onClick={() => onThankTip(item.id)}
+                    >
+                      <Heart
+                        data-icon='inline-start'
+                        className={
+                          item.thanked_at > 0
+                            ? 'fill-current text-rose-500'
+                            : undefined
+                        }
+                      />
+                      {item.thanked_at > 0 ? t('Thanked') : t('Send thanks')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              {index < items.length - 1 ? <Separator /> : null}
+            </div>
+          )
+        })}
+      </div>
+    </ScrollArea>
+  )
+}
+
 /**
  * Notification popover with Notice and Announcements tabs
  */
@@ -298,6 +381,9 @@ export function NotificationPopover({
   onTabChange,
   notice,
   announcements,
+  bountyTips,
+  thankingTipId,
+  onThankTip,
   loading,
   className,
 }: NotificationPopoverProps) {
@@ -331,7 +417,7 @@ export function NotificationPopover({
         className='w-[min(26rem,calc(100vw-1rem))] gap-3 p-3'
       >
         <PopoverHeader className='gap-1 px-1'>
-          <PopoverTitle>{t('System Announcements')}</PopoverTitle>
+          <PopoverTitle>{t('Notifications')}</PopoverTitle>
           <p className='text-muted-foreground text-xs'>
             {t('Latest platform updates and notices')}
           </p>
@@ -341,7 +427,7 @@ export function NotificationPopover({
           value={activeTab}
           onValueChange={onTabChange as (value: string) => void}
         >
-          <TabsList className='grid w-full grid-cols-2'>
+          <TabsList className='grid w-full grid-cols-3'>
             <TabsTrigger value='notice' className='gap-1.5'>
               <Bell className='size-3.5' />
               {t('Notice')}
@@ -349,6 +435,10 @@ export function NotificationPopover({
             <TabsTrigger value='announcements' className='gap-1.5'>
               <Megaphone className='size-3.5' />
               {t('Timeline')}
+            </TabsTrigger>
+            <TabsTrigger value='bounty-tips' className='gap-1.5'>
+              <Gift className='size-3.5' />
+              {t('Bounties')}
             </TabsTrigger>
           </TabsList>
 
@@ -360,6 +450,16 @@ export function NotificationPopover({
             <AnnouncementsContent
               announcements={announcements}
               loading={loading}
+              t={t}
+            />
+          </TabsContent>
+
+          <TabsContent value='bounty-tips' className='mt-2'>
+            <BountyTipsContent
+              items={bountyTips}
+              loading={loading}
+              thankingTipId={thankingTipId}
+              onThankTip={onThankTip}
               t={t}
             />
           </TabsContent>

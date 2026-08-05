@@ -414,11 +414,12 @@ return 1
         validate_input(&input, settings.max_quota())?;
         let key = generate_key();
         let now = unix_now();
+        let mut tx = self.pg.begin().await.map_err(TokenError::db)?;
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND deleted_at IS NULL",
         )
         .bind(user_id)
-        .fetch_one(&self.pg)
+        .fetch_one(&mut *tx)
         .await
         .map_err(TokenError::db)?;
         if count >= settings.max_user_tokens {
@@ -430,7 +431,16 @@ return 1
         let expired_time = legacy_create_expired_time(input.expired_time);
         sqlx::query("INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry) VALUES ($1,$2,1,$3,$4,$4,$5,$6,$7,$8,$9,$10,0,$11,$12)")
         .bind(user_id).bind(&key).bind(input.name).bind(now).bind(expired_time).bind(input.remain_quota).bind(input.unlimited_quota).bind(input.model_limits_enabled).bind(input.model_limits).bind(input.allow_ips.unwrap_or_default()).bind(input.group).bind(input.cross_group_retry)
-            .execute(&self.pg).await.map(|_| ()).map_err(TokenError::db)
+            .execute(&mut *tx).await.map_err(TokenError::db)?;
+        sqlx::query(
+            "UPDATE users SET console_activated_at = CASE WHEN COALESCE(console_activated_at, 0) = 0 THEN $2 ELSE console_activated_at END WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(TokenError::db)?;
+        tx.commit().await.map_err(TokenError::db)
     }
 
     async fn update(

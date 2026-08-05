@@ -60,6 +60,7 @@ export interface PublicHeaderProps {
   showNavigation?: boolean
   showAuthButtons?: boolean
   showNotifications?: boolean
+  useDynamicNavLinks?: boolean
   className?: string
 }
 
@@ -73,6 +74,7 @@ export function PublicHeader(props: PublicHeaderProps) {
     homeUrl = '/',
     showAuthButtons = true,
     showNotifications = true,
+    useDynamicNavLinks = true,
   } = props
 
   const { t } = useTranslation()
@@ -103,7 +105,8 @@ export function PublicHeader(props: PublicHeaderProps) {
     (usesDefaultBrand && systemName === DEFAULT_SYSTEM_NAME
       ? LMM_BRAND_NAME
       : systemName)
-  const links = dynamicLinks.length > 0 ? dynamicLinks : navLinks
+  const links =
+    useDynamicNavLinks && dynamicLinks.length > 0 ? dynamicLinks : navLinks
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20)
@@ -298,6 +301,9 @@ export function PublicHeader(props: PublicHeaderProps) {
                   onTabChange={notifications.setActiveTab}
                   notice={notifications.notice}
                   announcements={notifications.announcements}
+                  bountyTips={notifications.bountyTips}
+                  thankingTipId={notifications.thankingTipId}
+                  onThankTip={notifications.thankTip}
                   loading={notifications.loading}
                 />
               )}

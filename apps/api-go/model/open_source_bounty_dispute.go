@@ -41,7 +41,6 @@ type OpenSourceBountyDispute struct {
 	ChallengeStatusSnapshot          string  `json:"challenge_status_snapshot" gorm:"type:varchar(20);not null"`
 	IssueUrlSnapshot                 string  `json:"issue_url_snapshot" gorm:"type:varchar(512);not null;default:''"`
 	PullRequestUrlSnapshot           string  `json:"pull_request_url_snapshot" gorm:"type:varchar(512);not null;default:''"`
-	EncryptedReviewMessageSnapshot   string  `json:"encrypted_review_message_snapshot" gorm:"type:text;not null;default:''"`
 	SubmissionNoteSnapshot           string  `json:"submission_note_snapshot" gorm:"type:text;not null;default:''"`
 	ReviewNoteSnapshot               string  `json:"review_note_snapshot" gorm:"type:text;not null;default:''"`
 	RewardQuotaSnapshot              int     `json:"reward_quota_snapshot" gorm:"not null"`
@@ -69,7 +68,6 @@ type OpenSourceBountyDisputeView struct {
 	CurrentProjectEscrowQuota int    `json:"current_project_escrow_quota"`
 	IssueUrl                  string `json:"issue_url"`
 	PullRequestUrl            string `json:"pull_request_url"`
-	EncryptedReviewMessage    string `json:"encrypted_review_message"`
 	SubmissionNote            string `json:"submission_note"`
 	ReviewNote                string `json:"review_note"`
 	RewardQuota               int    `json:"reward_quota"`
@@ -90,7 +88,7 @@ func openSourceBountyDisputeViewQuery() *gorm.DB {
 		Select(`d.*, p.title AS project_title, p.repository_url AS repository_url, p.rules AS project_rules, c.status AS challenge_status,
 			p.escrow_quota AS current_project_escrow_quota,
 			c.issue_url AS issue_url, c.pull_request_url AS pull_request_url,
-			c.encrypted_review_message AS encrypted_review_message, c.submission_note AS submission_note, c.review_note AS review_note,
+			c.submission_note AS submission_note, c.review_note AS review_note,
 			c.reward_quota AS reward_quota, c.tip_quota AS tip_quota,
 			c.owner_rating_score AS owner_rating_score, c.owner_rating_comment AS owner_rating_comment,
 			c.contributor_rating_score AS contributor_rating_score, c.contributor_rating_comment AS contributor_rating_comment,
@@ -102,7 +100,6 @@ func openSourceBountyDisputeViewQuery() *gorm.DB {
 				OR c.status <> d.challenge_status_snapshot
 				OR c.issue_url <> d.issue_url_snapshot
 				OR c.pull_request_url <> d.pull_request_url_snapshot
-				OR c.encrypted_review_message <> d.encrypted_review_message_snapshot
 				OR c.submission_note <> d.submission_note_snapshot
 				OR c.review_note <> d.review_note_snapshot
 				OR c.reward_quota <> d.reward_quota_snapshot
@@ -198,7 +195,7 @@ func openOpenSourceBountyDispute(userId int, challengeId int, reason string, sta
 			ProjectTitleSnapshot: project.Title, RepositoryUrlSnapshot: project.RepositoryUrl,
 			ProjectRulesSnapshot: project.Rules, ProjectEscrowQuotaSnapshot: project.EscrowQuota,
 			ChallengeStatusSnapshot: challenge.Status, IssueUrlSnapshot: challenge.IssueUrl,
-			PullRequestUrlSnapshot: challenge.PullRequestUrl, EncryptedReviewMessageSnapshot: challenge.EncryptedReviewMessage,
+			PullRequestUrlSnapshot: challenge.PullRequestUrl,
 			SubmissionNoteSnapshot: challenge.SubmissionNote, ReviewNoteSnapshot: challenge.ReviewNote,
 			RewardQuotaSnapshot: challenge.RewardQuota, TipQuotaSnapshot: challenge.TipQuota,
 			OwnerRatingScoreSnapshot: challenge.OwnerRatingScore, OwnerRatingCommentSnapshot: challenge.OwnerRatingComment,

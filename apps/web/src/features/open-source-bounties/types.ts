@@ -54,7 +54,6 @@ export interface BountyDispute {
   challenge_status_snapshot: BountyChallengeStatus
   issue_url_snapshot: string
   pull_request_url_snapshot: string
-  encrypted_review_message_snapshot: string
   submission_note_snapshot: string
   review_note_snapshot: string
   reward_quota_snapshot: number
@@ -76,7 +75,6 @@ export interface BountyDispute {
   challenge_status: BountyChallengeStatus
   issue_url: string
   pull_request_url: string
-  encrypted_review_message: string
   submission_note: string
   review_note: string
   reward_quota: number
@@ -100,7 +98,6 @@ export type BountyDisputeEvidenceField =
   | 'challengeStatus'
   | 'issueUrl'
   | 'pullRequestUrl'
-  | 'encryptedReviewMessage'
   | 'submissionNote'
   | 'reviewNote'
   | 'rewardQuota'
@@ -132,11 +129,6 @@ export function getBountyDisputeEvidenceComparison(dispute: BountyDispute): {
     [
       'pullRequestUrl',
       dispute.pull_request_url_snapshot !== dispute.pull_request_url,
-    ],
-    [
-      'encryptedReviewMessage',
-      dispute.encrypted_review_message_snapshot !==
-        dispute.encrypted_review_message,
     ],
     [
       'submissionNote',
@@ -179,7 +171,6 @@ export interface BountyChallenge {
   status: BountyChallengeStatus
   issue_url: string
   pull_request_url: string
-  encrypted_review_message: string
   submission_note: string
   review_note: string
   reward_quota: number
@@ -212,8 +203,8 @@ export interface BountyProject {
   title: string
   description: string
   rules: string
-  promotion_quota: number
   reward_quota: number
+  net_reward_quota: number
   reward_slots: number
   escrow_quota: number
   platform_fee_rate_bps: number
@@ -227,7 +218,22 @@ export interface BountyProject {
   approved_challenge_count: number
   owner_rating_average: number
   owner_rating_count: number
+  owner_thank_heart_count: number
   viewer_challenge?: BountyChallenge
+}
+
+export interface BountyTipNotification {
+  id: number
+  project_id: number
+  challenge_id: number
+  sender_user_id: number
+  sender_username: string
+  project_title: string
+  quota: number
+  note: string
+  recipient_read_at: number
+  thanked_at: number
+  created_at: number
 }
 
 export interface BountyDraftInput {
@@ -235,7 +241,6 @@ export interface BountyDraftInput {
   title: string
   description: string
   rules: string
-  promotion_quota: number
   reward_quota: number
   reward_slots: number
 }

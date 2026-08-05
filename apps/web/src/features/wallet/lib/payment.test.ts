@@ -149,6 +149,49 @@ describe('payment dispatch', () => {
 })
 
 describe('payment checkout navigation', () => {
+  test('does not mistake Chrome on iOS for Safari', () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+    const originalNavigator = Object.getOwnPropertyDescriptor(
+      globalThis,
+      'navigator'
+    )
+    let openCalls = 0
+
+    try {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: {
+          userAgent:
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 CriOS/140.0.0.0 Mobile/15E148 Safari/604.1',
+        },
+      })
+      Object.defineProperty(globalThis, 'window', {
+        configurable: true,
+        value: {
+          open: () => {
+            openCalls += 1
+            return null
+          },
+        },
+      })
+
+      reservePaymentCheckout()
+
+      assert.equal(openCalls, 1)
+    } finally {
+      if (originalWindow) {
+        Object.defineProperty(globalThis, 'window', originalWindow)
+      } else {
+        Reflect.deleteProperty(globalThis, 'window')
+      }
+      if (originalNavigator) {
+        Object.defineProperty(globalThis, 'navigator', originalNavigator)
+      } else {
+        Reflect.deleteProperty(globalThis, 'navigator')
+      }
+    }
+  })
+
   test('only accepts absolute HTTP(S) redirect URLs', () => {
     assert.equal(
       isSafeHttpCheckoutUrl('https://pay.example.test/checkout'),
