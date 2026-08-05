@@ -230,6 +230,69 @@ pub fn build_midjourney_image_url(
     Some(url.to_string())
 }
 
+/// Builds the relative signed image path used in task JSON responses.
+///
+/// A relative path keeps the response correct when the Rust listener is
+/// mounted behind a reverse proxy without requiring the route adapter to
+/// duplicate the dashboard's public-address configuration.
+#[must_use]
+pub fn build_midjourney_image_path(secret: &[u8], user_id: i64, task_id: &str) -> Option<String> {
+    let base = reqwest::Url::parse("https://midjourney-image.invalid").ok()?;
+    let url = build_midjourney_image_url(base.as_str(), secret, user_id, task_id)?;
+    let parsed = reqwest::Url::parse(&url).ok()?;
+    let mut path = parsed.path().to_owned();
+    if let Some(query) = parsed.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+    Some(path)
+}
+
+/// Replaces provider image URLs in a Midjourney JSON response with signed
+/// proxy paths bound to the authenticated user's task.
+///
+/// The provider response shape differs between submit and task-read calls:
+/// submit responses put `imageUrl` under `properties`, while task snapshots
+/// expose it at the top level.  Walking both objects prevents either path
+/// from reintroducing a direct provider URL.
+pub fn rewrite_midjourney_image_urls(body: &mut Value, secret: &[u8], user_id: i64) {
+    fn rewrite(value: &mut Value, secret: &[u8], user_id: i64, inherited_task_id: Option<&str>) {
+        match value {
+            Value::Object(object) => {
+                let task_id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .or_else(|| object.get("result").and_then(Value::as_str))
+                    .or(inherited_task_id)
+                    .map(str::to_owned);
+                for key in ["imageUrl", "image_url"] {
+                    if let Some(Value::String(image_url)) = object.get_mut(key)
+                        && !image_url.is_empty()
+                    {
+                        *image_url = task_id
+                            .as_deref()
+                            .and_then(|task_id| {
+                                build_midjourney_image_path(secret, user_id, task_id)
+                            })
+                            .unwrap_or_default();
+                    }
+                }
+                for child in object.values_mut() {
+                    rewrite(child, secret, user_id, task_id.as_deref());
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    rewrite(item, secret, user_id, inherited_task_id);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+
+    rewrite(body, secret, user_id, None);
+}
+
 /// Boundary for authentication, relational task persistence, accounting, and upstream I/O.
 ///
 /// Implementations must insert/charge only from [`Self::record_submit`] after a 200
@@ -406,6 +469,7 @@ async fn submit(
         }
         normalize_replay_code(&mut body);
     }
+    rewrite_midjourney_image_urls(&mut body, &state.image_signing_secret, identity.user_id);
     json_response(
         submitted.response.status,
         submitted.response.content_type,
@@ -484,7 +548,14 @@ async fn task_read(
         .task_read(&identity, operation, id, &headers, body)
         .await
     {
-        Ok(reply) => json_response(reply.status, reply.content_type, reply.body),
+        Ok(mut reply) => {
+            rewrite_midjourney_image_urls(
+                &mut reply.body,
+                &state.image_signing_secret,
+                identity.user_id,
+            );
+            json_response(reply.status, reply.content_type, reply.body)
+        }
         Err(error) => failure(error),
     }
 }

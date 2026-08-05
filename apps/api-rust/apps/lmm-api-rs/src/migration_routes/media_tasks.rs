@@ -23,7 +23,8 @@ use serde_json::{Value, json};
 use crate::{
     RequestContext,
     migration_routes::media_midjourney::{
-        ImageReply, MidjourneyBackend, MidjourneyFailure, PgMidjourneyBackend, signed_image_user_id,
+        ImageReply, MidjourneyBackend, MidjourneyFailure, PgMidjourneyBackend,
+        rewrite_midjourney_image_urls, signed_image_user_id,
     },
 };
 
@@ -240,6 +241,11 @@ where
                         response_body["code"] = json!(1);
                     }
                 }
+                rewrite_midjourney_image_urls(
+                    &mut response_body,
+                    &self.image_signing_secret,
+                    identity.user_id,
+                );
                 media_json_response(
                     submitted.response.status,
                     submitted.response.content_type,
@@ -252,7 +258,14 @@ where
                     .task_read(&identity, operation, &task_id, &parts.headers, None)
                     .await
                 {
-                    Ok(reply) => media_json_response(reply.status, reply.content_type, reply.body),
+                    Ok(mut reply) => {
+                        rewrite_midjourney_image_urls(
+                            &mut reply.body,
+                            &self.image_signing_secret,
+                            identity.user_id,
+                        );
+                        media_json_response(reply.status, reply.content_type, reply.body)
+                    }
                     Err(error) => media_failure(error),
                 }
             }
@@ -272,7 +285,14 @@ where
                     )
                     .await
                 {
-                    Ok(reply) => media_json_response(reply.status, reply.content_type, reply.body),
+                    Ok(mut reply) => {
+                        rewrite_midjourney_image_urls(
+                            &mut reply.body,
+                            &self.image_signing_secret,
+                            identity.user_id,
+                        );
+                        media_json_response(reply.status, reply.content_type, reply.body)
+                    }
                     Err(error) => media_failure(error),
                 }
             }

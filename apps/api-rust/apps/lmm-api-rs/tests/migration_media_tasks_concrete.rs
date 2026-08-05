@@ -51,7 +51,12 @@ impl MidjourneyBackend for MockBackend {
             response: BufferedJsonReply {
                 status: StatusCode::OK,
                 content_type: HeaderValue::from_static("application/json"),
-                body: json!({"code":21,"description":"replayed","result":"task-1"}),
+                body: json!({
+                    "code":21,
+                    "description":"replayed",
+                    "result":"task-1",
+                    "properties":{"imageUrl":"https://provider.example/private.png"}
+                }),
             },
             effect: TaskEffect {
                 mode: "mj".to_owned(),
@@ -122,7 +127,9 @@ fn request(path: &str, body: Body) -> Request<Body> {
 #[tokio::test]
 async fn concrete_static_mj_submit_reuses_backend_accounting_and_normalizes_replay() {
     let backend = Arc::new(MockBackend::default());
-    let service = MidjourneyMediaTaskService::new(Arc::clone(&backend));
+    let secret = b"test-midjourney-image-session-secret-2026";
+    let service =
+        MidjourneyMediaTaskService::new(Arc::clone(&backend)).with_image_signing_secret(secret);
     let response = service
         .protected(
             MediaTaskOperation::Submit("IMAGINE"),
@@ -141,6 +148,20 @@ async fn concrete_static_mj_submit_reuses_backend_accounting_and_normalizes_repl
     )
     .expect("JSON response");
     assert_eq!(body["code"], 1);
+    let image_url = body["properties"]["imageUrl"]
+        .as_str()
+        .expect("signed image URL");
+    assert!(!image_url.contains("provider.example"));
+    let image_url =
+        reqwest::Url::parse(&format!("https://fixture{image_url}")).expect("signed image URL");
+    assert_eq!(
+        lmm_api_rs::migration_routes::media_midjourney::signed_image_user_id(
+            secret,
+            "task-1",
+            image_url.query(),
+        ),
+        Some(7)
+    );
     assert_eq!(*backend.recorded.lock().expect("record lock"), 1);
     assert_eq!(
         backend

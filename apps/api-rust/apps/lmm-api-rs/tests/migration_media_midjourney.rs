@@ -12,8 +12,8 @@ use axum::{
 use lmm_api_rs::migration_routes::media_midjourney::{
     BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyChannel, MidjourneyFailure,
     MidjourneyHttpState, MidjourneyIdentity, PgMidjourneyBackend, StoredImage, SubmitReply,
-    TaskEffect, build_midjourney_image_url, media_midjourney_router, midjourney_image_signature,
-    signed_image_user_id,
+    TaskEffect, build_midjourney_image_path, build_midjourney_image_url, media_midjourney_router,
+    midjourney_image_signature, signed_image_user_id,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -237,6 +237,9 @@ fn signed_image_builder_preserves_prefix_and_escapes_task_id() {
         signed_image_user_id(IMAGE_SECRET, "task/with space", parsed.query()),
         Some(42)
     );
+    let path = build_midjourney_image_path(IMAGE_SECRET, 42, "task/with space")
+        .expect("signed image path");
+    assert!(path.starts_with("/mj/image/task%2Fwith%20space?uid=42&sig="));
 }
 
 async fn spawn_tcp_router(router: axum::Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -337,6 +340,75 @@ async fn simultaneous_replays_should_reach_the_backend_twice_without_deduplicati
     assert_eq!(first.expect("first").status(), StatusCode::OK);
     assert_eq!(second.expect("second").status(), StatusCode::OK);
     assert_eq!(backend.effects().len(), 2);
+}
+
+#[tokio::test]
+async fn dynamic_submit_and_task_reads_rewrite_provider_image_urls() {
+    let backend = Arc::new(TestMidjourneyBackend::new(["test-token".to_owned()]));
+    backend.set_reply(BufferedJsonReply {
+        status: StatusCode::OK,
+        content_type: "application/json".parse().expect("header"),
+        body: json!({
+            "code": 21,
+            "description": "exists",
+            "result": "task-with-image",
+            "properties": {
+                "status": "SUCCESS",
+                "imageUrl": "https://provider.example/private.png"
+            }
+        }),
+    });
+    let router = app(Arc::clone(&backend));
+
+    let submit_response = router
+        .clone()
+        .oneshot(submit("/proxy/mj/submit/imagine"))
+        .await
+        .expect("submit response");
+    let submit_body: serde_json::Value = serde_json::from_slice(
+        &to_bytes(submit_response.into_body(), usize::MAX)
+            .await
+            .expect("submit body"),
+    )
+    .expect("submit JSON");
+    let submit_image = submit_body["properties"]["imageUrl"]
+        .as_str()
+        .expect("signed submit image URL");
+    assert!(!submit_image.contains("provider.example"));
+    let submit_url =
+        reqwest::Url::parse(&format!("https://fixture{submit_image}")).expect("signed submit URL");
+    assert_eq!(
+        signed_image_user_id(IMAGE_SECRET, "task-with-image", submit_url.query()),
+        Some(1)
+    );
+
+    let task_response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/proxy/mj/task/task-with-image/fetch")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("task request"),
+        )
+        .await
+        .expect("task response");
+    let task_body: serde_json::Value = serde_json::from_slice(
+        &to_bytes(task_response.into_body(), usize::MAX)
+            .await
+            .expect("task body"),
+    )
+    .expect("task JSON");
+    let task_image = task_body["properties"]["imageUrl"]
+        .as_str()
+        .expect("signed task image URL");
+    assert!(!task_image.contains("provider.example"));
+    let task_url =
+        reqwest::Url::parse(&format!("https://fixture{task_image}")).expect("signed task URL");
+    assert_eq!(
+        signed_image_user_id(IMAGE_SECRET, "task-with-image", task_url.query()),
+        Some(1)
+    );
 }
 
 #[tokio::test]
