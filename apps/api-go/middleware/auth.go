@@ -208,6 +208,10 @@ func ConsoleAccessGate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, _, credentialKind, err := classifyDashboardCredential(c)
 		if err != nil || credentialKind == dashboardCredentialUnmatched || user == nil {
+			if consoleDiscoveryRoute(c.Request.Method, c.Request.URL.Path) {
+				abortRelayAsNotFound(c)
+				return
+			}
 			c.Next()
 			return
 		}
@@ -221,6 +225,52 @@ func ConsoleAccessGate() gin.HandlerFunc {
 	}
 }
 
+// consoleDiscoveryRoute hides relay-console inventory from unauthenticated and
+// invalid dashboard credentials. Valid API keys continue to use the dedicated
+// relay routes, whose token middleware applies the same generic 404 policy.
+func consoleDiscoveryRoute(method string, path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	if publicSubscriptionCallbackRoute(method, path) {
+		return false
+	}
+	for _, prefix := range []string{
+		"/api/channel",
+		"/api/custom-oauth-provider",
+		"/api/data",
+		"/api/deployments",
+		"/api/group",
+		"/api/log",
+		"/api/mj",
+		"/api/models",
+		"/api/open-source-bounties/mcp-token",
+		"/api/option",
+		"/api/performance",
+		"/api/perf-metrics",
+		"/api/prefill_group",
+		"/api/pricing",
+		"/api/rankings",
+		"/api/ratio_config",
+		"/api/ratio_sync",
+		"/api/redemption",
+		"/api/status/test",
+		"/api/subscription",
+		"/api/system-info",
+		"/api/system-task",
+		"/api/task",
+		"/api/token",
+		"/api/usage",
+		"/api/user/groups",
+		"/api/user/models",
+		"/api/user/self/groups",
+		"/api/vendors",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // ConsoleActivationGranted reports whether the current dashboard request has
 // crossed the permanent first-credential activation boundary. Anonymous and
 // invalid credentials deliberately return false.
@@ -232,8 +282,14 @@ func ConsoleActivationGranted(c *gin.Context) bool {
 
 func preActivationRouteAllowed(method string, path string) bool {
 	path = strings.TrimSuffix(path, "/")
+	if publicSubscriptionCallbackRoute(method, path) {
+		return true
+	}
 
 	if path == "/api/open-source-bounties" {
+		return method == http.MethodGet
+	}
+	if path == "/api/open-source-bounties/accepted" || path == "/api/open-source-bounties/disputes/mine" {
 		return method == http.MethodGet
 	}
 	if strings.HasPrefix(path, "/api/open-source-bounties/projects/") {
@@ -242,12 +298,16 @@ func preActivationRouteAllowed(method string, path string) bool {
 		if len(segments) == 1 && segments[0] != "" {
 			return method == http.MethodGet
 		}
-		return len(segments) == 2 && segments[0] != "" && segments[1] == "accept" && method == http.MethodPost
+		return len(segments) == 2 && segments[0] != "" &&
+			(segments[1] == "accept" || segments[1] == "submit") && method == http.MethodPost
 	}
-	if path == "/api/subscription" || strings.HasPrefix(path, "/api/subscription/") {
-		return path != "/api/subscription/admin" && !strings.HasPrefix(path, "/api/subscription/admin/")
+	if strings.HasPrefix(path, "/api/open-source-bounties/challenges/") {
+		challengePath := strings.TrimPrefix(path, "/api/open-source-bounties/challenges/")
+		segments := strings.Split(challengePath, "/")
+		return len(segments) == 2 && segments[0] != "" &&
+			(segments[1] == "withdraw" || segments[1] == "rate-owner" || segments[1] == "disputes") &&
+			method == http.MethodPost
 	}
-
 	switch path {
 	case "/api/setup", "/api/status", "/api/notice", "/api/user-agreement", "/api/privacy-policy", "/api/about", "/api/home_page_content":
 		return method == http.MethodGet
@@ -263,7 +323,7 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete
 	case "/api/user/passkey":
 		return method == http.MethodGet || method == http.MethodDelete
-	case "/api/user/groups", "/api/user/sessions", "/api/user/self/groups", "/api/user/aff", "/api/user/topup/info", "/api/user/topup/self", "/api/user/oauth/bindings", "/api/user/2fa/status":
+	case "/api/user/sessions", "/api/user/aff", "/api/user/topup/info", "/api/user/topup/self", "/api/user/oauth/bindings", "/api/user/2fa/status":
 		return method == http.MethodGet
 	case "/api/user/sessions/revoke-others", "/api/user/passkey/register/begin", "/api/user/passkey/register/finish", "/api/user/passkey/verify/begin", "/api/user/passkey/verify/finish", "/api/user/2fa/setup", "/api/user/2fa/enable", "/api/user/2fa/disable", "/api/user/2fa/backup_codes", "/api/user/topup", "/api/user/pay", "/api/user/fastpay/pay", "/api/user/amount", "/api/user/stripe/pay", "/api/user/stripe/amount", "/api/user/creem/pay", "/api/user/waffo/amount", "/api/user/waffo/pay", "/api/user/waffo-pancake/amount", "/api/user/waffo-pancake/pay", "/api/user/aff_transfer":
 		return method == http.MethodPost
@@ -275,6 +335,17 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodDelete
 	}
 	return false
+}
+
+func publicSubscriptionCallbackRoute(method string, path string) bool {
+	switch path {
+	case "/api/subscription/epay/notify", "/api/subscription/epay/return":
+		return method == http.MethodGet || method == http.MethodPost
+	case "/api/subscription/fastpay/notify":
+		return method == http.MethodPost
+	default:
+		return false
+	}
 }
 
 func authorizationToken(header string) (string, bool) {

@@ -78,6 +78,7 @@ import {
 } from '@/lib/format'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { getChallengeAcceptanceState } from './acceptance'
 import {
   acceptBounty,
   cancelChallenge,
@@ -167,6 +168,8 @@ const ERROR_KEYS: Record<string, string> = {
   OPEN_SOURCE_BOUNTY_FULL: 'All reward slots are currently occupied.',
   OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED:
     'You have already accepted this challenge.',
+  OPEN_SOURCE_BOUNTY_RETRY_PENDING:
+    "Wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends.",
   OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH:
     'Every submitted Issue or pull request must belong to the bounty repository.',
   OPEN_SOURCE_BOUNTY_EVIDENCE_REQUIRED:
@@ -1188,6 +1191,7 @@ function BountyCard({
 }) {
   const { t } = useTranslation()
   const challenge = project.viewer_challenge
+  const acceptanceState = getChallengeAcceptanceState(challenge)
   const slots = availableSlots(project)
   let viewerAction: React.ReactNode
   if (project.owner_user_id === viewerUserId) {
@@ -1203,9 +1207,11 @@ function BountyCard({
         {t('Submit work')}
       </Button>
     )
-  } else if (challenge) {
+  } else if (acceptanceState === 'active' || acceptanceState === 'completed') {
     viewerAction = (
-      <Badge variant='outline'>{statusLabel(t, challenge.status)}</Badge>
+      <Badge variant='outline'>
+        {statusLabel(t, challenge?.status ?? 'accepted')}
+      </Badge>
     )
   } else {
     viewerAction = (
@@ -1220,7 +1226,11 @@ function BountyCard({
           strokeWidth={2}
           data-icon='inline-start'
         />
-        {t('Accept challenge')}
+        {t(
+          acceptanceState === 'retryable'
+            ? 'Retry challenge'
+            : 'Accept challenge'
+        )}
       </Button>
     )
   }

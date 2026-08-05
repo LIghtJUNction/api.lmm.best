@@ -1,5 +1,5 @@
 name: LMM API Bug Report
-description: Report a bug reproducible in this repository or a regression from upstream New API
+description: Report a bug reproducible in LMM Forge or a compatibility regression
 title: "[Bug] "
 labels:
   - bug
@@ -9,12 +9,11 @@ body:
       value: |
         ## Before submitting
 
-        LMM API is a maintained fork of [New API](https://github.com/QuantumNous/new-api). This repository handles issues reproducible in **LMM API** and regressions introduced by this fork.
+        This repository handles issues reproducible in **LMM Forge** and regressions introduced by the current product or compatibility layers.
 
         - Usage and deployment: [project README](https://github.com/LIghtJUNction/api.lmm.best#readme)
-        - Upstream documentation: [New API docs](https://docs.newapi.pro/)
-        - If the issue also occurs in an unmodified upstream New API build, search or report it in [upstream Issues](https://github.com/QuantumNous/new-api/issues).
-        - For third-party hosted services, private forks, or upstream provider failures, contact the relevant maintainer or provider.
+        - Bounty workflow: [open-source bounty guide](https://github.com/LIghtJUNction/api.lmm.best/blob/main/docs/open-source-bounties.zh-CN.md)
+        - For third-party hosted services, private forks, or external provider failures, contact the relevant maintainer or provider.
         - Remove API keys, cookies, tokens, passwords, DSNs, and all other secrets before posting.
 
   - type: checkboxes
@@ -47,19 +46,6 @@ body:
         - Container image built from this repository
         - Local development environment
         - Other (describe below)
-    validations:
-      required: true
-
-  - type: dropdown
-    id: upstream-reproduction
-    attributes:
-      label: Upstream New API comparison
-      description: When possible, compare this fork and upstream using the same configuration and request.
-      options:
-        - Reproduces only in LMM API
-        - Also reproduces in upstream New API
-        - Not applicable (LMM API-specific feature)
-        - Not compared yet (explain why below)
     validations:
       required: true
 
@@ -105,14 +91,6 @@ body:
         Database:
         Browser or client:
         Channel, model, and request protocol:
-    validations:
-      required: true
-
-  - type: textarea
-    id: upstream-comparison
-    attributes:
-      label: Upstream comparison details
-      description: State the upstream version and comparison result. If not compared, explain why.
     validations:
       required: true
 

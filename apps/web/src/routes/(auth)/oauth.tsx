@@ -24,6 +24,7 @@ import { toast } from 'sonner'
 import { wechatLoginByCode } from '@/features/auth/api'
 import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 import { applyAuthBundle, isAuthBundle } from '@/lib/api'
+import { getAuthenticatedLandingRoute } from '@/lib/console-activation'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
 
 function OAuthComponent() {
@@ -44,7 +45,7 @@ function OAuthComponent() {
             applyAuthBundle(res.data)
             const target =
               sanitizeAuthRedirect(search?.redirect, window.location.origin) ??
-              '/dashboard'
+              getAuthenticatedLandingRoute(res.data.user)
             navigate({ href: target, replace: true })
             return
           }

@@ -20,7 +20,13 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 	}{
 		{http.MethodGet, "/api/open-source-bounties"},
 		{http.MethodGet, "/api/open-source-bounties/projects/7"},
+		{http.MethodGet, "/api/open-source-bounties/accepted"},
+		{http.MethodGet, "/api/open-source-bounties/disputes/mine"},
 		{http.MethodPost, "/api/open-source-bounties/projects/7/accept"},
+		{http.MethodPost, "/api/open-source-bounties/projects/7/submit"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/withdraw"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/rate-owner"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/disputes"},
 		{http.MethodGet, "/api/user/topup/info"},
 		{http.MethodPost, "/api/user/stripe/pay"},
 		{http.MethodGet, "/api/user/aff"},
@@ -28,6 +34,11 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodPost, "/api/user/passkey/register/begin"},
 		{http.MethodPost, "/api/token"},
 		{http.MethodPost, "/api/token/"},
+		{http.MethodGet, "/api/subscription/epay/notify"},
+		{http.MethodPost, "/api/subscription/epay/notify"},
+		{http.MethodGet, "/api/subscription/epay/return"},
+		{http.MethodPost, "/api/subscription/epay/return"},
+		{http.MethodPost, "/api/subscription/fastpay/notify"},
 	}
 	for _, request := range allowed {
 		assert.True(t, preActivationRouteAllowed(request.method, request.path), "%s %s", request.method, request.path)
@@ -41,17 +52,95 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodGet, "/api/models"},
 		{http.MethodGet, "/api/channel"},
 		{http.MethodGet, "/api/pricing"},
+		{http.MethodGet, "/api/subscription/plans"},
+		{http.MethodPost, "/api/subscription/balance/pay"},
+		{http.MethodGet, "/api/subscription/fastpay/notify"},
 		{http.MethodGet, "/api/usage"},
 		{http.MethodPost, "/api/subscription/admin/plans"},
 		{http.MethodGet, "/api/open-source-bounties-probe"},
 		{http.MethodGet, "/api/subscription-probe"},
 		{http.MethodPost, "/api/open-source-bounties"},
+		{http.MethodGet, "/api/open-source-bounties/mine"},
 		{http.MethodGet, "/api/open-source-bounties/mcp-token"},
 		{http.MethodPut, "/api/open-source-bounties/projects/7"},
 		{http.MethodPost, "/api/open-source-bounties/projects/7/publish"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/approve"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/tip"},
 	}
 	for _, request := range denied {
 		assert.False(t, preActivationRouteAllowed(request.method, request.path), "%s %s", request.method, request.path)
+	}
+}
+
+func TestConsoleAccessGateHidesDiscoveryRoutesWithoutActivatedSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, path := range []string{
+		"/api/channel",
+		"/api/custom-oauth-provider",
+		"/api/data",
+		"/api/deployments",
+		"/api/group",
+		"/api/log/self",
+		"/api/mj",
+		"/api/models",
+		"/api/open-source-bounties/mcp-token",
+		"/api/option",
+		"/api/performance/stats",
+		"/api/perf-metrics/summary",
+		"/api/prefill_group",
+		"/api/pricing",
+		"/api/rankings",
+		"/api/ratio_config",
+		"/api/ratio_sync/channels",
+		"/api/redemption",
+		"/api/status/test",
+		"/api/subscription/plans",
+		"/api/system-info/instances",
+		"/api/system-task/list",
+		"/api/task",
+		"/api/token",
+		"/api/usage",
+		"/api/user/groups",
+		"/api/user/models",
+		"/api/user/self/groups",
+		"/api/vendors/search",
+	} {
+		router := gin.New()
+		router.Use(ConsoleAccessGate())
+		router.GET(path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+
+		assert.Equal(t, http.StatusNotFound, response.Code, path)
+		assert.JSONEq(t, `{"message":"Not Found"}`, response.Body.String(), path)
+	}
+}
+
+func TestConsoleAccessGateKeepsPublicAccountAndBountyRoutesReachable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, request := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/status"},
+		{http.MethodPost, "/api/user/login"},
+		{http.MethodGet, "/api/open-source-bounties"},
+		{http.MethodGet, "/api/subscription/epay/notify"},
+		{http.MethodPost, "/api/subscription/epay/notify"},
+		{http.MethodGet, "/api/subscription/epay/return"},
+		{http.MethodPost, "/api/subscription/epay/return"},
+		{http.MethodPost, "/api/subscription/fastpay/notify"},
+	} {
+		router := gin.New()
+		router.Use(ConsoleAccessGate())
+		router.Any(request.path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+		response := httptest.NewRecorder()
+		httpRequest := httptest.NewRequest(request.method, request.path, nil)
+		router.ServeHTTP(response, httpRequest)
+
+		assert.Equal(t, http.StatusNoContent, response.Code, "%s %s", request.method, request.path)
 	}
 }
 

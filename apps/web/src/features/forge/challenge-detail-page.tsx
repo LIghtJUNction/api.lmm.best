@@ -35,6 +35,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { getChallengeAcceptanceState } from '@/features/open-source-bounties/acceptance'
 import {
   acceptBounty,
   getBountyDetail,
@@ -81,7 +82,12 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
       ])
       toast.success(t('Challenge accepted.'))
     },
-    onError: () => toast.error(t('Unable to accept this challenge.')),
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Unable to accept this challenge.')
+      ),
   })
 
   if (query.isLoading) {
@@ -118,7 +124,11 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
   }
 
   const project = detail.project
-  const alreadyAccepted = Boolean(project.viewer_challenge)
+  const acceptanceState = getChallengeAcceptanceState(project.viewer_challenge)
+  const canAccept =
+    project.status === 'published' &&
+    (acceptanceState === 'available' || acceptanceState === 'retryable')
+  const isRetry = acceptanceState === 'retryable'
   const dateFormatter = new Intl.DateTimeFormat(i18n.language, {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -158,7 +168,8 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
                 {formatQuota(project.net_reward_quota || project.reward_quota)}
               </p>
               <p className='mb-7 text-sm'>{t('per approved delivery')}</p>
-              {alreadyAccepted ? (
+              {acceptanceState === 'active' ||
+              acceptanceState === 'completed' ? (
                 <div className='flex items-center gap-2 border border-[#141413] px-4 py-3 text-sm font-semibold'>
                   <HugeiconsIcon
                     icon={CheckmarkCircle02Icon}
@@ -166,14 +177,24 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
                     strokeWidth={2}
                     aria-hidden='true'
                   />
-                  {t('Accepted')}
+                  {t(
+                    project.viewer_challenge?.status === 'submitted'
+                      ? 'Submitted'
+                      : project.viewer_challenge?.status === 'approved'
+                        ? 'Approved'
+                        : 'Accepted'
+                  )}
+                </div>
+              ) : !canAccept ? (
+                <div className='border border-[#141413] px-4 py-3 text-sm font-semibold'>
+                  {t(project.status === 'paused' ? 'Paused' : project.status)}
                 </div>
               ) : user ? (
                 <Button
                   className='w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
                   onClick={() => setAcceptOpen(true)}
                 >
-                  {t('Accept challenge')}
+                  {t(isRetry ? 'Retry challenge' : 'Accept challenge')}
                 </Button>
               ) : (
                 <Button
@@ -316,7 +337,7 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
       <Dialog
         open={acceptOpen}
         onOpenChange={setAcceptOpen}
-        title={t('Accept challenge')}
+        title={t(isRetry ? 'Retry challenge' : 'Accept challenge')}
         description={t('Your GitHub handle will be attached to this delivery.')}
         footer={
           <Button

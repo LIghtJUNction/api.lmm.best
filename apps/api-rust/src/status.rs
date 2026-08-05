@@ -342,7 +342,7 @@ impl StatusData {
             turnstile_site_key: options.string("TurnstileSiteKey", ""),
             docs_link: options.string(
                 "general_setting.docs_link",
-                "https://docs.newapi.pro/en/docs",
+                "https://github.com/LIghtJUNction/api.lmm.best#readme",
             ),
             quota_per_unit: options.number("QuotaPerUnit", 500_000.0),
             display_in_currency: quota_display_type != "TOKENS",

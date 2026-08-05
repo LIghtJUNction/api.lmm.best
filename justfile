@@ -163,6 +163,10 @@ package-go:
 package-rust:
     bash packaging/aur/lmm-api-rs-bin/build-local-package.sh
 
+# Validate the public AUR package that consumes prebuilt release assets.
+test-package-bin:
+    bash packaging/aur/lmm-api-bin/test-package.sh
+
 # Deploy Go production only after explicit backend and site confirmation.
 deploy-production:
     @if [[ "${CONFIRM_PRODUCTION:-}" != "api.lmm.best" || "${LMM_API_BACKEND:-}" != "go" ]]; then echo "error: set CONFIRM_PRODUCTION=api.lmm.best and LMM_API_BACKEND=go" >&2; exit 1; fi
