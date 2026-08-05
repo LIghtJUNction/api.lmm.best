@@ -144,6 +144,7 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	}
 	assert.True(t, slices.IsSorted(names), "tool discovery order must be deterministic")
 	assert.Contains(t, names, "open_source_bounties.publish")
+	assert.Contains(t, names, "open_source_bounties.cancel")
 	assert.Contains(t, names, "open_source_bounties.tip")
 	assert.Contains(t, names, "open_source_bounties.rate_owner")
 	toolSchema, err := json.Marshal(tools.Tools)
@@ -246,6 +247,24 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.NoError(t, db.Create(&participant).Error)
 	challenge, err := model.AcceptOpenSourceBounty(participant.Id, project.Id, "mcp-contributor")
 	require.NoError(t, err)
+	cancelParticipant := model.User{Username: "mcp-cancel-contributor", Password: "password", AffCode: "mcp-cancel-contributor", Quota: 0, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&cancelParticipant).Error)
+	cancelledChallenge, err := model.AcceptOpenSourceBounty(cancelParticipant.Id, project.Id, "mcp-cancel-contributor")
+	require.NoError(t, err)
+	cancelRequest := &mcp.CallToolParams{Name: "open_source_bounties.cancel", Arguments: map[string]any{"challenge_id": cancelledChallenge.Id}}
+	cancelPending, err := session.CallTool(ctx, cancelRequest)
+	require.NoError(t, err)
+	require.True(t, cancelPending.NeedsInput())
+	cancelConfirmed := &mcp.CallToolParams{
+		Name: cancelRequest.Name, Arguments: cancelRequest.Arguments, RequestState: cancelPending.RequestState,
+		InputResponses: mcp.InputResponseMap{"confirmation": &mcp.ElicitResult{Action: "accept", Content: map[string]any{"confirmed": true}}},
+	}
+	_, err = session.CallTool(ctx, cancelConfirmed)
+	require.NoError(t, err)
+	_, err = session.CallTool(ctx, cancelConfirmed)
+	require.NoError(t, err, "a response-loss retry must recover the committed cancellation")
+	require.NoError(t, db.First(&cancelledChallenge, cancelledChallenge.Id).Error)
+	assert.Equal(t, model.OpenSourceBountyChallengeCancelled, cancelledChallenge.Status)
 
 	tipRequest := &mcp.CallToolParams{Name: "open_source_bounties.tip", Arguments: map[string]any{
 		"challenge_id": challenge.Id, "quota": 123, "note": "Thanks for the focused investigation.",

@@ -22,6 +22,7 @@ import { afterEach, describe, test } from 'node:test'
 import { api } from '@/lib/api'
 
 import {
+  cancelChallenge,
   listBounties,
   listReceivedBountyTips,
   markReceivedBountyTipsRead,
@@ -121,6 +122,26 @@ describe('open-source bounty tips', () => {
       '/api/open-source-bounties/tips/received/read',
       '/api/open-source-bounties/tips/17/thank',
     ])
+  })
+})
+
+describe('open-source bounty challenge cancellation', () => {
+  test('posts the selected challenge to the publisher cancellation endpoint', async () => {
+    let requestUrl = ''
+    api.post = (async (url) => {
+      requestUrl = url
+      return {
+        data: {
+          success: true,
+          data: { id: 42, status: 'cancelled' },
+        },
+      }
+    }) as typeof api.post
+
+    const challenge = await cancelChallenge(42)
+
+    assert.equal(requestUrl, '/api/open-source-bounties/challenges/42/cancel')
+    assert.equal(challenge.status, 'cancelled')
   })
 })
 

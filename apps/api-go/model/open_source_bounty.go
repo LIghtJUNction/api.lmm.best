@@ -24,6 +24,7 @@ const (
 	OpenSourceBountyChallengeApproved  = "approved"
 	OpenSourceBountyChallengeRejected  = "rejected"
 	OpenSourceBountyChallengeWithdrawn = "withdrawn"
+	OpenSourceBountyChallengeCancelled = "cancelled"
 
 	OpenSourceBountyLedgerEscrowFund     = "escrow_fund"
 	OpenSourceBountyLedgerRewardTransfer = "reward_transfer"
@@ -602,7 +603,7 @@ func closeOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSource
 			return err
 		}
 		if active > 0 {
-			return bountyError("OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES", "resolve or reject active challenges before closing the bounty")
+			return bountyError("OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES", "cancel unsubmitted challenges or review submitted work before closing the bounty")
 		}
 		var openDisputes int64
 		if err := tx.Model(&OpenSourceBountyDispute{}).
@@ -762,7 +763,7 @@ func openSourceBountyViewerChallengePriority(status string) int {
 		return 3
 	case OpenSourceBountyChallengeRejected:
 		return 2
-	case OpenSourceBountyChallengeWithdrawn:
+	case OpenSourceBountyChallengeWithdrawn, OpenSourceBountyChallengeCancelled:
 		return 1
 	default:
 		return 0
@@ -1056,6 +1057,76 @@ func SubmitOpenSourceBountyChallenge(participantUserId int, projectId int, issue
 
 func WithdrawOpenSourceBountyChallenge(participantUserId int, challengeId int) (*OpenSourceBountyChallenge, error) {
 	return withdrawOpenSourceBountyChallenge(participantUserId, challengeId, nil)
+}
+
+// CancelOpenSourceBountyChallenge lets the publisher release a reward slot
+// that was reserved but has no submitted work. Submitted work must still go
+// through review so cancellation cannot bypass payout or dispute protection.
+func CancelOpenSourceBountyChallenge(ownerUserId int, challengeId int) (*OpenSourceBountyChallenge, error) {
+	return cancelOpenSourceBountyChallenge(ownerUserId, challengeId, nil)
+}
+
+func CancelOpenSourceBountyChallengeWithMCPConfirmation(ownerUserId int, challengeId int, operation OpenSourceBountyMCPConfirmedOperation) (*OpenSourceBountyChallenge, error) {
+	return cancelOpenSourceBountyChallenge(ownerUserId, challengeId, &operation)
+}
+
+func cancelOpenSourceBountyChallenge(ownerUserId int, challengeId int, operation *OpenSourceBountyMCPConfirmedOperation) (*OpenSourceBountyChallenge, error) {
+	var challenge OpenSourceBountyChallenge
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if operation != nil {
+			if err := validateOpenSourceBountyMCPConfirmationTx(tx, ownerUserId, operation.ToolName, operation.PayloadHash, operation.State); err != nil {
+				return err
+			}
+		}
+		var challengeReference OpenSourceBountyChallenge
+		if err := tx.Select("id", "project_id").Where("id = ?", challengeId).First(&challengeReference).Error; err != nil {
+			return bountyError("OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND", "challenge was not found")
+		}
+		var project OpenSourceBountyProject
+		if err := lockForUpdate(tx).Where("id = ? AND owner_user_id = ?", challengeReference.ProjectId, ownerUserId).First(&project).Error; err != nil {
+			return bountyError("OPEN_SOURCE_BOUNTY_FORBIDDEN", "only the bounty owner can cancel this challenge")
+		}
+		if project.Status != OpenSourceBountyStatusPublished && project.Status != OpenSourceBountyStatusPaused {
+			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_STATE", "only a published or paused bounty can cancel a challenge")
+		}
+		if err := lockForUpdate(tx).Where("id = ?", challengeId).First(&challenge).Error; err != nil {
+			return bountyError("OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND", "challenge was not found")
+		}
+		if challenge.ProjectId != project.Id {
+			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", "challenge project changed while it was cancelled")
+		}
+		if challenge.Status != OpenSourceBountyChallengeAccepted {
+			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", "only an unsubmitted challenge can be cancelled")
+		}
+		var openDisputes int64
+		if err := tx.Model(&OpenSourceBountyDispute{}).
+			Where("challenge_id = ? AND status = ?", challengeId, OpenSourceBountyDisputeOpen).
+			Count(&openDisputes).Error; err != nil {
+			return err
+		}
+		if openDisputes > 0 {
+			return bountyError("OPEN_SOURCE_BOUNTY_OPEN_DISPUTES", "a challenge with an open dispute cannot be cancelled")
+		}
+		if err := tx.Model(&challenge).Updates(map[string]interface{}{
+			"status": OpenSourceBountyChallengeCancelled, "updated_at": common.GetTimestamp(),
+		}).Error; err != nil {
+			return err
+		}
+		if operation != nil {
+			return completeOpenSourceBountyMCPOperationTx(tx, ownerUserId, operation.ToolName, operation.PayloadHash, operation.State, map[string]any{
+				"challenge_id": challengeId,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		if operation != nil && OpenSourceBountyErrorCode(err) == "OPEN_SOURCE_BOUNTY_MCP_CONFIRMATION_INVALID" {
+			_ = ConsumeOpenSourceBountyMCPConfirmation(ownerUserId, operation.ToolName, operation.PayloadHash, operation.State)
+		}
+		return nil, err
+	}
+	RecordLog(ownerUserId, LogTypeSystem, fmt.Sprintf("Cancelled unsubmitted open-source bounty challenge %d", challengeId))
+	return &challenge, DB.First(&challenge, challengeId).Error
 }
 
 func WithdrawOpenSourceBountyChallengeWithMCPConfirmation(participantUserId int, challengeId int, operation OpenSourceBountyMCPConfirmedOperation) (*OpenSourceBountyChallenge, error) {
@@ -1366,8 +1437,8 @@ func tipOpenSourceBountyChallenge(ownerUserId int, challengeId int, quota int, n
 		if challenge.ProjectId != project.Id {
 			return bountyError("OPEN_SOURCE_BOUNTY_DISPUTE_IDENTITY_MISMATCH", "challenge project changed while the tip was sent")
 		}
-		if challenge.Status == OpenSourceBountyChallengeWithdrawn {
-			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", "withdrawn challenges cannot receive tips")
+		if challenge.Status == OpenSourceBountyChallengeWithdrawn || challenge.Status == OpenSourceBountyChallengeCancelled {
+			return bountyError("OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE", "inactive challenges cannot receive tips")
 		}
 		participantUserId = challenge.ParticipantUserId
 		if participantUserId == ownerUserId {
