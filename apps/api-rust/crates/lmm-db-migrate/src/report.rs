@@ -45,6 +45,7 @@ pub fn write_atomic<T: Serialize>(path: &Path, report: &T) -> Result<(), Migrati
         serde_json::to_writer_pretty(&mut file, report)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
+        drop(file);
         reject_symlink_target(path)?;
         fs::rename(&temporary, path)?;
         OpenOptions::new().read(true).open(parent)?.sync_all()?;

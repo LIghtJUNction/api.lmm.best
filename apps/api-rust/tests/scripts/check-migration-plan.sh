@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
-legacy="$repo_root/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv"
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(cd -- "$script_dir/../../../.." && pwd -P)
+legacy="${MIGRATION_LEGACY_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv}"
 plan="${MIGRATION_PLAN_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/migration-plan.tsv}"
 gate="${MIGRATION_GATE_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/migration-gate.tsv}"
 review="${MIGRATION_INTEGRATION_REVIEW_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv}"
+
+# Normalize command input without rewriting tracked route ledgers. This keeps
+# the checker stable when a checkout preserves CRLF TSV endings.
+tsv_without_crlf() {
+  sed 's/\r$//' -- "$1"
+}
 expected_header=$'method\tpath\tlegacy_handler\tdomain\tauth_scope\tdata_access\tstreaming\tpriority\tplanned_rust_module\tjob_dependency'
 expected_gate_header=$'method\tpath\tsource_state\tcompile_state\tmount_state\tdifferential_state\tapproval_state\tproduction_owner\tgate_state\tevidence'
 expected_review_header=$'method\tpath\trust_handler\tlistener_differential\tpostgres_evidence\tvalkey_evidence\tdecision\tnotes'
 
 [[ -f "$plan" ]] || { echo "missing migration plan: $plan" >&2; exit 1; }
-[[ $(head -n 1 "$plan") == "$expected_header" ]] || { echo "invalid migration-plan header" >&2; exit 1; }
+[[ -f "$legacy" ]] || { echo "missing frozen legacy route ledger: $legacy" >&2; exit 1; }
+[[ $(tsv_without_crlf "$plan" | head -n 1) == "$expected_header" ]] || { echo "invalid migration-plan header" >&2; exit 1; }
 
 awk -F '\t' '
   function frozen_auth_scope(method, path) {
@@ -57,21 +65,21 @@ awk -F '\t' '
     if (api_token_routes != 9) { printf "expected 9 exact API-token authorization rows, got %d\n", api_token_routes > "/dev/stderr"; failed=1 }
     exit failed
   }
-' "$plan"
+' <(tsv_without_crlf "$plan")
 
-cut -f1-3 "$plan" | tail -n +2 | diff -u "$legacy" -
+cut -f1-3 <(tsv_without_crlf "$plan") | tail -n +2 | diff -u <(tsv_without_crlf "$legacy") -
 
 [[ -f "$gate" ]] || { echo "missing migration evidence gate: $gate" >&2; exit 1; }
-[[ $(head -n 1 "$gate") == "$expected_gate_header" ]] || {
+[[ $(tsv_without_crlf "$gate" | head -n 1) == "$expected_gate_header" ]] || {
   echo "invalid migration-gate header" >&2
   exit 1
 }
 [[ -f "$review" ]] || { echo "missing integration review: $review" >&2; exit 1; }
-[[ $(head -n 1 "$review") == "$expected_review_header" ]] || {
+[[ $(tsv_without_crlf "$review" | head -n 1) == "$expected_review_header" ]] || {
   echo "invalid integration-review header" >&2
   exit 1
 }
-if rg -Fq $'/api/user/logout' "$gate" "$review"; then
+if rg -Fq $'/api/user/logout' <(tsv_without_crlf "$gate") <(tsv_without_crlf "$review"); then
   echo "obsolete /api/user/logout must not appear in migration evidence" >&2
   exit 1
 fi
@@ -96,9 +104,9 @@ awk -F '\t' '
   $9 == "verified-approved" && !($3 == "present" && $4 == "verified" && $5 == "mounted" && $6 == "verified" && $7 == "approved") { printf "gate line %d: verified-approved requires source, compile, mount, differential, and approval evidence\\n", NR > "/dev/stderr"; failed=1 }
   $9 == "verified-approved" && !($10 ~ /(^|;)source=[^;]+(;|$)/ && $10 ~ /(^|;)compile=[^;]+(;|$)/ && $10 ~ /(^|;)mount=[^;]+(;|$)/ && $10 ~ /(^|;)differential=[^;]+(;|$)/ && $10 ~ /(^|;)approval=[^;]+(;|$)/) { printf "gate line %d: verified-approved requires named source, compile, mount, differential, and approval references\\n", NR > "/dev/stderr"; failed=1 }
   END { if (NR != 357) { printf "expected 356 gate rows, got %d\\n", NR - 1 > "/dev/stderr"; failed=1 }; exit failed }
-' "$gate"
+' <(tsv_without_crlf "$gate")
 
-cut -f1-2 "$gate" | tail -n +2 | diff -u <(cut -f1-2 "$legacy") -
+cut -f1-2 <(tsv_without_crlf "$gate") | tail -n +2 | diff -u <(tsv_without_crlf "$legacy" | cut -f1-2) -
 
 evidence_value() {
   local key=$1
@@ -228,7 +236,7 @@ require_frozen_model_delete_501_evidence() {
   handler_count=$(awk -F '\t' -v method="$method" -v path="$path" -v handler="$expected_handler" '
     $1 == method && $2 == path && $3 == handler { count++ }
     END { print count + 0 }
-  ' "$legacy")
+  ' <(tsv_without_crlf "$legacy"))
   [[ $handler_count == 1 ]] || {
     echo "frozen DELETE /v1/models/:model 501 must match exactly one RelayNotImplemented Go owner" >&2
     return 1
@@ -252,7 +260,7 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
   if [[ $compile_state == verified || $differential_state == verified || $approval_state == approved ]]; then
     validate_evidence "$method" "$path" "$evidence" || exit 1
   fi
-done < <(awk -F '\t' 'NR > 1 { print }' "$gate")
+done < <(awk -F '\t' 'NR > 1 { print }' <(tsv_without_crlf "$gate"))
 
 awk -F '\t' '
   NR == 1 { next }
@@ -264,7 +272,7 @@ awk -F '\t' '
     if (seen[key]++) { printf "review line %d: duplicate method/path %s\\n", NR, key > "/dev/stderr"; failed=1 }
   }
   END { exit failed }
-' "$review"
+' <(tsv_without_crlf "$review")
 
 while IFS=$'\t' read -r method path approval_state evidence; do
   [[ $approval_state == approved ]] || continue
@@ -275,12 +283,12 @@ while IFS=$'\t' read -r method path approval_state evidence; do
   review_approval_count=$(awk -F '\t' -v method="$method" -v path="$path" '
     NR > 1 && $1 == method && $2 == path && $7 == "approved" { count++ }
     END { print count + 0 }
-  ' "$review")
+  ' <(tsv_without_crlf "$review"))
   [[ $review_approval_count -eq 1 ]] || {
     echo "approved $method $path lacks one exact approved integration-review record" >&2
     exit 1
   }
-done < <(awk -F '\t' 'NR > 1 { print $1 "\t" $2 "\t" $7 "\t" $10 }' "$gate")
+done < <(awk -F '\t' 'NR > 1 { print $1 "\t" $2 "\t" $7 "\t" $10 }' <(tsv_without_crlf "$gate"))
 
 while IFS=$'\t' read -r method path source_state compile_state mount_state differential_state approval_state owner gate_state evidence; do
   router_evidence=$evidence
@@ -309,22 +317,22 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
       exit 1
     fi
   fi
-done < <(awk -F '\t' 'NR > 1 && $5 == "mounted" { print }' "$gate")
+done < <(awk -F '\t' 'NR > 1 && $5 == "mounted" { print }' <(tsv_without_crlf "$gate"))
 
 expected_root_mounts=$'GET\t/api/about\nGET\t/api/home_page_content\nGET\t/api/notice\nGET\t/api/status\nGET\t/api/token/\nPOST\t/api/token/\nPUT\t/api/token/\nDELETE\t/api/token/:id\nGET\t/api/token/:id\nPOST\t/api/token/:id/key\nPOST\t/api/token/batch\nPOST\t/api/token/batch/keys\nGET\t/api/token/search\nGET\t/api/user/self\nPOST\t/api/user/auth/logout\nPOST\t/api/user/auth/refresh\nPOST\t/api/user/login\nGET\t/v1/models\nGET\t/v1beta/models\nGET\t/v1beta/openai/models'
-actual_root_mounts=$(awk -F '\t' 'NR > 1 && $5 == "mounted" { print $1 "\t" $2 }' "$gate" | LC_ALL=C sort)
+actual_root_mounts=$(awk -F '\t' 'NR > 1 && $5 == "mounted" { print $1 "\t" $2 }' <(tsv_without_crlf "$gate") | LC_ALL=C sort)
 diff -u <(printf '%s\n' "$expected_root_mounts" | LC_ALL=C sort) <(printf '%s\n' "$actual_root_mounts") || {
   echo "migration gate root mount inventory must contain exactly 20 authorized local Rust routes" >&2
   exit 1
 }
 
 expected_blocked_routes=$'GET\t/api/status\nPOST\t/api/user/auth/logout\nPOST\t/api/user/auth/refresh\nPOST\t/api/user/login\nGET\t/api/user/self\nGET\t/v1/models\nGET\t/v1beta/models\nGET\t/v1beta/openai/models'
-actual_blocked_routes=$(awk -F '\t' 'NR > 1 && $9 == "blocked-sol-stop" { print $1 "\t" $2 }' "$gate" | LC_ALL=C sort)
+actual_blocked_routes=$(awk -F '\t' 'NR > 1 && $9 == "blocked-sol-stop" { print $1 "\t" $2 }' <(tsv_without_crlf "$gate") | LC_ALL=C sort)
 diff -u <(printf '%s\n' "$expected_blocked_routes" | LC_ALL=C sort) <(printf '%s\n' "$actual_blocked_routes") || {
   echo "migration gate must block exactly the eight routes stopped by the latest independent Sol review" >&2
   exit 1
 }
-actual_review_blocks=$(awk -F '\t' 'NR > 1 && $7 == "blocked-sol-stop" { print $1 "\t" $2 }' "$review" | LC_ALL=C sort)
+actual_review_blocks=$(awk -F '\t' 'NR > 1 && $7 == "blocked-sol-stop" { print $1 "\t" $2 }' <(tsv_without_crlf "$review") | LC_ALL=C sort)
 diff -u <(printf '%s\n' "$expected_blocked_routes" | LC_ALL=C sort) <(printf '%s\n' "$actual_review_blocks") || {
   echo "integration review must record exactly the eight current Sol STOP routes" >&2
   exit 1
@@ -341,6 +349,7 @@ mapfile -t declared_candidates < <(
 declared_candidate_count=${#declared_candidates[@]}
 mapfile -t candidate_names < <(
   printf '%s\n' "${candidate_files[@]}" |
+    tr '\\\\' '/' |
     sed -E 's#^.*/##; s#\.rs$##' |
     LC_ALL=C sort
 )
@@ -439,6 +448,6 @@ awk -F '\t' '
     printf "migration gate evidence: source-present=%d compiled=%d mounted=%d unmounted=%d differential-verified=%d approved=%d production-owned-rust=%d migration-credit=%d\n", source, compiled, mounted, unmounted, differential, approved, production, production
     printf "migration gate states: legacy-go=%d mounted-unverified=%d candidate-pending-independent-approval=%d blocked-sol-stop=%d verified-approved=%d\n", state["legacy-go"], state["mounted-unverified"], state["candidate-pending-independent-approval"], state["blocked-sol-stop"], state["verified-approved"]
   }
-' "$gate"
+' <(tsv_without_crlf "$gate")
 
 echo "migration plan valid: 356 frozen legacy routes covered exactly; production ownership remains Go"

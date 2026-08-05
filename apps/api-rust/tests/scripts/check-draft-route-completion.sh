@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(cd -- "$script_dir/../../../.." && pwd -P)
 checker="$repo_root/apps/api-rust/tests/scripts/check-draft-route-coverage.sh"
 legacy=${DRAFT_BASELINE_PATH:-"$repo_root/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv"}
 outside_allowlist=${DRAFT_OUTSIDE_BASELINE_ALLOWLIST-"$repo_root/apps/api-rust/tests/fixtures/routes/draft-route-completion-allowlist.tsv"}
