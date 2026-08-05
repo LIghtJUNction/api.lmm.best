@@ -15,6 +15,33 @@ trap cleanup EXIT
 checker_output=$(bash "$checker")
 printf '%s\n' "$checker_output"
 
+# The deployed Rust archive intentionally has no .git directory.  The checker
+# must resolve its repository root from the script location instead of Git.
+no_git_output=$(cd "$runtime" && bash "$checker")
+[[ $no_git_output == *"migration plan valid: 356 frozen legacy routes covered exactly; production ownership remains Go"* ]] || {
+  echo "migration plan checker requires Git metadata when launched outside the checkout" >&2
+  exit 1
+}
+
+crlf_legacy="$runtime/legacy-go-routes.tsv"
+crlf_plan="$runtime/migration-plan.tsv"
+crlf_gate="$runtime/migration-gate.tsv"
+crlf_review="$runtime/integration-review.tsv"
+sed 's/$/\r/' "$repo_root/apps/api-rust/routes/legacy-go-routes.tsv" >"$crlf_legacy"
+sed 's/$/\r/' "$plan" >"$crlf_plan"
+sed 's/$/\r/' "$gate" >"$crlf_gate"
+sed 's/$/\r/' "$repo_root/apps/api-rust/routes/integration-review.tsv" >"$crlf_review"
+crlf_output=$(cd "$runtime" && \
+  MIGRATION_LEGACY_PATH="$crlf_legacy" \
+  MIGRATION_PLAN_PATH="$crlf_plan" \
+  MIGRATION_GATE_PATH="$crlf_gate" \
+  MIGRATION_INTEGRATION_REVIEW_PATH="$crlf_review" \
+  bash "$checker")
+[[ $crlf_output == *"migration plan valid: 356 frozen legacy routes covered exactly; production ownership remains Go"* ]] || {
+  echo "migration plan checker did not normalize CRLF across all ledgers" >&2
+  exit 1
+}
+
 expected_evidence='migration gate evidence: source-present=20 compiled=0 mounted=20 unmounted=336 differential-verified=0 approved=0 production-owned-rust=0 migration-credit=0'
 expected_states='migration gate states: legacy-go=336 mounted-unverified=12 candidate-pending-independent-approval=0 blocked-sol-stop=8 verified-approved=0'
 [[ $checker_output == *"$expected_evidence"* ]] || {

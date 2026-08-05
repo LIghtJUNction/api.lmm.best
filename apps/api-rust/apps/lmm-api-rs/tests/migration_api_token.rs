@@ -1538,6 +1538,28 @@ async fn reset(pool: &PgPool) {
         .execute(pool)
         .await
         .unwrap();
+    sqlx::query("DROP FUNCTION IF EXISTS hide_token_after_update()")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE IF EXISTS users")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE users (
+            id BIGINT PRIMARY KEY,
+            console_activated_at BIGINT,
+            deleted_at TIMESTAMPTZ
+        )",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO users (id) VALUES (7), (8)")
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query("CREATE TABLE tokens (id BIGSERIAL PRIMARY KEY,user_id BIGINT,key TEXT,status BIGINT,name TEXT,created_time BIGINT,accessed_time BIGINT,expired_time BIGINT,remain_quota BIGINT,unlimited_quota BOOL,model_limits_enabled BOOL,model_limits TEXT,allow_ips TEXT,used_quota BIGINT,\"group\" TEXT,cross_group_retry BOOL,deleted_at TIMESTAMPTZ)").execute(pool).await.unwrap();
     sqlx::query("CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         .execute(pool)

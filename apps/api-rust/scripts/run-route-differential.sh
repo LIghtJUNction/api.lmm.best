@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(cd -- "$script_dir/../../.." && pwd -P)
 fixture_dir=${1:-"$repo_root/apps/api-rust/behavior-oracle/fixtures"}
 request_dir=${ROUTE_REQUEST_DIR:-"$repo_root/apps/api-rust/behavior-oracle/requests"}
 require_effects=${ROUTE_REQUIRE_EFFECTS:-auto}
