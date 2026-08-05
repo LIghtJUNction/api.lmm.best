@@ -30,7 +30,7 @@ require_approved_legacy_stubs() {
     echo "frozen legacy baseline must live below the repository root" >&2
     return 1
   }
-  legacy_sha=$(sha256sum -- "$legacy")
+  legacy_sha=$(sed 's/\r$//' -- "$legacy" | sha256sum)
   legacy_sha=${legacy_sha%% *}
   expected_frozen_ledger="$legacy_relative@sha256:$legacy_sha"
 

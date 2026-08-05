@@ -223,6 +223,9 @@ sub normalize_path {
 
 sub relative_source_path {
     my ($path) = @_;
+    # `rg --files` emits native separators on Windows.  The checked-in
+    # allowlist is repository-relative and always uses forward slashes.
+    $path =~ s{\\}{/}g;
     $path =~ s{^\Q$repo_root/\E}{};
     return $path;
 }
