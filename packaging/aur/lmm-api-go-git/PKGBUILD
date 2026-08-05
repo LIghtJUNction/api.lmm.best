@@ -1,0 +1,41 @@
+# Maintainer: LIghtJUNction
+
+pkgname=lmm-api-go-git
+pkgver=0.1.0.r1.ge68b73186
+pkgrel=1
+pkgdesc='LMM API Go backend (git)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/LIghtJUNction/api.lmm.best'
+license=('AGPL-3.0-only')
+depends=('lmm-api')
+makedepends=('git' 'go>=1.25.1')
+provides=('lmm-api-go')
+conflicts=('lmm-api-go' 'lmm-api-go-bin')
+options=('!strip')
+source=('lmm-api::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd lmm-api || return
+  git describe --long --tags --abbrev=9 2>/dev/null | \
+    sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g' || \
+    printf '0.0.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
+}
+
+build() {
+  cd lmm-api/apps/api-go || return
+  CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${pkgver}" \
+    -o "${srcdir}/lmm-api-go" .
+}
+
+package() {
+  local root="${srcdir}/lmm-api"
+  install -Dm0755 "${srcdir}/lmm-api-go" \
+    "${pkgdir}/usr/lib/lmm-api/backends/go/lmm-api"
+  for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
+    install -Dm0644 "${root}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
+  done
+  git -C "${root}" rev-parse HEAD > "${srcdir}/REVISION"
+  install -Dm0644 "${srcdir}/REVISION" "${pkgdir}/usr/share/doc/${pkgname}/REVISION"
+}

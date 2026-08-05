@@ -18,7 +18,7 @@ configured_backend() {
   local value
   value=$(sed -nE 's/^[[:space:]]*LMM_API_BACKEND=(auto|go|rs)[[:space:]]*$/\1/p' \
     "$CONFIG_PATH" 2>/dev/null | tail -n1)
-  printf '%s\n' "${value:-go}"
+  printf '%s\n' "${value:-auto}"
 }
 
 resolved_backend() {

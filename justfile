@@ -157,15 +157,15 @@ docker-rust:
 package: package-go
 
 package-go:
-    @grep -Fqx 'LMM_API_BACKEND=go' packaging/aur/lmm-api/backend.conf || { echo "error: canonical package backend.conf must select go" >&2; exit 1; }
-    bash packaging/aur/lmm-api/build-local-package.sh
+    bash packaging/local/lmm-api-split/build-local-package.sh
 
 package-rust:
-    bash packaging/aur/lmm-api-rs-bin/build-local-package.sh
+    bash packaging/local/lmm-api-rs-fallback-bin/build-local-package.sh
 
 # Validate the public AUR package that consumes prebuilt release assets.
 test-package-bin:
-    bash packaging/aur/lmm-api-bin/test-package.sh
+    bash packaging/aur/test-matrix.sh
+    bash packaging/aur/test-bin-makepkg.sh
 
 # Deploy Go production only after explicit backend and site confirmation.
 deploy-production:

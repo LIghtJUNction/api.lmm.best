@@ -1,0 +1,31 @@
+pkgbase = lmm-api-git
+	pkgdesc = LMM API shared launcher, service, configuration, and web frontend (git)
+	pkgver = 0.1.0.r1.ge68b73186
+	pkgrel = 1
+	url = https://github.com/LIghtJUNction/api.lmm.best
+	install = lmm-api-git.install
+	arch = any
+	license = AGPL-3.0-only
+	makedepends = bun
+	makedepends = git
+	depends = bash
+	depends = ca-certificates
+	depends = coreutils
+	depends = sed
+	depends = systemd
+	depends = tzdata
+	optdepends = lmm-api-go: Go backend provider
+	optdepends = lmm-api-rs: Rust backend provider
+	provides = lmm-api
+	conflicts = lmm-api
+	conflicts = lmm-api-bin
+	conflicts = new-api
+	conflicts = new-api-bin
+	conflicts = new-api-git
+	replaces = new-api-git
+	backup = etc/lmm-api/backend.conf
+	backup = etc/lmm-api/lmm-api.env
+	source = lmm-api::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main
+	sha256sums = SKIP
+
+pkgname = lmm-api-git

@@ -1,0 +1,22 @@
+pkgbase = lmm-api-rs-git
+	pkgdesc = LMM API Rust backend and database migrator (git)
+	pkgver = 0.1.0.r1.ge68b73186
+	pkgrel = 1
+	url = https://github.com/LIghtJUNction/api.lmm.best
+	arch = x86_64
+	license = AGPL-3.0-or-later
+	makedepends = cargo
+	makedepends = git
+	depends = lmm-api
+	depends = gcc-libs
+	depends = glibc
+	optdepends = postgresql: PostgreSQL database
+	optdepends = valkey: cache and rate-limit service
+	provides = lmm-api-rs
+	conflicts = lmm-api-rs
+	conflicts = lmm-api-rs-bin
+	options = !strip
+	source = lmm-api::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main
+	sha256sums = SKIP
+
+pkgname = lmm-api-rs-git

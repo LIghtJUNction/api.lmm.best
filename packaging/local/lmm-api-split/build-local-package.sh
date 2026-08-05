@@ -46,10 +46,11 @@ cleanup() { rm -rf -- "$build_dir" "$pkgdest"; }
 trap cleanup EXIT
 mkdir -p -- "$build_dir/makepkg"
 
-for file in PKGBUILD lmm-api-launcher lmm-api-select lmm-api.service lmm-api.env \
+for file in lmm-api-launcher lmm-api-select lmm-api.service lmm-api.env \
   backend.conf lmm-api.install lmm-api-rs.env.example; do
-  install -Dm0644 "$SCRIPT_DIR/$file" "$build_dir/$file"
+  install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/$file" "$build_dir/$file"
 done
+install -Dm0644 "$SCRIPT_DIR/PKGBUILD" "$build_dir/PKGBUILD"
 chmod 0755 "$build_dir/lmm-api-launcher" "$build_dir/lmm-api-select" "$build_dir/lmm-api.install"
 install -Dm0755 "$GO_BINARY" "$build_dir/lmm-api-go-bin"
 install -Dm0755 "$RS_BINARY" "$build_dir/lmm-api-rs-bin"

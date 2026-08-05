@@ -37,12 +37,12 @@ to transfer `api.lmm.best` traffic.
 Build after a clean checkpoint for a commit-bound artifact:
 
 ```bash
-packaging/aur/lmm-api-rs-bin/build-local-package.sh
+packaging/local/lmm-api-rs-fallback-bin/build-local-package.sh
 ```
 
 For an explicitly labelled dirty test build, use a unique reviewed label:
 
 ```bash
-packaging/aur/lmm-api-rs-bin/build-local-package.sh \
+packaging/local/lmm-api-rs-fallback-bin/build-local-package.sh \
   --revision test-<commit>-<scope>
 ```
