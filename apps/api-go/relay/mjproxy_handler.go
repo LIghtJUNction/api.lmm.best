@@ -2,11 +2,15 @@ package relay
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -28,9 +32,17 @@ import (
 
 func RelayMidjourneyImage(c *gin.Context) {
 	taskId := c.Param("id")
-	midjourneyTask := model.GetByOnlyMJId(taskId)
+	signature := c.Query("sig")
+	userID, err := strconv.Atoi(c.Query("uid"))
+	if err != nil || userID <= 0 || !verifyMidjourneyImageSignature(userID, taskId, signature) {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "midjourney_image_signature_invalid",
+		})
+		return
+	}
+	midjourneyTask := model.GetByMJId(userID, taskId)
 	if midjourneyTask == nil {
-		c.JSON(400, gin.H{
+		c.JSON(http.StatusNotFound, gin.H{
 			"error": "midjourney_task_not_found",
 		})
 		return
@@ -97,6 +109,33 @@ func RelayMidjourneyImage(c *gin.Context) {
 	return
 }
 
+func midjourneyImageSignature(userID int, taskID string) string {
+	mac := hmac.New(sha256.New, []byte(common.SessionSecret))
+	_, _ = mac.Write([]byte(fmt.Sprintf("midjourney-image-v1:%d:%s", userID, taskID)))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func verifyMidjourneyImageSignature(userID int, taskID, signature string) bool {
+	if userID <= 0 || taskID == "" || signature == "" {
+		return false
+	}
+	expected := midjourneyImageSignature(userID, taskID)
+	provided, err := hex.DecodeString(signature)
+	if err != nil {
+		return false
+	}
+	want, err := hex.DecodeString(expected)
+	return err == nil && hmac.Equal(provided, want)
+}
+
+// BuildMidjourneyImageURL returns a bearer URL bound to one user's task.
+func BuildMidjourneyImageURL(baseURL string, userID int, taskID string) string {
+	query := url.Values{}
+	query.Set("uid", strconv.Itoa(userID))
+	query.Set("sig", midjourneyImageSignature(userID, taskID))
+	return strings.TrimRight(baseURL, "/") + "/mj/image/" + url.PathEscape(taskID) + "?" + query.Encode()
+}
+
 func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
 	var midjRequest dto.MidjourneyDto
 	err := common.UnmarshalBodyReusable(c, &midjRequest)
@@ -150,9 +189,15 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	midjourneyTask.FinishTime = originTask.FinishTime
 	midjourneyTask.ImageUrl = ""
 	if originTask.ImageUrl != "" && setting.MjForwardUrlEnabled {
-		midjourneyTask.ImageUrl = system_setting.ServerAddress + "/mj/image/" + originTask.MjId
+		midjourneyTask.ImageUrl = BuildMidjourneyImageURL(system_setting.ServerAddress, originTask.UserId, originTask.MjId)
 		if originTask.Status != "SUCCESS" {
-			midjourneyTask.ImageUrl += "?rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
+			imageURL, err := url.Parse(midjourneyTask.ImageUrl)
+			if err == nil {
+				query := imageURL.Query()
+				query.Set("rand", strconv.FormatInt(time.Now().UnixNano(), 10))
+				imageURL.RawQuery = query.Encode()
+				midjourneyTask.ImageUrl = imageURL.String()
+			}
 		}
 	} else {
 		midjourneyTask.ImageUrl = originTask.ImageUrl
