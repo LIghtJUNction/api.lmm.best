@@ -1,24 +1,11 @@
 # Explicit Rust migration-preview image. It is never the default/latest image.
-FROM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS web-builder
-
-WORKDIR /build
-COPY package.json bun.lock turbo.json ./
-COPY apps/web/package.json apps/web/package.json
-COPY apps/api-go/package.json apps/api-go/package.json
-COPY apps/api-rust/package.json apps/api-rust/package.json
-RUN bun install --frozen-lockfile
-COPY apps/web apps/web
-COPY VERSION VERSION
-RUN DISABLE_ESLINT_PLUGIN=true \
-    VITE_REACT_APP_VERSION="$(cat VERSION)" \
-    bun run --filter @lmm/web build
-
 FROM rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS rust-builder
 
 WORKDIR /build/apps/api-rust
 COPY apps/api-rust/Cargo.toml apps/api-rust/Cargo.lock ./
-COPY apps/api-rust/apps apps
 COPY apps/api-rust/crates crates
+COPY apps/api-rust/src src
+COPY apps/api-rust/assets assets
 ARG LMM_BUILD_REVISION=unknown
 RUN LMM_BUILD_REVISION="${LMM_BUILD_REVISION}" \
     cargo build --locked --release --package lmm-api-rs
@@ -32,12 +19,10 @@ RUN apt-get update \
     && useradd --system --uid 10001 --gid lmm-api-rs --home-dir /var/lib/lmm-api-rs --create-home lmm-api-rs
 
 COPY --from=rust-builder /build/apps/api-rust/target/release/lmm-api-rs /usr/local/bin/lmm-api-rs
-COPY --from=web-builder /build/apps/web/dist /opt/lmm-api-rs/web/dist
 COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /licenses/
 
 ENV LMM_RS_LISTEN_ADDR=0.0.0.0:3000 \
-    LMM_RS_SLOT=preview \
-    LMM_WEB_DIST_DIR=/opt/lmm-api-rs/web/dist
+    LMM_RS_SLOT=preview
 EXPOSE 3000
 WORKDIR /var/lib/lmm-api-rs
 USER 10001:10001

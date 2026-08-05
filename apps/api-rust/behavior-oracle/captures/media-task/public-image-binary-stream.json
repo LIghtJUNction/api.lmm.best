@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "source": {"revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9", "synthetic": true},
-  "route": {"id": "GET /mj/image/:id (stubbed binary stream)", "middleware": [], "side_effects": ["reads Midjourney by mj_id", "performs SSRF-validated upstream GET", "streams upstream body"]},
-  "request": {"method": "GET", "path": "/mj/image/stub-image-job", "headers": {"accept": "image/*"}, "body": null},
-  "response": {"status": 200, "selected_headers": {"content-type": "image/png"}, "body": {"encoding": "base64", "value": "iVBORw0KGgo="}, "sse_frames": []},
-  "effects": {"database": {"inserted": [], "updated": [], "deleted": []}, "valkey": {"added": [], "changed": [], "removed": []}},
-  "normalization": {"rules": []}
-}

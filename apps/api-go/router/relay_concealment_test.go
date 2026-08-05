@@ -19,7 +19,7 @@ func TestExternalFrontendDoesNotRevealRelayRoutes(t *testing.T) {
 	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example")
 
 	engine := gin.New()
-	SetRouter(engine, WebAssets{})
+	SetRouter(engine)
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		t.Run(method, func(t *testing.T) {
@@ -63,4 +63,55 @@ func TestExternalFrontendDoesNotRevealRelayRoutes(t *testing.T) {
 		)
 		assert.Equal(t, responses[0].Body.String(), responses[1].Body.String())
 	})
+}
+
+func TestExternalFrontendKeepsEveryBackendFamilyOffThePublicSurface(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousMasterNode := common.IsMasterNode
+	common.IsMasterNode = false
+	t.Cleanup(func() { common.IsMasterNode = previousMasterNode })
+	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example")
+
+	engine := gin.New()
+	SetRouter(engine)
+
+	backendPaths := []string{
+		"/api/not-a-route",
+		"/assets/not-a-route",
+		"/mcp/not-a-route",
+		"/v1/not-a-route",
+		"/v1beta/not-a-route",
+		"/pg/not-a-route",
+		"/mj/not-a-route",
+		"/suno/not-a-route",
+		"/kling/v1/not-a-route",
+		"/jimeng/not-a-route",
+		"/dashboard/billing/subscription",
+		"/dashboard/billing/usage",
+		"/fast/mj/not-a-route",
+	}
+	for _, path := range backendPaths {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, path+"?probe=1", nil)
+
+			engine.ServeHTTP(response, request)
+
+			assert.Equal(t, http.StatusNotFound, response.Code)
+			assert.JSONEq(t, `{"message":"Not Found"}`, response.Body.String())
+			assert.Empty(t, response.Header().Get("Location"))
+		})
+	}
+
+	frontendResponse := httptest.NewRecorder()
+	engine.ServeHTTP(
+		frontendResponse,
+		httptest.NewRequest(http.MethodGet, "/challenges?status=open", nil),
+	)
+	assert.Equal(t, http.StatusMovedPermanently, frontendResponse.Code)
+	assert.Equal(
+		t,
+		"https://frontend.example/challenges?status=open",
+		frontendResponse.Header().Get("Location"),
+	)
 }

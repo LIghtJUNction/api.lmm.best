@@ -51,26 +51,18 @@ run-go:
 
 # Run the explicit Rust backend with standardized infrastructure.
 run-rust: infra-up
-    bun run --filter @lmm/api-rust run
+    bun run dev:rust
 
-# Build web, synchronize it into Go embed assets, then build static Go.
-build: build-web sync-web build-go
+# Build the frontend and default Go backend as independent artifacts.
+build: build-web build-go
 
 # Build the shared web frontend.
 build-web:
     VITE_REACT_APP_VERSION="$(cat VERSION)" bun run build:web
     @test -f apps/web/dist/index.html || { echo "error: apps/web/dist/index.html was not produced" >&2; exit 1; }
 
-# Synchronize verified web assets into the Go embed tree.
-sync-web:
-    @test -f apps/web/dist/index.html || { echo "error: verified apps/web/dist is missing; run 'just build-web'" >&2; exit 1; }
-    mkdir -p apps/api-go/web/dist
-    rsync --archive --delete apps/web/dist/ apps/api-go/web/dist/
-    @test -f apps/api-go/web/dist/index.html || { echo "error: Go embed synchronization failed" >&2; exit 1; }
-
-# Build the static Go production binary from synchronized assets.
+# Build the static Go production binary independently.
 build-go:
-    @test -f apps/api-go/web/dist/index.html || { echo "error: Go embed assets are missing; run 'just build'" >&2; exit 1; }
     bun run build:go
     @test -x apps/api-go/out/lmm-api || { echo "error: static Go binary was not produced" >&2; exit 1; }
 
@@ -150,7 +142,7 @@ typecheck-rust:
 
 # Remove generated build and task-runner output only.
 clean-generated:
-    rm -rf .turbo apps/api-go/.turbo apps/api-rust/.turbo apps/web/.turbo apps/api-go/out apps/api-go/web/dist apps/api-rust/target apps/web/dist
+    rm -rf .turbo apps/web/.turbo apps/api-go/out apps/api-rust/target apps/web/dist
 
 # Build the default Go image from the root Dockerfile.
 docker: docker-go

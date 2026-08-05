@@ -35,7 +35,6 @@ import { useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { z } from 'zod'
 
 import { Main } from '@/components/layout'
 import {
@@ -65,46 +64,13 @@ import {
   buildSupportTicketText,
   SUPPORT_EMAIL,
 } from './lib'
-import {
-  SUPPORT_TICKET_CATEGORIES,
-  BOUNTY_DISPUTE_REASONS,
-  type BountyDisputeReason,
-  type SupportTicketCategory,
-  type SupportTicketDraft,
-  type SupportTicketLabels,
+import type {
+  BountyDisputeReason,
+  SupportTicketCategory,
+  SupportTicketDraft,
+  SupportTicketLabels,
 } from './types'
-
-const supportTicketSchema = z
-  .object({
-    category: z.enum(SUPPORT_TICKET_CATEGORIES),
-    disputeReason: z.enum(BOUNTY_DISPUTE_REASONS),
-    contactEmail: z.string().trim().email('Enter a valid contact email'),
-    referenceId: z.string().trim().max(120, 'Reference ID is too long'),
-    subject: z
-      .string()
-      .trim()
-      .min(4, 'Subject must be at least 4 characters')
-      .max(100, 'Subject must be at most 100 characters'),
-    details: z
-      .string()
-      .trim()
-      .min(20, 'Details must be at least 20 characters')
-      .max(1200, 'Details must be at most 1200 characters'),
-  })
-  .superRefine((values, context) => {
-    if (
-      values.category === 'bounty_dispute' &&
-      !/^\d+$/.test(values.referenceId)
-    ) {
-      context.addIssue({
-        code: 'custom',
-        path: ['referenceId'],
-        message: 'Enter a valid bounty challenge ID',
-      })
-    }
-  })
-
-type SupportTicketForm = z.infer<typeof supportTicketSchema>
+import { supportTicketSchema, type SupportTicketForm } from './validation'
 
 const CATEGORY_META = [
   {
@@ -250,8 +216,12 @@ export function SupportTicket({
         toast.success(
           t('Bounty dispute submitted for third-party administrator review.')
         )
-      } catch {
-        toast.error(t('Unable to submit the bounty dispute.'))
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t('Unable to submit the bounty dispute.')
+        )
       } finally {
         setSubmitting(false)
       }
@@ -406,30 +376,39 @@ export function SupportTicket({
                     ) : null}
 
                     <div className='grid gap-5 sm:grid-cols-2'>
-                      <Field
-                        data-invalid={errors.contactEmail ? true : undefined}
-                      >
-                        <FieldLabel htmlFor='support-contact-email'>
-                          {t('Contact email')}
-                        </FieldLabel>
-                        <Input
-                          id='support-contact-email'
-                          type='email'
-                          autoComplete='email'
-                          aria-invalid={errors.contactEmail ? true : undefined}
-                          {...register('contactEmail')}
-                        />
-                        <FieldDescription>
-                          {t("We'll use this address to reply.")}
-                        </FieldDescription>
-                        <FieldError>
-                          {errors.contactEmail?.message
-                            ? t(errors.contactEmail.message)
-                            : null}
-                        </FieldError>
-                      </Field>
+                      {selectedCategory !== 'bounty_dispute' ? (
+                        <Field
+                          data-invalid={errors.contactEmail ? true : undefined}
+                        >
+                          <FieldLabel htmlFor='support-contact-email'>
+                            {t('Contact email')}
+                          </FieldLabel>
+                          <Input
+                            id='support-contact-email'
+                            type='email'
+                            autoComplete='email'
+                            aria-invalid={
+                              errors.contactEmail ? true : undefined
+                            }
+                            {...register('contactEmail')}
+                          />
+                          <FieldDescription>
+                            {t("We'll use this address to reply.")}
+                          </FieldDescription>
+                          <FieldError>
+                            {errors.contactEmail?.message
+                              ? t(errors.contactEmail.message)
+                              : null}
+                          </FieldError>
+                        </Field>
+                      ) : null}
 
                       <Field
+                        className={
+                          selectedCategory === 'bounty_dispute'
+                            ? 'sm:col-span-2'
+                            : undefined
+                        }
                         data-invalid={errors.referenceId ? true : undefined}
                       >
                         <FieldLabel htmlFor='support-reference-id'>
