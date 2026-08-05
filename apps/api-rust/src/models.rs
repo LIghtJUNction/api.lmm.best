@@ -1209,7 +1209,7 @@ fn success_response(models: Vec<ModelView>, format: ModelsFormat) -> Response {
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(LegacyPanicEnvelope {
                         error: LegacyPanicError {
-                            message: "Panic detected, error: runtime error: index out of range [0] with length 0. Please submit a issue here: https://github.com/Calcium-Ion/new-api",
+                            message: "Panic detected, error: runtime error: index out of range [0] with length 0. Please report it at https://github.com/LIghtJUNction/api.lmm.best/issues",
                             kind: "new_api_panic",
                         },
                     }),
@@ -1687,7 +1687,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
             json_body(response).await,
-            json!({"error":{"message":"Panic detected, error: runtime error: index out of range [0] with length 0. Please submit a issue here: https://github.com/Calcium-Ion/new-api","type":"new_api_panic"}})
+            json!({"error":{"message":"Panic detected, error: runtime error: index out of range [0] with length 0. Please report it at https://github.com/LIghtJUNction/api.lmm.best/issues","type":"new_api_panic"}})
         );
     }
 

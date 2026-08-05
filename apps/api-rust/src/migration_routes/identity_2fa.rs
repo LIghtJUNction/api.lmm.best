@@ -31,7 +31,7 @@ use totp_rs::{Algorithm, Secret, TOTP};
 const BACKUP_CODE_COUNT: usize = 4;
 const BACKUP_CODE_LENGTH: usize = 8;
 const TOTP_SECRET_LENGTH: usize = 32;
-const TOTP_ISSUER: &str = "New API";
+const TOTP_ISSUER: &str = "LMM Forge";
 const TOTP_MAX_ATTEMPTS: i64 = 5;
 const TOTP_LOCK_SECONDS: i64 = 5 * 60;
 const ROLE_ADMIN: i64 = 10;

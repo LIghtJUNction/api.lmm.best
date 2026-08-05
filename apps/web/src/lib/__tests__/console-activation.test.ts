@@ -22,6 +22,7 @@ import { describe, test } from 'node:test'
 import type { AuthUser } from '@/stores/auth-store'
 
 import {
+  getAuthenticatedLandingRoute,
   isConsoleActivated,
   isContributorRoute,
   isRestrictedPublicRoute,
@@ -47,11 +48,24 @@ describe('console activation boundary', () => {
     assert.equal(isConsoleActivated(user(1)), true)
   })
 
+  test('lands every authenticated user in a bounty workspace', () => {
+    assert.equal(getAuthenticatedLandingRoute(user(1, 0)), '/workspace')
+    assert.equal(
+      getAuthenticatedLandingRoute(user(1, 1720000000)),
+      '/open-source-bounties'
+    )
+    assert.equal(
+      getAuthenticatedLandingRoute(user(10, 0)),
+      '/open-source-bounties'
+    )
+  })
+
   test('allows only contributor, wallet, and profile routes before activation', () => {
     assert.equal(isContributorRoute('/workspace'), true)
     assert.equal(isContributorRoute('/challenges/42'), true)
     assert.equal(isContributorRoute('/wallet'), true)
     assert.equal(isContributorRoute('/profile/security'), true)
+    assert.equal(isContributorRoute('/support'), true)
     assert.equal(isContributorRoute('/models'), false)
     assert.equal(isContributorRoute('/open-source-bounties'), false)
   })

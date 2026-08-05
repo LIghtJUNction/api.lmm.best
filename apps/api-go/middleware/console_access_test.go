@@ -20,7 +20,13 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 	}{
 		{http.MethodGet, "/api/open-source-bounties"},
 		{http.MethodGet, "/api/open-source-bounties/projects/7"},
+		{http.MethodGet, "/api/open-source-bounties/accepted"},
+		{http.MethodGet, "/api/open-source-bounties/disputes/mine"},
 		{http.MethodPost, "/api/open-source-bounties/projects/7/accept"},
+		{http.MethodPost, "/api/open-source-bounties/projects/7/submit"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/withdraw"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/rate-owner"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/disputes"},
 		{http.MethodGet, "/api/user/topup/info"},
 		{http.MethodPost, "/api/user/stripe/pay"},
 		{http.MethodGet, "/api/user/aff"},
@@ -41,17 +47,68 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodGet, "/api/models"},
 		{http.MethodGet, "/api/channel"},
 		{http.MethodGet, "/api/pricing"},
+		{http.MethodGet, "/api/subscription/plans"},
+		{http.MethodPost, "/api/subscription/balance/pay"},
 		{http.MethodGet, "/api/usage"},
 		{http.MethodPost, "/api/subscription/admin/plans"},
 		{http.MethodGet, "/api/open-source-bounties-probe"},
 		{http.MethodGet, "/api/subscription-probe"},
 		{http.MethodPost, "/api/open-source-bounties"},
+		{http.MethodGet, "/api/open-source-bounties/mine"},
 		{http.MethodGet, "/api/open-source-bounties/mcp-token"},
 		{http.MethodPut, "/api/open-source-bounties/projects/7"},
 		{http.MethodPost, "/api/open-source-bounties/projects/7/publish"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/approve"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/tip"},
 	}
 	for _, request := range denied {
 		assert.False(t, preActivationRouteAllowed(request.method, request.path), "%s %s", request.method, request.path)
+	}
+}
+
+func TestConsoleAccessGateHidesDiscoveryRoutesWithoutActivatedSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, path := range []string{
+		"/api/channel",
+		"/api/deployments",
+		"/api/models",
+		"/api/perf-metrics/summary",
+		"/api/pricing",
+		"/api/rankings",
+		"/api/ratio_config",
+		"/api/vendor/search",
+	} {
+		router := gin.New()
+		router.Use(ConsoleAccessGate())
+		router.GET(path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+
+		assert.Equal(t, http.StatusNotFound, response.Code, path)
+		assert.JSONEq(t, `{"message":"Not Found"}`, response.Body.String(), path)
+	}
+}
+
+func TestConsoleAccessGateKeepsPublicAccountAndBountyRoutesReachable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, path := range []string{
+		"/api/status",
+		"/api/user/login",
+		"/api/open-source-bounties",
+	} {
+		router := gin.New()
+		router.Use(ConsoleAccessGate())
+		router.Any(path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		if path == "/api/user/login" {
+			request.Method = http.MethodPost
+		}
+		router.ServeHTTP(response, request)
+
+		assert.Equal(t, http.StatusNoContent, response.Code, path)
 	}
 }
 

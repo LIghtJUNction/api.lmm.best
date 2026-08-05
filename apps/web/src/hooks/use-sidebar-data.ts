@@ -91,6 +91,22 @@ export function useSidebarData(): SidebarData {
   return {
     navGroups: [
       {
+        id: 'forge',
+        title: t('Open-source bounties'),
+        items: [
+          {
+            title: t('Open-source bounties'),
+            url: '/open-source-bounties',
+            icon: Bug,
+          },
+          {
+            title: t('Challenges'),
+            url: '/challenges',
+            icon: Trophy,
+          },
+        ],
+      },
+      {
         id: 'chat',
         title: t('Chat'),
         items: [
@@ -157,11 +173,6 @@ export function useSidebarData(): SidebarData {
             title: t('Submit a ticket'),
             url: '/support',
             icon: LifeBuoy,
-          },
-          {
-            title: t('Open-source bounties'),
-            url: '/open-source-bounties',
-            icon: Bug,
           },
         ],
       },
