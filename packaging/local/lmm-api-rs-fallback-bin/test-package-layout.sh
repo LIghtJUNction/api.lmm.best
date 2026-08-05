@@ -5,7 +5,7 @@ set -Eeuo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
 readonly PKGBUILD="$HERE/PKGBUILD"
-readonly INSTALL_TEMPLATE="$HERE/lmm-api-rs-bin.install"
+readonly INSTALL_TEMPLATE="$HERE/lmm-api-rs-fallback-bin.install"
 readonly BUILD_SCRIPT="$HERE/build-local-package.sh"
 readonly DEPLOY_SCRIPT="$HERE/../../../deploy/backend-rust/deploy-lmm-api-rs-single-instance.sh"
 readonly BOOTSTRAP_SCRIPT="$HERE/../../../deploy/backend-rust/install-lmm-api-rs-single-instance.sh"
@@ -70,7 +70,7 @@ for required in \
   '/usr/share/lmm-api-rs/payload.sha256' \
   '/usr/share/lmm-api-rs/source-manifest.tsv' \
   '/usr/share/lmm-api-rs/source-manifest.sha256' \
-  'lmm-api-rs-bin.install' \
+  'lmm-api-rs-fallback-bin.install' \
   'create-sanitized-test-schema.sh' \
   'import-sanitized-auth-snapshot.sh' \
   'sanitized-auth-snapshot-v1.tsv.schema' \

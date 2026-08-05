@@ -166,8 +166,8 @@ jobs:
           bash check-docker-image-namespace.sh
           bash test-docker-image-namespace.sh
 
-  aur-bin-package:
-    name: AUR prebuilt package contract
+  aur-package-matrix:
+    name: AUR six-package contract
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container: archlinux:base-devel
@@ -180,7 +180,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Validate prebuilt AUR package
+      - name: Validate all public AUR packages
         run: |
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
-          runuser --user package-builder -- bash packaging/aur/lmm-api-bin/test-package.sh
+          runuser --user package-builder -- bash packaging/aur/test-matrix.sh
+          runuser --user package-builder -- bash packaging/aur/test-bin-makepkg.sh

@@ -7,7 +7,7 @@ umask 077
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly SCRIPT_DIR
 readonly GUARD="$SCRIPT_DIR/fallback-target-guard.sh"
-readonly PACKAGE_NAME='lmm-api-rs-bin'
+readonly PACKAGE_NAME='lmm-api-rs-fallback-bin'
 readonly SERVICE_NAME='lmm-api-rs-single.service'
 
 die() { printf 'deploy-lmm-api-rs-single-instance: %s\n' "$*" >&2; exit 1; }

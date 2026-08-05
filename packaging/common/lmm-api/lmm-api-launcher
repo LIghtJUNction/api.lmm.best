@@ -18,7 +18,7 @@ case $backend in
     elif [[ -x $RS_BINARY ]]; then
       backend=rs
     else
-      die 'no backend is installed; install lmm-api-go or explicitly install lmm-api-rs'
+      die 'no backend is installed; install lmm-api-go-bin, lmm-api-go-git, lmm-api-rs-bin, or lmm-api-rs-git'
     fi
     ;;
   go|rs) ;;
@@ -27,11 +27,11 @@ esac
 
 case $backend in
   go)
-    [[ -x $GO_BINARY ]] || die 'Go backend is selected but lmm-api-go is not installed'
+    [[ -x $GO_BINARY ]] || die 'Go backend is selected but no lmm-api-go provider is installed'
     exec "$GO_BINARY" "$@"
     ;;
   rs)
-    [[ -x $RS_BINARY ]] || die 'Rust backend is selected but lmm-api-rs is not installed'
+    [[ -x $RS_BINARY ]] || die 'Rust backend is selected but no lmm-api-rs provider is installed'
     [[ ${LMM_DATABASE_SCHEMA:-} == lmm_preview_* ]] || \
       die 'Rust preview requires LMM_DATABASE_SCHEMA=lmm_preview_*'
     : "${LMM_RS_SLOT:=preview}"
