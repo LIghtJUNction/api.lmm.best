@@ -46,7 +46,7 @@ func TestGetStatusAdvertisesDefaultDashboard(t *testing.T) {
 	assert.Equal(t, "default", payload.Data["theme"])
 }
 
-func TestGetStatusHidesRelayDocumentationBeforeConsoleActivation(t *testing.T) {
+func TestGetStatusHidesPaidDocumentationFromAnonymousVisitors(t *testing.T) {
 	previousMap := common.OptionMap
 	common.OptionMap = map[string]string{}
 	t.Cleanup(func() { common.OptionMap = previousMap })
@@ -63,6 +63,7 @@ func TestGetStatusHidesRelayDocumentationBeforeConsoleActivation(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
 	require.True(t, payload.Success)
 	assert.Equal(t, false, payload.Data["api_info_enabled"])
+	assert.Equal(t, false, payload.Data["docs_access"])
 	assert.Empty(t, payload.Data["docs_link"])
 	_, hasAPIInfo := payload.Data["api_info"]
 	assert.False(t, hasAPIInfo)

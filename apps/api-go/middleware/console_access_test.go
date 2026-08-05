@@ -32,8 +32,6 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodGet, "/api/user/aff"},
 		{http.MethodPut, "/api/user/self"},
 		{http.MethodPost, "/api/user/passkey/register/begin"},
-		{http.MethodPost, "/api/token"},
-		{http.MethodPost, "/api/token/"},
 		{http.MethodGet, "/api/subscription/epay/notify"},
 		{http.MethodPost, "/api/subscription/epay/notify"},
 		{http.MethodGet, "/api/subscription/epay/return"},
@@ -69,6 +67,27 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 	}
 	for _, request := range denied {
 		assert.False(t, preActivationRouteAllowed(request.method, request.path), "%s %s", request.method, request.path)
+	}
+}
+
+func TestTrustLevelDeveloperAccessBoundary(t *testing.T) {
+	levelZero := 0
+	levelOne := 1
+	for _, test := range []struct {
+		name    string
+		user    *model.UserBase
+		granted bool
+	}{
+		{name: "level zero", user: &model.UserBase{Role: common.RoleCommonUser, TrustLevelOverride: &levelZero}},
+		{name: "level one", user: &model.UserBase{Role: common.RoleCommonUser, TrustLevelOverride: &levelOne}, granted: true},
+		{name: "administrator", user: &model.UserBase{Role: common.RoleAdminUser}, granted: true},
+		{name: "root", user: &model.UserBase{Role: common.RoleRootUser}, granted: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			granted, err := trustLevelAllowsDeveloperAccess(test.user)
+			require.NoError(t, err)
+			assert.Equal(t, test.granted, granted)
+		})
 	}
 }
 

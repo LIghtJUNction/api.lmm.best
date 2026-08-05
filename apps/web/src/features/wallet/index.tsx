@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import { SectionPageLayout } from '@/components/layout'
 import { useStatus } from '@/hooks/use-status'
 import { getSelf } from '@/lib/api'
+import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
@@ -62,6 +63,7 @@ interface WalletProps {
 
 export function Wallet(props: WalletProps) {
   const { t } = useTranslation()
+  const setAuthUser = useAuthStore((state) => state.auth.setUser)
   const [user, setUser] = useState<UserWalletData | null>(null)
   const [userLoading, setUserLoading] = useState(true)
   const [topupAmount, setTopupAmount] = useState(0)
@@ -108,7 +110,9 @@ export function Wallet(props: WalletProps) {
       setUserLoading(true)
       const response = await getSelf()
       if (response.success && response.data) {
-        setUser(response.data as UserWalletData)
+        const refreshedUser = response.data as AuthUser
+        setUser(refreshedUser as UserWalletData)
+        setAuthUser(refreshedUser)
       }
     } catch (error) {
       // eslint-disable-next-line no-console
@@ -116,7 +120,7 @@ export function Wallet(props: WalletProps) {
     } finally {
       setUserLoading(false)
     }
-  }, [])
+  }, [setAuthUser])
 
   useEffect(() => {
     fetchUser()

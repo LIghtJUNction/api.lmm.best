@@ -2,8 +2,13 @@ package middleware
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,4 +43,13 @@ func TestResponsesSubprotocolDoesNotReplaceAuthorization(t *testing.T) {
 	header.Set("Sec-WebSocket-Protocol", "responses, openai-insecure-api-key.sk-protocol")
 	assert.True(t, applyWebSocketSubprotocolAuthorization(header))
 	assert.Equal(t, "Bearer sk-protocol", header.Get("Authorization"))
+}
+
+func TestSetupContextForTokenDoesNotSetEmptySpecificChannel(t *testing.T) {
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	token := &model.Token{Id: 7, UserId: 9, Key: "plain-token", Name: "plain"}
+
+	assert.NoError(t, SetupContextForToken(context, token))
+	assert.Empty(t, common.GetContextKeyString(context, constant.ContextKeyTokenSpecificChannelId),
+		"ordinary tokens must use normal channel selection")
 }

@@ -388,6 +388,12 @@ func GetUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
+	trustLevel, err := model.GetTrustLevelInfoForUser(user)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	user.TrustLevelInfo = &trustLevel
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -487,19 +493,12 @@ func GetAffCode(c *gin.Context) {
 
 func GetSelf(c *gin.Context) {
 	id := c.GetInt("id")
-	userRole := c.GetInt("role")
 	user, err := model.GetUserById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	responseData := buildSelfUserData(user)
-	// The authenticated role is loaded from GetUserCache. It should equal the
-	// row role, but use it for capabilities so GetSelf and login/refresh remain
-	// consistent with the authorization decision made for this request.
-	permissions := calculateUserPermissions(userRole)
-	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
-	responseData["permissions"] = permissions
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -516,11 +515,18 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
-	consoleActivatedAt := user.ConsoleActivatedAt
-	if user.Role >= common.RoleAdminUser && consoleActivatedAt == 0 {
+	trustLevel, err := model.GetTrustLevelInfoForUser(user)
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to calculate trust level for user %d: %s", user.Id, err.Error()))
+		trustLevel = model.EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, common.GetTimestamp())
+	}
+	consoleActivatedAt := int64(0)
+	if trustLevel.Level >= 1 {
 		consoleActivatedAt = 1
 	}
 	permissions["console_activated_at"] = consoleActivatedAt
+	docsAccess := trustLevel.Level >= 1
+	permissions["docs_access"] = docsAccess
 	return map[string]interface{}{
 		"id":                user.Id,
 		"username":          user.Username,
@@ -545,6 +551,7 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"linux_do_id":       user.LinuxDOId,
 		"setting":           user.Setting,
 		"stripe_customer":   user.StripeCustomer,
+		"trust_level_info":  trustLevel,
 		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
 		"permissions":       permissions,
 	}
@@ -675,9 +682,18 @@ func GetUserModels(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	var requestData map[string]interface{}
+	if err := common.DecodeJson(c.Request.Body, &requestData); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	requestDataBytes, err := common.Marshal(requestData)
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	var updatedUser model.User
-	err := common.DecodeJson(c.Request.Body, &updatedUser)
-	if err != nil || updatedUser.Id == 0 {
+	if err := common.Unmarshal(requestDataBytes, &updatedUser); err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
@@ -708,6 +724,17 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
+	trustLevelValue, trustLevelSpecified := requestData["trust_level_override"]
+	var trustLevelOverride *int
+	if trustLevelSpecified {
+		encodedValue, err := common.Marshal(trustLevelValue)
+		if err != nil || common.Unmarshal(encodedValue, &trustLevelOverride) != nil ||
+			originUser.Role >= common.RoleAdminUser ||
+			(trustLevelOverride != nil && (*trustLevelOverride < model.TrustLevelMinUser || *trustLevelOverride > model.TrustLevelMaxUser)) {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+	}
 	if updatedUser.Password == "$I_LOVE_U" {
 		updatedUser.Password = "" // rollback to what it should be
 	}
@@ -716,6 +743,12 @@ func UpdateUser(c *gin.Context) {
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
+		}
+		if trustLevelSpecified {
+			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).
+				Update("trust_level_override", trustLevelOverride).Error; err != nil {
+				return err
+			}
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, updatedUser.Id, originUser.Role, updatedUser.AdminPermissions)
 		authzTouched = touched
@@ -1214,6 +1247,25 @@ func ManageUser(c *gin.Context) {
 			return
 		}
 		user.Role = common.RoleCommonUser
+	case "set_trust_level":
+		if user.Role >= common.RoleAdminUser || req.Value < -1 || req.Value > model.TrustLevelMaxUser {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		var level *int
+		if req.Value >= model.TrustLevelMinUser {
+			value := req.Value
+			level = &value
+		}
+		if err := model.SetUserTrustLevelOverride(user.Id, level); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordManageAuditFor(c, user.Id, "user.trust_level_override", map[string]interface{}{
+			"level": req.Value,
+		})
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
 	case "add_quota":
 		switch req.Mode {
 		case "add":

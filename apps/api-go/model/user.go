@@ -108,6 +108,9 @@ type User struct {
 	StripeCustomer     string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
 	CreatedAt          int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
 	LastLoginAt        int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	LastAPIActivityAt  int64                      `json:"last_api_activity_at" gorm:"type:bigint;not null;default:0;column:last_api_activity_at"`
+	TrustLevelOverride *int                       `json:"trust_level_override" gorm:"type:int;column:trust_level_override"`
+	TrustLevelInfo     *TrustLevelInfo            `json:"trust_level_info,omitempty" gorm:"-:all"`
 	ConsoleActivatedAt int64                      `json:"console_activated_at" gorm:"type:bigint;not null;default:0;column:console_activated_at"`
 	AuthVersion        int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
 	AdminPermissions   map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
@@ -123,6 +126,9 @@ func (user *User) ToBaseUser() *UserBase {
 		Username:           user.Username,
 		Setting:            user.Setting,
 		Email:              user.Email,
+		CreatedAt:          user.CreatedAt,
+		LastAPIActivityAt:  user.LastAPIActivityAt,
+		TrustLevelOverride: user.TrustLevelOverride,
 		ConsoleActivatedAt: user.ConsoleActivatedAt,
 		AuthVersion:        user.AuthVersion,
 		CacheSchema:        userCacheSchemaVersion,
@@ -374,9 +380,11 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 		tx.Rollback()
 		return nil, 0, err
 	}
-
 	// Commit transaction
 	if err = tx.Commit().Error; err != nil {
+		return nil, 0, err
+	}
+	if err = EnrichUsersTrustLevels(users); err != nil {
 		return nil, 0, err
 	}
 
@@ -443,9 +451,11 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 		tx.Rollback()
 		return nil, 0, err
 	}
-
 	// 提交事务
 	if err = tx.Commit().Error; err != nil {
+		return nil, 0, err
+	}
+	if err = EnrichUsersTrustLevels(users); err != nil {
 		return nil, 0, err
 	}
 
@@ -1320,8 +1330,9 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
-			"used_quota":    gorm.Expr("used_quota + ?", quota),
-			"request_count": gorm.Expr("request_count + ?", count),
+			"used_quota":           gorm.Expr("used_quota + ?", quota),
+			"request_count":        gorm.Expr("request_count + ?", count),
+			"last_api_activity_at": common.GetTimestamp(),
 		},
 	).Error
 	if err != nil {
@@ -1342,9 +1353,10 @@ func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, r
 
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
-			"quota":         gorm.Expr("quota + ?", quota),
-			"used_quota":    gorm.Expr("used_quota + ?", usedQuota),
-			"request_count": gorm.Expr("request_count + ?", requestCount),
+			"quota":                gorm.Expr("quota + ?", quota),
+			"used_quota":           gorm.Expr("used_quota + ?", usedQuota),
+			"request_count":        gorm.Expr("request_count + ?", requestCount),
+			"last_api_activity_at": common.GetTimestamp(),
 		},
 	).Error
 	if err != nil {

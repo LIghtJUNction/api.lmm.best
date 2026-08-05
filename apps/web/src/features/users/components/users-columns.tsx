@@ -219,6 +219,46 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { mobileOrder: 20 },
     },
     {
+      id: 'trust_level',
+      header: t('Trust level'),
+      cell: ({ row }) => {
+        const user = row.original
+        const info = user.trust_level_info
+        const level =
+          info?.level ?? (user.role >= 100 ? 6 : user.role >= 10 ? 5 : 0)
+        const overridden = info?.overridden === true
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <StatusBadge
+                  label={`L${level}`}
+                  variant={
+                    level >= 5 ? 'info' : level >= 3 ? 'success' : 'neutral'
+                  }
+                  copyable={false}
+                  className='cursor-help'
+                />
+              }
+            />
+            <TooltipContent>
+              <p className='text-xs'>
+                {overridden
+                  ? t('Administrator override')
+                  : t('Automatic level')}
+                {info?.discount_percent
+                  ? ` · ${info.discount_percent}% ${t('discount')}`
+                  : ''}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        )
+      },
+      enableSorting: false,
+      size: 110,
+      meta: { mobileBadge: true, mobileOrder: 25 },
+    },
+    {
       id: 'invite_info',
       header: t('Invite Info'),
       cell: ({ row }) => {

@@ -66,6 +66,17 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 		// normal group ratio
 		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
 	}
+	groupRatioInfo.TrustDiscountRatio = 1
+	if relayInfo.UserId > 0 {
+		trustLevel, err := model.GetTrustLevelInfoByUserID(relayInfo.UserId)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("failed to calculate trust discount for user %d: %s", relayInfo.UserId, err.Error()))
+		} else {
+			groupRatioInfo.TrustLevel = trustLevel.Level
+			groupRatioInfo.TrustDiscountRatio = trustLevel.DiscountRatio
+			groupRatioInfo.GroupRatio *= trustLevel.DiscountRatio
+		}
+	}
 
 	return groupRatioInfo
 }

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   ArrowRight01Icon,
-  Key01Icon,
+  ShieldCheck,
   Wallet01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -68,21 +68,21 @@ export function ContributorWorkspace() {
             </div>
             <div className='flex flex-col justify-end border-t border-[#141413]/40 pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-7'>
               <HugeiconsIcon
-                icon={Key01Icon}
+                icon={ShieldCheck}
                 className='mb-5 size-7'
                 strokeWidth={2}
                 aria-hidden='true'
               />
               <p className='mb-5 text-sm leading-6'>
                 {t(
-                  'Developer access becomes available when you create your first credential. No payment is required to activate it.'
+                  'Build account trust to unlock more workspace tools and better rates.'
                 )}
               </p>
               <Button
                 className='w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
-                render={<Link to='/developer-access' />}
+                render={<Link to='/wallet' />}
               >
-                {t('Developer access')}
+                {t('View trust level')}
                 <HugeiconsIcon
                   icon={ArrowRight01Icon}
                   data-icon='inline-end'
