@@ -24,6 +24,7 @@ export type UserPermissions = {
   sidebar_settings?: boolean
   sidebar_modules?: Record<string, unknown>
   admin_permissions?: AdminCapabilities
+  console_activated_at?: number
 }
 
 export interface AuthUser {

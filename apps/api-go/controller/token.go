@@ -222,7 +222,7 @@ func AddToken(c *gin.Context) {
 		Group:              token.Group,
 		CrossGroupRetry:    token.CrossGroupRetry,
 	}
-	err = cleanToken.Insert()
+	err = model.InsertTokenAndActivateConsole(&cleanToken)
 	if err != nil {
 		common.ApiError(c, err)
 		return
