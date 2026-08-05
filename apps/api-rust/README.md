@@ -1,11 +1,11 @@
 # Rust migration workspace
 
 This native (non-container) workspace is the strangler target for the Go
-service. Its root router currently mounts 20 frozen method/path pairs across
-public content, status, authentication, model discovery, and API-token slices.
-Additional migration modules are compiled as candidates without being mounted.
-The production edge still assigns all 356 frozen routes to Go; Rust owns no
-production business traffic or writes yet.
+service. The isolated test-instance root composes the complete Rust candidate
+surface, while the normal listener currently mounts 20 frozen method/path
+pairs across public content, status, authentication, model discovery, and
+API-token slices. The production edge still assigns all 356 frozen routes to
+Go; Rust owns no production business traffic or writes yet.
 
 Required environment variable names are `LMM_RS_LISTEN_ADDR`, `DATABASE_URL`,
 `VALKEY_URL`, and `LMM_SCHEMA_CONTRACT`. `DATABASE_URL` must select the exact
@@ -41,11 +41,12 @@ route validation remains Go-independent after the source moves to the ignored
 local backup. `routes/rust-implemented-routes.tsv` records implementation
 coverage; it does not claim production traffic ownership.
 
-The draft coverage checker currently finds Rust handlers for 300 of the 356
-frozen method/path pairs (84.3%), leaving 56 without a candidate. This is only
-static implementation evidence: it does not grant differential-verification
-credit, root mounting, or production ownership. Run it after every candidate
-wave instead of copying this snapshot into an ownership decision.
+The draft coverage checker currently finds Rust handlers for all 356 frozen
+method/path pairs, including 12 explicitly approved legacy-equivalent 501
+routes. This is only static implementation evidence: it does not grant
+differential-verification credit, root mounting, or production ownership. Run
+it after every candidate wave instead of copying this snapshot into an
+ownership decision.
 
 `/livez` performs no dependency I/O. `/readyz` always requires PostgreSQL, the
 schema reader window, and read/capability checks for every currently mounted
