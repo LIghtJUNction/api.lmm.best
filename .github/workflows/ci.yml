@@ -181,7 +181,6 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Validate prebuilt AUR package
-        run: >-
-          runuser --user package-builder --
-          env BUILDDIR=/tmp/lmm-api-bin-build
-          bash packaging/aur/lmm-api-bin/test-package.sh
+        run: |
+          chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
+          runuser --user package-builder -- bash packaging/aur/lmm-api-bin/test-package.sh
