@@ -80,6 +80,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   acceptBounty,
+  cancelChallenge,
   closeBounty,
   createBounty,
   deleteBounty,
@@ -140,6 +141,7 @@ const STATUS_KEYS = {
   approved: 'Approved',
   rejected: 'Rejected',
   withdrawn: 'Withdrawn',
+  cancelled: 'Cancelled by publisher',
 } as const
 
 const ERROR_KEYS: Record<string, string> = {
@@ -161,7 +163,7 @@ const ERROR_KEYS: Record<string, string> = {
   OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE:
     'Your balance is not enough to publish this bounty.',
   OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES:
-    'Resolve or reject active challenges before closing this bounty.',
+    'Cancel unsubmitted challenges or review submitted work before closing this bounty.',
   OPEN_SOURCE_BOUNTY_FULL: 'All reward slots are currently occupied.',
   OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED:
     'You have already accepted this challenge.',
@@ -410,6 +412,27 @@ export function OpenSourceBounties() {
       toast.error(errorMessage(error))
     } finally {
       setPending('')
+    }
+  }
+
+  const handleCancelChallenge = async (challenge: BountyChallenge) => {
+    if (
+      !window.confirm(
+        t(
+          'Cancel the unsubmitted challenge from @{{username}}? This releases its reward slot and cannot be undone.',
+          { username: challenge.github_handle }
+        )
+      )
+    ) {
+      return
+    }
+    const success = await runAction(
+      `cancel-${challenge.id}`,
+      () => cancelChallenge(challenge.id),
+      'Challenge cancelled and reward slot released.'
+    )
+    if (success) {
+      setDetail(await getBountyDetail(challenge.project_id))
     }
   }
 
@@ -940,6 +963,7 @@ export function OpenSourceBounties() {
           setTipAmount(0)
           setTipNote('')
         }}
+        onCancel={handleCancelChallenge}
       />
 
       <Dialog
@@ -1568,7 +1592,9 @@ function ChallengeCard({
                 {t('Rate publisher')}
               </Button>
             )}
-          {challenge.status !== 'withdrawn' && !challenge.dispute ? (
+          {challenge.status !== 'withdrawn' &&
+          challenge.status !== 'cancelled' &&
+          !challenge.dispute ? (
             <Button
               variant='outline'
               render={
@@ -1939,6 +1965,7 @@ function ProjectReviewDialog(props: {
   pending: string
   onReview: (challenge: BountyChallenge, action: 'approve' | 'reject') => void
   onTip: (challenge: BountyChallenge) => void
+  onCancel: (challenge: BountyChallenge) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -2083,40 +2110,41 @@ function ProjectReviewDialog(props: {
                 average={challenge.owner_rating_average}
                 count={challenge.owner_rating_count}
               />
-              {challenge.status !== 'withdrawn' && (
-                <div className='flex flex-wrap gap-2'>
-                  <Button
-                    variant='outline'
-                    onClick={() => props.onTip(challenge)}
-                    disabled={props.pending !== ''}
-                  >
-                    <HugeiconsIcon
-                      icon={GiftIcon}
-                      strokeWidth={2}
-                      data-icon='inline-start'
-                    />
-                    {t('Send tip')}
-                  </Button>
-                  {!challenge.dispute ? (
+              {challenge.status !== 'withdrawn' &&
+                challenge.status !== 'cancelled' && (
+                  <div className='flex flex-wrap gap-2'>
                     <Button
                       variant='outline'
-                      render={
-                        <Link
-                          to='/support'
-                          search={disputeTicketSearch(challenge)}
-                        />
-                      }
+                      onClick={() => props.onTip(challenge)}
+                      disabled={props.pending !== ''}
                     >
                       <HugeiconsIcon
-                        icon={CustomerSupportIcon}
+                        icon={GiftIcon}
                         strokeWidth={2}
                         data-icon='inline-start'
                       />
-                      {t('Submit dispute ticket')}
+                      {t('Send tip')}
                     </Button>
-                  ) : null}
-                </div>
-              )}
+                    {!challenge.dispute ? (
+                      <Button
+                        variant='outline'
+                        render={
+                          <Link
+                            to='/support'
+                            search={disputeTicketSearch(challenge)}
+                          />
+                        }
+                      >
+                        <HugeiconsIcon
+                          icon={CustomerSupportIcon}
+                          strokeWidth={2}
+                          data-icon='inline-start'
+                        />
+                        {t('Submit dispute ticket')}
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
               {challenge.status === 'submitted' && (
                 <div className='flex flex-wrap gap-2'>
                   <Button
@@ -2144,6 +2172,22 @@ function ProjectReviewDialog(props: {
                     {t('Reject')}
                   </Button>
                 </div>
+              )}
+              {challenge.status === 'accepted' && (
+                <Button
+                  variant='destructive'
+                  onClick={() => props.onCancel(challenge)}
+                  disabled={
+                    props.pending !== '' || challenge.dispute?.status === 'open'
+                  }
+                >
+                  <HugeiconsIcon
+                    icon={CancelCircleIcon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                  />
+                  {t('Cancel challenge')}
+                </Button>
               )}
             </div>
           ))

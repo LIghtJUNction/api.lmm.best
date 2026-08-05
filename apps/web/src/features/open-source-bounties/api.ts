@@ -162,6 +162,12 @@ export function withdrawChallenge(challengeId: number) {
   )
 }
 
+export function cancelChallenge(challengeId: number) {
+  return unwrap<BountyChallenge>(
+    api.post(`/api/open-source-bounties/challenges/${challengeId}/cancel`)
+  )
+}
+
 export function reviewChallenge(
   challengeId: number,
   action: 'approve' | 'reject',

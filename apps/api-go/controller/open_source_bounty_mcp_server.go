@@ -258,6 +258,42 @@ func registerOpenSourceBountyMCPTools(server *mcp.Server) {
 			return nil, bountyMCPOutput{Message: "Bounty closed and unused escrow refunded.", Data: map[string]any{"project": updated, "refunded_quota": refunded}, RemainingQuota: bountyMCPRemainingQuota(userId)}, bountyMCPError(err)
 		})
 
+	mcp.AddTool(server, bountyMCPTool("open_source_bounties.cancel", "Cancel an unsubmitted challenge", "Cancel a publisher-owned challenge that has no submitted work and release its reward slot. Requires explicit user confirmation.", false, true, true),
+		func(ctx context.Context, request *mcp.CallToolRequest, input bountyMCPChallengeInput) (*mcp.CallToolResult, bountyMCPOutput, error) {
+			userId, err := bountyMCPUserId(request)
+			if err != nil {
+				return nil, bountyMCPOutput{}, err
+			}
+			if replay, found, err := model.GetOpenSourceBountyMCPOperationResult(userId, "open_source_bounties.cancel", request.Params.RequestState); err != nil {
+				return nil, bountyMCPOutput{}, bountyMCPError(err)
+			} else if found {
+				challengeId, _ := replay["challenge_id"].(float64)
+				var challenge model.OpenSourceBountyChallenge
+				err := model.DB.First(&challenge, int(challengeId)).Error
+				return nil, bountyMCPOutput{Message: "Challenge cancellation already completed.", Data: &challenge}, bountyMCPError(err)
+			}
+			var snapshot struct {
+				model.OpenSourceBountyChallenge
+				ProjectTitle string `json:"project_title"`
+				EscrowQuota  int    `json:"escrow_quota"`
+			}
+			if err := model.DB.Table("open_source_bounty_challenges AS challenge").
+				Joins("JOIN open_source_bounty_projects project ON project.id = challenge.project_id AND project.owner_user_id = ?", userId).
+				Where("challenge.id = ?", input.ChallengeId).
+				Select("challenge.*, project.title AS project_title, project.escrow_quota").
+				Scan(&snapshot).Error; err != nil || snapshot.Id == 0 {
+				return nil, bountyMCPOutput{}, bountyMCPError(&model.OpenSourceBountyError{Code: "OPEN_SOURCE_BOUNTY_FORBIDDEN", Message: "challenge is unavailable"})
+			}
+			message := fmt.Sprintf("Cancel the unsubmitted challenge %d from %q? This releases its reserved reward slot; no balance is refunded until the bounty is closed.", snapshot.Id, snapshot.ProjectTitle)
+			confirmationPayload := map[string]any{"input": input, "snapshot": snapshot}
+			pending, operation, err := bountyMCPConfirmedOperation(request, userId, "open_source_bounties.cancel", confirmationPayload, message)
+			if err != nil || pending != nil {
+				return pending, bountyMCPOutput{}, err
+			}
+			challenge, err := model.CancelOpenSourceBountyChallengeWithMCPConfirmation(userId, input.ChallengeId, *operation)
+			return nil, bountyMCPOutput{Message: "Unsubmitted challenge cancelled and its reward slot released.", Data: challenge}, bountyMCPError(err)
+		})
+
 	mcp.AddTool(server, bountyMCPTool("open_source_bounties.create_draft", "Create a bounty draft", "Create an unpublished bounty draft. Draft creation does not spend balance.", false, false, false),
 		func(ctx context.Context, request *mcp.CallToolRequest, input bountyMCPDraftInput) (*mcp.CallToolResult, bountyMCPOutput, error) {
 			userId, err := bountyMCPUserId(request)
@@ -619,7 +655,7 @@ func newOpenSourceBountyMCPServer() *mcp.Server {
 		Title:       "Open-source bounty operator",
 		Description: "Instructions for safely publishing, accepting, verifying, tipping, rating, and settling open-source bounties.",
 	}, func(ctx context.Context, request *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-		text := strings.TrimSpace(`Use the connected api.lmm.best Open-source bounties MCP server to complete my request. Treat each bounty as a peer-to-peer transaction between its publisher and contributor; a third-party administrator intervenes only when either party opens a dispute. Do not invent bugs, Issues, pull requests, tests, scores, dispute facts, or review results. Read the current bounty, public administrator-configured task fee, and balance state before mutating it. Publishing debits the gross listed price from my balance, credits the public platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit as well as the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When the server returns an input-required confirmation for publishing, approval/payment, rejection, closing/refunding, tipping, rating, opening or resolving a dispute, draft deletion, or withdrawal, show me the exact action, recipient, score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Tips are independent, non-refundable transfers from my own balance and never reduce escrow. A contributor may submit a matching GitHub Issue URL, pull request URL, or both, plus an optional completion note. The bounty publisher reviews the completed work directly. At review time, record a truthful 1-5 contributor score and public evaluation; after review, contributors may rate the publisher/verifier, and both sides can see mutual ratings and historical averages. If a party disputes rejection or payment, preserve the linked Issue, pull request, completion note, reward and tip amounts, and mutual ratings for third-party administrator review. Administrators may force payment only from the remaining escrow after reviewing genuine evidence.`)
+		text := strings.TrimSpace(`Use the connected api.lmm.best Open-source bounties MCP server to complete my request. Treat each bounty as a peer-to-peer transaction between its publisher and contributor; a third-party administrator intervenes only when either party opens a dispute. Do not invent bugs, Issues, pull requests, tests, scores, dispute facts, or review results. Read the current bounty, public administrator-configured task fee, and balance state before mutating it. Publishing debits the gross listed price from my balance, credits the public platform fee to the enabled super administrator account, and locks the remaining net contributor rewards in escrow. If I am that super administrator, report both the gross debit and fee credit as well as the resulting net balance decrease. Daily check-in rewards are credited to the same balance and can fund listings. The public board ranks listings by gross price per fix from highest to lowest. When the server returns an input-required confirmation for publishing, approval/payment, rejection, cancellation, closing/refunding, tipping, rating, opening or resolving a dispute, draft deletion, or withdrawal, show me the exact action, recipient, score, gross price, net reward, fee, evidence, and balance impact, then continue only after I explicitly confirm. Cancelling is available only to the publisher for an unsubmitted challenge; it releases the reserved reward slot but does not refund balance until the bounty is closed. Tips are independent, non-refundable transfers from my own balance and never reduce escrow. A contributor may submit a matching GitHub Issue URL, pull request URL, or both, plus an optional completion note. The bounty publisher reviews the completed work directly. At review time, record a truthful 1-5 contributor score and public evaluation; after review, contributors may rate the publisher/verifier, and both sides can see mutual ratings and historical averages. If a party disputes rejection or payment, preserve the linked Issue, pull request, completion note, reward and tip amounts, and mutual ratings for third-party administrator review. Administrators may force payment only from the remaining escrow after reviewing genuine evidence.`)
 		return &mcp.GetPromptResult{
 			Description: "Operate the authenticated user's open-source bounties end to end.",
 			Messages: []*mcp.PromptMessage{

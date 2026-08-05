@@ -77,3 +77,39 @@ func TestOpenSourceBountyTipHTTPIdempotencyReplay(t *testing.T) {
 	require.NoError(t, db.Model(&model.OpenSourceBountyLedger{}).Where("challenge_id = ? AND kind = ?", challenge.Id, model.OpenSourceBountyLedgerTipTransfer).Count(&ledgers).Error)
 	assert.Equal(t, int64(1), ledgers)
 }
+
+func TestCancelOpenSourceBountyChallengeHTTP(t *testing.T) {
+	db, owner, _ := setupOpenSourceBountyMCPControllerTest(t)
+	participant := model.User{Username: "http-cancel-contributor", Password: "password", AffCode: "http-cancel-contributor", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&participant).Error)
+	project, err := model.CreateOpenSourceBountyDraft(owner.Id, model.OpenSourceBountyDraftInput{
+		RepositoryUrl: "https://github.com/example/http-cancel", Title: "Cancel abandoned challenge",
+		Description: "Release a reserved reward slot when no work was submitted.",
+		Rules:       "Accepted challenges may be cancelled only before submission.",
+		RewardQuota: 1_000, RewardSlots: 1,
+	})
+	require.NoError(t, err)
+	project, _, err = model.PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	challenge, err := model.AcceptOpenSourceBounty(participant.Id, project.Id, "http-cancel-contributor")
+	require.NoError(t, err)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/open-source-bounties/challenges/:challenge_id/cancel", func(c *gin.Context) {
+		c.Set("id", owner.Id)
+		CancelOpenSourceBountyChallenge(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/open-source-bounties/challenges/"+strconv.Itoa(challenge.Id)+"/cancel", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	var envelope struct {
+		Success bool                            `json:"success"`
+		Data    model.OpenSourceBountyChallenge `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &envelope))
+	require.True(t, envelope.Success)
+	assert.Equal(t, model.OpenSourceBountyChallengeCancelled, envelope.Data.Status)
+}
