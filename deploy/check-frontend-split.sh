@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 config=$repo/deploy/nginx/lmm-api-locations.conf
+server_config=$repo/deploy/nginx/new-api.conf
 mime_types=$repo/deploy/nginx/mime.types
 release=$repo/deploy/frontend-release.sh
 nginx_installer=$repo/deploy/nginx/install-nginx-split.sh
@@ -52,6 +53,31 @@ assert_literal 'max-age=31536000, immutable' "$config"
 assert_literal 'no-cache, must-revalidate' "$config"
 assert_literal 'proxy_buffering off' "$config"
 assert_literal 'Connection $connection_upgrade' "$config"
+
+redirect_server=$(awk '
+  /^server \{$/ { server_count++; capture = server_count == 1 }
+  capture { print }
+  capture && /^}$/ { exit }
+' "$server_config")
+canonical_server=$(awk '
+  /^server \{$/ { server_count++; capture = server_count == 2 }
+  capture { print }
+' "$server_config")
+[[ $(grep -Fc 'listen 9000 ssl;' <<<"$redirect_server") == 1 ]] ||
+  fail 'the first server must exclusively listen on the legacy :9000 entry point'
+[[ $(grep -Fc 'return 308 https://api.lmm.best$request_uri;' <<<"$redirect_server") == 1 ]] ||
+  fail 'the :9000 entry point must redirect to the canonical HTTPS origin'
+if grep -Fq 'lmm-api-locations.conf' <<<"$redirect_server"; then
+  fail 'the :9000 redirect server must not serve application routes'
+fi
+[[ $(grep -Fc 'listen 443 ssl;' <<<"$canonical_server") == 1 ]] ||
+  fail 'the second server must exclusively listen on the canonical HTTPS entry point'
+[[ $(grep -Fc 'include /etc/nginx/lmm-api-locations.conf;' <<<"$canonical_server") == 1 ]] ||
+  fail 'the canonical HTTPS server must serve application routes'
+if grep -Fq 'listen 9000 ssl;' <<<"$canonical_server"; then
+  fail 'the canonical HTTPS server must not also serve the legacy :9000 origin'
+fi
+
 assert_literal 'mv -Tf -- "$temp" "$root/current"' "$release"
 assert_literal 'flock -n 9' "$release"
 assert_literal 'immutable asset collision with different content' "$release"
