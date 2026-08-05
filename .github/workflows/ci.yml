@@ -47,7 +47,7 @@ jobs:
         run: bun run --filter @lmm/web test
 
       - name: Validate frontend API route manifest
-        run: bash apps/api-rust/behavior-oracle/tests/test-frontend-api-route-manifest.sh
+        run: bash apps/api-rust/tests/behavior-oracle/tests/test-frontend-api-route-manifest.sh
 
       - name: Build production web assets
         env:
@@ -59,16 +59,8 @@ jobs:
           bash deploy/test-frontend-release.sh
           bash deploy/production/test-go-deploy-contract.sh
 
-      - name: Upload web assets for the Go embed build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ci-web-dist
-          path: apps/web/dist
-          if-no-files-found: error
-
   go:
     name: Go default backend, relaykit, and static build
-    needs: web
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -82,12 +74,6 @@ jobs:
           cache-dependency-path: |
             apps/api-go/go.sum
             apps/api-go/relaykit/go.sum
-
-      - name: Download verified web assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ci-web-dist
-          path: apps/api-go/web/dist
 
       - name: Test default Go module
         working-directory: apps/api-go
@@ -136,7 +122,7 @@ jobs:
       - name: Report route ownership and parity without gating Go production
         continue-on-error: true
         run: |
-          bash apps/api-rust/scripts/check-go-route-manifest.sh
+          bash apps/api-rust/tests/scripts/check-go-route-manifest.sh
           echo 'Rust route ownership remains preview evidence and does not gate the Go release lane.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check formatting
@@ -154,35 +140,15 @@ jobs:
   electron-retirement:
     name: Electron embedded-backend retirement guard
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: electron
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: electron/package-lock.json
-
-      - name: Validate retired package
+      - name: Verify retired packages remain absent
         run: |
-          npm ci --ignore-scripts
-          node --check main.js
-          bash -n build.sh
-          test -x build.sh
-          if ./build.sh; then
-            echo "::error::Retired Electron packaging unexpectedly succeeded"
-            exit 1
-          fi
-          if npm run build; then
-            echo "::error::Retired Electron npm packaging unexpectedly succeeded"
-            exit 1
-          fi
+          test ! -e electron
+          test ! -e apps/api-go/electron
 
   docker-publish-config:
     name: Docker publish namespace guard

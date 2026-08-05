@@ -20,7 +20,6 @@ apps/*/node_modules/
 apps/*/dist/
 apps/*/out/
 apps/*/target/
-apps/api-go/web/dist/
 .env
 one-api
 new-api
@@ -46,7 +45,7 @@ token_estimator_test.go
 skills-lock.json
 .playwright-mcp
 /rust/target/
-/rust/apps/lmm-api-rs/tests/root-route-acceptance/target/
+/apps/api-rust/tests/root-route-acceptance/target/
 /packaging/aur/lmm-api-rs-bin/out/
 /legacy-go-backup/
 /.codegraph/

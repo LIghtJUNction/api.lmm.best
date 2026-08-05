@@ -36,7 +36,7 @@ Run `bash deploy/check-frontend-split.sh` whenever routers or deployment files c
 
 ## Go backend today: autonomous, bounded interruption
 
-Production currently uses one Go process and SQLite. The 2026-08-01 gate snapshot has Go owning all 356 legacy routes; always read `apps/api-rust/routes/migration-gate.tsv` rather than treating this prose as the current ownership source. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
+Production currently uses one Go process and SQLite. The 2026-08-01 gate snapshot has Go owning all 356 legacy routes; always read `apps/api-rust/tests/fixtures/routes/migration-gate.tsv` rather than treating this prose as the current ownership source. A backend package upgrade must remain a single-instance, autonomous systemd transaction with a deployment lock, offline database backup, health validation, persistent audit output, and complete package rollback. The transaction continues without the initiating shell or API connection, but restarting the only process creates a bounded interruption. It is not a zero-downtime or blue/green deployment.
 
 Do not run old and new backend binaries concurrently against the SQLite database. Two writers, startup migrations, and background jobs make that unsafe; copying SQLite for each process would instead create divergent state.
 
