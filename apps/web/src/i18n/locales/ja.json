@@ -4019,6 +4019,7 @@
     "Regex": "正規表現",
     "Regex Pattern": "正規表現パターン",
     "Regex Replace": "正規表現置換",
+    "Regional access statement": "地域アクセスに関する声明：現地法または制裁措置で禁止されている地域には本サービスを提供しません。登録または支払いの前に、お住まいの地域での利用が許可されていることをご確認ください。",
     "Register each URL into the matching Test Mode / Production Mode webhook slot in the Pancake dashboard. Separate endpoints prevent test traffic from accidentally crediting production accounts.": "Pancake ダッシュボードで、各 URL を対応するテストモードまたは本番モードの Webhook スロットに登録してください。エンドポイントを分けることで、テスト通信が誤って本番アカウントに入金されることを防ぎます。",
     "Register Passkey": "Passkeyの登録",
     "Registered a passkey": "パスキーを登録しました",

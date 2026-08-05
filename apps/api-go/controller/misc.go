@@ -152,6 +152,14 @@ func GetStatus(c *gin.Context) {
 	if cs.FAQEnabled {
 		data["faq"] = console_setting.GetFAQ()
 	}
+	// Keep the public status response useful for branding, authentication, and
+	// billing while withholding legacy relay documentation until the account
+	// has permanently activated the developer console.
+	if !middleware.ConsoleActivationGranted(c) {
+		data["api_info_enabled"] = false
+		data["docs_link"] = ""
+		delete(data, "api_info")
+	}
 
 	// Add enabled custom OAuth providers
 	customProviders := oauth.GetEnabledCustomProviders()
