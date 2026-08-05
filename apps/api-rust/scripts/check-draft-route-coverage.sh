@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(cd -- "$script_dir/../../.." && pwd -P)
 router_root=${DRAFT_ROUTER_ROOT:-"$repo_root/apps/api-rust/apps/lmm-api-rs/src"}
 baseline=${DRAFT_BASELINE_PATH:-"$repo_root/apps/api-rust/routes/legacy-go-routes.tsv"}
 gate=${DRAFT_GATE_PATH:-"$repo_root/apps/api-rust/routes/migration-gate.tsv"}

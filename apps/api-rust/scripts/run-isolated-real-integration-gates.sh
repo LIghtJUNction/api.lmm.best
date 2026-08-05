@@ -5,7 +5,8 @@
 # that could target a non-loopback endpoint.
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(cd -- "$script_dir/../../.." && pwd -P)
 runner="$repo_root/apps/api-rust/scripts/run-real-integration-gates.sh"
 suite=${1:-all}
 tmp_base=${TMPDIR:-/tmp}
