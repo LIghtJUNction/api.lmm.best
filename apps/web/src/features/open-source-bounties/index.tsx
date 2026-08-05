@@ -276,6 +276,16 @@ export function OpenSourceBounties() {
     queryKey: BOUNTY_QUERY_KEYS[2],
     queryFn: listAcceptedBounties,
   })
+  const bountyRankByProjectId = useMemo(() => {
+    const items = bountyQuery.data?.items ?? []
+    const page = bountyQuery.data?.page ?? 1
+    const pageSize = bountyQuery.data?.page_size ?? 50
+    const firstRank = (page - 1) * pageSize + 1
+
+    return new Map(
+      items.map((project, index) => [project.id, firstRank + index] as const)
+    )
+  }, [bountyQuery.data])
   const disputesQuery = useQuery({
     queryKey: BOUNTY_QUERY_KEYS[3],
     queryFn: listMyBountyDisputes,
@@ -807,6 +817,7 @@ export function OpenSourceBounties() {
                       <ChallengeCard
                         key={challenge.id}
                         challenge={challenge}
+                        rank={bountyRankByProjectId.get(challenge.project_id)}
                         pending={pending}
                         onSubmit={() =>
                           openSubmitDialog(challenge.project_id, challenge)
@@ -1450,12 +1461,14 @@ function OwnerProjectCard(props: {
 
 function ChallengeCard({
   challenge,
+  rank,
   pending,
   onSubmit,
   onWithdraw,
   onRateOwner,
 }: {
   challenge: BountyChallenge
+  rank?: number
   pending: string
   onSubmit: () => void
   onWithdraw: () => void
@@ -1471,6 +1484,7 @@ function ChallengeCard({
       description={`${challenge.owner_username ?? ''} · ${statusLabel(t, challenge.status)}`}
       icon={<HugeiconsIcon icon={Bug01Icon} strokeWidth={1.8} />}
       iconTone='neutral'
+      action={rank != null ? <BountyRankBadge rank={rank} /> : undefined}
       disableHoverEffect
     >
       <div className='flex flex-col gap-4'>
