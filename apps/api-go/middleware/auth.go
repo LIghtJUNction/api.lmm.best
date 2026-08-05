@@ -208,6 +208,10 @@ func ConsoleAccessGate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, _, credentialKind, err := classifyDashboardCredential(c)
 		if err != nil || credentialKind == dashboardCredentialUnmatched || user == nil {
+			if consoleDiscoveryRoute(c.Request.URL.Path) {
+				abortRelayAsNotFound(c)
+				return
+			}
 			c.Next()
 			return
 		}
@@ -219,6 +223,28 @@ func ConsoleAccessGate() gin.HandlerFunc {
 		}
 		abortRelayAsNotFound(c)
 	}
+}
+
+// consoleDiscoveryRoute hides relay-console inventory from unauthenticated and
+// invalid dashboard credentials. Valid API keys continue to use the dedicated
+// relay routes, whose token middleware applies the same generic 404 policy.
+func consoleDiscoveryRoute(path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	for _, prefix := range []string{
+		"/api/channel",
+		"/api/deployments",
+		"/api/models",
+		"/api/perf-metrics",
+		"/api/pricing",
+		"/api/rankings",
+		"/api/ratio_config",
+		"/api/vendor",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ConsoleActivationGranted reports whether the current dashboard request has
@@ -236,18 +262,25 @@ func preActivationRouteAllowed(method string, path string) bool {
 	if path == "/api/open-source-bounties" {
 		return method == http.MethodGet
 	}
+	if path == "/api/open-source-bounties/accepted" || path == "/api/open-source-bounties/disputes/mine" {
+		return method == http.MethodGet
+	}
 	if strings.HasPrefix(path, "/api/open-source-bounties/projects/") {
 		projectPath := strings.TrimPrefix(path, "/api/open-source-bounties/projects/")
 		segments := strings.Split(projectPath, "/")
 		if len(segments) == 1 && segments[0] != "" {
 			return method == http.MethodGet
 		}
-		return len(segments) == 2 && segments[0] != "" && segments[1] == "accept" && method == http.MethodPost
+		return len(segments) == 2 && segments[0] != "" &&
+			(segments[1] == "accept" || segments[1] == "submit") && method == http.MethodPost
 	}
-	if path == "/api/subscription" || strings.HasPrefix(path, "/api/subscription/") {
-		return path != "/api/subscription/admin" && !strings.HasPrefix(path, "/api/subscription/admin/")
+	if strings.HasPrefix(path, "/api/open-source-bounties/challenges/") {
+		challengePath := strings.TrimPrefix(path, "/api/open-source-bounties/challenges/")
+		segments := strings.Split(challengePath, "/")
+		return len(segments) == 2 && segments[0] != "" &&
+			(segments[1] == "withdraw" || segments[1] == "rate-owner" || segments[1] == "disputes") &&
+			method == http.MethodPost
 	}
-
 	switch path {
 	case "/api/setup", "/api/status", "/api/notice", "/api/user-agreement", "/api/privacy-policy", "/api/about", "/api/home_page_content":
 		return method == http.MethodGet

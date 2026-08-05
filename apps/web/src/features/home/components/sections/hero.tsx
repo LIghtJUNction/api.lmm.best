@@ -22,7 +22,6 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { useStatus } from '@/hooks/use-status'
-import { normalizeInterfaceLanguage } from '@/i18n/languages'
 
 import { HeroArt } from '../hero-art'
 
@@ -68,24 +67,11 @@ function DocsLink({ href, label }: { href: string; label: string }) {
 }
 
 export function Hero({ isAuthenticated = false }: HeroProps) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { status } = useStatus()
-  const docsLangByInterfaceLanguage: Record<string, 'en' | 'ja' | 'zh'> = {
-    en: 'en',
-    fr: 'en',
-    ru: 'en',
-    vi: 'en',
-    ja: 'ja',
-    zhCN: 'zh',
-    zhTW: 'zh',
-  }
-  const docsLang =
-    docsLangByInterfaceLanguage[
-      normalizeInterfaceLanguage(i18n.resolvedLanguage || i18n.language)
-    ]
   const docsUrl =
     (status?.docs_link as string | undefined) ||
-    `https://docs.newapi.pro/${docsLang || 'en'}/docs`
+    'https://github.com/LIghtJUNction/api.lmm.best#readme'
   return (
     <section
       className='relative overflow-hidden bg-[#FAF9F5] px-5 pt-28 pb-14 text-[#141413] sm:px-8 sm:pt-32 sm:pb-20 lg:pt-36 lg:pb-24 dark:bg-[#141413] dark:text-[#FAF9F5]'
@@ -123,9 +109,13 @@ export function Hero({ isAuthenticated = false }: HeroProps) {
             <Button
               size='lg'
               className='w-full border-[#141413] bg-[#141413] text-[#FAF9F5] hover:bg-[#BCD1CA] hover:text-[#141413] min-[420px]:w-auto dark:border-[#FAF9F5] dark:bg-[#FAF9F5] dark:text-[#141413] dark:hover:bg-[#BCD1CA]'
-              render={<Link to={isAuthenticated ? '/dashboard' : '/sign-up'} />}
+              render={
+                <Link
+                  to={isAuthenticated ? '/open-source-bounties' : '/sign-up'}
+                />
+              }
             >
-              {isAuthenticated ? t('Go to Dashboard') : t('Get Started')}
+              {isAuthenticated ? t('Open workspace') : t('Get Started')}
               <ArrowRight data-icon='inline-end' />
             </Button>
             {!isAuthenticated ? (

@@ -68,9 +68,9 @@ export function useTopNavLinks(): TopNavLink[] {
     links.push({ title: t('Home'), href: '/' })
   }
 
-  // Console -> /dashboard (new console path)
+  // Keep the product workspace ahead of the optional developer console.
   if (modules?.console !== false && isConsoleActivated(auth.user)) {
-    links.push({ title: t('Console'), href: '/dashboard' })
+    links.push({ title: t('Open workspace'), href: '/open-source-bounties' })
   }
 
   // Pricing

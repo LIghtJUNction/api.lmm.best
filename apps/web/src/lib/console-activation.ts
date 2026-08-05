@@ -26,6 +26,12 @@ export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
   return user.permissions?.console_activated_at !== 0
 }
 
+export function getAuthenticatedLandingRoute(
+  user: AuthUser | null | undefined
+): '/open-source-bounties' | '/workspace' {
+  return isConsoleActivated(user) ? '/open-source-bounties' : '/workspace'
+}
+
 export function isContributorRoute(pathname: string): boolean {
   return [
     '/challenges',
@@ -33,6 +39,7 @@ export function isContributorRoute(pathname: string): boolean {
     '/profile',
     '/developer-access',
     '/workspace',
+    '/support',
   ].some((path) => pathname === path || pathname.startsWith(`${path}/`))
 }
 

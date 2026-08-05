@@ -76,7 +76,7 @@
         "discord_client_id": "",
         "discord_oauth": false,
         "display_in_currency": true,
-        "docs_link": "https://docs.newapi.pro/en/docs",
+        "docs_link": "https://github.com/LIghtJUNction/api.lmm.best#readme",
         "email_verification": false,
         "enable_batch_update": false,
         "enable_data_export": true,

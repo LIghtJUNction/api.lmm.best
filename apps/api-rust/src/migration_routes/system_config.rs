@@ -51,8 +51,8 @@ const PANCAKE_CREATE_STORE_PATH: &str = "/v1/actions/store/create-store";
 const PANCAKE_CREATE_PRODUCT_PATH: &str = "/v1/actions/onetime-product/create-product";
 const PANCAKE_PUBLISH_PRODUCT_PATH: &str = "/v1/actions/onetime-product/publish-product";
 const MAX_PANCAKE_RESPONSE_BYTES: usize = 1 << 20;
-const PANCAKE_STORE_NAME: &str = "new-api-store";
-const PANCAKE_PRIMARY_PRODUCT_NAME: &str = "new-api-charge-product";
+const PANCAKE_STORE_NAME: &str = "lmm-forge-store";
+const PANCAKE_PRIMARY_PRODUCT_NAME: &str = "lmm-forge-wallet-topup";
 const PANCAKE_TAX_CATEGORY: &str = "saas";
 
 /// Concrete production adapter for the pinned GitHub update probe.

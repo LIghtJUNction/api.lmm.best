@@ -28,6 +28,7 @@ import { useTranslation } from 'react-i18next'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 
+import { AcceptedChallengeList } from './accepted-challenge-list'
 import { ChallengeList } from './challenge-list'
 
 export function ContributorWorkspace() {
@@ -93,6 +94,7 @@ export function ContributorWorkspace() {
           </section>
           <div className='px-6 py-9 md:px-10 md:py-12'>
             <ChallengeList limit={12} />
+            <AcceptedChallengeList />
           </div>
         </div>
       </SectionPageLayout.Content>

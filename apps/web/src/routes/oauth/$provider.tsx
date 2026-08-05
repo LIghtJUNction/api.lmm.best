@@ -39,6 +39,7 @@ import {
   startOAuthBindResponseDeadline,
 } from '@/features/auth/lib/oauth-bind-window'
 import { api, applyAuthBundle, isAuthBundle } from '@/lib/api'
+import { getAuthenticatedLandingRoute } from '@/lib/console-activation'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
@@ -159,7 +160,13 @@ function OAuthCallback() {
       }
     }
 
-    const safeNavigate = (target: unknown, fallback = '/dashboard') => {
+    const safeNavigate = (
+      target: unknown,
+      fallback:
+        | '/open-source-bounties'
+        | '/workspace'
+        | '/sign-in' = '/open-source-bounties'
+    ) => {
       const href =
         sanitizeAuthRedirect(target, window.location.origin) ?? fallback
       void navigate({ href, replace: true })
@@ -185,7 +192,10 @@ function OAuthCallback() {
         const response = await api.get(`/api/oauth/${provider}`, config)
         if (response.data?.success && isAuthBundle(response.data?.data)) {
           applyAuthBundle(response.data.data)
-          safeNavigate(search.redirect)
+          safeNavigate(
+            search.redirect,
+            getAuthenticatedLandingRoute(response.data.data.user)
+          )
           toast.success(i18next.t('Signed in successfully!'))
           return
         }
