@@ -53,6 +53,11 @@ package_lmm-api() {
   install -Dm0644 "$srcdir/NOTICE" "$pkgdir/usr/share/licenses/lmm-api/NOTICE"
   install -Dm0644 "$srcdir/THIRD-PARTY-LICENSES.md" \
     "$pkgdir/usr/share/licenses/lmm-api/THIRD-PARTY-LICENSES.md"
+  install -d -m0755 "$pkgdir/usr/share/lmm-api/frontend-dist"
+  cp -R --no-preserve=ownership,mode,timestamps -- "$srcdir/frontend-dist/." \
+    "$pkgdir/usr/share/lmm-api/frontend-dist/"
+  find "$pkgdir/usr/share/lmm-api/frontend-dist" -type d -exec chmod 0755 {} +
+  find "$pkgdir/usr/share/lmm-api/frontend-dist" -type f -exec chmod 0644 {} +
 }
 
 package_lmm-api-go() {
@@ -76,9 +81,4 @@ package_lmm-api-rs() {
     "$pkgdir/usr/lib/lmm-api/backends/rs/lmm-api-rs"
   install -Dm0755 "$srcdir/lmm-db-migrate-bin" \
     "$pkgdir/usr/lib/lmm-api/backends/rs/lmm-db-migrate"
-  install -d -m0755 "$pkgdir/usr/share/lmm-api/frontend-dist"
-  cp -R --no-preserve=ownership,mode,timestamps -- "$srcdir/frontend-dist/." \
-    "$pkgdir/usr/share/lmm-api/frontend-dist/"
-  find "$pkgdir/usr/share/lmm-api/frontend-dist" -type d -exec chmod 0755 {} +
-  find "$pkgdir/usr/share/lmm-api/frontend-dist" -type f -exec chmod 0644 {} +
 }

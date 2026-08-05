@@ -65,7 +65,7 @@ release JSON, copied binary, revision argument, or production configuration is
 accepted by the activation command.
 
 ```bash
-PACKAGE=/srv/lmm-test-artifacts/lmm-api-rs-bin-0.1.0.r0123456789ab-1-x86_64.pkg.tar.zst
+PACKAGE=/srv/lmm-test-artifacts/lmm-api-rs-fallback-bin-0.1.0.r0123456789ab-1-x86_64.pkg.tar.zst
 PACKAGE_SHA256=replace_with_the_sha256sum_of_that_exact_package
 
 LMM_RS_TEST_INSTANCE=1 \

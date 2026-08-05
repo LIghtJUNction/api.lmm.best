@@ -1,0 +1,59 @@
+# Maintainer: LIghtJUNction
+
+pkgname=lmm-api-git
+pkgver=0.1.0.r1.ge68b73186
+pkgrel=1
+pkgdesc='LMM API shared launcher, service, configuration, and web frontend (git)'
+arch=('any')
+url='https://github.com/LIghtJUNction/api.lmm.best'
+license=('AGPL-3.0-only')
+depends=('bash' 'ca-certificates' 'coreutils' 'sed' 'systemd' 'tzdata')
+makedepends=('bun' 'git')
+optdepends=(
+  'lmm-api-go: Go backend provider'
+  'lmm-api-rs: Rust backend provider'
+)
+provides=('lmm-api')
+conflicts=('lmm-api' 'lmm-api-bin' 'new-api' 'new-api-bin' 'new-api-git')
+replaces=('new-api-git')
+backup=('etc/lmm-api/backend.conf' 'etc/lmm-api/lmm-api.env')
+install=lmm-api-git.install
+source=('lmm-api::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main')
+sha256sums=('SKIP')
+
+pkgver() {
+  cd lmm-api || return
+  git describe --long --tags --abbrev=9 2>/dev/null | \
+    sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g' || \
+    printf '0.0.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
+}
+
+build() {
+  cd lmm-api || return
+  bun install --frozen-lockfile
+  VITE_REACT_APP_VERSION="${pkgver}" bun run --filter @lmm/web build
+}
+
+package() {
+  local root="${srcdir}/lmm-api"
+  local shared="${root}/packaging/common/lmm-api"
+
+  install -Dm0755 "${shared}/lmm-api-launcher" "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0755 "${shared}/lmm-api-select" "${pkgdir}/usr/bin/lmm-api-select"
+  install -Dm0644 "${shared}/lmm-api.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
+  install -Dm0644 "${shared}/backend.conf" "${pkgdir}/etc/lmm-api/backend.conf"
+  install -Dm0600 "${shared}/lmm-api.env" "${pkgdir}/etc/lmm-api/lmm-api.env"
+  install -Dm0644 "${shared}/lmm-api-rs.env.example" \
+    "${pkgdir}/usr/share/doc/${pkgname}/lmm-api-rs.env.example"
+  install -d -m0755 "${pkgdir}/usr/share/lmm-api/frontend-dist"
+  cp -R --no-preserve=ownership,mode,timestamps -- "${root}/apps/web/dist/." \
+    "${pkgdir}/usr/share/lmm-api/frontend-dist/"
+  find "${pkgdir}/usr/share/lmm-api/frontend-dist" -type d -exec chmod 0755 {} +
+  find "${pkgdir}/usr/share/lmm-api/frontend-dist" -type f -exec chmod 0644 {} +
+  for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
+    install -Dm0644 "${root}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
+  done
+  git -C "${root}" rev-parse HEAD > "${srcdir}/REVISION"
+  install -Dm0644 "${srcdir}/REVISION" "${pkgdir}/usr/share/doc/${pkgname}/REVISION"
+}

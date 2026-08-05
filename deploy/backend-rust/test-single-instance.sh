@@ -60,13 +60,13 @@ new_case() {
 #!/usr/bin/env bash
 set -Eeuo pipefail
 case "${1:-}" in
-  -Qp) printf '%s\n' 'lmm-api-rs-bin 9.9.9-1' ;;
+  -Qp) printf '%s\n' 'lmm-api-rs-fallback-bin 9.9.9-1' ;;
   -U) exit 0 ;;
   -Qkk) exit 0 ;;
   -Q)
-    if [[ ${2:-} == lmm-api-rs-bin ]]; then printf '%s\n' 'lmm-api-rs-bin 9.9.9-1'; else exit 1; fi
+    if [[ ${2:-} == lmm-api-rs-fallback-bin ]]; then printf '%s\n' 'lmm-api-rs-fallback-bin 9.9.9-1'; else exit 1; fi
     ;;
-  -Qoq) printf '%s\n' "${MOCK_PACMAN_OWNER:-lmm-api-rs-bin}" ;;
+  -Qoq) printf '%s\n' "${MOCK_PACMAN_OWNER:-lmm-api-rs-fallback-bin}" ;;
   *) exit 1 ;;
 esac
 EOF
