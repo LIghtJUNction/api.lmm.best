@@ -1,6 +1,6 @@
 pkgbase = lmm-api-bin
 	pkgdesc = LMM API shared launcher, service, configuration, and web frontend (prebuilt)
-	pkgver = 0.1.1
+	pkgver = 0.1.2
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/api.lmm.best
 	install = lmm-api-bin.install
@@ -15,20 +15,20 @@ pkgbase = lmm-api-bin
 	depends = tzdata
 	optdepends = lmm-api-go: Go backend provider
 	optdepends = lmm-api-rs: Rust backend provider
-	provides = lmm-api=0.1.1
+	provides = lmm-api=0.1.2
 	conflicts = lmm-api
 	conflicts = lmm-api-git
 	conflicts = new-api
 	conflicts = new-api-bin
 	conflicts = new-api-git
 	replaces = new-api-bin
-	noextract = lmm-api-core-0.1.1.tar.gz
+	noextract = lmm-api-core-0.1.2.tar.gz
 	options = !strip
 	backup = etc/lmm-api/backend.conf
 	backup = etc/lmm-api/lmm-api.env
-	source = lmm-api-core-0.1.1.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.1/lmm-api-core-0.1.1.tar.gz
-	source = lmm-api-core-0.1.1.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.1/lmm-api-core-0.1.1.tar.gz.sha256
-	source = lmm-api-core-0.1.1.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.1/lmm-api-core-0.1.1.tar.gz.sigstore.json
+	source = lmm-api-core-0.1.2.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.2/lmm-api-core-0.1.2.tar.gz
+	source = lmm-api-core-0.1.2.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.2/lmm-api-core-0.1.2.tar.gz.sha256
+	source = lmm-api-core-0.1.2.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/v0.1.2/lmm-api-core-0.1.2.tar.gz.sigstore.json
 	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = SKIP

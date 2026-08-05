@@ -263,6 +263,11 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Install route coverage tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep
+
       - name: Set up pinned Rust toolchain
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
