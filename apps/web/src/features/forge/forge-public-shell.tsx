@@ -45,7 +45,7 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
       headerProps={{
         useDynamicNavLinks: false,
         className:
-          '[&>div>nav]:bg-[#FAF9F5]/82 [&>div>nav]:backdrop-blur-md [&>div>nav]:border-[#141413]/20',
+          '[&>div>nav]:bg-[#FAF9F5]/82 [&>div>nav]:backdrop-blur-md [&>div>nav]:border-[#141413]/20 [&>div>nav_a]:!text-[#141413] [&>div>nav>div]:!text-[#141413]',
       }}
     >
       <div className='min-h-svh bg-[#FAF9F5] text-[#141413]'>

@@ -31,7 +31,7 @@ import { getChannelTypeIcon, getKeyPromptForType } from '../channel-utils'
 function newAPIForm(baseUrl: string) {
   return {
     ...CHANNEL_FORM_DEFAULT_VALUES,
-    name: 'New API upstream',
+    name: 'Compatible relay upstream',
     type: CHANNEL_TYPE_NEW_API,
     base_url: baseUrl,
     key: 'test-key',
@@ -39,7 +39,7 @@ function newAPIForm(baseUrl: string) {
   }
 }
 
-describe('New API channel', () => {
+describe('Compatible relay channel', () => {
   test('registers selection, ordering, model discovery, and icon metadata', () => {
     const option = CHANNEL_TYPE_OPTIONS.find(
       (item) => item.value === CHANNEL_TYPE_NEW_API
@@ -47,7 +47,7 @@ describe('New API channel', () => {
 
     assert.deepEqual(option, {
       value: CHANNEL_TYPE_NEW_API,
-      label: 'New API',
+      label: 'Compatible Relay',
     })
     assert.equal(
       CHANNEL_TYPE_OPTIONS.findIndex(
@@ -56,12 +56,12 @@ describe('New API channel', () => {
       CHANNEL_TYPE_OPTIONS.findIndex((item) => item.value === 58)
     )
     assert.equal(MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_NEW_API), true)
-    assert.equal(getChannelTypeIcon(CHANNEL_TYPE_NEW_API), 'NewAPI')
+    assert.equal(getChannelTypeIcon(CHANNEL_TYPE_NEW_API), 'OpenAI')
     assert.equal(
       getKeyPromptForType(CHANNEL_TYPE_NEW_API),
       'Enter API key for this channel'
     )
-    assert.equal(getChannelTypeConfig(CHANNEL_TYPE_NEW_API).icon, 'NewAPI')
+    assert.equal(getChannelTypeConfig(CHANNEL_TYPE_NEW_API).icon, 'OpenAI')
   })
 
   test('requires a non-blank Base URL', () => {
@@ -80,8 +80,7 @@ describe('New API channel', () => {
     }
 
     assert.equal(
-      channelFormSchema.safeParse(newAPIForm('https://new-api.example'))
-        .success,
+      channelFormSchema.safeParse(newAPIForm('https://relay.example')).success,
       true
     )
   })

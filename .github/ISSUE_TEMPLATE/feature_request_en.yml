@@ -1,5 +1,5 @@
 name: LMM API Feature Request
-description: Suggest a feature or improvement appropriate for this maintained fork
+description: Suggest a feature or improvement appropriate for LMM Forge
 title: "[Feature] "
 labels:
   - enhancement
@@ -9,9 +9,9 @@ body:
       value: |
         ## Before submitting
 
-        LMM API is a maintained fork of [New API](https://github.com/QuantumNous/new-api). Explain why this request belongs in this repository and how it relates to upstream behavior.
+        Explain how this request improves LMM Forge bounty collaboration, delivery tracking, or operations.
 
-        Search this repository and [upstream Issues](https://github.com/QuantumNous/new-api/issues), then review the [project README](https://github.com/LIghtJUNction/api.lmm.best#readme) and [upstream docs](https://docs.newapi.pro/) before submitting.
+        Search this repository's Issues, then review the [project README](https://github.com/LIghtJUNction/api.lmm.best#readme) and [bounty workflow guide](https://github.com/LIghtJUNction/api.lmm.best/blob/main/docs/open-source-bounties.zh-CN.md) before submitting.
 
   - type: checkboxes
     id: submission-checks
@@ -20,9 +20,7 @@ body:
       options:
         - label: I searched this repository's [Issues](https://github.com/LIghtJUNction/api.lmm.best/issues) and found no duplicate request.
           required: true
-        - label: I checked upstream New API documentation and Issues and confirmed the existing functionality does not meet this need.
-          required: true
-        - label: I explained why this feature should be implemented or maintained by the LMM API fork.
+        - label: I explained how this feature serves the current LMM Forge product workflow.
           required: true
 
   - type: textarea
@@ -44,12 +42,12 @@ body:
   - type: textarea
     id: fork-rationale
     attributes:
-      label: Relationship to upstream New API
-      description: State whether upstream has a related feature or issue and why this belongs in LMM API.
+      label: Relationship to the current product workflow
+      description: State which roles, states, or settlement flows this improves and how it can be verified.
       placeholder: |
-        Related upstream docs or issue:
-        Current upstream behavior:
-        Why LMM API should implement this:
+        Affected roles:
+        Related bounty or delivery state:
+        Verifiable expected result:
     validations:
       required: true
 

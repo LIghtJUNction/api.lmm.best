@@ -64,7 +64,7 @@ func TestValidateChannelRequiresNewAPIBaseURL(t *testing.T) {
 	}{
 		{name: "missing", wantErr: true},
 		{name: "blank", baseURL: common.GetPointer("  "), wantErr: true},
-		{name: "configured", baseURL: common.GetPointer("https://new-api.example")},
+		{name: "configured", baseURL: common.GetPointer("https://relay.example")},
 	}
 
 	for _, test := range tests {
@@ -77,7 +77,7 @@ func TestValidateChannelRequiresNewAPIBaseURL(t *testing.T) {
 			err := validateChannel(channel, false)
 
 			if test.wantErr {
-				require.ErrorContains(t, err, "New API channel base URL cannot be empty")
+				require.ErrorContains(t, err, "compatible relay channel base URL cannot be empty")
 				return
 			}
 			require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestNewAPIChannelRegistration(t *testing.T) {
 
 	require.True(t, ok)
 	assert.Equal(t, constant.APITypeNewAPI, apiType)
-	assert.Equal(t, "New API", constant.GetChannelTypeName(constant.ChannelTypeNewAPI))
+	assert.Equal(t, "Compatible Relay", constant.GetChannelTypeName(constant.ChannelTypeNewAPI))
 	require.Greater(t, len(constant.ChannelBaseURLs), constant.ChannelTypeNewAPI)
 	assert.Empty(t, constant.ChannelBaseURLs[constant.ChannelTypeNewAPI])
 }
@@ -105,7 +105,7 @@ func TestResponsesCompactAPITypeSupport(t *testing.T) {
 		{name: "Codex", apiType: constant.APITypeCodex, want: true},
 		{name: "Advanced Custom", apiType: constant.APITypeAdvancedCustom, want: true},
 		{name: "Sub2API", apiType: constant.APITypeSub2API, want: true},
-		{name: "New API", apiType: constant.APITypeNewAPI, want: true},
+		{name: "Compatible Relay", apiType: constant.APITypeNewAPI, want: true},
 		{name: "Anthropic", apiType: constant.APITypeAnthropic, want: false},
 	}
 
