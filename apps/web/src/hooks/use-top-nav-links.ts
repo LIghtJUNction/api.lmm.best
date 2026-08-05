@@ -20,6 +20,7 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useStatus } from '@/hooks/use-status'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -68,7 +69,7 @@ export function useTopNavLinks(): TopNavLink[] {
   }
 
   // Console -> /dashboard (new console path)
-  if (modules?.console !== false) {
+  if (modules?.console !== false && isConsoleActivated(auth.user)) {
     links.push({ title: t('Console'), href: '/dashboard' })
   }
 
