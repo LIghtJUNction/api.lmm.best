@@ -23,6 +23,7 @@ import (
 
 const authIdentityContextKey = "auth_identity"
 const dashboardCredentialContextKey = "dashboard_credential"
+const consoleActivationContextKey = "console_activation_granted"
 
 type dashboardCredentialKind int
 
@@ -210,12 +211,23 @@ func ConsoleAccessGate() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if user.Role >= common.RoleAdminUser || user.ConsoleActivatedAt > 0 || preActivationRouteAllowed(c.Request.Method, c.Request.URL.Path) {
+		activated := user.Role >= common.RoleAdminUser || user.ConsoleActivatedAt > 0
+		c.Set(consoleActivationContextKey, activated)
+		if activated || preActivationRouteAllowed(c.Request.Method, c.Request.URL.Path) {
 			c.Next()
 			return
 		}
 		abortRelayAsNotFound(c)
 	}
+}
+
+// ConsoleActivationGranted reports whether the current dashboard request has
+// crossed the permanent first-credential activation boundary. Anonymous and
+// invalid credentials deliberately return false.
+func ConsoleActivationGranted(c *gin.Context) bool {
+	value, ok := c.Get(consoleActivationContextKey)
+	activated, ok := value.(bool)
+	return ok && activated
 }
 
 func preActivationRouteAllowed(method string, path string) bool {

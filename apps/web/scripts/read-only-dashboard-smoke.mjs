@@ -166,6 +166,9 @@ function jsonFixture(pathname) {
   if (pathname === '/api/notice') {
     return { success: true, data: '', message: 'smoke fixture' }
   }
+  if (pathname === '/api/open-source-bounties/tips/received') {
+    return { success: true, data: [], message: 'smoke fixture' }
+  }
   if (pathname === '/api/data' || pathname === '/api/data/self') {
     return { success: true, data: quotaFixture, message: 'smoke fixture' }
   }
