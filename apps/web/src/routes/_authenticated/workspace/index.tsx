@@ -16,8 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ForgeHome } from '@/features/forge/forge-home'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-export function Home() {
-  return <ForgeHome />
-}
+import { ContributorWorkspace } from '@/features/forge/contributor-workspace'
+import { isConsoleActivated } from '@/lib/console-activation'
+import { useAuthStore } from '@/stores/auth-store'
+
+export const Route = createFileRoute('/_authenticated/workspace/')({
+  beforeLoad: () => {
+    if (isConsoleActivated(useAuthStore.getState().auth.user)) {
+      throw redirect({ to: '/open-source-bounties' })
+    }
+  },
+  component: ContributorWorkspace,
+})

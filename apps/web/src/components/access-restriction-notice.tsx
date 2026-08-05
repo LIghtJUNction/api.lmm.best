@@ -16,8 +16,26 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ForgeHome } from '@/features/forge/forge-home'
+import { useTranslation } from 'react-i18next'
 
-export function Home() {
-  return <ForgeHome />
+import { cn } from '@/lib/utils'
+
+type AccessRestrictionNoticeProps = {
+  className?: string
+}
+
+export function AccessRestrictionNotice(props: AccessRestrictionNoticeProps) {
+  const { t } = useTranslation()
+
+  return (
+    <aside
+      role='note'
+      className={cn(
+        'border-border bg-muted/40 text-muted-foreground border-t px-4 py-2 text-center text-[11px] leading-4 font-medium',
+        props.className
+      )}
+    >
+      {t('Access from China is prohibited.')}
+    </aside>
+  )
 }

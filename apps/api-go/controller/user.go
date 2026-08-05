@@ -516,6 +516,11 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	consoleActivatedAt := user.ConsoleActivatedAt
+	if user.Role >= common.RoleAdminUser && consoleActivatedAt == 0 {
+		consoleActivatedAt = 1
+	}
+	permissions["console_activated_at"] = consoleActivatedAt
 	return map[string]interface{}{
 		"id":                user.Id,
 		"username":          user.Username,

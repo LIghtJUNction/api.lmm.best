@@ -184,53 +184,53 @@ export function Footer(props: FooterProps) {
   const fallbackColumns = useMemo<FooterColumnProps[]>(
     () => [
       {
-        title: t('footer.columns.about.title'),
+        title: t('Challenges'),
         links: [
           {
-            text: t('footer.columns.about.links.aboutProject'),
-            href: `${docsBaseUrl}/guide/wiki/basic-concepts/project-introduction`,
+            text: t('Browse challenges'),
+            href: '/challenges',
           },
           {
-            text: t('footer.columns.about.links.contact'),
-            href: `${docsBaseUrl}/support/community-interaction`,
+            text: t('Open work'),
+            href: '/challenges',
           },
           {
-            text: t('footer.columns.about.links.features'),
-            href: `${docsBaseUrl}/guide/wiki/basic-concepts/features-introduction`,
+            text: t('How it works'),
+            href: '/#workflow',
           },
         ],
       },
       {
-        title: t('footer.columns.docs.title'),
+        title: t('Terms'),
         links: [
           {
-            text: t('footer.columns.docs.links.quickStart'),
-            href: `${docsBaseUrl}/guide/home`,
+            text: t('Terms'),
+            href: '/user-agreement',
           },
           {
-            text: t('footer.columns.docs.links.installation'),
-            href: `${docsBaseUrl}/installation`,
+            text: t('Privacy'),
+            href: '/privacy-policy',
           },
           {
-            text: t('footer.columns.docs.links.apiDocs'),
-            href: `${docsBaseUrl}/api`,
+            text: t('Open-source attribution'),
+            href: '/about',
           },
         ],
       },
       {
-        title: t('footer.columns.related.title'),
+        title: t('Open-source attribution'),
         links: [
           {
-            text: t('footer.columns.related.links.oneApi'),
+            text: t('New API'),
+            href: 'https://github.com/QuantumNous/new-api',
+          },
+          {
+            text: t('One API'),
             href: 'https://github.com/songquanpeng/one-api',
           },
           {
-            text: t('footer.columns.related.links.midjourney'),
-            href: 'https://github.com/novicezk/midjourney-proxy',
-          },
-          {
-            text: t('footer.columns.related.links.newApiKeyTool'),
-            href: 'https://github.com/Calcium-Ion/new-api-key-tool',
+            text: t('Open-source attribution'),
+            href: `${docsBaseUrl}/guide/wiki/basic-concepts/project-introduction`,
           },
         ],
       },
@@ -286,7 +286,7 @@ export function Footer(props: FooterProps) {
               </span>
             </Link>
             <p className='mt-3 max-w-[15rem] text-xs leading-relaxed text-[#141413]/58 dark:text-[#FAF9F5]/58'>
-              {t('Powerful API Management Platform')}
+              {t('Open-source bounty collaboration')}
             </p>
           </div>
 

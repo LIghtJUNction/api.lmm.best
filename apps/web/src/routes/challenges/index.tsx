@@ -16,8 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ForgeHome } from '@/features/forge/forge-home'
+import { createFileRoute } from '@tanstack/react-router'
 
-export function Home() {
-  return <ForgeHome />
+import { ChallengeList } from '@/features/forge/challenge-list'
+import { ForgePublicShell } from '@/features/forge/forge-public-shell'
+
+export const Route = createFileRoute('/challenges/')({
+  component: ChallengesPage,
+})
+
+function ChallengesPage() {
+  return (
+    <ForgePublicShell>
+      <main className='mx-auto max-w-7xl px-5 pt-32 pb-24 md:px-10'>
+        <ChallengeList />
+      </main>
+    </ForgePublicShell>
+  )
 }

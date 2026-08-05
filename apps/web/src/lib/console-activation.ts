@@ -16,8 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ForgeHome } from '@/features/forge/forge-home'
+import type { AuthUser } from '@/stores/auth-store'
 
-export function Home() {
-  return <ForgeHome />
+const ADMIN_ROLE = 10
+
+export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
+  if (!user) return false
+  if (user.role >= ADMIN_ROLE) return true
+  return user.permissions?.console_activated_at !== 0
+}
+
+export function isContributorRoute(pathname: string): boolean {
+  return [
+    '/challenges',
+    '/wallet',
+    '/profile',
+    '/developer-access',
+    '/workspace',
+  ].some((path) => pathname === path || pathname.startsWith(`${path}/`))
+}
+
+export function isRestrictedPublicRoute(pathname: string): boolean {
+  return ['/about', '/pricing', '/rankings'].some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  )
 }

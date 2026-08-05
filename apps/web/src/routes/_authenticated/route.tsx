@@ -19,6 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { AuthenticatedLayout } from '@/components/layout'
+import {
+  isConsoleActivated,
+  isContributorRoute,
+} from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated')({
@@ -30,6 +34,13 @@ export const Route = createFileRoute('/_authenticated')({
         to: '/sign-in',
         search: { redirect: location.href },
       })
+    }
+
+    if (
+      !isConsoleActivated(auth.user) &&
+      !isContributorRoute(location.pathname)
+    ) {
+      throw redirect({ to: '/challenges' })
     }
   },
   component: AuthenticatedLayout,
