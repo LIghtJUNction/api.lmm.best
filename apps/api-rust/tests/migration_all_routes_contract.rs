@@ -150,7 +150,7 @@ fn every_migration_route_module_should_have_a_router_integration_test() {
 fn all_candidate_route_shapes_should_pass_the_repository_gate() {
     let root = manifest_dir();
     let output = Command::new("bash")
-        .arg(root.join("scripts/check-draft-route-coverage.sh"))
+        .arg(root.join("tests/scripts/check-draft-route-coverage.sh"))
         .current_dir(&root)
         .output()
         .expect("route coverage gate");
