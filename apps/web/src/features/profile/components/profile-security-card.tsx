@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Shield, Key, Trash2 } from 'lucide-react'
+import { Shield, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -26,7 +26,6 @@ import { TitledCard } from '@/components/ui/titled-card'
 import { useDialogs } from '@/hooks/use-dialog'
 
 import type { UserProfile } from '../types'
-import { AccessTokenDialog } from './dialogs/access-token-dialog'
 import { ChangePasswordDialog } from './dialogs/change-password-dialog'
 import { DeleteAccountDialog } from './dialogs/delete-account-dialog'
 
@@ -39,7 +38,7 @@ interface ProfileSecurityCardProps {
   loading: boolean
 }
 
-type DialogKey = 'password' | 'token' | 'delete'
+type DialogKey = 'password' | 'delete'
 
 export function ProfileSecurityCard({
   profile,
@@ -75,13 +74,6 @@ export function ProfileSecurityCard({
       variant: 'default' as const,
     },
     {
-      icon: Key,
-      title: t('Access Token'),
-      description: t('Generate and manage your API access token'),
-      action: () => dialogs.open('token'),
-      variant: 'default' as const,
-    },
-    {
       icon: Trash2,
       title: t('Delete Account'),
       description: t('Permanently delete your account and all data'),
@@ -99,7 +91,7 @@ export function ProfileSecurityCard({
         iconTone='success'
         disableHoverEffect
       >
-        <div className='grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-3'>
+        <div className='grid grid-cols-1 gap-2.5 sm:gap-3 md:grid-cols-2'>
           {securityActions.map((item) => (
             <button
               key={item.title}
@@ -130,13 +122,6 @@ export function ProfileSecurityCard({
           open ? dialogs.open('password') : dialogs.close('password')
         }
         username={profile.username}
-      />
-
-      <AccessTokenDialog
-        open={dialogs.isOpen('token')}
-        onOpenChange={(open) =>
-          open ? dialogs.open('token') : dialogs.close('token')
-        }
       />
 
       <DeleteAccountDialog
