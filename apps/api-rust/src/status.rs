@@ -13,7 +13,7 @@ use sqlx::{PgPool, Row};
 use std::{collections::BTreeMap, sync::Arc};
 
 const DEFAULT_SERVER_ADDRESS: &str = "http://localhost:3000";
-const DEFAULT_DOCS_LINK: &str = "https://docs.newapi.pro/en/docs";
+const DEFAULT_DOCS_LINK: &str = "https://github.com/LIghtJUNction/api.lmm.best#readme";
 const DEFAULT_CHATS: &str = r#"[
   {"Cherry Studio":"cherrystudio://providers/api-keys?v=1&data={cherryConfig}"},
   {"AionUI":"aionui://provider/add?v=1&data={aionuiConfig}"},
