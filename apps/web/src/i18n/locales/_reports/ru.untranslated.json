@@ -1,7 +1,3 @@
 {
-  "FastPay API Address": "FastPay API Address",
-  "FastPay Merchant No": "FastPay Merchant No",
-  "FastPay Secret Key": "FastPay Secret Key",
-  "LMM API &lt;noreply@example.com&gt;": "LMM API &lt;noreply@example.com&gt;",
-  "The gateway base URL for FastPay API": "The gateway base URL for FastPay API"
+  "LMM API &lt;noreply@example.com&gt;": "LMM API &lt;noreply@example.com&gt;"
 }
