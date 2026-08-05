@@ -27,6 +27,7 @@ import {
   LayoutDashboard,
   LifeBuoy,
   ListTodo,
+  Medal,
   MessageSquare,
   Radio,
   ServerCog,
@@ -36,7 +37,7 @@ import {
   User,
   Users,
   Wallet,
-  KeyRound,
+  ShieldCheck,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -73,9 +74,9 @@ export function useSidebarData(): SidebarData {
               icon: Wallet,
             },
             {
-              title: t('Developer access'),
-              url: '/developer-access',
-              icon: KeyRound,
+              title: t('Trust & access'),
+              url: '/wallet',
+              icon: ShieldCheck,
             },
             {
               title: t('Profile'),
@@ -103,6 +104,11 @@ export function useSidebarData(): SidebarData {
             title: t('Challenges'),
             url: '/challenges',
             icon: Trophy,
+          },
+          {
+            title: t('Rankings'),
+            url: '/rankings',
+            icon: Medal,
           },
         ],
       },

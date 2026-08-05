@@ -215,7 +215,13 @@ func ConsoleAccessGate() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		activated := user.Role >= common.RoleAdminUser || user.ConsoleActivatedAt > 0
+		activated, trustErr := trustLevelAllowsDeveloperAccess(user)
+		if trustErr != nil {
+			common.SysLog(fmt.Sprintf("failed to calculate console trust level for user %d: %s", user.Id, trustErr.Error()))
+			// Preserve the legacy gate only while the database is unavailable. New
+			// accounts never receive ConsoleActivatedAt, so this cannot unlock L0.
+			activated = user.ConsoleActivatedAt > 0
+		}
 		c.Set(consoleActivationContextKey, activated)
 		if activated || preActivationRouteAllowed(c.Request.Method, c.Request.URL.Path) {
 			c.Next()
@@ -223,6 +229,23 @@ func ConsoleAccessGate() gin.HandlerFunc {
 		}
 		abortRelayAsNotFound(c)
 	}
+}
+
+func trustLevelAllowsDeveloperAccess(user *model.UserBase) (bool, error) {
+	if user == nil {
+		return false, gorm.ErrInvalidData
+	}
+	if user.Role >= common.RoleAdminUser {
+		return true, nil
+	}
+	if user.TrustLevelOverride != nil {
+		return *user.TrustLevelOverride >= 1, nil
+	}
+	trustLevel, err := model.GetTrustLevelInfoForUserBase(user)
+	if err != nil {
+		return false, err
+	}
+	return trustLevel.Level >= 1, nil
 }
 
 // consoleDiscoveryRoute hides relay-console inventory from unauthenticated and
@@ -280,6 +303,17 @@ func ConsoleActivationGranted(c *gin.Context) bool {
 	return ok && activated
 }
 
+// AuthenticatedDashboardUser returns the valid dashboard identity already
+// classified by ConsoleAccessGate. Callers can use it on public-but-optional-
+// auth surfaces without accepting an unverified user id from request data.
+func AuthenticatedDashboardUser(c *gin.Context) (*model.UserBase, bool) {
+	user, _, credentialKind, err := classifyDashboardCredential(c)
+	if err != nil || credentialKind == dashboardCredentialUnmatched || user == nil {
+		return nil, false
+	}
+	return user, true
+}
+
 func preActivationRouteAllowed(method string, path string) bool {
 	path = strings.TrimSuffix(path, "/")
 	if publicSubscriptionCallbackRoute(method, path) {
@@ -316,8 +350,6 @@ func preActivationRouteAllowed(method string, path string) bool {
 	case "/api/user/register", "/api/user/login", "/api/user/login/2fa", "/api/user/reset", "/api/user/auth/refresh", "/api/user/auth/logout":
 		return method == http.MethodPost
 	case "/api/verify":
-		return method == http.MethodPost
-	case "/api/token":
 		return method == http.MethodPost
 	case "/api/user/self":
 		return method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete
@@ -512,6 +544,10 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
+		if granted, trustErr := trustLevelAllowsDeveloperAccess(userCache); trustErr != nil || !granted {
+			abortRelayAsNotFound(c)
+			return
+		}
 
 		c.Set("id", token.UserId)
 		c.Set("token_id", token.Id)
@@ -594,6 +630,9 @@ func authenticateRelayToken(c *gin.Context) *relayTokenAuthFailure {
 	if userCache.Status != common.UserStatusEnabled {
 		return newRelayTokenAuthFailure(errors.New("user is disabled"), http.StatusForbidden,
 			common.TranslateMessage(c, i18n.MsgAuthUserBanned), "")
+	}
+	if granted, trustErr := trustLevelAllowsDeveloperAccess(userCache); trustErr != nil || !granted {
+		return newRelayTokenAuthFailure(errors.New("account trust level is insufficient"), http.StatusNotFound, "Not Found", types.ErrorCodeAccessDenied)
 	}
 
 	userGroup := userCache.Group

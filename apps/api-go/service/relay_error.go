@@ -20,7 +20,7 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 		return false
 	}
 	if c != nil {
-		if _, ok := c.Get("specific_channel_id"); ok {
+		if common.GetContextKeyString(c, constant.ContextKeyTokenSpecificChannelId) != "" {
 			return false
 		}
 	}

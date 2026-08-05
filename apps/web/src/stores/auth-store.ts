@@ -25,6 +25,22 @@ export type UserPermissions = {
   sidebar_modules?: Record<string, unknown>
   admin_permissions?: AdminCapabilities
   console_activated_at?: number
+  docs_access?: boolean
+}
+
+export interface TrustLevelInfo {
+  level: number
+  automatic_level: number
+  override_level: number | null
+  paid_amount: number
+  discount_ratio: number
+  discount_percent: number
+  next_level?: number | null
+  next_level_paid_amount?: number | null
+  amount_to_next_level?: number | null
+  next_decay_at?: number | null
+  inactivity_decay_steps: number
+  overridden: boolean
 }
 
 export interface AuthUser {
@@ -54,6 +70,7 @@ export interface AuthUser {
   stripe_customer?: string
   sidebar_modules?: string
   permissions?: UserPermissions
+  trust_level_info?: TrustLevelInfo
 }
 
 export interface LoginSession {

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Activity, BarChart3, WalletCards } from 'lucide-react'
+import { Activity, BarChart3, ShieldCheck, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
@@ -34,8 +34,8 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
   const { t } = useTranslation()
   if (props.loading) {
     return (
-      <div className='grid grid-cols-3 divide-x rounded-lg border'>
-        {['balance', 'usage', 'requests'].map((key) => (
+      <div className='grid grid-cols-2 divide-x rounded-lg border sm:grid-cols-4'>
+        {['balance', 'usage', 'requests', 'trust'].map((key) => (
           <div key={key} className='min-w-0 px-2.5 py-2.5 sm:px-5 sm:py-4'>
             <Skeleton className='h-3.5 w-full' />
             <Skeleton className='mt-2 h-6 w-full sm:h-7' />
@@ -74,10 +74,17 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
       icon: Activity,
       tone: 'chart-4',
     },
+    {
+      label: t('Trust level'),
+      value: `L${props.user?.trust_level_info?.level ?? 0}`,
+      description: `${props.user?.trust_level_info?.discount_percent ?? 0}% ${t('discount')}`,
+      icon: ShieldCheck,
+      tone: 'warning',
+    },
   ]
 
   return (
-    <div className='grid grid-cols-3 divide-x rounded-lg border'>
+    <div className='grid grid-cols-2 divide-x rounded-lg border sm:grid-cols-4'>
       {stats.map((item) => (
         <div key={item.label} className='min-w-0 px-2.5 py-2.5 sm:px-5 sm:py-4'>
           <div className='flex items-center gap-1.5 sm:gap-2.5'>

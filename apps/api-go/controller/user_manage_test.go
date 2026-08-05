@@ -48,6 +48,10 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 }
 
 func performManageUserRequest(t *testing.T, body string) *httptest.ResponseRecorder {
+	return performManageUserRequestAsRole(t, body, common.RoleRootUser)
+}
+
+func performManageUserRequestAsRole(t *testing.T, body string, role int) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -55,10 +59,52 @@ func performManageUserRequest(t *testing.T, body string) *httptest.ResponseRecor
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("id", 9999)
-	c.Set("role", common.RoleRootUser)
+	c.Set("role", role)
 	c.Set("username", "root-operator")
 	ManageUser(c)
 	return recorder
+}
+
+func TestManageUserTrustLevelOverrideValidation(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	user := model.User{
+		Username: "managed-trust-user", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	for _, value := range []int{0, 1, 2, 3, 4, -1} {
+		recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":%d}`, user.Id, value))
+		assert.Contains(t, recorder.Body.String(), `"success":true`, "value %d", value)
+
+		var updated model.User
+		require.NoError(t, db.First(&updated, user.Id).Error)
+		if value == -1 {
+			assert.Nil(t, updated.TrustLevelOverride)
+		} else if assert.NotNil(t, updated.TrustLevelOverride) {
+			assert.Equal(t, value, *updated.TrustLevelOverride)
+		}
+	}
+
+	for _, value := range []int{-2, 5} {
+		recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":%d}`, user.Id, value))
+		assert.Contains(t, recorder.Body.String(), `"success":false`, "value %d", value)
+	}
+}
+
+func TestManageUserTrustLevelRejectsAdministratorsAndPeerTargets(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	admin := model.User{
+		Username: "managed-trust-admin", Password: "password", Role: common.RoleAdminUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}
+	require.NoError(t, db.Create(&admin).Error)
+
+	rootRecorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":4}`, admin.Id))
+	assert.Contains(t, rootRecorder.Body.String(), `"success":false`)
+
+	peerRecorder := performManageUserRequestAsRole(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":4}`, admin.Id), common.RoleAdminUser)
+	assert.Contains(t, peerRecorder.Body.String(), `"success":false`)
 }
 
 func TestManageUserDisableAdvancesAuthVersionOnceAndRevokesSession(t *testing.T) {

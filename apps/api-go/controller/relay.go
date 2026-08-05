@@ -561,7 +561,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if retryTimes <= 0 {
 		return false
 	}
-	if _, ok := c.Get("specific_channel_id"); ok {
+	if common.GetContextKeyString(c, constant.ContextKeyTokenSpecificChannelId) != "" {
 		return false
 	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {

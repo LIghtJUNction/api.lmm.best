@@ -80,6 +80,29 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 	return topUp
 }
 
+// HasSuccessfulPaidTopUp reports whether the account has completed at least
+// one real-money recharge. Quota grants, redemption codes, and balance-funded
+// subscription purchases do not unlock paid-only product surfaces.
+func HasSuccessfulPaidTopUp(userId int) (bool, error) {
+	if userId <= 0 {
+		return false, nil
+	}
+
+	var topUp TopUp
+	err := DB.Select("id").
+		Where("user_id = ? AND status = ? AND money > 0", userId, common.TopUpStatusSuccess).
+		Where("(payment_method IS NULL OR payment_method <> ?)", PaymentMethodBalance).
+		Where("(payment_provider IS NULL OR payment_provider <> ?)", PaymentProviderBalance).
+		Take(&topUp).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {
 	if tradeNo == "" {
 		return errors.New("未提供支付单号")

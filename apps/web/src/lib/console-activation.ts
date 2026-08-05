@@ -23,6 +23,8 @@ const ADMIN_ROLE = 10
 export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
   if (!user) return false
   if (user.role >= ADMIN_ROLE) return true
+  const trustLevel = user.trust_level_info?.level
+  if (typeof trustLevel === 'number') return trustLevel >= 1
   const activatedAt = user.permissions?.console_activated_at
   // Older auth responses did not include permissions at all. Preserve their
   // legacy full-console behavior, but require an explicit positive timestamp

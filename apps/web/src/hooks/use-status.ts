@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import type { SystemStatus } from '@/features/auth/types'
 import { getStatus } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { mapStatusDataToConfig } from './use-system-config'
@@ -38,8 +39,13 @@ function getInitialStatus(): SystemStatus | undefined {
 }
 
 export function useStatus() {
+  const statusScope = useAuthStore((state) => {
+    const user = state.auth.user
+    if (!user) return 'anonymous'
+    return `user:${user.id}:docs:${user.permissions?.docs_access === true ? 1 : 0}`
+  })
   const { data, isLoading, error } = useQuery({
-    queryKey: ['status'],
+    queryKey: ['status', statusScope],
     queryFn: async () => {
       const status = await getStatus()
       try {

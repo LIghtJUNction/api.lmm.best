@@ -1,11 +1,15 @@
 package helper
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -13,8 +17,55 @@ import (
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func TestHandleGroupRatioAppliesTrustLevelDiscount(t *testing.T) {
+	previousDB := model.DB
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+
+	savedGroupRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"trust-test":1.25}`))
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.RedisEnabled = previousRedis
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(savedGroupRatios))
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	user := model.User{
+		Username: "trust-price-user", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "trust-test",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId: user.Id, TradeNo: "trust-price-paid", Amount: 100 * int64(common.QuotaPerUnit),
+		Money: 14.6, Status: common.TopUpStatusSuccess, PaymentProvider: model.PaymentProviderStripe,
+		CompleteTime: time.Now().Unix(),
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{
+		UserId: user.Id, UserGroup: "trust-test", UsingGroup: "trust-test",
+	}
+
+	groupRatio := HandleGroupRatio(ctx, info)
+	require.InDelta(t, 1.2125, groupRatio.GroupRatio, 0.000001)
+	require.Equal(t, 2, groupRatio.TrustLevel)
+	require.InDelta(t, 0.97, groupRatio.TrustDiscountRatio, 0.000001)
+}
 
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -20,7 +20,7 @@ import type { SVGProps } from 'react'
 
 import { cn } from '@/lib/utils'
 
-export const LMM_BRAND_NAME = 'lmm.best'
+export const LMM_BRAND_NAME = 'LMM Forge'
 
 type LmmBrandMarkProps = SVGProps<SVGSVGElement> & {
   title?: string

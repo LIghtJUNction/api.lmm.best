@@ -16,3 +16,10 @@ func TestShouldRetryRelayErrorSpecificChannelSkipsChannelError(t *testing.T) {
 	apiErr := types.NewError(errors.New("channel failed"), types.ErrorCodeChannelNoAvailableKey)
 	assert.False(t, ShouldRetryRelayError(c, apiErr, 1))
 }
+
+func TestShouldRetryRelayErrorEmptySpecificChannelAllowsRetry(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("specific_channel_id", "")
+	apiErr := types.NewError(errors.New("channel failed"), types.ErrorCodeChannelNoAvailableKey)
+	assert.True(t, ShouldRetryRelayError(c, apiErr, 1))
+}

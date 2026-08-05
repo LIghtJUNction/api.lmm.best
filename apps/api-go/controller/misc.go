@@ -152,12 +152,24 @@ func GetStatus(c *gin.Context) {
 	if cs.FAQEnabled {
 		data["faq"] = console_setting.GetFAQ()
 	}
+	docsAccess := false
+	if dashboardUser, ok := middleware.AuthenticatedDashboardUser(c); ok {
+		trustLevel, err := model.GetTrustLevelInfoForUserBase(dashboardUser)
+		if err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to calculate trust level for user %d: %s", dashboardUser.Id, err.Error()))
+		} else {
+			docsAccess = trustLevel.Level >= 1
+		}
+	}
+	data["docs_access"] = docsAccess
+	if !docsAccess {
+		data["docs_link"] = ""
+	}
 	// Keep the public status response useful for branding, authentication, and
-	// billing while withholding legacy relay documentation until the account
-	// has permanently activated the developer console.
+	// billing while withholding legacy relay details until the account has
+	// permanently activated the developer console.
 	if !middleware.ConsoleActivationGranted(c) {
 		data["api_info_enabled"] = false
-		data["docs_link"] = ""
 		delete(data, "api_info")
 	}
 
