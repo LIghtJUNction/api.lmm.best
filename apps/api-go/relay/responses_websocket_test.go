@@ -105,6 +105,68 @@ func TestCancelTerminalSettlesTurnOnce(t *testing.T) {
 	assert.Equal(t, []bool{false}, commits)
 }
 
+func TestResponsesWSIncompleteAfterOutputSettlesPartialUsage(t *testing.T) {
+	previousPost := postResponsesWSConsumeQuota
+	t.Cleanup(func() { postResponsesWSConsumeQuota = previousPost })
+
+	var postedUsage *dto.Usage
+	postResponsesWSConsumeQuota = func(_ *gin.Context, _ *relaycommon.RelayInfo, usage *dto.Usage, _ []string) {
+		postedUsage = usage
+	}
+
+	commits := make([]bool, 0, 1)
+	state := &responsesWSCallState{
+		info: &relaycommon.RelayInfo{
+			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5"},
+		},
+		usage: &dto.Usage{},
+		commitRate: func(success bool) {
+			commits = append(commits, success)
+		},
+	}
+	state.info.SetEstimatePromptTokens(7)
+	session := &responsesWSSession{current: state}
+
+	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"billable output"}`))
+	session.observeUpstreamMessage([]byte(`{"type":"response.incomplete","response":{"usage":{"input_tokens":7,"output_tokens":3,"total_tokens":10}}}`))
+
+	assert.Nil(t, session.getCurrent())
+	assert.Equal(t, []bool{true}, commits)
+	require.NotNil(t, postedUsage)
+	assert.Equal(t, 7, postedUsage.PromptTokens)
+	assert.Equal(t, 3, postedUsage.CompletionTokens)
+	assert.Equal(t, 10, postedUsage.TotalTokens)
+}
+
+func TestResponsesWSDisconnectAfterOutputSettlesPartialUsage(t *testing.T) {
+	previousPost := postResponsesWSConsumeQuota
+	t.Cleanup(func() { postResponsesWSConsumeQuota = previousPost })
+
+	posted := false
+	postResponsesWSConsumeQuota = func(_ *gin.Context, _ *relaycommon.RelayInfo, _ *dto.Usage, _ []string) {
+		posted = true
+	}
+
+	commits := make([]bool, 0, 1)
+	state := &responsesWSCallState{
+		info: &relaycommon.RelayInfo{
+			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5"},
+		},
+		usage: &dto.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10},
+		commitRate: func(success bool) {
+			commits = append(commits, success)
+		},
+	}
+	session := &responsesWSSession{current: state}
+
+	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"billable output"}`))
+	session.failCurrent()
+
+	assert.Nil(t, session.getCurrent())
+	assert.Equal(t, []bool{true}, commits)
+	assert.True(t, posted)
+}
+
 func TestBuildResponsesWSErrorPayload(t *testing.T) {
 	payload, err := buildResponsesWSErrorPayload("evt", types.NewErrorWithStatusCode(
 		errors.New("model is required"), types.ErrorCodeInvalidRequest, http.StatusBadRequest,
