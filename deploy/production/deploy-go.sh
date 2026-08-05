@@ -47,8 +47,7 @@ mkdir -p "$work_dir/new" "$work_dir/rollback"
   cd -- "$REPO_ROOT"
   VITE_REACT_APP_VERSION=$release_version bun run build:web
 )
-"$REPO_ROOT/apps/api-go/build-production-binary.sh" \
-  --web-dist "$REPO_ROOT/apps/web/dist" \
+"$SCRIPT_DIR/build-go-binary.sh" \
   --source-ref "$revision" \
   --version "$release_version"
 "$SCRIPT_DIR/build-go-package.sh" \

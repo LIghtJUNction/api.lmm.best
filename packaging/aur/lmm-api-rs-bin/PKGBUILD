@@ -48,7 +48,6 @@ prepare() {
 package() {
   local deploy_root="$pkgdir/usr/lib/lmm-api-rs/deploy"
   local migration_root="$pkgdir/usr/share/lmm-api-rs/migration"
-  local frontend_root="$pkgdir/usr/share/lmm-api-rs/frontend-dist"
 
   install -Dm0755 "$srcdir/lmm-api-rs" \
     "$pkgdir/usr/lib/lmm-api-rs/bin/lmm-api-rs"
@@ -125,19 +124,8 @@ package() {
     "$srcdir/apps/api-rust/migrations/0001_schema_contract.sql" \
     "$migration_root/0001_schema_contract.sql"
   install -Dm0644 \
-    "$srcdir/apps/api-rust/crates/lmm-db-migrate/schema/provenance.json" \
-    "$migration_root/provenance.json"
-  install -Dm0644 \
-    "$srcdir/apps/api-rust/legacy/go-provenance.json" \
-    "$migration_root/legacy-go-provenance.json"
-  install -Dm0644 \
-    "$srcdir/apps/api-rust/routes/legacy-go-routes.tsv" \
+    "$srcdir/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv" \
     "$migration_root/legacy-go-routes.tsv"
-
-  install -d -m0755 "$frontend_root"
-  cp -a -- "$srcdir/apps/web/dist/." "$frontend_root/"
-  find "$frontend_root" -type d -exec chmod 0755 {} +
-  find "$frontend_root" -type f -exec chmod 0644 {} +
 
   install -d -m0755 "$pkgdir/usr/lib/sysusers.d"
   cat >"$pkgdir/usr/lib/sysusers.d/lmm-api-rs-fallback.conf" <<'EOF'

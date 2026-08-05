@@ -66,7 +66,7 @@ EnvironmentFile=/etc/lmm-api/valkey.env
 
 Apply this only as part of the reviewed autonomous backend/database transaction. Restarting the sole Go process merely to attach Valkey would create an avoidable interruption. All concurrently active backend slots must use the same Valkey URL and `CRYPTO_SECRET`; otherwise they create separate rate-limit/session state.
 
-As verified on 2026-08-01, the production Go environment does not yet define `REDIS_CONN_STRING`; its global API limiter is therefore process-local. Candidate Rust processes may use the dedicated 6380 instance only in isolation. Partial Go/Rust route ownership is blocked until the autonomous backend cutover attaches the serving backend to the same dedicated Valkey without relying on the initiating API/SSH connection. The same-date gate snapshot reports Go 356/356; use `apps/api-rust/routes/migration-gate.tsv` for the live ownership conclusion.
+As verified on 2026-08-01, the production Go environment does not yet define `REDIS_CONN_STRING`; its global API limiter is therefore process-local. Candidate Rust processes may use the dedicated 6380 instance only in isolation. Partial Go/Rust route ownership is blocked until the autonomous backend cutover attaches the serving backend to the same dedicated Valkey without relying on the initiating API/SSH connection. The same-date gate snapshot reports Go 356/356; use `apps/api-rust/tests/fixtures/routes/migration-gate.tsv` for the live ownership conclusion.
 
 ## Rollback
 

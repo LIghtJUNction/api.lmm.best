@@ -665,6 +665,57 @@ func TestOpenSourceBountyRejectedChallengeAppealWindowExpires(t *testing.T) {
 	assert.Equal(t, 1_000, refunded)
 }
 
+func TestOpenSourceBountyRejectedContributorCanRetryAfterAppealWindow(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "retry-owner", 10_000, common.RoleCommonUser)
+	participant := createOpenSourceBountyUser(t, db, "retry-contributor", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/retry", 1_000, 1))
+	require.NoError(t, err)
+	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+
+	first, err := AcceptOpenSourceBounty(participant.Id, project.Id, participant.Username)
+	require.NoError(t, err)
+	first, err = SubmitOpenSourceBountyChallenge(participant.Id, project.Id,
+		"https://github.com/example/retry/issues/1", "https://github.com/example/retry/pull/2", "First attempt for review.")
+	require.NoError(t, err)
+	first, _, err = ReviewOpenSourceBountyChallenge(owner.Id, first.Id, false, "Please address the remaining failure.", 2, "The first attempt is incomplete.")
+	require.NoError(t, err)
+
+	expiredAt := common.GetTimestamp() - OpenSourceBountyAppealWindowSeconds - 1
+	require.NoError(t, db.Model(&OpenSourceBountyChallenge{}).Where("id = ?", first.Id).Update("rejected_at", expiredAt).Error)
+
+	retry, err := AcceptOpenSourceBounty(participant.Id, project.Id, participant.Username)
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Id, retry.Id)
+	assert.Equal(t, OpenSourceBountyChallengeAccepted, retry.Status)
+
+	var attempts []OpenSourceBountyChallenge
+	require.NoError(t, db.Where("project_id = ? AND participant_user_id = ?", project.Id, participant.Id).Order("id ASC").Find(&attempts).Error)
+	require.Len(t, attempts, 2)
+	assert.Equal(t, OpenSourceBountyChallengeRejected, attempts[0].Status)
+	assert.Equal(t, OpenSourceBountyChallengeAccepted, attempts[1].Status)
+	require.NoError(t, db.Model(&attempts[0]).Update("updated_at", retry.UpdatedAt+100).Error)
+	projects, _, err := ListOpenSourceBounties(participant.Id, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, projects, 1)
+	require.NotNil(t, projects[0].ViewerChallenge)
+	assert.Equal(t, retry.Id, projects[0].ViewerChallenge.Id, "the active retry must remain the viewer's current challenge")
+
+	_, err = AcceptOpenSourceBounty(participant.Id, project.Id, participant.Username)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", OpenSourceBountyErrorCode(err))
+}
+
+func TestOpenSourceBountyRetryMigrationDropsLegacyUniqueIndex(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX idx_open_source_bounty_participant ON open_source_bounty_challenges(project_id, participant_user_id)").Error)
+	require.True(t, db.Migrator().HasIndex(&OpenSourceBountyChallenge{}, legacyOpenSourceBountyParticipantIndex))
+
+	require.NoError(t, migrateOpenSourceBountyChallengeRetryIndex())
+	assert.False(t, db.Migrator().HasIndex(&OpenSourceBountyChallenge{}, legacyOpenSourceBountyParticipantIndex))
+	assert.True(t, db.Migrator().HasIndex(&OpenSourceBountyChallenge{}, "idx_open_source_bounty_project_participant"))
+}
+
 func TestOpenSourceBountyDisputeRejectsPartyAdministrators(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	thirdPartyAdmin := createOpenSourceBountyUser(t, db, "independent-admin", 0, common.RoleAdminUser)

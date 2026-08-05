@@ -1,5 +1,12 @@
+[package]
+name = "lmm-api-rs"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
 [workspace]
-members = ["apps/lmm-api-rs", "crates/application", "crates/contracts", "crates/domain", "crates/lmm-db-migrate", "crates/observability"]
+members = ["crates/application", "crates/contracts", "crates/domain", "crates/lmm-db-migrate", "crates/observability"]
 resolver = "2"
 
 [workspace.package]
@@ -42,6 +49,46 @@ tower-http = { version = "0.6.6", features = ["request-id", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 uuid = { version = "1.17.0", features = ["v4"] }
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+bcrypt.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hmac.workspace = true
+hex.workspace = true
+form_urlencoded.workspace = true
+http.workspace = true
+httpdate.workspace = true
+ipnet.workspace = true
+jsonwebtoken.workspace = true
+lmm-application = { path = "crates/application" }
+lmm-contracts = { path = "crates/contracts" }
+lmm-domain = { path = "crates/domain" }
+lmm-observability = { path = "crates/observability" }
+redis.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rsa = { version = "0.9.10", features = ["pem"] }
+secrecy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+totp-rs.workspace = true
+tower = { version = "0.5.2", features = ["util"] }
+tower-http.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true
 
 [workspace.lints.rust]
 future_incompatible = { level = "deny", priority = -1 }

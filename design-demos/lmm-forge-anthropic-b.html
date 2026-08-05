@@ -1,0 +1,966 @@
+<!--
+  Direction B assumptions and rationale:
+  - This is a static, high-fidelity concept for a 1440x900 authenticated pre-activation workspace.
+  - All names, challenge details, amounts, balances, dates, and activity are representative preview placeholders, never live claims.
+  - The interface intentionally exposes only Challenges, Wallet, Profile, and Developer access.
+  - Anthropic-art influence is expressed with an original CSS/HTML composition: an opaque clay field,
+    an irregular ivory carrier, and hand-wobbled near-black linework. No reference art is copied and no SVG is used.
+  - Lora and Public Sans are requested from Google Fonts for this standalone review artifact; production should use local font assets.
+  - Buttons demonstrate local prototype states only and do not initiate transactions or create credentials.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="only light">
+  <meta name="description" content="LMM Forge contributor workspace concept preview.">
+  <title>LMM Forge — Contributor workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #141413;
+      --ivory: #faf9f5;
+      --soft-ivory: #f0eee6;
+      --clay: #d97757;
+      --clay-deep: #9f3f28;
+      --line: rgba(20, 20, 19, 0.18);
+      --muted: #63615b;
+      --sidebar: 224px;
+      color-scheme: only light;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { background: var(--clay); }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--clay);
+      color: var(--ink);
+      font-family: "Public Sans", Arial, sans-serif;
+      font-size: 15px;
+      letter-spacing: 0;
+      overflow-x: hidden;
+    }
+
+    button, input { font: inherit; }
+
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 3px solid var(--ink);
+      outline-offset: 3px;
+    }
+
+    .site-header {
+      height: 72px;
+      padding: 0 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 2px solid var(--ink);
+      background: var(--clay);
+      position: relative;
+      z-index: 20;
+    }
+
+    .brand-group, .header-actions, .brand-lockup, .preview-flag, .user-menu {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand-group { gap: 28px; min-width: 0; }
+    .brand-lockup { gap: 11px; text-decoration: none; color: inherit; }
+
+    .forge-mark {
+      position: relative;
+      width: 37px;
+      height: 37px;
+      flex: 0 0 auto;
+    }
+
+    .forge-mark::before,
+    .forge-mark::after,
+    .forge-mark span {
+      content: "";
+      position: absolute;
+      background: var(--ink);
+      border-radius: 999px;
+      transform-origin: center;
+    }
+
+    .forge-mark::before { width: 33px; height: 5px; top: 16px; left: 2px; transform: rotate(-7deg); }
+    .forge-mark::after { width: 5px; height: 31px; top: 3px; left: 16px; transform: rotate(8deg); }
+    .forge-mark span { width: 9px; height: 9px; top: 1px; right: 1px; }
+
+    .brand-name {
+      font-family: "Lora", Georgia, serif;
+      font-weight: 600;
+      font-size: 21px;
+      white-space: nowrap;
+    }
+
+    .brand-tagline {
+      font-size: 13px;
+      font-weight: 600;
+      border-left: 1px solid rgba(20,20,19,.42);
+      padding-left: 28px;
+      white-space: nowrap;
+    }
+
+    .header-actions { gap: 10px; }
+
+    .header-link, .icon-button, .user-menu {
+      min-height: 38px;
+      color: inherit;
+      text-decoration: none;
+      border: 1px solid transparent;
+      background: transparent;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .header-link { display: inline-flex; align-items: center; padding: 0 11px; }
+    .header-link:hover { border-color: var(--ink); }
+
+    .user-menu {
+      gap: 9px;
+      padding: 4px 7px 4px 5px;
+      cursor: pointer;
+    }
+
+    .user-menu:hover { background: rgba(250,249,245,.28); border-color: var(--ink); }
+
+    .avatar {
+      width: 29px;
+      height: 29px;
+      display: grid;
+      place-items: center;
+      background: var(--ink);
+      color: var(--ivory);
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .workspace-shell {
+      height: calc(100vh - 72px);
+      min-height: 760px;
+      padding: 22px 22px 24px;
+      position: relative;
+    }
+
+    .workspace-carrier {
+      position: relative;
+      height: 100%;
+      max-width: 1530px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      background: var(--ivory);
+      clip-path: polygon(0.4% 1.2%, 7% 0, 47% .8%, 71% 0, 99.2% 1.5%, 100% 18%, 99.4% 76%, 100% 98%, 90% 100%, 54% 99.3%, 24% 100%, .5% 98.2%, 0 66%, .5% 31%);
+      overflow: hidden;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 31px 20px 22px;
+      display: flex;
+      flex-direction: column;
+      background: var(--soft-ivory);
+      min-width: 0;
+    }
+
+    .workspace-label {
+      padding: 0 10px;
+      margin-bottom: 23px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      font-size: 10px;
+      line-height: 1.2;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .workspace-label strong {
+      display: block;
+      font-family: "Lora", Georgia, serif;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+
+    .nav-list { display: grid; gap: 5px; }
+
+    .nav-item {
+      width: 100%;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 11px;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--ink);
+      text-decoration: none;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .nav-item:hover { border-color: var(--ink); }
+    .nav-item[aria-current="page"] { background: var(--ink); color: var(--ivory); }
+
+    .nav-icon {
+      width: 20px;
+      height: 20px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      font-size: 17px;
+      font-weight: 400;
+    }
+
+    .nav-divider { height: 1px; background: var(--line); margin: 10px 10px; }
+    .sidebar-spacer { flex: 1; min-height: 24px; }
+
+    .public-note {
+      margin: 0 10px;
+      padding-top: 17px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .public-note a { color: var(--ink); font-weight: 700; text-underline-offset: 3px; }
+
+    .main {
+      min-width: 0;
+      overflow: auto;
+      padding: 30px 34px 34px;
+      scrollbar-width: thin;
+    }
+
+    .main-header {
+      min-height: 78px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 24px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1, h2 {
+      font-family: "Lora", Georgia, serif;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    h1 { margin-bottom: 8px; font-size: 31px; line-height: 1.14; }
+    h2 { margin-bottom: 7px; font-size: 21px; line-height: 1.24; }
+    h3 { margin-bottom: 5px; font-size: 15px; line-height: 1.35; }
+
+    .muted { color: var(--muted); }
+    .main-header p { font-size: 14px; margin-bottom: 20px; }
+
+    .preview-flag {
+      flex: 0 0 auto;
+      gap: 8px;
+      margin-top: 2px;
+      padding: 7px 10px;
+      border: 1px solid var(--ink);
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      white-space: nowrap;
+    }
+
+    .preview-dot { width: 7px; height: 7px; background: var(--clay); border: 1px solid var(--ink); border-radius: 50%; }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 326px;
+      gap: 26px;
+      align-items: start;
+    }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 14px;
+    }
+
+    .section-heading p { margin: 0; font-size: 13px; color: var(--muted); }
+
+    .text-link {
+      border: 0;
+      padding: 4px 0;
+      background: transparent;
+      color: var(--ink);
+      font-weight: 700;
+      text-decoration: underline;
+      text-underline-offset: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .challenge-card {
+      border: 1.5px solid var(--ink);
+      border-radius: 7px;
+      background: var(--ivory);
+      overflow: hidden;
+    }
+
+    .challenge-topline {
+      min-height: 39px;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--soft-ivory);
+      border-bottom: 1px solid var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .status-line { display: flex; align-items: center; gap: 8px; }
+    .status-mark { width: 8px; height: 8px; background: var(--clay); border: 1px solid var(--ink); border-radius: 50%; }
+
+    .challenge-body { padding: 19px 20px 20px; }
+
+    .challenge-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 14px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .challenge-meta .repo { color: var(--ink); }
+
+    .challenge-title {
+      max-width: 650px;
+      margin-bottom: 11px;
+      font-family: "Lora", Georgia, serif;
+      font-size: 23px;
+      line-height: 1.28;
+      font-weight: 600;
+    }
+
+    .challenge-summary {
+      max-width: 690px;
+      margin-bottom: 19px;
+      color: #4f4d48;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .progress-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 7px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .progress-track {
+      height: 9px;
+      background: #d7d4cb;
+      border: 1px solid var(--ink);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill { width: 60%; height: 100%; background: var(--clay); border-right: 1px solid var(--ink); }
+
+    .milestones {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+      margin: 15px 0 19px;
+    }
+
+    .milestone {
+      min-height: 59px;
+      padding-top: 10px;
+      border-top: 2px solid #c8c5bc;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .milestone.done, .milestone.current { border-color: var(--ink); color: var(--ink); }
+    .milestone.current { font-weight: 700; }
+    .milestone b { display: block; margin-bottom: 3px; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+
+    .challenge-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+
+    .due-note { margin: 0; color: var(--muted); font-size: 12px; }
+
+    .button-row { display: flex; align-items: center; gap: 8px; }
+
+    .button {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 14px;
+      border: 1.5px solid var(--ink);
+      border-radius: 5px;
+      background: var(--ink);
+      color: var(--ivory);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .button:hover { background: #33322f; }
+    .button.secondary { background: transparent; color: var(--ink); }
+    .button.secondary:hover { background: var(--soft-ivory); }
+    .button.clay { background: var(--clay); color: var(--ink); }
+    .button.clay:hover { background: #cd6848; }
+    .button.small { min-height: 36px; padding: 0 11px; font-size: 13px; }
+
+    .lower-band {
+      margin-top: 24px;
+      padding-top: 19px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+    }
+
+    .activity-item {
+      display: grid;
+      grid-template-columns: 27px 1fr;
+      gap: 11px;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .activity-icon {
+      width: 25px;
+      height: 25px;
+      display: grid;
+      place-items: center;
+      background: var(--soft-ivory);
+      border: 1px solid var(--ink);
+      border-radius: 50%;
+      font-weight: 700;
+    }
+
+    .activity-item p { margin: 0; }
+    .activity-item time { color: var(--muted); font-size: 11px; }
+
+    .side-column { display: grid; gap: 18px; }
+
+    .wallet-panel {
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .wallet-panel .panel-head, .access-panel .panel-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .wallet-panel .panel-head p, .access-panel .panel-head p { margin: 0; font-size: 12px; color: var(--muted); }
+
+    .balance-box {
+      position: relative;
+      padding: 17px 17px 16px;
+      background: var(--soft-ivory);
+      border: 1px solid var(--ink);
+      border-radius: 7px;
+      overflow: hidden;
+    }
+
+    .balance-label { display: block; margin-bottom: 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+
+    .balance-value {
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      margin-bottom: 17px;
+      font-family: "Lora", Georgia, serif;
+      font-size: 36px;
+      line-height: 1;
+      font-weight: 600;
+    }
+
+    .balance-value small { font-family: "Public Sans", Arial, sans-serif; font-size: 11px; color: var(--muted); font-weight: 600; }
+    .balance-box .button { width: 100%; }
+
+    .quick-amounts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 8px; }
+
+    .amount-chip {
+      min-height: 34px;
+      border: 1px solid var(--ink);
+      border-radius: 4px;
+      background: var(--ivory);
+      color: var(--ink);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .amount-chip:hover, .amount-chip.active { background: var(--ink); color: var(--ivory); }
+
+    .truth-note {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .access-panel {
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--ivory);
+    }
+
+    .access-panel .seal {
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      position: relative;
+      border: 2px solid var(--ink);
+      border-radius: 50%;
+    }
+
+    .seal::before { content: ""; position: absolute; width: 15px; height: 6px; border: 2px solid var(--ink); border-top: 0; border-radius: 0 0 9px 9px; left: 10px; top: 20px; transform: rotate(-5deg); }
+    .seal::after { content: ""; position: absolute; width: 2px; height: 12px; background: var(--ink); left: 17px; top: 7px; transform: rotate(7deg); }
+
+    .access-panel p { margin-bottom: 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .access-panel .button { width: 100%; }
+
+    .gesture {
+      position: absolute;
+      pointer-events: none;
+      opacity: .95;
+      z-index: 0;
+    }
+
+    .gesture-a {
+      width: 132px;
+      height: 82px;
+      right: -39px;
+      top: 82px;
+      border: 7px solid var(--ink);
+      border-left-color: transparent;
+      border-bottom-color: transparent;
+      border-radius: 51% 44% 57% 49%;
+      transform: rotate(14deg);
+    }
+
+    .gesture-a::after {
+      content: "";
+      position: absolute;
+      width: 17px;
+      height: 17px;
+      left: -2px;
+      bottom: 6px;
+      background: var(--ink);
+      border-radius: 50%;
+    }
+
+    .gesture-b {
+      width: 105px;
+      height: 53px;
+      left: -58px;
+      bottom: 29px;
+      border-top: 7px solid var(--ink);
+      border-radius: 50%;
+      transform: rotate(-13deg);
+    }
+
+    .main > *, .sidebar > * { position: relative; z-index: 2; }
+
+    .toast {
+      position: fixed;
+      right: 30px;
+      bottom: 26px;
+      z-index: 100;
+      max-width: 340px;
+      padding: 13px 15px;
+      border: 2px solid var(--ink);
+      border-radius: 6px;
+      background: var(--ivory);
+      color: var(--ink);
+      font-weight: 600;
+      transform: translateY(130%);
+      opacity: 0;
+      transition: transform 180ms ease, opacity 180ms ease;
+    }
+
+    .toast.show { transform: translateY(0); opacity: 1; }
+
+    dialog {
+      width: min(440px, calc(100vw - 32px));
+      padding: 0;
+      border: 2px solid var(--ink);
+      border-radius: 7px;
+      background: var(--ivory);
+      color: var(--ink);
+    }
+
+    dialog::backdrop { background: rgba(20,20,19,.58); }
+
+    .dialog-head { padding: 19px 20px 14px; border-bottom: 1px solid var(--line); }
+    .dialog-head h2 { margin-bottom: 5px; }
+    .dialog-head p { margin: 0; color: var(--muted); font-size: 12px; }
+    .dialog-body { padding: 19px 20px; }
+    .dialog-body label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 700; }
+    .amount-input { display: flex; align-items: center; border: 1.5px solid var(--ink); border-radius: 5px; background: white; }
+    .amount-input span { padding-left: 13px; font-family: "Lora", Georgia, serif; font-size: 22px; }
+    .amount-input input { width: 100%; height: 48px; padding: 0 13px 0 7px; border: 0; outline: 0; background: transparent; font-weight: 700; }
+    .dialog-foot { padding: 14px 20px 19px; display: flex; justify-content: flex-end; gap: 8px; }
+
+    @media (max-width: 1050px) {
+      :root { --sidebar: 190px; }
+      .brand-tagline { display: none; }
+      .workspace-shell { padding: 14px; }
+      .main { padding: 26px 24px 30px; }
+      .content-grid { grid-template-columns: 1fr; }
+      .side-column { grid-template-columns: 1fr 1fr; }
+      .wallet-panel { padding: 0 18px 0 0; border-right: 1px solid var(--line); border-bottom: 0; }
+    }
+
+    @media (max-width: 760px) {
+      .site-header { height: 62px; padding: 0 15px; }
+      .header-link, .user-menu .user-name { display: none; }
+      .workspace-shell { height: auto; min-height: calc(100vh - 62px); padding: 0; }
+      .workspace-carrier { min-height: calc(100vh - 62px); display: block; clip-path: none; }
+      .sidebar { padding: 12px 12px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .workspace-label, .public-note, .sidebar-spacer, .nav-divider { display: none; }
+      .nav-list { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+      .nav-item { height: 50px; padding: 4px; flex-direction: column; justify-content: center; gap: 2px; font-size: 10px; white-space: nowrap; }
+      .nav-icon { height: 18px; font-size: 14px; }
+      .main { padding: 22px 17px 28px; overflow: visible; }
+      .main-header { display: block; }
+      .preview-flag { width: fit-content; margin: 0 0 18px; }
+      h1 { font-size: 27px; }
+      .content-grid, .side-column, .lower-band { grid-template-columns: 1fr; }
+      .wallet-panel { padding: 0 0 18px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .milestones { grid-template-columns: 1fr; gap: 4px; }
+      .milestone { min-height: 36px; padding: 7px 0 5px; display: flex; align-items: center; gap: 10px; }
+      .challenge-actions { align-items: flex-start; flex-direction: column; }
+      .button-row { width: 100%; }
+      .button-row .button { flex: 1; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand-group">
+      <a class="brand-lockup" href="#" aria-label="LMM Forge public home">
+        <span class="forge-mark" aria-hidden="true"><span></span></span>
+        <span class="brand-name">LMM Forge</span>
+      </a>
+      <span class="brand-tagline">Open-source bounty collaboration and delivery tracking.</span>
+    </div>
+    <div class="header-actions">
+      <a class="header-link" href="#challenges">Browse public challenges</a>
+      <button class="user-menu" type="button" data-demo-action="Account menu preview">
+        <span class="avatar" aria-hidden="true">AM</span>
+        <span class="user-name">Alex Morgan</span>
+        <span aria-hidden="true">⌄</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="workspace-shell">
+    <div class="workspace-carrier">
+      <span class="gesture gesture-a" aria-hidden="true"></span>
+      <span class="gesture gesture-b" aria-hidden="true"></span>
+
+      <aside class="sidebar" aria-label="Contributor navigation">
+        <div class="workspace-label">
+          <p class="eyebrow">Signed in</p>
+          <strong>Contributor workspace</strong>
+        </div>
+        <nav class="nav-list" id="workspace-nav">
+          <a class="nav-item" href="#challenges" aria-current="page">
+            <span class="nav-icon" aria-hidden="true">✦</span>
+            <span>Challenges</span>
+          </a>
+          <a class="nav-item" href="#wallet">
+            <span class="nav-icon" aria-hidden="true">◫</span>
+            <span>Wallet</span>
+          </a>
+          <a class="nav-item" href="#profile">
+            <span class="nav-icon" aria-hidden="true">○</span>
+            <span>Profile</span>
+          </a>
+          <div class="nav-divider" aria-hidden="true"></div>
+          <a class="nav-item" href="#developer-access">
+            <span class="nav-icon" aria-hidden="true">↗</span>
+            <span>Developer access</span>
+          </a>
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <p class="public-note">Working in the open? <a href="#" data-demo-action="Public profile preview">View public profile</a></p>
+      </aside>
+
+      <main class="main" id="main-content">
+        <header class="main-header">
+          <div>
+            <h1>Good morning, Alex.</h1>
+            <p>Continue your accepted work or find the next contribution.</p>
+          </div>
+          <div class="preview-flag" aria-label="Representative preview data">
+            <span class="preview-dot" aria-hidden="true"></span>
+            Representative preview
+          </div>
+        </header>
+
+        <div class="content-grid">
+          <div class="primary-column" id="challenges">
+            <section aria-labelledby="accepted-heading">
+              <div class="section-heading">
+                <div>
+                  <h2 id="accepted-heading">Accepted challenge</h2>
+                  <p>One representative work item in progress</p>
+                </div>
+                <button class="text-link" type="button" data-demo-action="Challenge list preview">All challenges ↗</button>
+              </div>
+
+              <article class="challenge-card">
+                <div class="challenge-topline">
+                  <span class="status-line"><span class="status-mark" aria-hidden="true"></span> In progress</span>
+                  <span>Sample bounty · $480</span>
+                </div>
+                <div class="challenge-body">
+                  <div class="challenge-meta">
+                    <span class="repo">RepoCanvas / web</span>
+                    <span>Accessibility</span>
+                    <span>Accepted May 14</span>
+                  </div>
+                  <h3 class="challenge-title">Improve screen-reader announcements for collaborative editing</h3>
+                  <p class="challenge-summary">Add clear, non-disruptive announcements for cursor movement, saved changes, and collaborator presence. Delivery evidence is reviewed against the published acceptance checklist.</p>
+
+                  <div class="progress-head">
+                    <span>Delivery progress</span>
+                    <span>3 of 5 steps</span>
+                  </div>
+                  <div class="progress-track" role="progressbar" aria-label="Delivery progress" aria-valuemin="0" aria-valuemax="5" aria-valuenow="3">
+                    <div class="progress-fill"></div>
+                  </div>
+
+                  <div class="milestones" aria-label="Challenge milestones">
+                    <div class="milestone done"><b>01 · Done</b>Accepted</div>
+                    <div class="milestone done"><b>02 · Done</b>Plan shared</div>
+                    <div class="milestone current"><b>03 · Current</b>Build</div>
+                    <div class="milestone"><b>04 · Next</b>Evidence</div>
+                    <div class="milestone"><b>05</b>Review</div>
+                  </div>
+
+                  <div class="challenge-actions">
+                    <p class="due-note">Preview due date: May 24 · 6 days remaining</p>
+                    <div class="button-row">
+                      <button class="button secondary small" type="button" data-demo-action="Update preview">Post update</button>
+                      <button class="button small" type="button" data-demo-action="Challenge detail preview">Open challenge <span aria-hidden="true">↗</span></button>
+                    </div>
+                  </div>
+                </div>
+              </article>
+            </section>
+
+            <div class="lower-band">
+              <section aria-labelledby="activity-heading">
+                <div class="section-heading">
+                  <div>
+                    <h2 id="activity-heading">Recent activity</h2>
+                    <p>Sample collaboration timeline</p>
+                  </div>
+                </div>
+                <div class="activity-item">
+                  <span class="activity-icon" aria-hidden="true">✓</span>
+                  <div><p><strong>Plan acknowledged</strong> by the challenge maintainer</p><time>Preview · 2 hours ago</time></div>
+                </div>
+                <div class="activity-item">
+                  <span class="activity-icon" aria-hidden="true">↗</span>
+                  <div><p><strong>Progress note</strong> linked to the accepted work</p><time>Preview · Yesterday</time></div>
+                </div>
+              </section>
+
+              <section aria-labelledby="next-heading">
+                <div class="section-heading">
+                  <div>
+                    <h2 id="next-heading">Next checkpoint</h2>
+                    <p>Keep delivery evidence reviewable</p>
+                  </div>
+                </div>
+                <div class="activity-item">
+                  <span class="activity-icon" aria-hidden="true">3</span>
+                  <div><p><strong>Share an implementation note</strong> with a link to the working branch.</p><time>Representative step</time></div>
+                </div>
+                <button class="text-link" type="button" data-demo-action="Requirements preview">Review acceptance checklist ↗</button>
+              </section>
+            </div>
+          </div>
+
+          <aside class="side-column" aria-label="Workspace account actions">
+            <section class="wallet-panel" id="wallet" aria-labelledby="wallet-heading">
+              <div class="panel-head">
+                <div>
+                  <h2 id="wallet-heading">Wallet</h2>
+                  <p>Account credits</p>
+                </div>
+                <button class="text-link" type="button" data-demo-action="Transaction history preview">History</button>
+              </div>
+              <div class="balance-box">
+                <span class="balance-label">Preview balance</span>
+                <div class="balance-value">$120.00 <small>sample</small></div>
+                <button class="button clay" type="button" id="add-funds">+ Add account credits</button>
+                <div class="quick-amounts" aria-label="Sample quick amounts">
+                  <button class="amount-chip" type="button" data-amount="10">$10</button>
+                  <button class="amount-chip active" type="button" data-amount="25">$25</button>
+                  <button class="amount-chip" type="button" data-amount="50">$50</button>
+                </div>
+                <p class="truth-note">This concept does not process payment. In production, the confirmation step must show the credited amount and transaction terms before purchase.</p>
+              </div>
+            </section>
+
+            <section class="access-panel" id="developer-access" aria-labelledby="access-heading">
+              <div class="panel-head">
+                <div>
+                  <h2 id="access-heading">Developer access</h2>
+                  <p>Optional workspace setup</p>
+                </div>
+                <span class="seal" aria-hidden="true"></span>
+              </div>
+              <p>Create your first private workspace credential when you are ready. This permanently activates the expanded workspace; deleting it later does not remove access.</p>
+              <button class="button secondary" type="button" id="setup-access">Set up first credential <span aria-hidden="true">↗</span></button>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="fund-dialog" aria-labelledby="fund-title">
+    <form method="dialog">
+      <div class="dialog-head">
+        <h2 id="fund-title">Add account credits</h2>
+        <p>Representative checkout preview — no payment will be initiated.</p>
+      </div>
+      <div class="dialog-body">
+        <label for="credit-amount">Amount to add</label>
+        <div class="amount-input"><span aria-hidden="true">$</span><input id="credit-amount" inputmode="decimal" value="25.00" aria-describedby="credit-note"></div>
+        <p class="truth-note" id="credit-note">A production confirmation would state the exact amount credited, payment method, and applicable terms.</p>
+      </div>
+      <div class="dialog-foot">
+        <button class="button secondary" value="cancel">Cancel</button>
+        <button class="button" value="confirm" id="preview-confirm">Continue preview</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="access-dialog" aria-labelledby="access-dialog-title">
+    <form method="dialog">
+      <div class="dialog-head">
+        <h2 id="access-dialog-title">Set up developer access</h2>
+        <p>This is an optional activation preview.</p>
+      </div>
+      <div class="dialog-body">
+        <p style="margin-bottom:8px;line-height:1.55">Your first private credential activates the expanded workspace. It should be stored securely and will be shown only once.</p>
+        <p class="truth-note">No credential is created in this standalone concept.</p>
+      </div>
+      <div class="dialog-foot">
+        <button class="button secondary" value="cancel">Not now</button>
+        <button class="button" value="confirm" id="preview-credential">Continue setup</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const toast = document.getElementById('toast');
+    let toastTimer;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+
+    document.querySelectorAll('[data-demo-action]').forEach((element) => {
+      element.addEventListener('click', (event) => {
+        event.preventDefault();
+        showToast(`${element.dataset.demoAction} — representative prototype only.`);
+      });
+    });
+
+    document.querySelectorAll('.amount-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        document.querySelectorAll('.amount-chip').forEach((item) => item.classList.remove('active'));
+        chip.classList.add('active');
+        document.getElementById('credit-amount').value = `${chip.dataset.amount}.00`;
+      });
+    });
+
+    const fundDialog = document.getElementById('fund-dialog');
+    document.getElementById('add-funds').addEventListener('click', () => fundDialog.showModal());
+    document.getElementById('preview-confirm').addEventListener('click', () => {
+      setTimeout(() => showToast('Checkout preview complete. No payment was initiated.'), 20);
+    });
+
+    const accessDialog = document.getElementById('access-dialog');
+    document.getElementById('setup-access').addEventListener('click', () => accessDialog.showModal());
+    document.getElementById('preview-credential').addEventListener('click', () => {
+      setTimeout(() => showToast('Setup preview complete. No credential was created.'), 20);
+    });
+
+    document.querySelectorAll('#workspace-nav .nav-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('#workspace-nav .nav-item').forEach((navItem) => navItem.removeAttribute('aria-current'));
+        item.setAttribute('aria-current', 'page');
+      });
+    });
+  </script>
+</body>
+</html>
