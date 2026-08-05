@@ -18,9 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   ArrowRight01Icon,
-  GitPullRequestIcon,
   HeartHandshakeIcon,
-  Tick02Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link } from '@tanstack/react-router'
@@ -33,41 +31,6 @@ import { useAuthStore } from '@/stores/auth-store'
 import { ChallengeList } from './challenge-list'
 import { ForgePublicShell } from './forge-public-shell'
 
-function ForgeIllustration() {
-  return (
-    <div
-      className='relative min-h-[220px] overflow-hidden sm:min-h-[280px] md:min-h-[410px]'
-      aria-hidden='true'
-    >
-      <div className='absolute inset-[5%_2%_1%_1%] bg-[#FAF9F5] [clip-path:polygon(7%_13%,22%_4%,45%_7%,66%_2%,91%_13%,96%_36%,91%_57%,96%_80%,77%_95%,52%_91%,28%_98%,8%_84%,3%_56%)]' />
-      <div className='absolute top-[28%] left-[10%] h-20 w-32 -rotate-6 border-4 border-[#141413] bg-[#FAF9F5] p-3 md:h-28 md:w-44 md:p-4'>
-        <span className='mb-3 block h-1.5 bg-[#141413]' />
-        <span className='mb-3 block h-1.5 w-3/4 bg-[#141413]' />
-        <span className='block h-1.5 w-1/2 bg-[#141413]' />
-      </div>
-      <div className='absolute right-[9%] bottom-[16%] h-20 w-32 rotate-3 border-4 border-[#141413] bg-[#FAF9F5] p-3 md:h-28 md:w-44 md:p-4'>
-        <span className='mb-3 block h-1.5 bg-[#141413]' />
-        <span className='mb-3 block h-1.5 w-2/3 bg-[#141413]' />
-        <HugeiconsIcon
-          icon={Tick02Icon}
-          className='absolute right-3 bottom-2 size-8 md:size-9'
-          strokeWidth={3}
-        />
-      </div>
-      <span className='absolute top-[48%] left-[39%] size-5 rounded-full bg-[#141413]' />
-      <span className='absolute top-[61%] left-[54%] size-4 rounded-full bg-[#141413]' />
-      <span className='absolute top-[47%] left-[69%] size-6 rounded-full bg-[#141413]' />
-      <span className='absolute top-[50%] left-[40%] h-2 w-24 origin-left rotate-[28deg] rounded-full bg-[#141413] md:w-32' />
-      <span className='absolute top-[64%] left-[54%] h-2 w-20 origin-left -rotate-[28deg] rounded-full bg-[#141413] md:w-28' />
-      <HugeiconsIcon
-        icon={GitPullRequestIcon}
-        className='absolute top-[12%] right-[16%] size-12 rotate-6 md:size-16'
-        strokeWidth={1.6}
-      />
-    </div>
-  )
-}
-
 export function ForgeHome() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
@@ -78,9 +41,22 @@ export function ForgeHome() {
   return (
     <ForgePublicShell>
       <main>
-        <section className='border-b border-[#141413] bg-[#BCD1CA] pt-16'>
-          <div className='mx-auto grid min-h-[calc(100svh-9rem)] max-w-7xl items-center gap-5 px-5 py-8 md:grid-cols-[0.92fr_1.08fr] md:px-10 md:py-12'>
-            <div className='relative z-10'>
+        <section className='relative overflow-hidden border-b border-[#141413] bg-[#FAF9F5] pt-16'>
+          <img
+            src='/forge-collaboration.webp'
+            alt=''
+            width={1200}
+            height={800}
+            fetchPriority='high'
+            className='absolute inset-0 size-full object-cover object-[64%_center] opacity-35 sm:opacity-60 md:opacity-100'
+            aria-hidden='true'
+          />
+          <div
+            className='absolute inset-0 bg-[#FAF9F5]/25 md:hidden'
+            aria-hidden='true'
+          />
+          <div className='relative z-10 mx-auto flex min-h-[calc(100svh-9rem)] max-w-7xl items-center px-5 py-10 md:px-10 md:py-12'>
+            <div className='max-w-xl md:max-w-[32rem]'>
               <p className='mb-5 flex items-center gap-2 text-xs font-bold uppercase before:block before:size-2 before:rounded-full before:bg-[#141413]'>
                 {t('Open-source work, made accountable')}
               </p>
@@ -109,7 +85,7 @@ export function ForgeHome() {
                 <Button
                   size='lg'
                   variant='outline'
-                  className='rounded-sm border-[#141413] bg-transparent hover:bg-[#FAF9F5]/50'
+                  className='rounded-sm border-[#141413] bg-[#FAF9F5]/70 hover:bg-[#FAF9F5]'
                   render={
                     user ? (
                       <Link to={workspaceTarget} />
@@ -122,7 +98,6 @@ export function ForgeHome() {
                 </Button>
               </div>
             </div>
-            <ForgeIllustration />
           </div>
         </section>
 

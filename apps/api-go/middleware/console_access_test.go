@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -80,5 +81,39 @@ func TestConsoleAccessGateReturnsTheGenericNotFoundForRestrictedRoutes(t *testin
 			continue
 		}
 		require.Equal(t, http.StatusNoContent, response.Code)
+	}
+}
+
+func TestConsoleAccessGateAnnotatesActivationForStatusSurfaces(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name      string
+		user      *model.UserBase
+		activated bool
+	}{
+		{name: "unactivated", user: &model.UserBase{Id: 7, Role: common.RoleCommonUser}},
+		{name: "activated", user: &model.UserBase{Id: 8, Role: common.RoleCommonUser, ConsoleActivatedAt: 10}, activated: true},
+		{name: "administrator", user: &model.UserBase{Id: 9, Role: common.RoleAdminUser}, activated: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
+					user:           test.user,
+					credentialKind: dashboardCredentialInternal,
+				})
+				c.Next()
+			})
+			router.Use(ConsoleAccessGate())
+			router.GET("/api/status", func(c *gin.Context) {
+				c.JSON(http.StatusOK, gin.H{"activated": ConsoleActivationGranted(c)})
+			})
+
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+
+			assert.Equal(t, http.StatusOK, response.Code)
+			assert.JSONEq(t, `{"activated":`+strconv.FormatBool(test.activated)+`}`, response.Body.String())
+		})
 	}
 }

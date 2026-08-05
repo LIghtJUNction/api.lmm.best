@@ -35,7 +35,7 @@ export function AccessRestrictionNotice(props: AccessRestrictionNoticeProps) {
         props.className
       )}
     >
-      {t('Access from China is prohibited.')}
+      {t('Regional access statement')}
     </aside>
   )
 }

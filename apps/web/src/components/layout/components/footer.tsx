@@ -109,22 +109,24 @@ function ComplianceLinks() {
     },
   ]
   return (
-    <div className='flex w-full flex-wrap items-center justify-center gap-x-5 gap-y-2 border-y border-[#141413]/25 py-3 text-sm text-[#141413]/75 sm:justify-start dark:border-[#FAF9F5]/25 dark:text-[#FAF9F5]/75'>
-      {items.map((item) => (
-        <Link
-          key={item.key}
-          to={item.href}
+    <div className='w-full border-y border-[#141413]/25 py-3 text-sm text-[#141413]/75 dark:border-[#FAF9F5]/25 dark:text-[#FAF9F5]/75'>
+      <div className='flex flex-wrap items-center justify-center gap-x-5 gap-y-2 sm:justify-start'>
+        {items.map((item) => (
+          <Link
+            key={item.key}
+            to={item.href}
+            className='hover:text-foreground font-medium transition-colors duration-200'
+          >
+            {item.label}
+          </Link>
+        ))}
+        <a
+          href='mailto:support@lmm.best'
           className='hover:text-foreground font-medium transition-colors duration-200'
         >
-          {item.label}
-        </Link>
-      ))}
-      <a
-        href='mailto:support@lmm.best'
-        className='hover:text-foreground font-medium transition-colors duration-200'
-      >
-        {t('Customer Support')}: support@lmm.best
-      </a>
+          {t('Customer Support')}: support@lmm.best
+        </a>
+      </div>
     </div>
   )
 }

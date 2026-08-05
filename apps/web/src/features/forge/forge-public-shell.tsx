@@ -42,7 +42,11 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
         { title: 'How it works', href: '/#workflow' },
       ]}
       showNotifications={false}
-      headerProps={{ useDynamicNavLinks: false }}
+      headerProps={{
+        useDynamicNavLinks: false,
+        className:
+          '[&>div>nav]:bg-[#FAF9F5]/82 [&>div>nav]:backdrop-blur-md [&>div>nav]:border-[#141413]/20',
+      }}
     >
       <div className='min-h-svh bg-[#FAF9F5] text-[#141413]'>
         {props.children}
