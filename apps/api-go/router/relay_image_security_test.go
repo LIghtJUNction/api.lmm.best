@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -74,8 +75,8 @@ func TestRelayMidjourneyImageIsNotPubliclyReadable(t *testing.T) {
 
 		engine.ServeHTTP(response, request)
 
-		require.Equal(t, http.StatusUnauthorized, response.Code, path)
-		require.Contains(t, response.Body.String(), "midjourney_image_signature_invalid", path)
+		assert.Equal(t, http.StatusUnauthorized, response.Code, path)
+		assert.Contains(t, response.Body.String(), "midjourney_image_signature_invalid", path)
 	}
 }
 
@@ -104,8 +105,8 @@ func TestRelayMidjourneyImageRequiresTaskOwnerAndValidSignature(t *testing.T) {
 
 	engine.ServeHTTP(response, request)
 
-	require.Equal(t, http.StatusNotFound, response.Code)
-	require.Contains(t, response.Body.String(), "midjourney_task_not_found")
+	assert.Equal(t, http.StatusNotFound, response.Code)
+	assert.Contains(t, response.Body.String(), "midjourney_task_not_found")
 }
 
 func TestRelayMidjourneyImageAllowsSignedTaskURL(t *testing.T) {
@@ -129,14 +130,19 @@ func TestRelayMidjourneyImageAllowsSignedTaskURL(t *testing.T) {
 	imageURL := relay.BuildMidjourneyImageURL("http://fixture", 101, "task-owned-by-a")
 	parsedURL, err := url.Parse(imageURL)
 	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodGet, parsedURL.RequestURI(), nil)
-	response := httptest.NewRecorder()
+	for _, path := range []string{
+		parsedURL.RequestURI(),
+		"/openai" + parsedURL.RequestURI(),
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
 
-	engine.ServeHTTP(response, request)
+		engine.ServeHTTP(response, request)
 
-	require.Equal(t, http.StatusOK, response.Code)
-	require.Equal(t, "image/png", response.Header().Get("Content-Type"))
-	require.Equal(t, "user-a-image", response.Body.String())
+		assert.Equal(t, http.StatusOK, response.Code, path)
+		assert.Equal(t, "image/png", response.Header().Get("Content-Type"), path)
+		assert.Equal(t, "user-a-image", response.Body.String(), path)
+	}
 }
 
 func TestRelayMidjourneyImageRejectsTamperedOwner(t *testing.T) {
@@ -162,6 +168,6 @@ func TestRelayMidjourneyImageRejectsTamperedOwner(t *testing.T) {
 
 	engine.ServeHTTP(response, request)
 
-	require.Equal(t, http.StatusUnauthorized, response.Code)
-	require.Contains(t, response.Body.String(), "midjourney_image_signature_invalid")
+	assert.Equal(t, http.StatusUnauthorized, response.Code)
+	assert.Contains(t, response.Body.String(), "midjourney_image_signature_invalid")
 }
