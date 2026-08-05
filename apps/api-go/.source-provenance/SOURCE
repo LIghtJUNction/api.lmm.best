@@ -1,5 +1,0 @@
-source_commit=64349b0ac32e4cf949a9aa28d54c60f123ed8672
-source_subtree=go/
-source_tree=b27775a17edea48634864f5599658cef3f8c5182
-materialization=git archive
-tracked_file_count=1992

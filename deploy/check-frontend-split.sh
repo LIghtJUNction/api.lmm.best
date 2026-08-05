@@ -7,7 +7,7 @@ server_config=$repo/deploy/nginx/new-api.conf
 mime_types=$repo/deploy/nginx/mime.types
 release=$repo/deploy/frontend-release.sh
 nginx_installer=$repo/deploy/nginx/install-nginx-split.sh
-route_manifest=$repo/apps/api-rust/routes/legacy-go-routes.tsv
+route_manifest=$repo/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv
 
 fail() { printf 'split-check: %s\n' "$*" >&2; exit 1; }
 assert_literal() { grep -Fq -- "$1" "$2" || fail "$2 is missing: $1"; }

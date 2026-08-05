@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetRouter(router *gin.Engine, assets WebAssets) {
+func SetRouter(router *gin.Engine) {
 	SetApiRouter(router)
 	SetOpenSourceBountyMCPRouter(router)
 	SetDashboardRouter(router)
@@ -24,23 +24,47 @@ func SetRouter(router *gin.Engine, assets WebAssets) {
 		frontendBaseUrl = ""
 		common.SysLog("FRONTEND_BASE_URL is ignored on master node")
 	}
-	if frontendBaseUrl == "" {
-		SetWebRouter(router, assets)
-	} else {
+	if frontendBaseUrl != "" {
 		frontendBaseUrl = strings.TrimSuffix(frontendBaseUrl, "/")
-		router.NoRoute(func(c *gin.Context) {
-			c.Set(middleware.RouteTagKey, "web")
-			if isBackendPath(c.Request.RequestURI) {
-				controller.RelayNotFound(c)
-				return
-			}
-			c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("%s%s", frontendBaseUrl, c.Request.RequestURI))
-		})
 	}
+	router.NoRoute(func(c *gin.Context) {
+		c.Set(middleware.RouteTagKey, "web")
+		if frontendBaseUrl == "" || isBackendPath(c.Request.RequestURI) {
+			controller.RelayNotFound(c)
+			return
+		}
+		c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("%s%s", frontendBaseUrl, c.Request.RequestURI))
+	})
 }
 
 func isBackendPath(requestURI string) bool {
-	return strings.HasPrefix(requestURI, "/v1") ||
-		strings.HasPrefix(requestURI, "/api") ||
-		strings.HasPrefix(requestURI, "/assets")
+	path := requestURI
+	if queryStart := strings.IndexByte(path, '?'); queryStart >= 0 {
+		path = path[:queryStart]
+	}
+
+	for _, prefix := range []string{
+		"/api/",
+		"/assets/",
+		"/mcp/",
+		"/v1/",
+		"/v1beta/",
+		"/pg/",
+		"/mj/",
+		"/suno/",
+		"/kling/v1/",
+		"/jimeng/",
+	} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+
+	switch path {
+	case "/api", "/assets", "/mcp", "/v1", "/v1beta", "/pg", "/mj", "/suno", "/kling/v1", "/jimeng", "/dashboard/billing/subscription", "/dashboard/billing/usage":
+		return true
+	}
+
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	return len(segments) >= 2 && segments[0] != "" && segments[1] == "mj"
 }

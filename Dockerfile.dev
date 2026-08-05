@@ -12,9 +12,7 @@ COPY apps/api-go/relaykit/go.mod relaykit/go.mod
 RUN go mod download
 COPY apps/api-go ./
 COPY VERSION ./VERSION
-RUN mkdir -p web/dist \
-    && printf '%s\n' '<!doctype html><title>LMM API development backend</title>' > web/dist/index.html \
-    && go build \
+RUN go build \
       -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" \
       -o /out/lmm-api-go
 

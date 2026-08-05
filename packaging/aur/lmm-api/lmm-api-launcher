@@ -36,8 +36,7 @@ case $backend in
       die 'Rust preview requires LMM_DATABASE_SCHEMA=lmm_preview_*'
     : "${LMM_RS_SLOT:=preview}"
     : "${LMM_RS_LISTEN_ADDR:=127.0.0.1:${PORT:-3001}}"
-    : "${LMM_WEB_DIST_DIR:=${LMM_API_FRONTEND_DIR:-/usr/share/lmm-api/frontend-dist}}"
-    export LMM_RS_SLOT LMM_RS_LISTEN_ADDR LMM_WEB_DIST_DIR
+    export LMM_RS_SLOT LMM_RS_LISTEN_ADDR
     exec "$RS_BINARY" "$@"
     ;;
 esac

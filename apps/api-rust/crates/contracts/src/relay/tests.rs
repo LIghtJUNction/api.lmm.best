@@ -7,9 +7,7 @@ use super::*;
 const SOURCES: [&str; 4] = ["claude", "gemini", "openai", "openai_responses"];
 
 fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("fixtures/legacy-relayconvert/golden")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/relayconvert/golden")
 }
 
 fn protocol(name: &str) -> Protocol {

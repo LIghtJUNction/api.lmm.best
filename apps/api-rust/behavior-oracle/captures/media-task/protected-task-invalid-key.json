@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "source": {"revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9", "synthetic": true},
-  "route": {"id": "GET /mj/task/:id/fetch (invalid key)", "middleware": ["TokenAuth", "Distribute"], "side_effects": []},
-  "request": {"method": "GET", "path": "/mj/task/stub-job-1/fetch", "headers": {"authorization": "Bearer invalid-oracle-key", "accept": "application/json"}, "body": null},
-  "response": {"status": 401, "selected_headers": {"content-type": "application/json; charset=utf-8", "x-oneapi-request-id": "<REQUEST_ID>"}, "body": {"error": {"code": "", "message": "Invalid token (request id: <REQUEST_ID>)", "type": "new_api_error"}}, "sse_frames": []},
-  "effects": {"database": {"inserted": [], "updated": [], "deleted": []}, "valkey": {"added": [], "changed": [], "removed": []}},
-  "normalization": {"rules": [{"path": "$.response.selected_headers.x-oneapi-request-id", "operation": "replace", "replacement": "<REQUEST_ID>", "reason": "request id is generated per request"}, {"path": "$.response.body.error.message", "operation": "regex_replace", "pattern": "request id: [^)]+", "replacement": "request id: <REQUEST_ID>", "reason": "auth error embeds request id"}]}
-}

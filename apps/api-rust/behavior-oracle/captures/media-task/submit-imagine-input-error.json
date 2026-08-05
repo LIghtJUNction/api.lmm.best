@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "source": {"revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9", "synthetic": true},
-  "route": {"id": "POST /mj/submit/imagine (missing prompt)", "middleware": ["TokenAuth", "Distribute"], "side_effects": ["selects channel before handler validation"]},
-  "request": {"method": "POST", "path": "/mj/submit/imagine", "headers": {"authorization": "Bearer <VALID_TOKEN>", "content-type": "application/json", "accept": "application/json"}, "body": {}},
-  "response": {"status": 400, "selected_headers": {"content-type": "application/json; charset=utf-8"}, "body": {"code": 4, "description": "prompt_is_required ", "type": "upstream_error"}, "sse_frames": []},
-  "effects": {"database": {"inserted": [], "updated": [], "deleted": []}, "valkey": {"added": [], "changed": [], "removed": []}},
-  "normalization": {"rules": []}
-}
