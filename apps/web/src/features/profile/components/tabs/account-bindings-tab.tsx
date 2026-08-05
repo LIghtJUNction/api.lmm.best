@@ -46,6 +46,7 @@ import {
 
 import {
   getSelfOAuthBindings,
+  unbindBuiltInOAuth,
   unbindCustomOAuth,
   type CustomOAuthBinding,
 } from '../../api'
@@ -81,6 +82,10 @@ interface OAuthBindingCallback {
   errorDescription?: string
 }
 
+type UnbindTarget =
+  | { kind: 'built-in'; label: string; bindingType: string }
+  | { kind: 'custom'; label: string; providerId: string }
+
 export function AccountBindingsTab({
   profile,
   onUpdate,
@@ -89,9 +94,7 @@ export function AccountBindingsTab({
   const dialogs = useDialogs<DialogKey>()
   const { status, loading } = useStatus()
   const [customBindings, setCustomBindings] = useState<CustomOAuthBinding[]>([])
-  const [unbindTarget, setUnbindTarget] = useState<CustomOAuthBinding | null>(
-    null
-  )
+  const [unbindTarget, setUnbindTarget] = useState<UnbindTarget | null>(null)
   const [unbinding, setUnbinding] = useState(false)
   const pendingOAuthBinding = useRef<PendingOAuthBinding | null>(null)
 
@@ -125,19 +128,21 @@ export function AccountBindingsTab({
     fetchCustomBindings()
   }, [fetchCustomBindings])
 
-  const handleUnbindCustom = async () => {
+  const handleUnbind = async () => {
     if (!unbindTarget) return
     setUnbinding(true)
     try {
-      const res = await unbindCustomOAuth(unbindTarget.provider_id)
+      const res =
+        unbindTarget.kind === 'built-in'
+          ? await unbindBuiltInOAuth(unbindTarget.bindingType)
+          : await unbindCustomOAuth(unbindTarget.providerId)
       if (res.success) {
         toast.success(
           t('Unbound {{provider}}', {
-            provider: unbindTarget.provider_name,
+            provider: unbindTarget.label,
           })
         )
-        await fetchCustomBindings()
-        onUpdate()
+        await Promise.all([fetchCustomBindings(), onUpdate()])
       } else {
         toast.error(res.message || t('Unbind failed'))
       }
@@ -301,6 +306,12 @@ export function AccountBindingsTab({
         ),
         isEnabled: status?.wechat_login || false,
         onBind: () => dialogs.open('wechat'),
+        onUnbind: () =>
+          setUnbindTarget({
+            kind: 'built-in',
+            label: t('WeChat'),
+            bindingType: 'wechat',
+          }),
       },
       {
         id: 'github',
@@ -321,6 +332,12 @@ export function AccountBindingsTab({
             )
           }
         },
+        onUnbind: () =>
+          setUnbindTarget({
+            kind: 'built-in',
+            label: t('GitHub'),
+            bindingType: 'github',
+          }),
       },
       {
         id: 'discord',
@@ -341,6 +358,12 @@ export function AccountBindingsTab({
             )
           }
         },
+        onUnbind: () =>
+          setUnbindTarget({
+            kind: 'built-in',
+            label: t('Discord'),
+            bindingType: 'discord',
+          }),
       },
       {
         id: 'oidc',
@@ -362,6 +385,12 @@ export function AccountBindingsTab({
             )
           }
         },
+        onUnbind: () =>
+          setUnbindTarget({
+            kind: 'built-in',
+            label: t('OIDC'),
+            bindingType: 'oidc',
+          }),
       },
       {
         id: 'telegram',
@@ -375,6 +404,12 @@ export function AccountBindingsTab({
         ),
         isEnabled: status?.telegram_oauth || false,
         onBind: () => dialogs.open('telegram'),
+        onUnbind: () =>
+          setUnbindTarget({
+            kind: 'built-in',
+            label: t('Telegram'),
+            bindingType: 'telegram',
+          }),
       },
       {
         id: 'linuxdo',
@@ -395,6 +430,12 @@ export function AccountBindingsTab({
             )
           }
         },
+        onUnbind: () =>
+          setUnbindTarget({
+            kind: 'built-in',
+            label: t('LinuxDO'),
+            bindingType: 'linuxdo',
+          }),
       },
     ].filter((binding) => binding.isEnabled)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -406,11 +447,10 @@ export function AccountBindingsTab({
     <>
       <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3'>
         {bindings.map((binding) => {
+          const canUnbind = binding.isBound && Boolean(binding.onUnbind)
           let actionLabel = t('Bind')
-          if (binding.isBound && binding.id === 'email') {
-            actionLabel = t('Change')
-          } else if (binding.isBound) {
-            actionLabel = t('Bound')
+          if (binding.isBound) {
+            actionLabel = binding.id === 'email' ? t('Change') : t('Unbind')
           }
 
           return (
@@ -439,12 +479,12 @@ export function AccountBindingsTab({
                 </div>
               </div>
               <Button
-                variant='outline'
+                variant={canUnbind ? 'destructive' : 'outline'}
                 size='sm'
                 className='h-7 shrink-0 px-2.5 text-xs'
-                onClick={binding.onBind}
-                disabled={binding.isBound && binding.id !== 'email'}
+                onClick={canUnbind ? binding.onUnbind : binding.onBind}
               >
+                {canUnbind && <Unlink data-icon='inline-start' />}
                 {actionLabel}
               </Button>
             </div>
@@ -497,9 +537,15 @@ export function AccountBindingsTab({
                       variant='ghost'
                       size='sm'
                       className='text-destructive h-7 shrink-0 px-2.5 text-xs'
-                      onClick={() => setUnbindTarget(binding)}
+                      onClick={() =>
+                        setUnbindTarget({
+                          kind: 'custom',
+                          label: binding.provider_name,
+                          providerId: binding.provider_id,
+                        })
+                      }
                     >
-                      <Unlink className='mr-1 h-3 w-3' />
+                      <Unlink data-icon='inline-start' />
                       {t('Unbind')}
                     </Button>
                   ) : (
@@ -519,7 +565,7 @@ export function AccountBindingsTab({
         </>
       )}
 
-      {/* Custom OAuth Unbind Confirmation */}
+      {/* OAuth Unbind Confirmation */}
       <ConfirmDialog
         open={!!unbindTarget}
         onOpenChange={(open) => !open && setUnbindTarget(null)}
@@ -527,12 +573,12 @@ export function AccountBindingsTab({
         desc={t(
           'Are you sure you want to unbind {{provider}}? You will no longer be able to log in via this method.',
           {
-            provider: unbindTarget?.provider_name || '',
+            provider: unbindTarget?.label || '',
           }
         )}
         confirmText={t('Confirm Unbind')}
         destructive
-        handleConfirm={handleUnbindCustom}
+        handleConfirm={handleUnbind}
         isLoading={unbinding}
       />
 
