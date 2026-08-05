@@ -14,6 +14,8 @@ use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
 
@@ -229,17 +231,37 @@ impl SourceSnapshot {
         let sha256: [u8; 32] = digest.finalize().into();
         file.seek(SeekFrom::Start(0))?;
         #[cfg(unix)]
-        return Ok(Self {
-            canonical,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            size: metadata.len(),
-            modified_seconds: metadata.mtime(),
-            modified_nanoseconds: metadata.mtime_nsec(),
-            sha256,
-        });
-        #[cfg(not(unix))]
-        compile_error!("lmm-db-migrate requires Unix metadata identity semantics");
+        {
+            Ok(Self {
+                canonical,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                size: metadata.len(),
+                modified_seconds: metadata.mtime(),
+                modified_nanoseconds: metadata.mtime_nsec(),
+                sha256,
+            })
+        }
+        #[cfg(windows)]
+        {
+            // Stable Rust does not expose Windows volume/file identity until
+            // the `windows_by_handle` API is stabilized.  The immutable
+            // content digest, size, and write timestamp remain authoritative
+            // for this read-only rehearsal; the fields stay zero so a future
+            // handle-based identity implementation can be added without a
+            // schema change.
+            Ok(Self {
+                canonical,
+                device: 0,
+                inode: 0,
+                size: metadata.file_size(),
+                modified_seconds: i64::try_from(metadata.last_write_time()).unwrap_or(i64::MAX),
+                modified_nanoseconds: 0,
+                sha256,
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        compile_error!("lmm-db-migrate requires supported file metadata identity semantics");
     }
 }
 
@@ -287,19 +309,22 @@ fn open_source(path: &Path, before: &SourceSnapshot) -> Result<SourceHandle, Mig
     reject_sidecars(path)?;
     let canonical = fs::canonicalize(path)?;
     let mut identity_file = File::open(path)?;
-    let opened = SourceSnapshot::from_file(canonical, &mut identity_file)?;
+    let opened = SourceSnapshot::from_file(canonical.clone(), &mut identity_file)?;
     if &opened != before {
         return Err(MigrationError::Manifest(
             "SQLite source changed between capture and open".into(),
         ));
     }
-    let uri = format!("file:/proc/self/fd/{}?mode=ro", identity_file.as_raw_fd());
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+        | OpenFlags::SQLITE_OPEN_URI
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    #[cfg(unix)]
     let connection = Connection::open_with_flags(
-        uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-            | OpenFlags::SQLITE_OPEN_URI
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        format!("file:/proc/self/fd/{}?mode=ro", identity_file.as_raw_fd()),
+        flags,
     )?;
+    #[cfg(windows)]
+    let connection = Connection::open_with_flags(&canonical, flags)?;
     Ok(SourceHandle {
         connection,
         _identity_file: identity_file,

@@ -45,15 +45,45 @@ pub fn write_atomic<T: Serialize>(path: &Path, report: &T) -> Result<(), Migrati
         serde_json::to_writer_pretty(&mut file, report)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
+        drop(file);
         reject_symlink_target(path)?;
-        fs::rename(&temporary, path)?;
-        OpenOptions::new().read(true).open(parent)?.sync_all()?;
+        publish_temporary(&temporary, path)?;
+        sync_parent(parent)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(not(windows))]
+fn publish_temporary(temporary: &Path, path: &Path) -> Result<(), MigrationError> {
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn publish_temporary(temporary: &Path, path: &Path) -> Result<(), MigrationError> {
+    // Windows' std::fs::rename does not replace an existing file. Remove only
+    // the checked report entry, then rename the fully-synced temporary file.
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_parent(parent: &Path) -> Result<(), MigrationError> {
+    OpenOptions::new().read(true).open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn sync_parent(_parent: &Path) -> Result<(), MigrationError> {
+    // Windows does not expose portable directory fsync through std::fs.
+    Ok(())
 }
 
 fn reject_symlink_target(path: &Path) -> Result<(), MigrationError> {

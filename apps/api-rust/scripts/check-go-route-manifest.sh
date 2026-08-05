@@ -16,7 +16,7 @@ for required_file in "${golden_hash_file}" "${legacy_manifest}" "${rust_manifest
 done
 
 expected_hash="$(awk 'NR == 1 { print $1 }' "${golden_hash_file}")"
-actual_hash="$(sha256sum "${legacy_manifest}" | awk '{ print $1 }')"
+actual_hash="$(sed 's/\r$//' "${legacy_manifest}" | sha256sum | awk '{ print $1 }')"
 if [[ "${actual_hash}" != "${expected_hash}" ]]; then
   echo "expected frozen legacy route hash ${expected_hash}, got ${actual_hash}" >&2
   echo "legacy-go-routes.tsv is immutable evidence; regenerate it only from the pinned Go revision" >&2

@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -40,6 +40,37 @@ fn router_constructors(source: &str) -> BTreeSet<&str> {
         .filter_map(|signature| signature.split_once('(').map(|(name, _)| name))
         .filter(|name| *name == "routes" || name.ends_with("router"))
         .collect()
+}
+
+fn bash_command() -> Command {
+    #[cfg(windows)]
+    {
+        if let Ok(path) = env::var("LMM_BASH") {
+            return Command::new(path);
+        }
+
+        // `C:\Windows\System32\bash.exe` is the WSL launcher and emits a
+        // misleading install prompt when WSL is absent. Prefer the Bash
+        // shipped with the Git installation that Cargo is using.
+        if let Ok(output) = Command::new("git").arg("--exec-path").output()
+            && output.status.success()
+        {
+            let exec_path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            let exec_path = Path::new(&exec_path);
+            for candidate in [
+                exec_path.join("..\\..\\..\\bin\\bash.exe"),
+                exec_path.join("..\\..\\..\\usr\\bin\\bash.exe"),
+            ] {
+                if let Ok(candidate) = candidate.canonicalize() {
+                    if candidate.is_file() {
+                        return Command::new(candidate);
+                    }
+                }
+            }
+        }
+    }
+
+    Command::new("bash")
 }
 
 /// These slices are composed by the isolated test-instance root instead of a
@@ -149,7 +180,7 @@ fn every_migration_route_module_should_have_a_router_integration_test() {
 #[test]
 fn all_candidate_route_shapes_should_pass_the_repository_gate() {
     let root = manifest_dir();
-    let output = Command::new("bash")
+    let output = bash_command()
         .arg(root.join("../../scripts/check-draft-route-coverage.sh"))
         .current_dir(&root)
         .output()

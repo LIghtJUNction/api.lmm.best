@@ -6,12 +6,20 @@ legacy="$repo_root/apps/api-rust/routes/legacy-go-routes.tsv"
 plan="${MIGRATION_PLAN_PATH:-$repo_root/apps/api-rust/routes/migration-plan.tsv}"
 gate="${MIGRATION_GATE_PATH:-$repo_root/apps/api-rust/routes/migration-gate.tsv}"
 review="${MIGRATION_INTEGRATION_REVIEW_PATH:-$repo_root/apps/api-rust/routes/integration-review.tsv}"
+
+# Git's checkout policy may leave the tracked TSV files with CRLF endings on
+# Windows.  Normalize only command output used for validation; do not rewrite
+# the checked-in route ledgers.
+tsv_without_crlf() {
+  sed 's/\r$//' -- "$1"
+}
+
 expected_header=$'method\tpath\tlegacy_handler\tdomain\tauth_scope\tdata_access\tstreaming\tpriority\tplanned_rust_module\tjob_dependency'
 expected_gate_header=$'method\tpath\tsource_state\tcompile_state\tmount_state\tdifferential_state\tapproval_state\tproduction_owner\tgate_state\tevidence'
 expected_review_header=$'method\tpath\trust_handler\tlistener_differential\tpostgres_evidence\tvalkey_evidence\tdecision\tnotes'
 
 [[ -f "$plan" ]] || { echo "missing migration plan: $plan" >&2; exit 1; }
-[[ $(head -n 1 "$plan") == "$expected_header" ]] || { echo "invalid migration-plan header" >&2; exit 1; }
+[[ $(tsv_without_crlf "$plan" | head -n 1) == "$expected_header" ]] || { echo "invalid migration-plan header" >&2; exit 1; }
 
 awk -F '\t' '
   function frozen_auth_scope(method, path) {
@@ -59,15 +67,15 @@ awk -F '\t' '
   }
 ' "$plan"
 
-cut -f1-3 "$plan" | tail -n +2 | diff -u "$legacy" -
+diff -u <(tsv_without_crlf "$legacy") <(tsv_without_crlf "$plan" | cut -f1-3 | tail -n +2)
 
 [[ -f "$gate" ]] || { echo "missing migration evidence gate: $gate" >&2; exit 1; }
-[[ $(head -n 1 "$gate") == "$expected_gate_header" ]] || {
+[[ $(tsv_without_crlf "$gate" | head -n 1) == "$expected_gate_header" ]] || {
   echo "invalid migration-gate header" >&2
   exit 1
 }
 [[ -f "$review" ]] || { echo "missing integration review: $review" >&2; exit 1; }
-[[ $(head -n 1 "$review") == "$expected_review_header" ]] || {
+[[ $(tsv_without_crlf "$review" | head -n 1) == "$expected_review_header" ]] || {
   echo "invalid integration-review header" >&2
   exit 1
 }
@@ -341,6 +349,7 @@ mapfile -t declared_candidates < <(
 declared_candidate_count=${#declared_candidates[@]}
 mapfile -t candidate_names < <(
   printf '%s\n' "${candidate_files[@]}" |
+    tr '\\' '/' |
     sed -E 's#^.*/##; s#\.rs$##' |
     LC_ALL=C sort
 )
