@@ -110,19 +110,19 @@ for package in lmm-api-rs-bin lmm-api-rs-git; do
 done
 
 stage="$tmp/stage"
-mkdir -p "$stage/core/lmm-api-core-0.1.1/frontend-dist" \
-  "$stage/go/lmm-api-go-0.1.1-linux-amd64" \
-  "$stage/rs/lmm-api-rs-0.1.1-linux-amd64"
-cp "$SHARED"/* "$stage/core/lmm-api-core-0.1.1/"
-printf '<!doctype html>\n' > "$stage/core/lmm-api-core-0.1.1/frontend-dist/index.html"
-printf '#!/bin/sh\n' > "$stage/go/lmm-api-go-0.1.1-linux-amd64/lmm-api"
-printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.1-linux-amd64/lmm-api-rs"
-printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.1-linux-amd64/lmm-db-migrate"
-chmod 0755 "$stage/go/lmm-api-go-0.1.1-linux-amd64/lmm-api" \
-  "$stage/rs/lmm-api-rs-0.1.1-linux-amd64/lmm-api-rs" \
-  "$stage/rs/lmm-api-rs-0.1.1-linux-amd64/lmm-db-migrate"
-for component in core/lmm-api-core-0.1.1 go/lmm-api-go-0.1.1-linux-amd64 \
-  rs/lmm-api-rs-0.1.1-linux-amd64; do
+mkdir -p "$stage/core/lmm-api-core-0.1.2/frontend-dist" \
+  "$stage/go/lmm-api-go-0.1.2-linux-amd64" \
+  "$stage/rs/lmm-api-rs-0.1.2-linux-amd64"
+cp "$SHARED"/* "$stage/core/lmm-api-core-0.1.2/"
+printf '<!doctype html>\n' > "$stage/core/lmm-api-core-0.1.2/frontend-dist/index.html"
+printf '#!/bin/sh\n' > "$stage/go/lmm-api-go-0.1.2-linux-amd64/lmm-api"
+printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-api-rs"
+printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-db-migrate"
+chmod 0755 "$stage/go/lmm-api-go-0.1.2-linux-amd64/lmm-api" \
+  "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-api-rs" \
+  "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-db-migrate"
+for component in core/lmm-api-core-0.1.2 go/lmm-api-go-0.1.2-linux-amd64 \
+  rs/lmm-api-rs-0.1.2-linux-amd64; do
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     printf 'fixture\n' > "$stage/$component/$file"
   done
