@@ -266,7 +266,7 @@ jobs:
       - name: Install route coverage tooling
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ripgrep
+          sudo apt-get install --yes --no-install-recommends ripgrep
 
       - name: Set up pinned Rust toolchain
         run: |
