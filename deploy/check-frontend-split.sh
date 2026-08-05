@@ -53,6 +53,7 @@ assert_literal 'max-age=31536000, immutable' "$config"
 assert_literal 'no-cache, must-revalidate' "$config"
 assert_literal 'proxy_buffering off' "$config"
 assert_literal 'Connection $connection_upgrade' "$config"
+assert_literal 'include /etc/nginx/site-policy/http/*.conf;' "$repo/deploy/nginx/http-map.conf"
 
 redirect_server=$(awk '
   /^server \{$/ { server_count++; capture = server_count == 1 }
@@ -74,6 +75,8 @@ fi
   fail 'the second server must exclusively listen on the canonical HTTPS entry point'
 [[ $(grep -Fc 'include /etc/nginx/lmm-api-locations.conf;' <<<"$canonical_server") == 1 ]] ||
   fail 'the canonical HTTPS server must serve application routes'
+[[ $(grep -Fc 'include /etc/nginx/site-policy/api.lmm.best/*.conf;' <<<"$canonical_server") == 1 ]] ||
+  fail 'the canonical HTTPS server must load host-specific access policies'
 if grep -Fq 'listen 9000 ssl;' <<<"$canonical_server"; then
   fail 'the canonical HTTPS server must not also serve the legacy :9000 origin'
 fi

@@ -17,6 +17,7 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
+	apiRouter.Use(middleware.ConsoleAccessGate())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
 		apiRouter.GET("/setup", controller.GetSetup)
@@ -275,6 +276,13 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 
+		openSourceBountyPublicRoute := apiRouter.Group("/open-source-bounties")
+		openSourceBountyPublicRoute.Use(middleware.TryUserAuth())
+		{
+			openSourceBountyPublicRoute.GET("", controller.ListOpenSourceBounties)
+			openSourceBountyPublicRoute.GET("/projects/:id", controller.GetOpenSourceBounty)
+		}
+
 		openSourceBountyRoute := apiRouter.Group("/open-source-bounties")
 		openSourceBountyRoute.Use(middleware.UserAuth())
 		{
@@ -282,7 +290,6 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.GET("/mcp-token", middleware.DisableCache(), controller.GetOpenSourceBountyMCPToken)
 			openSourceBountyRoute.POST("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RotateOpenSourceBountyMCPToken)
 			openSourceBountyRoute.DELETE("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevokeOpenSourceBountyMCPToken)
-			openSourceBountyRoute.GET("", controller.ListOpenSourceBounties)
 			openSourceBountyRoute.POST("", controller.CreateOpenSourceBounty)
 			openSourceBountyRoute.GET("/mine", controller.ListOwnedOpenSourceBounties)
 			openSourceBountyRoute.GET("/accepted", controller.ListAcceptedOpenSourceBounties)
@@ -292,7 +299,6 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.GET("/disputes/mine", controller.ListMyOpenSourceBountyDisputes)
 			openSourceBountyRoute.GET("/disputes/admin", middleware.AdminAuth(), controller.ListAdminOpenSourceBountyDisputes)
 			openSourceBountyRoute.POST("/disputes/:dispute_id/resolve", middleware.AdminAuth(), middleware.CriticalRateLimit(), controller.ResolveOpenSourceBountyDispute)
-			openSourceBountyRoute.GET("/projects/:id", controller.GetOpenSourceBounty)
 			openSourceBountyRoute.PUT("/projects/:id", controller.UpdateOpenSourceBounty)
 			openSourceBountyRoute.DELETE("/projects/:id", controller.DeleteOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/publish", middleware.CriticalRateLimit(), controller.PublishOpenSourceBounty)

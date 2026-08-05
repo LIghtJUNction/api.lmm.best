@@ -1,0 +1,83 @@
+package service
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+
+	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/gin-gonic/gin"
+)
+
+func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes int) bool {
+	if apiErr == nil || ShouldSkipRetryAfterChannelAffinityFailure(c) {
+		return false
+	}
+	if c != nil {
+		if _, ok := c.Get("specific_channel_id"); ok {
+			return false
+		}
+	}
+	if types.IsChannelError(apiErr) {
+		return true
+	}
+	if types.IsSkipRetryError(apiErr) || retryTimes <= 0 {
+		return false
+	}
+	code := apiErr.StatusCode
+	if code >= 200 && code < 300 {
+		return false
+	}
+	if code < 100 || code > 599 {
+		return true
+	}
+	if operation_setting.IsAlwaysSkipRetryCode(apiErr.GetErrorCode()) {
+		return false
+	}
+	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr *types.NewAPIError) {
+	if apiErr == nil {
+		return
+	}
+	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, apiErr.StatusCode, common.LocalLogPreview(apiErr.MaskSensitiveErrorWithStatusCode())))
+	if ShouldDisableChannel(apiErr) && channelError.AutoBan {
+		gopool.Go(func() {
+			DisableChannel(channelError, apiErr.ErrorWithStatusCode())
+		})
+	}
+
+	if !constant.ErrorLogEnabled || !types.IsRecordErrorLog(apiErr) || c == nil {
+		return
+	}
+	other := map[string]interface{}{
+		"error_type":   apiErr.GetErrorType(),
+		"error_code":   apiErr.GetErrorCode(),
+		"status_code":  apiErr.StatusCode,
+		"channel_id":   c.GetInt("channel_id"),
+		"channel_name": c.GetString("channel_name"),
+		"channel_type": c.GetInt("channel_type"),
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	adminInfo := map[string]interface{}{"use_channel": c.GetStringSlice("use_channel")}
+	if common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {
+		adminInfo["is_multi_key"] = true
+		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	}
+	AppendChannelAffinityAdminInfo(c, adminInfo)
+	other["admin_info"] = adminInfo
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	model.RecordErrorLog(c, c.GetInt("id"), c.GetInt("channel_id"), c.GetString("original_model"), c.GetString("token_name"), apiErr.MaskSensitiveErrorWithStatusCode(), c.GetInt("token_id"), int(time.Since(startTime).Seconds()), common.GetContextKeyBool(c, constant.ContextKeyIsStream), c.GetString("group"), other)
+}
