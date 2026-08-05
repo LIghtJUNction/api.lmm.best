@@ -23,7 +23,6 @@ import { useTranslation } from 'react-i18next'
 import { BrandLogo } from '@/components/brand-logo'
 import { LMM_BRAND_NAME } from '@/components/lmm-brand-mark'
 import { useSystemConfig } from '@/hooks/use-system-config'
-import { normalizeInterfaceLanguage } from '@/i18n/languages'
 import { DEFAULT_LOGO, DEFAULT_SYSTEM_NAME } from '@/lib/constants'
 import { cn } from '@/lib/utils'
 
@@ -43,22 +42,6 @@ interface FooterProps {
   columns?: FooterColumnProps[]
   copyright?: string
   className?: string
-}
-
-const NEW_API_FOOTER_ATTRIBUTION_KEY = [
-  'footer',
-  'new' + 'api',
-  'projectAttributionSuffix',
-].join('.')
-
-const docsLanguageByInterfaceLanguage: Record<string, 'en' | 'ja' | 'zh'> = {
-  en: 'en',
-  fr: 'en',
-  ja: 'ja',
-  ru: 'en',
-  vi: 'en',
-  zhCN: 'zh',
-  zhTW: 'zh',
 }
 
 function FooterLinkItem(props: { link: FooterLink }) {
@@ -133,20 +116,16 @@ function ComplianceLinks() {
 
 // inline=true returns just the inner span for composition in a parent flex
 // row. inline=false wraps in a centered/right-aligned div (default).
-function ProjectAttribution(props: { currentYear: number; inline?: boolean }) {
+function ProjectAttribution(props: {
+  currentYear: number
+  name: string
+  inline?: boolean
+}) {
   const { t } = useTranslation()
   const content = (
     <span className='text-muted-foreground/45'>
-      &copy; {props.currentYear}{' '}
-      <a
-        href='https://github.com/QuantumNous/new-api'
-        target='_blank'
-        rel='noopener noreferrer'
-        className='text-foreground/70 hover:text-foreground font-medium transition-colors'
-      >
-        {t('New API')}
-      </a>
-      . {t(NEW_API_FOOTER_ATTRIBUTION_KEY)}
+      &copy; {props.currentYear} {props.name}.{' '}
+      {t('Open-source bounty collaboration')}
     </span>
   )
   if (props.inline) {
@@ -160,19 +139,13 @@ function ProjectAttribution(props: { currentYear: number; inline?: boolean }) {
 }
 
 export function Footer(props: FooterProps) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const {
     systemName,
     logo: systemLogo,
     footerHtml,
     demoSiteEnabled,
   } = useSystemConfig()
-  const docsLang =
-    docsLanguageByInterfaceLanguage[
-      normalizeInterfaceLanguage(i18n.resolvedLanguage || i18n.language)
-    ]
-  const docsBaseUrl = `https://docs.newapi.pro/${docsLang || 'en'}/docs`
-
   const displayLogo = systemLogo || props.logo || DEFAULT_LOGO
   const configuredName = systemName || props.name || DEFAULT_SYSTEM_NAME
   const usesDefaultBrand = displayLogo === DEFAULT_LOGO
@@ -219,25 +192,8 @@ export function Footer(props: FooterProps) {
           },
         ],
       },
-      {
-        title: t('Open-source attribution'),
-        links: [
-          {
-            text: t('New API'),
-            href: 'https://github.com/QuantumNous/new-api',
-          },
-          {
-            text: t('One API'),
-            href: 'https://github.com/songquanpeng/one-api',
-          },
-          {
-            text: t('Open-source attribution'),
-            href: `${docsBaseUrl}/guide/wiki/basic-concepts/project-introduction`,
-          },
-        ],
-      },
     ],
-    [t, docsBaseUrl]
+    [t]
   )
 
   const displayColumns = props.columns ?? fallbackColumns
@@ -257,7 +213,11 @@ export function Footer(props: FooterProps) {
                 className='custom-footer text-muted-foreground min-w-0 text-center text-sm sm:text-left'
                 dangerouslySetInnerHTML={{ __html: footerHtml }}
               />
-              <ProjectAttribution currentYear={currentYear} inline />
+              <ProjectAttribution
+                currentYear={currentYear}
+                name={displayName}
+                inline
+              />
             </div>
             <ComplianceLinks />
           </div>
@@ -294,7 +254,7 @@ export function Footer(props: FooterProps) {
 
           {/* Links columns */}
           {isDemoSiteMode && (
-            <div className='grid grid-cols-3 gap-8 md:gap-16'>
+            <div className='grid grid-cols-2 gap-8 md:gap-16'>
               {displayColumns.map((column) => (
                 <div key={column.title}>
                   <p className='text-muted-foreground/50 mb-3 text-xs font-medium tracking-wider uppercase'>
@@ -325,7 +285,7 @@ export function Footer(props: FooterProps) {
               {props.copyright ?? t('footer.defaultCopyright')}
             </span>
           </div>
-          <ProjectAttribution currentYear={currentYear} />
+          <ProjectAttribution currentYear={currentYear} name={displayName} />
         </div>
       </div>
     </footer>
