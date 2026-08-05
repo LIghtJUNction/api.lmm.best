@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "source": {"revision": "5418ce6b6d45ed69167b0aad53f2f595e5bc8de9", "synthetic": true},
-  "route": {"id": "POST /mj/submit/imagine (stub replay code 21)", "middleware": ["TokenAuth", "Distribute"], "side_effects": ["forwards sanitized JSON to stub", "inserts Midjourney row", "consumes quota after HTTP 200", "records consume log", "increments user and channel usage"]},
-  "request": {"method": "POST", "path": "/mj/submit/imagine", "headers": {"authorization": "Bearer <VALID_TOKEN>", "content-type": "application/json", "accept": "application/json"}, "body": {"prompt": "oracle replay prompt", "notifyHook": "http://not-forwarded.invalid/hook", "accountFilter": "not-forwarded"}},
-  "response": {"status": 200, "selected_headers": {}, "body": {"code": 1, "description": "exists", "result": "stub-job-1", "properties": {"status": "SUCCESS", "imageUrl": "http://stub.invalid/image.png"}}, "sse_frames": []},
-  "effects": {"database": {"inserted": [{"table": "midjourneys", "mj_id": "stub-job-1", "action": "IMAGINE", "status": "SUCCESS", "progress": "100%", "image_url": "http://stub.invalid/image.png"}, {"table": "logs", "type": "consume"}], "updated": [{"table": "users", "fields": ["used_quota", "request_count"]}, {"table": "channels", "fields": ["used_quota"]}], "deleted": []}, "valkey": {"added": [], "changed": [], "removed": []}},
-  "normalization": {"rules": [{"path": "$.effects.database.inserted[0].submit_time", "operation": "replace", "replacement": "<MILLIS>", "reason": "submission time is wall-clock derived"}]}
-}

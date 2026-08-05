@@ -25,6 +25,7 @@ import {
   listBounties,
   listReceivedBountyTips,
   markReceivedBountyTipsRead,
+  openBountyDispute,
   thankBountyTip,
   tipChallenge,
 } from './api'
@@ -119,6 +120,35 @@ describe('open-source bounty tips', () => {
     assert.deepEqual(posts, [
       '/api/open-source-bounties/tips/received/read',
       '/api/open-source-bounties/tips/17/thank',
+    ])
+  })
+})
+
+describe('open-source bounty disputes', () => {
+  test('posts the selected challenge, reason, and statement to the dispute endpoint', async () => {
+    const requests: Array<{ url: string; data: unknown }> = []
+    api.post = (async (url, data) => {
+      requests.push({ url, data })
+      return {
+        data: {
+          success: true,
+          data: { id: 9, challenge_id: 42 },
+        },
+      }
+    }) as typeof api.post
+
+    const input = {
+      reason: 'requirements_met_but_rejected' as const,
+      statement:
+        'The submitted evidence satisfies every published requirement.',
+    }
+    await openBountyDispute(42, input)
+
+    assert.deepEqual(requests, [
+      {
+        url: '/api/open-source-bounties/challenges/42/disputes',
+        data: input,
+      },
     ])
   })
 })

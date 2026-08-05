@@ -40,6 +40,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { Heart } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -216,12 +217,11 @@ function availableSlots(project: BountyProject) {
   )
 }
 
-function disputeTicketHref(challenge: BountyChallenge) {
-  const params = new URLSearchParams({
+function disputeTicketSearch(challenge: BountyChallenge) {
+  return {
     category: 'bounty_dispute',
     referenceId: String(challenge.id),
-  })
-  return `/support?${params.toString()}`
+  } as const
 }
 
 export function OpenSourceBounties() {
@@ -1557,7 +1557,9 @@ function ChallengeCard({
           {challenge.status !== 'withdrawn' && !challenge.dispute ? (
             <Button
               variant='outline'
-              render={<a href={disputeTicketHref(challenge)} />}
+              render={
+                <Link to='/support' search={disputeTicketSearch(challenge)} />
+              }
             >
               <HugeiconsIcon
                 icon={CustomerSupportIcon}
@@ -2084,7 +2086,12 @@ function ProjectReviewDialog(props: {
                   {!challenge.dispute ? (
                     <Button
                       variant='outline'
-                      render={<a href={disputeTicketHref(challenge)} />}
+                      render={
+                        <Link
+                          to='/support'
+                          search={disputeTicketSearch(challenge)}
+                        />
+                      }
                     >
                       <HugeiconsIcon
                         icon={CustomerSupportIcon}
