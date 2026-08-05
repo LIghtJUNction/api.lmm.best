@@ -38,6 +38,7 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             raw_version=$GITHUB_REF_NAME
+            raw_version=${raw_version#v}
           else
             raw_version="0.1.0-${GITHUB_SHA:0:12}"
           fi
@@ -171,6 +172,8 @@ jobs:
               -o "../../${bundle}/lmm-api" .
           )
           file "$bundle/lmm-api"
+          cp packaging/aur/lmm-api-bin/lmm-api.service "$bundle/"
+          cp packaging/aur/lmm-api-bin/lmm-api.env "$bundle/"
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
           printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"
           tar -czf "release-go/${artifact}.tar.gz" -C release-go "$artifact"

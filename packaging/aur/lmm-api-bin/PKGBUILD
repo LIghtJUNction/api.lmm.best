@@ -1,0 +1,93 @@
+# Maintainer: LIghtJUNction
+
+pkgname=lmm-api-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='LMM API model management and distribution system (prebuilt binary)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/LIghtJUNction/api.lmm.best'
+license=('AGPL-3.0-only')
+depends=('ca-certificates' 'tzdata')
+makedepends=('cosign')
+provides=("lmm-api=${pkgver}" "new-api=${pkgver}")
+conflicts=('lmm-api' 'lmm-api-git' 'new-api' 'new-api-bin' 'new-api-git')
+backup=('etc/lmm-api/lmm-api.env')
+options=('!strip')
+
+_release_tag="v${pkgver}"
+_release_base="${url}/releases/download/${_release_tag}"
+_artifact="lmm-api-go-${pkgver}-linux"
+
+source_x86_64=(
+  "${_artifact}-amd64.tar.gz::${_release_base}/${_artifact}-amd64.tar.gz"
+  "${_artifact}-amd64.tar.gz.sha256::${_release_base}/${_artifact}-amd64.tar.gz.sha256"
+  "${_artifact}-amd64.tar.gz.sigstore.json::${_release_base}/${_artifact}-amd64.tar.gz.sigstore.json"
+)
+source_aarch64=(
+  "${_artifact}-arm64.tar.gz::${_release_base}/${_artifact}-arm64.tar.gz"
+  "${_artifact}-arm64.tar.gz.sha256::${_release_base}/${_artifact}-arm64.tar.gz.sha256"
+  "${_artifact}-arm64.tar.gz.sigstore.json::${_release_base}/${_artifact}-arm64.tar.gz.sigstore.json"
+)
+noextract=(
+  "${_artifact}-amd64.tar.gz"
+  "${_artifact}-arm64.tar.gz"
+)
+
+# The release workflow publishes the checksum beside a keyless Sigstore bundle.
+# prepare() verifies both; SKIP only prevents makepkg from requiring a PKGBUILD
+# checksum update after every release.
+sha256sums_x86_64=('SKIP' 'SKIP' 'SKIP')
+sha256sums_aarch64=('SKIP' 'SKIP' 'SKIP')
+
+case "${CARCH}" in
+  x86_64) _release_arch=amd64 ;;
+  aarch64) _release_arch=arm64 ;;
+  *) printf 'unsupported architecture: %s\n' "${CARCH}" >&2; return 1 ;;
+esac
+
+prepare() {
+  local archive="${_artifact}-${_release_arch}.tar.gz"
+  local checksum="${archive}.sha256"
+  local bundle="${archive}.sigstore.json"
+  local expected actual
+
+  expected=$(awk 'NR == 1 { print $1 }' "${checksum}")
+  [[ ${expected} =~ ^[[:xdigit:]]{64}$ ]] || {
+    printf 'invalid release checksum: %s\n' "${checksum}" >&2
+    return 1
+  }
+  actual=$(sha256sum "${archive}")
+  actual=${actual%% *}
+  [[ ${actual} == "${expected}" ]] || {
+    printf 'release checksum mismatch: %s\n' "${archive}" >&2
+    return 1
+  }
+
+  cosign verify-blob \
+    --bundle "${bundle}" \
+    --certificate-identity \
+      "https://github.com/LIghtJUNction/api.lmm.best/.github/workflows/release.yml@refs/tags/${_release_tag}" \
+    --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+    "${archive}"
+
+  # Keep the archive opaque until its release signature has been verified.
+  bsdtar -xf "${archive}"
+}
+
+package() {
+  local bundle_dir="${srcdir}/${_artifact}-${_release_arch}"
+
+  install -Dm0755 "${bundle_dir}/lmm-api" "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0644 "${bundle_dir}/lmm-api.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
+  install -Dm0600 "${bundle_dir}/lmm-api.env" \
+    "${pkgdir}/etc/lmm-api/lmm-api.env"
+  install -Dm0644 "${bundle_dir}/LICENSE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm0644 "${bundle_dir}/NOTICE" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/NOTICE"
+  install -Dm0644 "${bundle_dir}/THIRD-PARTY-LICENSES.md" \
+    "${pkgdir}/usr/share/licenses/${pkgname}/THIRD-PARTY-LICENSES.md"
+  install -Dm0644 "${bundle_dir}/REVISION" \
+    "${pkgdir}/usr/share/doc/${pkgname}/REVISION"
+}
