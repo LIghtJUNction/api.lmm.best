@@ -569,7 +569,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON options, custom_oauth_providers, setups,
 GRANT SELECT, INSERT, UPDATE, DELETE ON tokens TO lmm_auth_runtime;
 GRANT USAGE ON SEQUENCE auth_flows_id_seq, tokens_id_seq TO lmm_auth_runtime;
 SQL
-# New API no longer bootstraps a root account during startup.  Seed the same
+# The gateway no longer bootstraps a root account during startup.  Seed the same
 # synthetic, well-known bcrypt fixture on both disposable PostgreSQL databases.
 # This hash is only for the `password` test credential and is never emitted.
 # shellcheck disable=SC2016 # bcrypt contains literal dollar signs.

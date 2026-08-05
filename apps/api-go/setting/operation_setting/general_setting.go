@@ -24,7 +24,7 @@ type GeneralSetting struct {
 
 // 默认配置
 var generalSetting = GeneralSetting{
-	DocsLink:                   "https://docs.newapi.pro/en/docs",
+	DocsLink:                   "https://github.com/LIghtJUNction/api.lmm.best#readme",
 	PingIntervalEnabled:        false,
 	PingIntervalSeconds:        60,
 	QuotaDisplayType:           QuotaDisplayTypeUSD,
