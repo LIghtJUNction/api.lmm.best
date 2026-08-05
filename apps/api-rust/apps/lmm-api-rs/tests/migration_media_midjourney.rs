@@ -12,7 +12,8 @@ use axum::{
 use lmm_api_rs::migration_routes::media_midjourney::{
     BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyChannel, MidjourneyFailure,
     MidjourneyHttpState, MidjourneyIdentity, PgMidjourneyBackend, StoredImage, SubmitReply,
-    TaskEffect, media_midjourney_router,
+    TaskEffect, build_midjourney_image_url, media_midjourney_router, midjourney_image_signature,
+    signed_image_user_id,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -27,6 +28,7 @@ struct TestMidjourneyBackend {
     effects: Mutex<Vec<TaskEffect>>,
     submit_calls: Mutex<usize>,
     image_fetches: Mutex<usize>,
+    image_users: Mutex<Vec<i64>>,
     image: Mutex<Option<StoredImage>>,
     stream_target: Mutex<Option<String>>,
     reply: Mutex<BufferedJsonReply>,
@@ -42,6 +44,7 @@ impl TestMidjourneyBackend {
             effects: Mutex::new(Vec::new()),
             submit_calls: Mutex::new(0),
             image_fetches: Mutex::new(0),
+            image_users: Mutex::new(Vec::new()),
             image: Mutex::new(None),
             stream_target: Mutex::new(None),
             reply: Mutex::new(BufferedJsonReply {
@@ -160,7 +163,14 @@ impl MidjourneyBackend for TestMidjourneyBackend {
         Ok(self.reply.lock().expect("reply lock").clone())
     }
 
-    async fn image_for(&self, _: &str) -> Result<StoredImage, MidjourneyFailure> {
+    async fn image_for(&self, user_id: i64, _: &str) -> Result<StoredImage, MidjourneyFailure> {
+        self.image_users
+            .lock()
+            .expect("image users lock")
+            .push(user_id);
+        if user_id != 1 {
+            return Err(MidjourneyFailure::NotFound);
+        }
         self.image
             .lock()
             .expect("image lock")
@@ -198,7 +208,35 @@ impl MidjourneyBackend for TestMidjourneyBackend {
 }
 
 fn app(backend: Arc<TestMidjourneyBackend>) -> axum::Router {
-    media_midjourney_router(MidjourneyHttpState::new(backend))
+    media_midjourney_router(
+        MidjourneyHttpState::new(backend).with_image_signing_secret(IMAGE_SECRET),
+    )
+}
+
+const IMAGE_SECRET: &[u8] = b"test-midjourney-image-session-secret-2026";
+
+fn signed_image_path(path: &str, task_id: &str, user_id: i64) -> String {
+    format!(
+        "{path}?uid={user_id}&sig={}",
+        midjourney_image_signature(IMAGE_SECRET, user_id, task_id).expect("image signature")
+    )
+}
+
+#[test]
+fn signed_image_builder_preserves_prefix_and_escapes_task_id() {
+    let url = build_midjourney_image_url(
+        "https://api.example.test/compat",
+        IMAGE_SECRET,
+        42,
+        "task/with space",
+    )
+    .expect("signed URL");
+    let parsed = reqwest::Url::parse(&url).expect("URL");
+    assert_eq!(parsed.path(), "/compat/mj/image/task%2Fwith%20space");
+    assert_eq!(
+        signed_image_user_id(IMAGE_SECRET, "task/with space", parsed.query()),
+        Some(42)
+    );
 }
 
 async fn spawn_tcp_router(router: axum::Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -302,7 +340,7 @@ async fn simultaneous_replays_should_reach_the_backend_twice_without_deduplicati
 }
 
 #[tokio::test]
-async fn public_image_should_stream_exact_binary_without_token() {
+async fn signed_public_image_should_stream_exact_binary_without_bearer_token() {
     let backend = Arc::new(TestMidjourneyBackend::new(Vec::<String>::new()));
     backend.set_image(StoredImage {
         url: "https://images.example.test/image.png".to_owned(),
@@ -310,7 +348,7 @@ async fn public_image_should_stream_exact_binary_without_token() {
     let response = app(backend)
         .oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/task-1")
+                .uri(signed_image_path("/proxy/mj/image/task-1", "task-1", 1))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -324,6 +362,59 @@ async fn public_image_should_stream_exact_binary_without_token() {
             .expect("image")
             .as_ref(),
         b"mock-png"
+    );
+}
+
+#[tokio::test]
+async fn public_image_rejects_missing_or_tampered_signature_before_lookup() {
+    let backend = Arc::new(TestMidjourneyBackend::new(Vec::<String>::new()));
+    backend.set_image(StoredImage {
+        url: "https://images.example.test/image.png".to_owned(),
+    });
+    for query in ["", "uid=1&sig=deadbeef"] {
+        let uri = if query.is_empty() {
+            "/proxy/mj/image/task-1".to_owned()
+        } else {
+            format!("/proxy/mj/image/task-1?{query}")
+        };
+        let response = app(Arc::clone(&backend))
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(backend.image_fetches(), 0);
+}
+
+#[tokio::test]
+async fn public_image_signature_scopes_lookup_to_the_signed_user() {
+    let backend = Arc::new(TestMidjourneyBackend::new(Vec::<String>::new()));
+    backend.set_image(StoredImage {
+        url: "https://images.example.test/image.png".to_owned(),
+    });
+    let response = app(Arc::clone(&backend))
+        .oneshot(
+            Request::builder()
+                .uri(signed_image_path("/proxy/mj/image/task-1", "task-1", 2))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(backend.image_fetches(), 0);
+    assert_eq!(
+        backend
+            .image_users
+            .lock()
+            .expect("image users lock")
+            .as_slice(),
+        [2]
     );
 }
 
@@ -357,7 +448,11 @@ async fn public_image_returns_headers_before_the_upstream_stream_finishes() {
         Duration::from_secs(1),
         app(backend).oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/task-stream")
+                .uri(signed_image_path(
+                    "/proxy/mj/image/task-stream",
+                    "task-stream",
+                    1,
+                ))
                 .body(Body::empty())
                 .expect("request"),
         ),
@@ -387,7 +482,7 @@ async fn public_image_rejects_ipv6_loopback_before_any_upstream_fetch() {
     let response = app(Arc::clone(&backend))
         .oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/task-1")
+                .uri(signed_image_path("/proxy/mj/image/task-1", "task-1", 1))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -446,7 +541,7 @@ async fn unknown_public_image_uses_the_frozen_not_found_envelope() {
     let response = app(Arc::clone(&backend))
         .oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/missing")
+                .uri(signed_image_path("/proxy/mj/image/missing", "missing", 1))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -494,7 +589,11 @@ async fn dynamic_midjourney_auth_and_route_status_contract_holds_over_a_real_tcp
     let client = reqwest::Client::new();
 
     let public_image = client
-        .get(format!("{base_url}/proxy/mj/image/missing"))
+        .get(signed_image_path(
+            &format!("{base_url}/proxy/mj/image/missing"),
+            "missing",
+            1,
+        ))
         .send()
         .await
         .expect("public-image response");

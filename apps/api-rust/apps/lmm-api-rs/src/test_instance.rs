@@ -152,6 +152,7 @@ pub fn safe_candidate_surface(
     pg: PgPool,
     valkey: redis::Client,
     auth: Arc<dyn DashboardAuth>,
+    image_signing_secret: &str,
 ) -> Router {
     let catalog_authorizer: Arc<dyn AdminCatalogAuthorizer> =
         Arc::new(DashboardAdminCatalogAuthorizer::new(Arc::clone(&auth)));
@@ -354,12 +355,17 @@ pub fn safe_candidate_surface(
         // test adapter denies every provider protocol after authentication, so
         // an imported snapshot can exercise route/auth compatibility without
         // contacting a selected production channel.
-        .merge(media_midjourney_router(MidjourneyHttpState::new(Arc::new(
-            TestInstanceMidjourneyBackend::new(pg.clone()),
-        ))))
-        .merge(media_task_router(MediaTaskHttpState::new(Arc::new(
-            MidjourneyMediaTaskService::new(Arc::new(TestInstanceMidjourneyBackend::new(pg))),
-        ))))
+        .merge(media_midjourney_router(
+            MidjourneyHttpState::new(Arc::new(TestInstanceMidjourneyBackend::new(pg.clone())))
+                .with_image_signing_secret(image_signing_secret),
+        ))
+        .merge(media_task_router(
+            MediaTaskHttpState::new(Arc::new(
+                MidjourneyMediaTaskService::new(Arc::new(TestInstanceMidjourneyBackend::new(pg)))
+                    .with_image_signing_secret(image_signing_secret),
+            ))
+            .with_image_signing_secret(image_signing_secret),
+        ))
 }
 
 /// PostgreSQL-backed read adapter for the legacy public/control endpoints.
@@ -2153,7 +2159,7 @@ impl MidjourneyBackend for TestInstanceMidjourneyBackend {
         Err(MidjourneyFailure::Upstream)
     }
 
-    async fn image_for(&self, _: &str) -> Result<StoredImage, MidjourneyFailure> {
+    async fn image_for(&self, _: i64, _: &str) -> Result<StoredImage, MidjourneyFailure> {
         Err(MidjourneyFailure::NotFound)
     }
 
@@ -2774,14 +2780,19 @@ mod tests {
             )
             .expect("test auth config is valid"),
         );
-        let response = safe_candidate_surface(pg, valkey, auth)
-            .oneshot(
-                Request::get("/api/setup")
-                    .body(Body::empty())
-                    .expect("request is valid"),
-            )
-            .await
-            .expect("router is infallible");
+        let response = safe_candidate_surface(
+            pg,
+            valkey,
+            auth,
+            "test-instance-session-secret-with-entropy-123456",
+        )
+        .oneshot(
+            Request::get("/api/setup")
+                .body(Body::empty())
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router is infallible");
         assert_ne!(response.status(), StatusCode::NOT_FOUND);
         assert!(DenyProjectUpdate.latest_main_commit().await.is_err());
     }
@@ -2805,7 +2816,12 @@ mod tests {
             )
             .expect("test auth config is valid"),
         );
-        let app = safe_candidate_surface(pg, valkey, auth);
+        let app = safe_candidate_surface(
+            pg,
+            valkey,
+            auth,
+            "test-instance-session-secret-with-entropy-123456",
+        );
         for path in ["/api/data/self", "/api/perf-metrics/summary"] {
             let response = app
                 .clone()

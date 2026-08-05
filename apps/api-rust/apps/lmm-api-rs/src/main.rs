@@ -132,7 +132,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let candidates = http::migration_candidate_test_surface(
             &app_state,
-            test_instance::safe_candidate_surface(pg.clone(), valkey.clone(), Arc::clone(&auth)),
+            test_instance::safe_candidate_surface(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+                config.auth_session_secret.expose_secret(),
+            ),
         );
         http::router_with_web_and_api_token_and_extra(
             app_state,

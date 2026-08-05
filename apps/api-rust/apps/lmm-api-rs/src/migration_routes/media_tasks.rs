@@ -4,8 +4,8 @@
 //! selection, SSRF validation, PostgreSQL accounting and upstream I/O belong
 //! to [`MediaTaskService`], where they can be kept atomic and tested against
 //! disposable infrastructure.  The image proxy is deliberately separate: it
-//! is a public route in the legacy listener, whereas every task route is
-//! authenticated.
+//! uses a signed bearer URL, whereas every task route is authenticated with a
+//! bearer token.
 
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::{
     RequestContext,
     migration_routes::media_midjourney::{
-        ImageReply, MidjourneyBackend, MidjourneyFailure, PgMidjourneyBackend,
+        ImageReply, MidjourneyBackend, MidjourneyFailure, PgMidjourneyBackend, signed_image_user_id,
     },
 };
 
@@ -67,14 +67,15 @@ pub enum MediaTaskOperation {
 /// and increment user/channel counters.  Codes 21 and 22 are replay successes
 /// and must be presented as code 1 without adding an idempotency guard.
 ///
-/// The image proxy must look up `mj_id`, validate the resulting URL against
-/// SSRF, then stream only successful upstream bytes.  It must not write
-/// PostgreSQL or Valkey.
+/// The image proxy must verify the signed user/task binding, look up `mj_id`
+/// within that user scope, validate the resulting URL against SSRF, then
+/// stream only successful upstream bytes.  It must not write PostgreSQL or
+/// Valkey.
 #[async_trait]
 pub trait MediaTaskService: Send + Sync {
     /// Handle a protected task request, including the legacy auth boundary.
     async fn protected(&self, operation: MediaTaskOperation, request: Request) -> Response;
-    /// Handle the public image proxy after task lookup and SSRF validation.
+    /// Handle the signed image proxy after task lookup and SSRF validation.
     async fn public_image(&self, task_id: String, request: Request) -> Response;
 }
 
@@ -136,6 +137,7 @@ impl TaskRelayProvider for UnconfiguredTaskRelayProvider {
 pub struct MidjourneyMediaTaskService<B = PgMidjourneyBackend> {
     backend: Arc<B>,
     task_relay: Arc<dyn TaskRelayProvider>,
+    image_signing_secret: Arc<[u8]>,
 }
 
 /// Production static-Midjourney service.  It is generic only so contract tests
@@ -155,6 +157,7 @@ impl<B> MidjourneyMediaTaskService<B> {
         Self {
             backend,
             task_relay,
+            image_signing_secret: Arc::from([]),
         }
     }
 
@@ -164,6 +167,13 @@ impl<B> MidjourneyMediaTaskService<B> {
     #[must_use]
     pub fn with_task_relay(mut self, task_relay: Arc<dyn TaskRelayProvider>) -> Self {
         self.task_relay = task_relay;
+        self
+    }
+
+    /// Supplies the deployment-wide `SESSION_SECRET` used for image URLs.
+    #[must_use]
+    pub fn with_image_signing_secret(mut self, secret: impl AsRef<[u8]>) -> Self {
+        self.image_signing_secret = Arc::from(secret.as_ref());
         self
     }
 }
@@ -269,8 +279,17 @@ where
         }
     }
 
-    async fn public_image(&self, task_id: String, _request: Request) -> Response {
-        let stored = match self.backend.image_for(&task_id).await {
+    async fn public_image(&self, task_id: String, request: Request) -> Response {
+        let Some(user_id) =
+            signed_image_user_id(&self.image_signing_secret, &task_id, request.uri().query())
+        else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                axum::Json(json!({"error":"midjourney_image_signature_invalid"})),
+            )
+                .into_response();
+        };
+        let stored = match self.backend.image_for(user_id, &task_id).await {
             Ok(stored) => stored,
             Err(MidjourneyFailure::NotFound) => {
                 return (
@@ -439,13 +458,24 @@ fn media_failure(error: MidjourneyFailure) -> Response {
 #[derive(Clone)]
 pub struct MediaTaskHttpState {
     service: Arc<dyn MediaTaskService>,
+    image_signing_secret: Arc<[u8]>,
 }
 
 impl MediaTaskHttpState {
     /// Creates route state from an application-owned task relay service.
     #[must_use]
     pub fn new(service: Arc<dyn MediaTaskService>) -> Self {
-        Self { service }
+        Self {
+            service,
+            image_signing_secret: Arc::from([]),
+        }
+    }
+
+    /// Supplies the deployment-wide `SESSION_SECRET` used for image URLs.
+    #[must_use]
+    pub fn with_image_signing_secret(mut self, secret: impl AsRef<[u8]>) -> Self {
+        self.image_signing_secret = Arc::from(secret.as_ref());
+        self
     }
 }
 
@@ -498,6 +528,13 @@ async fn public_image(
     Path(id): Path<String>,
     request: Request,
 ) -> Response {
+    if signed_image_user_id(&state.image_signing_secret, &id, request.uri().query()).is_none() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(json!({"error":"midjourney_image_signature_invalid"})),
+        )
+            .into_response();
+    }
     state.service.public_image(id, request).await
 }
 
@@ -657,9 +694,10 @@ mod tests {
     }
 
     fn app(calls: Calls) -> Router {
-        media_task_router(MediaTaskHttpState::new(Arc::new(CapturingService {
-            calls,
-        })))
+        media_task_router(
+            MediaTaskHttpState::new(Arc::new(CapturingService { calls }))
+                .with_image_signing_secret(b"test-midjourney-image-session-secret-2026"),
+        )
     }
 
     #[tokio::test]

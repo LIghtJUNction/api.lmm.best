@@ -6,8 +6,9 @@ use axum::{
     http::{Request, StatusCode, header},
     response::Response,
 };
-use lmm_api_rs::migration_routes::media_tasks::{
-    MediaTaskHttpState, MediaTaskOperation, MediaTaskService, media_task_router,
+use lmm_api_rs::migration_routes::{
+    media_midjourney::midjourney_image_signature,
+    media_tasks::{MediaTaskHttpState, MediaTaskOperation, MediaTaskService, media_task_router},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -133,8 +134,10 @@ fn json_response(status: StatusCode, body: Value) -> Response {
 }
 
 fn app(service: Arc<StubTaskService>) -> axum::Router {
-    media_task_router(MediaTaskHttpState::new(service))
+    media_task_router(MediaTaskHttpState::new(service).with_image_signing_secret(IMAGE_SECRET))
 }
+
+const IMAGE_SECRET: &[u8] = b"test-midjourney-image-session-secret-2026";
 
 async fn call(router: &axum::Router, method: &str, path: &str, body: Body) -> Response {
     router
@@ -152,12 +155,14 @@ async fn call(router: &axum::Router, method: &str, path: &str, body: Body) -> Re
 }
 
 #[tokio::test]
-async fn public_image_is_unauthenticated_and_preserves_binary_response_without_effects() {
+async fn signed_public_image_preserves_binary_response_without_bearer_token_or_effects() {
     let service = Arc::new(StubTaskService::default());
+    let signature =
+        midjourney_image_signature(IMAGE_SECRET, 1, "stub-image-job").expect("signature");
     let response = app(Arc::clone(&service))
         .oneshot(
             Request::builder()
-                .uri("/mj/image/stub-image-job")
+                .uri(format!("/mj/image/stub-image-job?uid=1&sig={signature}"))
                 .body(Body::empty())
                 .expect("request"),
         )

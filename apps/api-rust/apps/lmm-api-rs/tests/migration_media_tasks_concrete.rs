@@ -8,7 +8,7 @@ use axum::{
 use lmm_api_rs::migration_routes::{
     media_midjourney::{
         BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyFailure, MidjourneyIdentity,
-        StoredImage, SubmitReply, TaskEffect,
+        StoredImage, SubmitReply, TaskEffect, midjourney_image_signature,
     },
     media_tasks::{MediaTaskOperation, MediaTaskService, MidjourneyMediaTaskService},
 };
@@ -97,7 +97,7 @@ impl MidjourneyBackend for MockBackend {
         })
     }
 
-    async fn image_for(&self, _task_id: &str) -> Result<StoredImage, MidjourneyFailure> {
+    async fn image_for(&self, _: i64, _task_id: &str) -> Result<StoredImage, MidjourneyFailure> {
         Ok(StoredImage {
             url: "https://provider.example/task-1.png".to_owned(),
         })
@@ -177,11 +177,17 @@ async fn concrete_static_mj_read_scopes_the_task_id_before_backend_dispatch() {
 #[tokio::test]
 async fn concrete_static_mj_public_image_preserves_stream_without_task_writes() {
     let backend = Arc::new(MockBackend::default());
-    let service = MidjourneyMediaTaskService::new(Arc::clone(&backend));
+    let secret = b"test-midjourney-image-session-secret-2026";
+    let service =
+        MidjourneyMediaTaskService::new(Arc::clone(&backend)).with_image_signing_secret(secret);
+    let signature = midjourney_image_signature(secret, 7, "task-1").expect("signature");
     let response = service
         .public_image(
             "task-1".to_owned(),
-            request("/mj/image/task-1", Body::empty()),
+            request(
+                &format!("/mj/image/task-1?uid=7&sig={signature}"),
+                Body::empty(),
+            ),
         )
         .await;
 

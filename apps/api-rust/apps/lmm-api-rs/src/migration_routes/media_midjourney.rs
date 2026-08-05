@@ -17,12 +17,14 @@ use axum::{
     Extension, Json, Router,
     body::{Body, Bytes, to_bytes},
     extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::Sha256;
 use sqlx::{PgPool, Row};
 
 use crate::RequestContext;
@@ -66,7 +68,7 @@ pub struct BufferedJsonReply {
     pub body: Value,
 }
 
-/// A persisted public image reference, looked up exclusively by Midjourney id.
+/// A persisted image reference selected after the signed URL user scope is checked.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredImage {
     /// URL saved in PostgreSQL by the task lifecycle.
@@ -152,6 +154,82 @@ pub enum MidjourneyFailure {
     BlockedImage,
 }
 
+type HmacSha256 = Hmac<Sha256>;
+
+const IMAGE_SIGNATURE_PREFIX: &str = "midjourney-image-v1";
+
+/// Creates the bearer signature used by the legacy image URL contract.
+///
+/// The task id and user id are both authenticated so a leaked URL for one
+/// user's task cannot be rewritten to address another task or account.
+#[must_use]
+pub fn midjourney_image_signature(secret: &[u8], user_id: i64, task_id: &str) -> Option<String> {
+    if secret.is_empty() || user_id <= 0 || task_id.is_empty() {
+        return None;
+    }
+    let mut mac = HmacSha256::new_from_slice(secret).ok()?;
+    mac.update(format!("{IMAGE_SIGNATURE_PREFIX}:{user_id}:{task_id}").as_bytes());
+    Some(hex::encode(mac.finalize().into_bytes()))
+}
+
+/// Verifies a legacy image URL signature using constant-time HMAC comparison.
+#[must_use]
+pub fn verify_midjourney_image_signature(
+    secret: &[u8],
+    user_id: i64,
+    task_id: &str,
+    signature: &str,
+) -> bool {
+    if secret.is_empty() || user_id <= 0 || task_id.is_empty() || signature.is_empty() {
+        return false;
+    }
+    let Ok(provided) = hex::decode(signature) else {
+        return false;
+    };
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret) else {
+        return false;
+    };
+    mac.update(format!("{IMAGE_SIGNATURE_PREFIX}:{user_id}:{task_id}").as_bytes());
+    mac.verify_slice(&provided).is_ok()
+}
+
+/// Extracts and verifies `uid`/`sig` from a bearer image URL query string.
+#[must_use]
+pub fn signed_image_user_id(secret: &[u8], task_id: &str, query: Option<&str>) -> Option<i64> {
+    let mut user_id = None;
+    let mut signature = None;
+    for (key, value) in form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        if key == "uid" && user_id.is_none() {
+            user_id = value.parse::<i64>().ok();
+        } else if key == "sig" && signature.is_none() {
+            signature = Some(value.into_owned());
+        }
+    }
+    let user_id = user_id.filter(|user_id| *user_id > 0)?;
+    let signature = signature?;
+    verify_midjourney_image_signature(secret, user_id, task_id, &signature).then_some(user_id)
+}
+
+/// Builds a signed image URL while preserving any path prefix in `base_url`.
+#[must_use]
+pub fn build_midjourney_image_url(
+    base_url: &str,
+    secret: &[u8],
+    user_id: i64,
+    task_id: &str,
+) -> Option<String> {
+    let signature = midjourney_image_signature(secret, user_id, task_id)?;
+    let mut url = reqwest::Url::parse(base_url).ok()?;
+    {
+        let mut segments = url.path_segments_mut().ok()?;
+        segments.push("mj").push("image").push(task_id);
+    }
+    url.query_pairs_mut()
+        .append_pair("uid", &user_id.to_string())
+        .append_pair("sig", &signature);
+    Some(url.to_string())
+}
+
 /// Boundary for authentication, relational task persistence, accounting, and upstream I/O.
 ///
 /// Implementations must insert/charge only from [`Self::record_submit`] after a 200
@@ -190,8 +268,12 @@ pub trait MidjourneyBackend: Send + Sync {
         headers: &HeaderMap,
         body: Option<Value>,
     ) -> Result<BufferedJsonReply, MidjourneyFailure>;
-    /// Finds a public image reference without authenticating the requester.
-    async fn image_for(&self, task_id: &str) -> Result<StoredImage, MidjourneyFailure>;
+    /// Finds an image reference scoped to the user authenticated by the signed URL.
+    async fn image_for(
+        &self,
+        user_id: i64,
+        task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure>;
     /// Fetches a previously validated image URL.
     async fn fetch_image(&self, url: &str) -> Result<ImageReply, MidjourneyFailure>;
 }
@@ -200,13 +282,24 @@ pub trait MidjourneyBackend: Send + Sync {
 #[derive(Clone)]
 pub struct MidjourneyHttpState {
     backend: Arc<dyn MidjourneyBackend>,
+    image_signing_secret: Arc<[u8]>,
 }
 
 impl MidjourneyHttpState {
     /// Creates state from an application-owned backend.
     #[must_use]
     pub fn new(backend: Arc<dyn MidjourneyBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            image_signing_secret: Arc::from([]),
+        }
+    }
+
+    /// Supplies the deployment-wide `SESSION_SECRET` used for image URLs.
+    #[must_use]
+    pub fn with_image_signing_secret(mut self, secret: impl AsRef<[u8]>) -> Self {
+        self.image_signing_secret = Arc::from(secret.as_ref());
+        self
     }
 }
 
@@ -399,8 +492,16 @@ async fn task_read(
 async fn image(
     State(state): State<MidjourneyHttpState>,
     Path((_, id)): Path<(String, String)>,
+    uri: Uri,
 ) -> Response {
-    let stored = match state.backend.image_for(&id).await {
+    let Some(user_id) = signed_image_user_id(&state.image_signing_secret, &id, uri.query()) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"midjourney_image_signature_invalid"})),
+        )
+            .into_response();
+    };
+    let stored = match state.backend.image_for(user_id, &id).await {
         Ok(stored) => stored,
         Err(MidjourneyFailure::NotFound) => {
             return (
@@ -1351,10 +1452,15 @@ impl MidjourneyBackend for PgMidjourneyBackend {
         .await
     }
 
-    async fn image_for(&self, task_id: &str) -> Result<StoredImage, MidjourneyFailure> {
+    async fn image_for(
+        &self,
+        user_id: i64,
+        task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure> {
         let url = sqlx::query_scalar::<_, String>(
-            "SELECT image_url FROM midjourneys WHERE mj_id=$1 AND COALESCE(image_url,'')<>'' ORDER BY id DESC LIMIT 1",
+            "SELECT image_url FROM midjourneys WHERE user_id=$1 AND mj_id=$2 AND COALESCE(image_url,'')<>'' ORDER BY id DESC LIMIT 1",
         )
+        .bind(user_id)
         .bind(task_id)
         .fetch_optional(&self.pg)
         .await
