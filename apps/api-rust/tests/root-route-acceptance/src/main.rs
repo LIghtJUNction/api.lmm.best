@@ -774,6 +774,8 @@ async fn main() {
 
 #[cfg(not(feature = "runtime"))]
 fn main() {
-    eprintln!("enable the runtime feature or use rust/scripts/run-root-route-acceptance.sh");
+    eprintln!(
+        "enable the runtime feature or use apps/api-rust/tests/scripts/run-root-route-acceptance.sh"
+    );
     std::process::exit(2);
 }
