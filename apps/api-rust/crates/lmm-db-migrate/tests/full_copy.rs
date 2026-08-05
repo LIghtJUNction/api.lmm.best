@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use std::{fs, path::Path, process::Command};
 
 use lmm_db_migrate::{
@@ -12,6 +14,7 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 
 #[test]
+#[cfg(unix)]
 #[ignore = "requires native PostgreSQL from rehearse-postgres.sh"]
 fn full_copy_should_verify_all_tables_and_rollback_both_fault_phases() {
     let database_url = std::env::var("LMM_TEST_DATABASE_URL").expect("test database URL");

@@ -7,10 +7,11 @@ use lmm_api_rs::auth::{
     AuthConfig, AuthErrorKind, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth,
     UserAuthPolicyError, auth_router, enforce_user_auth,
 };
+use lmm_api_rs::{ClientIpKey, RequestContext};
 use secrecy::SecretString;
 use serde_json::Value;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
-use std::{env, sync::Arc, time::Duration};
+use std::{env, net::IpAddr, sync::Arc, time::Duration};
 use totp_rs::{Algorithm, Secret, TOTP};
 use tower::ServiceExt;
 
@@ -134,7 +135,7 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
         let user_agent = user_agent.to_owned();
         refreshes.spawn(async move {
             let response = router
-                .oneshot(
+                .oneshot(with_client_ip(
                     Request::builder()
                         .method("POST")
                         .uri("/api/user/auth/refresh")
@@ -144,7 +145,8 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
                         .header(header::USER_AGENT, &user_agent)
                         .body(Body::empty())
                         .expect("refresh request"),
-                )
+                    "127.0.0.2",
+                ))
                 .await
                 .expect("refresh response");
             (user_agent, response)
@@ -233,7 +235,7 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
 
     let replay = router
         .clone()
-        .oneshot(
+        .oneshot(with_client_ip(
             Request::builder()
                 .method("POST")
                 .uri("/api/user/auth/refresh")
@@ -243,7 +245,8 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
                 .header(header::USER_AGENT, "replay-request")
                 .body(Body::empty())
                 .expect("refresh replay request"),
-        )
+            "127.0.0.3",
+        ))
         .await
         .expect("refresh replay response");
     assert_eq!(replay.status(), StatusCode::OK);
@@ -876,25 +879,45 @@ fn integration_urls() -> (String, String) {
 }
 
 fn json_request(method: &str, uri: &str, body: &'static str) -> Request<Body> {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header("x-real-ip", "127.0.0.1")
-        .header(header::USER_AGENT, "integration-login")
-        .body(Body::from(body))
-        .expect("JSON request")
+    with_test_context(
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-real-ip", "127.0.0.1")
+            .header(header::USER_AGENT, "integration-login")
+            .body(Body::from(body))
+            .expect("JSON request"),
+    )
 }
 
 fn dynamic_json_request(uri: &str, body: String) -> Request<Body> {
-    Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header("x-real-ip", "127.0.0.1")
-        .header(header::USER_AGENT, "integration-2fa")
-        .body(Body::from(body))
-        .expect("dynamic JSON request")
+    with_test_context(
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header("x-real-ip", "127.0.0.1")
+            .header(header::USER_AGENT, "integration-2fa")
+            .body(Body::from(body))
+            .expect("dynamic JSON request"),
+    )
+}
+
+fn with_test_context(request: Request<Body>) -> Request<Body> {
+    with_client_ip(request, "127.0.0.1")
+}
+
+fn with_client_ip(mut request: Request<Body>, ip: &str) -> Request<Body> {
+    let client_ip = ip.parse::<IpAddr>().expect("test client IP");
+    request.extensions_mut().insert(RequestContext {
+        request_id: "integration-test-request".to_owned(),
+        client_ip: Some(client_ip),
+    });
+    request
+        .extensions_mut()
+        .insert(ClientIpKey(client_ip.to_string()));
+    request
 }
 
 async fn json_body(response: axum::response::Response) -> Value {

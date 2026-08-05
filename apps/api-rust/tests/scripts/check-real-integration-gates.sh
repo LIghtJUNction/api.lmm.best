@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+repo_root=$(cd -- "$script_dir/../../../.." && pwd -P)
 tests_dir="$repo_root/apps/api-rust/tests"
 runner="$repo_root/apps/api-rust/tests/scripts/run-real-integration-gates.sh"
 isolated_runner="$repo_root/apps/api-rust/tests/scripts/run-isolated-real-integration-gates.sh"

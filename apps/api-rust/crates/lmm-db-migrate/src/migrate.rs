@@ -228,8 +228,7 @@ impl SourceSnapshot {
         }
         let sha256: [u8; 32] = digest.finalize().into();
         file.seek(SeekFrom::Start(0))?;
-        #[cfg(unix)]
-        return Ok(Self {
+        Ok(Self {
             canonical,
             device: metadata.dev(),
             inode: metadata.ino(),
@@ -237,9 +236,7 @@ impl SourceSnapshot {
             modified_seconds: metadata.mtime(),
             modified_nanoseconds: metadata.mtime_nsec(),
             sha256,
-        });
-        #[cfg(not(unix))]
-        compile_error!("lmm-db-migrate requires Unix metadata identity semantics");
+        })
     }
 }
 
@@ -293,12 +290,12 @@ fn open_source(path: &Path, before: &SourceSnapshot) -> Result<SourceHandle, Mig
             "SQLite source changed between capture and open".into(),
         ));
     }
-    let uri = format!("file:/proc/self/fd/{}?mode=ro", identity_file.as_raw_fd());
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
+        | OpenFlags::SQLITE_OPEN_URI
+        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let connection = Connection::open_with_flags(
-        uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY
-            | OpenFlags::SQLITE_OPEN_URI
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        format!("file:/proc/self/fd/{}?mode=ro", identity_file.as_raw_fd()),
+        flags,
     )?;
     Ok(SourceHandle {
         connection,
