@@ -29,12 +29,14 @@ interface CreemProductsSectionProps {
   products: CreemProduct[]
   onProductSelect: (product: CreemProduct) => void
   loading?: boolean
+  neutralMode?: boolean
 }
 
 export function CreemProductsSection({
   products,
   onProductSelect,
   loading,
+  neutralMode = false,
 }: CreemProductsSectionProps) {
   const { t } = useTranslation()
 
@@ -54,7 +56,7 @@ export function CreemProductsSection({
 
   return (
     <div className='grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3 md:grid-cols-3'>
-      {products.map((product) => (
+      {products.map((product, index) => (
         <Card
           key={product.productId}
           data-card-hover='false'
@@ -62,10 +64,16 @@ export function CreemProductsSection({
           onClick={() => onProductSelect(product)}
         >
           <CardContent className='p-3 text-center sm:p-4'>
-            <div className='mb-2 text-lg font-medium'>{product.name}</div>
-            <div className='text-muted-foreground mb-2 text-sm'>
-              {t('Quota')}: {formatNumber(product.quota)}
+            <div className='mb-2 text-lg font-medium'>
+              {neutralMode
+                ? t('Payment option {{number}}', { number: index + 1 })
+                : product.name}
             </div>
+            {!neutralMode ? (
+              <div className='text-muted-foreground mb-2 text-sm'>
+                {t('Quota')}: {formatNumber(product.quota)}
+              </div>
+            ) : null}
             <div className='text-primary text-lg font-semibold'>
               {formatCreemPrice(product.price, product.currency)}
             </div>

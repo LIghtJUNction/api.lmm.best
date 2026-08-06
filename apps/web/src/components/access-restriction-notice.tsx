@@ -36,7 +36,9 @@ export function AccessRestrictionNotice(props: AccessRestrictionNoticeProps) {
       )}
     >
       <span className='font-semibold'>
-        {t('Access from China is prohibited.')}
+        {t(
+          'Service availability and permitted use vary by location. Confirm that access, registration, and payment comply with applicable local law.'
+        )}
       </span>{' '}
       {t('Regional access statement')}
     </aside>

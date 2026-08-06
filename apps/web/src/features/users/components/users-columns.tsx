@@ -224,8 +224,12 @@ export function useUsersColumns(): ColumnDef<User>[] {
       cell: ({ row }) => {
         const user = row.original
         const info = user.trust_level_info
-        const level =
-          info?.level ?? (user.role >= 100 ? 6 : user.role >= 10 ? 5 : 0)
+        let level = info?.level ?? 0
+        if (!info?.level && user.role >= 100) level = 6
+        else if (!info?.level && user.role >= 10) level = 5
+        let badgeVariant: 'info' | 'success' | 'neutral' = 'neutral'
+        if (level >= 5) badgeVariant = 'info'
+        else if (level >= 3) badgeVariant = 'success'
         const overridden = info?.overridden === true
         return (
           <Tooltip>
@@ -233,9 +237,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
               render={
                 <StatusBadge
                   label={`L${level}`}
-                  variant={
-                    level >= 5 ? 'info' : level >= 3 ? 'success' : 'neutral'
-                  }
+                  variant={badgeVariant}
                   copyable={false}
                   className='cursor-help'
                 />

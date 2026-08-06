@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   ArrowRight01Icon,
   HeartHandshakeIcon,
+  WalletCardsIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link } from '@tanstack/react-router'
@@ -90,11 +91,11 @@ export function ForgeHome() {
                     user ? (
                       <Link to={workspaceTarget} />
                     ) : (
-                      <Link to='/sign-in' />
+                      <Link to='/pricing' />
                     )
                   }
                 >
-                  {user ? t('Open workspace') : t('Sign in')}
+                  {user ? t('Open workspace') : t('Explore access options')}
                 </Button>
               </div>
             </div>
@@ -187,6 +188,40 @@ export function ForgeHome() {
                 </article>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section className='border-b border-[#141413] bg-[#E4DED0] py-16 md:py-20'>
+          <div className='mx-auto grid max-w-7xl gap-8 px-5 md:grid-cols-[auto_1fr_auto] md:items-center md:px-10'>
+            <HugeiconsIcon
+              icon={WalletCardsIcon}
+              className='size-10'
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+            <div>
+              <h2 className='font-serif text-3xl leading-tight font-normal md:text-4xl'>
+                {t('Need a dependable starting point?')}
+              </h2>
+              <p className='mt-3 max-w-2xl text-sm leading-6 md:text-base'>
+                {t(
+                  'Create an account, add usage credit when you are ready, and pay only for what you use.'
+                )}
+              </p>
+            </div>
+            <Button
+              variant='outline'
+              className='rounded-sm border-[#141413] bg-[#FAF9F5] hover:bg-[#FAF9F5]/80'
+              render={<Link to='/pricing' />}
+            >
+              {t('View access options')}
+              <HugeiconsIcon
+                icon={ArrowRight01Icon}
+                data-icon='inline-end'
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+            </Button>
           </div>
         </section>
 

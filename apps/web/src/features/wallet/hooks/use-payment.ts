@@ -20,6 +20,8 @@ import i18next from 'i18next'
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
+import { isLocalPreview } from '@/lib/local-preview'
+
 import {
   calculateAmount,
   calculateStripeAmount,
@@ -94,10 +96,16 @@ export function usePayment() {
   const [amount, setAmount] = useState<number>(0)
   const [calculating, setCalculating] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const localPreview = isLocalPreview()
 
   // Calculate payment amount
   const calculatePaymentAmount = useCallback(
     async (topupAmount: number, paymentType: string) => {
+      if (localPreview) {
+        setAmount(topupAmount)
+        return topupAmount
+      }
+
       try {
         setCalculating(true)
         const calculatedAmount = await requestPaymentAmount(
@@ -113,12 +121,21 @@ export function usePayment() {
         setCalculating(false)
       }
     },
-    []
+    [localPreview]
   )
 
   // Process payment
   const processPayment = useCallback(
     async (topupAmount: number, paymentType: string) => {
+      if (localPreview) {
+        toast.info(
+          i18next.t(
+            'Local preview only: no payment is started and no balance is changed.'
+          )
+        )
+        return false
+      }
+
       let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
       try {
         setProcessing(true)
@@ -181,7 +198,7 @@ export function usePayment() {
         setProcessing(false)
       }
     },
-    []
+    [localPreview]
   )
 
   return {

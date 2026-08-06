@@ -2,6 +2,7 @@ package model
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -21,6 +22,17 @@ const (
 
 var trustLevelThresholds = [...]float64{0, 0, 100, 500, 2000}
 var trustLevelDiscountRatios = [...]float64{1, 1, 0.97, 0.94, 0.90}
+var localAcceptanceDeveloperAccess atomic.Bool
+
+// SetLocalAcceptanceDeveloperAccess stores the startup-validated, immutable
+// local acceptance capability. Production startup leaves it disabled.
+func SetLocalAcceptanceDeveloperAccess(enabled bool) {
+	localAcceptanceDeveloperAccess.Store(enabled)
+}
+
+func LocalAcceptanceDeveloperAccessEnabled() bool {
+	return localAcceptanceDeveloperAccess.Load()
+}
 
 type TrustLevelInfo struct {
 	Level                int      `json:"level"`
@@ -379,6 +391,13 @@ func explicitDeveloperAccessDecision(role int, overrideLevel *int) (DeveloperAcc
 	return DeveloperAccessState{Granted: *overrideLevel >= TrustLevelMinUser+1 && *overrideLevel <= TrustLevelMaxUser}, true
 }
 
+func ordinaryDeveloperAccessState(paidActivationComplete bool) DeveloperAccessState {
+	return DeveloperAccessState{
+		Granted:                paidActivationComplete || LocalAcceptanceDeveloperAccessEnabled(),
+		PaidActivationComplete: paidActivationComplete,
+	}
+}
+
 // GetFreshUserAccessSnapshot performs at most one bounded aggregate query for
 // an ordinary user and none for administrator or explicit-override access.
 func GetFreshUserAccessSnapshot(user *User) (UserAccessSnapshot, error) {
@@ -400,10 +419,7 @@ func GetFreshUserAccessSnapshot(user *User) (UserAccessSnapshot, error) {
 		TrustLevel: EvaluateTrustLevelWithActivation(
 			user.Role, nil, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix(),
 		),
-		DeveloperAccess: DeveloperAccessState{
-			Granted:                aggregate.ActivationComplete,
-			PaidActivationComplete: aggregate.ActivationComplete,
-		},
+		DeveloperAccess:        ordinaryDeveloperAccessState(aggregate.ActivationComplete),
 		PaidAmountMicros:       aggregate.PaidAmountMicros,
 		LastPaidCompleteAt:     aggregate.LastPaidCompleteAt,
 		PaidActivationComplete: aggregate.ActivationComplete,
@@ -456,7 +472,7 @@ func GetDeveloperAccessStateForUserBase(user *UserBase) (DeveloperAccessState, e
 	if err != nil {
 		return DeveloperAccessState{}, err
 	}
-	return DeveloperAccessState{Granted: paid, PaidActivationComplete: paid}, nil
+	return ordinaryDeveloperAccessState(paid), nil
 }
 
 func GetDeveloperAccessStateForUser(user *User) (DeveloperAccessState, error) {

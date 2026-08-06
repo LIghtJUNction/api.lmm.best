@@ -252,18 +252,8 @@ export interface UserWalletData {
   aff_count: number
   /** User group */
   group: string
-  trust_level_info?: {
-    level: number
-    automatic_level: number
-    override_level: number | null
-    paid_amount: number
-    discount_ratio: number
-    discount_percent: number
-    next_level?: number | null
-    amount_to_next_level?: number | null
-    next_decay_at?: number | null
-    overridden: boolean
-  }
+  trust_level_info?: import('@/stores/auth-store').TrustLevelInfo
+  trust_level_tiers?: import('@/stores/auth-store').TrustLevelTier[]
 }
 
 /**

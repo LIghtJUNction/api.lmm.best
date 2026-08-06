@@ -53,6 +53,7 @@ interface PaymentConfirmDialogProps {
   calculating: boolean
   processing: boolean
   discountRate?: number
+  neutralMode?: boolean
 }
 
 export function PaymentConfirmDialog({
@@ -65,6 +66,7 @@ export function PaymentConfirmDialog({
   calculating,
   processing,
   discountRate = DEFAULT_DISCOUNT_RATE,
+  neutralMode = false,
 }: PaymentConfirmDialogProps) {
   const { t } = useTranslation()
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
@@ -75,6 +77,9 @@ export function PaymentConfirmDialog({
     settlementUnit
       ? formatSettlementAmount(amount, settlementUnit.label)
       : formatPaymentAmount(amount)
+  const paymentMethodLabel = neutralMode
+    ? t('Payment Method')
+    : paymentMethod?.name
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -94,7 +99,9 @@ export function PaymentConfirmDialog({
               {t('Destination')}
             </div>
             <div className='mt-1 font-medium'>
-              {t('Current signed-in account · API usage balance')}
+              {neutralMode
+                ? t('Current account balance')
+                : t('Current signed-in account · API usage balance')}
             </div>
           </div>
 
@@ -162,9 +169,9 @@ export function PaymentConfirmDialog({
                   paymentMethod?.type,
                   'h-4 w-4',
                   paymentMethod?.icon,
-                  paymentMethod?.name
+                  paymentMethodLabel
                 )}
-                <span className='font-medium'>{paymentMethod?.name}</span>
+                <span className='font-medium'>{paymentMethodLabel}</span>
               </div>
             </div>
           </div>

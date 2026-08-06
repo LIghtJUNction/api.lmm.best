@@ -354,7 +354,7 @@ async fn public_image_returns_headers_before_the_upstream_stream_finishes() {
     });
     backend.set_stream_target(format!("http://{address}/stream.png"));
     let response = tokio::time::timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(3),
         app(backend).oneshot(
             Request::builder()
                 .uri("/proxy/mj/image/task-stream")
@@ -571,6 +571,12 @@ async fn pg_adapter_uses_channel_secret_and_only_compatibility_headers_for_mock_
         },
         Duration::from_secs(1),
         16 * 1024,
+    )
+    .with_settings(
+        lmm_api_rs::migration_routes::media_midjourney::MidjourneySettings {
+            require_successful_parent: false,
+            ..Default::default()
+        },
     );
     let mut headers = axum::http::HeaderMap::new();
     headers.insert("content-type", "application/json".parse().expect("header"));

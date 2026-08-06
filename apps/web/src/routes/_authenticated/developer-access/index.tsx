@@ -18,15 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { DeveloperAccessPage } from '@/features/forge/developer-access-page'
-import { isConsoleActivated } from '@/lib/console-activation'
+import { getAuthenticatedLandingRoute } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/developer-access/')({
   beforeLoad: () => {
-    if (isConsoleActivated(useAuthStore.getState().auth.user)) {
-      throw redirect({ to: '/keys' })
-    }
+    throw redirect({
+      to: getAuthenticatedLandingRoute(useAuthStore.getState().auth.user),
+    })
   },
-  component: DeveloperAccessPage,
 })

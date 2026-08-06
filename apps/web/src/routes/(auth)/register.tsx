@@ -23,6 +23,7 @@ export const Route = createFileRoute('/(auth)/register')({
     throw redirect({
       to: '/sign-up',
       search: location.search,
+      hash: location.hash,
       replace: true,
     })
   },

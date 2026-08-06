@@ -16,12 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { BrandLogo } from '@/components/brand-logo'
-import { LMM_BRAND_NAME } from '@/components/lmm-brand-mark'
+import { LMM_BRAND_NAME, LmmBrandMark } from '@/components/lmm-brand-mark'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { DEFAULT_LOGO, DEFAULT_SYSTEM_NAME } from '@/lib/constants'
 import { cn } from '@/lib/utils'
@@ -140,17 +140,38 @@ function ProjectAttribution(props: {
 
 export function Footer(props: FooterProps) {
   const { t } = useTranslation()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
   const {
     systemName,
     logo: systemLogo,
     footerHtml,
     demoSiteEnabled,
   } = useSystemConfig()
+  const isForgeSurface =
+    pathname === '/' ||
+    pathname.startsWith('/challenges') ||
+    pathname.startsWith('/pricing') ||
+    pathname.startsWith('/rankings') ||
+    pathname.startsWith('/about') ||
+    pathname.startsWith('/user-agreement') ||
+    pathname.startsWith('/privacy-policy') ||
+    pathname.startsWith('/terms') ||
+    pathname.startsWith('/sign-in') ||
+    pathname.startsWith('/sign-up') ||
+    pathname.startsWith('/signup') ||
+    pathname.startsWith('/register') ||
+    pathname.startsWith('/forgot-password') ||
+    pathname.startsWith('/reset') ||
+    pathname.startsWith('/otp') ||
+    pathname.startsWith('/oauth')
   const displayLogo = systemLogo || props.logo || DEFAULT_LOGO
   const configuredName = systemName || props.name || DEFAULT_SYSTEM_NAME
   const usesDefaultBrand = displayLogo === DEFAULT_LOGO
   const displayName =
-    usesDefaultBrand && configuredName === DEFAULT_SYSTEM_NAME
+    isForgeSurface ||
+    (usesDefaultBrand && configuredName === DEFAULT_SYSTEM_NAME)
       ? LMM_BRAND_NAME
       : configuredName
   const isDemoSiteMode = Boolean(demoSiteEnabled)
@@ -198,7 +219,7 @@ export function Footer(props: FooterProps) {
 
   const displayColumns = props.columns ?? fallbackColumns
 
-  if (footerHtml) {
+  if (footerHtml && !isForgeSurface) {
     return (
       <footer
         className={cn(
@@ -242,7 +263,14 @@ export function Footer(props: FooterProps) {
           {/* Brand column */}
           <div className='shrink-0'>
             <Link to='/' className='group flex items-center gap-2.5'>
-              <BrandLogo src={displayLogo} className='size-9 object-contain' />
+              {isForgeSurface ? (
+                <LmmBrandMark className='size-9' title={LMM_BRAND_NAME} />
+              ) : (
+                <BrandLogo
+                  src={displayLogo}
+                  className='size-9 object-contain'
+                />
+              )}
               <span className='text-base font-semibold tracking-[-0.025em]'>
                 {displayName}
               </span>

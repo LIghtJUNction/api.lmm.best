@@ -51,6 +51,7 @@ import {
 } from '@/features/auth/lib/storage'
 import { useStatus } from '@/hooks/use-status'
 import { isAuthBundle } from '@/lib/api'
+import { isLocalPreview } from '@/lib/local-preview'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
@@ -59,6 +60,7 @@ export function SignUpForm({
   ...props
 }: React.HTMLAttributes<HTMLFormElement>) {
   const { t } = useTranslation()
+  const localPreview = isLocalPreview()
   const [isLoading, setIsLoading] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
   const [agreedToLegal, setAgreedToLegal] = useState(false)
@@ -98,7 +100,8 @@ export function SignUpForm({
   })
 
   const emailValue = form.watch('email')
-  const emailVerificationRequired = !!status?.email_verification
+  const emailVerificationRequired =
+    !localPreview && !!status?.email_verification
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
   const requiresLegalConsent = hasUserAgreement || hasPrivacyPolicy
@@ -106,7 +109,7 @@ export function SignUpForm({
     status?.oauth_register_enabled ??
     status?.data?.oauth_register_enabled ??
     true
-  const hasWeChatLogin = Boolean(status?.wechat_login)
+  const hasWeChatLogin = !localPreview && Boolean(status?.wechat_login)
   const turnstileReady = !isTurnstileEnabled || Boolean(turnstileToken)
 
   const wechatQrCodeUrl = useMemo(() => {
@@ -183,6 +186,15 @@ export function SignUpForm({
   }
 
   async function handleSendVerificationCode() {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview: password registration is available; email verification and social sign-in are disabled.'
+        )
+      )
+      return
+    }
+
     if (await sendCode(emailValue || '')) {
       setTurnstileToken('')
       setTurnstileWidgetKey((current) => current + 1)
@@ -190,6 +202,15 @@ export function SignUpForm({
   }
 
   const handleOpenWeChatDialog = () => {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview: password registration is available; email verification and social sign-in are disabled.'
+        )
+      )
+      return
+    }
+
     if (requiresLegalConsent && !agreedToLegal) {
       toast.error(legalConsentErrorMessage)
       return
@@ -207,6 +228,15 @@ export function SignUpForm({
   }
 
   async function handleWeChatLogin() {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview: password registration is available; email verification and social sign-in are disabled.'
+        )
+      )
+      return
+    }
+
     if (!wechatCode.trim()) {
       toast.error(t('Please enter the verification code'))
       return
@@ -378,7 +408,7 @@ export function SignUpForm({
           {t('Create account')}
         </Button>
 
-        {oauthRegisterEnabled && (
+        {!localPreview && oauthRegisterEnabled && (
           <OAuthProviders
             status={status}
             disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
@@ -389,7 +419,7 @@ export function SignUpForm({
         )}
       </form>
 
-      {hasWeChatLogin && (
+      {!localPreview && hasWeChatLogin && (
         <Dialog
           open={isWeChatDialogOpen}
           onOpenChange={handleWeChatDialogChange}

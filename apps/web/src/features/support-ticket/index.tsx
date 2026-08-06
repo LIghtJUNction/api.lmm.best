@@ -57,6 +57,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { TitledCard } from '@/components/ui/titled-card'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { openBountyDispute } from '@/features/open-source-bounties/api'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -131,6 +132,14 @@ const DISPUTE_REASON_META = [
   ['other', 'Other bounty dispute'],
 ] as const satisfies ReadonlyArray<readonly [BountyDisputeReason, string]>
 
+const NEUTRAL_CATEGORY_VALUES = new Set<SupportTicketCategory>([
+  'refund',
+  'invoice',
+  'billing',
+  'account',
+  'other',
+])
+
 export function SupportTicket({
   initialSearch,
 }: {
@@ -142,6 +151,19 @@ export function SupportTicket({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
+  const developerAccessGranted = isConsoleActivated(user)
+  const categoryMeta = developerAccessGranted
+    ? CATEGORY_META
+    : CATEGORY_META.filter((category) =>
+        NEUTRAL_CATEGORY_VALUES.has(category.value)
+      )
+  const requestedInitialCategory = initialSearch?.category
+  const initialCategory =
+    developerAccessGranted ||
+    (requestedInitialCategory &&
+      NEUTRAL_CATEGORY_VALUES.has(requestedInitialCategory))
+      ? (requestedInitialCategory ?? 'technical')
+      : 'account'
   const [submitting, setSubmitting] = useState(false)
   const {
     control,
@@ -154,7 +176,7 @@ export function SupportTicket({
   } = useForm<SupportTicketForm>({
     resolver: zodResolver(supportTicketSchema),
     defaultValues: {
-      category: initialSearch?.category ?? 'technical',
+      category: initialCategory,
       disputeReason: 'merged_but_unpaid',
       contactEmail: user?.email ?? '',
       referenceId: initialSearch?.referenceId ?? '',
@@ -175,9 +197,7 @@ export function SupportTicket({
   }
 
   const prepareTicket = (values: SupportTicketForm) => {
-    const category = CATEGORY_META.find(
-      (item) => item.value === values.category
-    )
+    const category = categoryMeta.find((item) => item.value === values.category)
     const draft: SupportTicketDraft = {
       ...values,
       categoryLabel: t(category?.labelKey ?? 'Other request'),
@@ -193,7 +213,7 @@ export function SupportTicket({
   }
 
   const submitTicket = handleSubmit(async (values) => {
-    if (values.category === 'bounty_dispute') {
+    if (developerAccessGranted && values.category === 'bounty_dispute') {
       const challengeId = Number(values.referenceId)
       if (
         !window.confirm(
@@ -312,7 +332,7 @@ export function SupportTicket({
                             spacing={2}
                             className='grid w-full grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3'
                           >
-                            {CATEGORY_META.map((category) => (
+                            {categoryMeta.map((category) => (
                               <ToggleGroupItem
                                 key={category.value}
                                 value={category.value}
@@ -422,7 +442,11 @@ export function SupportTicket({
                           placeholder={
                             selectedCategory === 'bounty_dispute'
                               ? t('Numeric challenge ID')
-                              : t('Order ID, request ID, or log ID')
+                              : developerAccessGranted
+                                ? t('Order ID, request ID, or log ID')
+                                : t(
+                                    'Include any relevant order or account reference.'
+                                  )
                           }
                           {...register('referenceId')}
                         />
@@ -468,9 +492,13 @@ export function SupportTicket({
                         id='support-details'
                         rows={8}
                         aria-invalid={errors.details ? true : undefined}
-                        placeholder={t(
-                          'Describe the issue, what you expected, and what you already tried.'
-                        )}
+                        placeholder={
+                          developerAccessGranted
+                            ? t(
+                                'Describe the issue, what you expected, and what you already tried.'
+                              )
+                            : t('Describe what happened and when it occurred.')
+                        }
                         className='min-h-40 resize-y'
                         {...register('details')}
                       />
@@ -487,9 +515,13 @@ export function SupportTicket({
                         strokeWidth={2}
                       />
                       <AlertDescription>
-                        {t(
-                          'Do not include passwords, full API keys, or payment card details.'
-                        )}
+                        {developerAccessGranted
+                          ? t(
+                              'Do not include passwords, full API keys, or payment card details.'
+                            )
+                          : t(
+                              'Do not include passwords or payment card details.'
+                            )}
                       </AlertDescription>
                     </Alert>
 
@@ -539,12 +571,16 @@ export function SupportTicket({
                 >
                   <ul className='text-muted-foreground space-y-3 text-sm leading-relaxed'>
                     <li>
-                      {t('Include the relevant order, request, or log ID.')}
+                      {developerAccessGranted
+                        ? t('Include the relevant order, request, or log ID.')
+                        : t('Include any relevant order or account reference.')}
                     </li>
                     <li>
-                      {t(
-                        'For technical issues, include the model, endpoint, timestamp, and error message.'
-                      )}
+                      {developerAccessGranted
+                        ? t(
+                            'For technical issues, include the model, endpoint, timestamp, and error message.'
+                          )
+                        : t('Describe what happened and when it occurred.')}
                     </li>
                     <li>
                       {t(

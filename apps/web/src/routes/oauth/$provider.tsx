@@ -165,6 +165,8 @@ function OAuthCallback() {
       fallback:
         | '/open-source-bounties'
         | '/workspace'
+        | '/dashboard'
+        | '/getting-started'
         | '/sign-in' = '/open-source-bounties'
     ) => {
       const href =

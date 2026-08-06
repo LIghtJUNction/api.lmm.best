@@ -51,12 +51,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
           <div className='flex min-h-0 w-full flex-1'>
             <AppSidebar />
             <SidebarInset
-              className={cn(
-                '@container/content',
-                'h-[calc(100svh-var(--app-header-height,0px))]',
-                'min-h-0 overflow-hidden',
-                'peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]'
-              )}
+              className={cn('@container/content', 'min-h-0 overflow-hidden')}
             >
               {props.children ?? <AnimatedOutlet />}
             </SidebarInset>

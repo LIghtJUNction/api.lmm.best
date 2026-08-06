@@ -108,6 +108,7 @@ interface RechargeFormCardProps {
   waffoMinTopup?: number
   onWaffoMethodSelect?: (method: WaffoPayMethod, index: number) => void
   enableWaffoPancakeTopup?: boolean
+  neutralMode?: boolean
 }
 
 export function RechargeFormCard({
@@ -138,6 +139,7 @@ export function RechargeFormCard({
   waffoMinTopup,
   onWaffoMethodSelect,
   enableWaffoPancakeTopup,
+  neutralMode = false,
 }: RechargeFormCardProps) {
   const { t } = useTranslation()
   const [localAmount, setLocalAmount] = useState(topupAmount.toString())
@@ -183,7 +185,9 @@ export function RechargeFormCard({
   const settlementUnit = getPaymentSettlementUnit(effectivePaymentMethod)
   const paymentTopupRatio = getPaymentTopupRatio(effectivePaymentMethod)
   const selectedPaymentMethodName =
-    effectivePaymentMethod?.name ?? t('Payment Method')
+    neutralMode || !effectivePaymentMethod?.name
+      ? t('Payment Method')
+      : effectivePaymentMethod.name
   const shouldShowSettlementRule = (paymentMethod: PaymentMethod) =>
     !usesDedicatedPaymentPricing(paymentMethod.type)
   const getSettlementRule = (paymentMethod: PaymentMethod) => {
@@ -225,6 +229,10 @@ export function RechargeFormCard({
         </CardHeader>
         <CardContent className='space-y-4 p-3 sm:space-y-6 sm:p-5'>
           <div className='space-y-4 sm:space-y-6'>
+            {/* ASCII Banner Skeleton */}
+            <div className='bg-primary/5 rounded-xl border p-4 text-center font-mono'>
+              <Skeleton className='mx-auto h-16 w-3/4' />
+            </div>
             {/* Preset Amounts Skeleton */}
             <div className='space-y-3'>
               <Skeleton className='h-3 w-16' />
@@ -255,13 +263,15 @@ export function RechargeFormCard({
           </div>
 
           {/* Redemption Code Section Skeleton */}
-          <div className='space-y-3 border-t pt-8'>
-            <Skeleton className='h-3 w-24' />
-            <div className='flex gap-2'>
-              <Skeleton className='h-10 flex-1' />
-              <Skeleton className='h-10 w-20' />
+          {!neutralMode ? (
+            <div className='space-y-3 border-t pt-8'>
+              <Skeleton className='h-3 w-24' />
+              <div className='flex gap-2'>
+                <Skeleton className='h-10 flex-1' />
+                <Skeleton className='h-10 w-20' />
+              </div>
             </div>
-          </div>
+          ) : null}
         </CardContent>
       </Card>
     )
@@ -273,9 +283,11 @@ export function RechargeFormCard({
       description={t('Choose an amount and payment method')}
       icon={<HugeiconsIcon icon={WalletCardsIcon} strokeWidth={2} />}
       iconTone='success'
-      disableHoverEffect
+      cardProps={{
+        'data-card-hover': 'false',
+      }}
       action={
-        onOpenBilling ? (
+        onOpenBilling && !neutralMode ? (
           <Button
             variant='outline'
             size='sm'
@@ -297,11 +309,19 @@ export function RechargeFormCard({
               {presetAmounts.length > 0 && (
                 <FieldGroup>
                   <Field>
-                    <FieldLabel>{t('Credited amount (unit: USD)')}</FieldLabel>
+                    <FieldLabel>
+                      {neutralMode
+                        ? t('Current account balance')
+                        : t('Credited amount (unit: USD)')}
+                    </FieldLabel>
                     <FieldDescription>
-                      {t(
-                        'Credits are added to your current signed-in account for API usage.'
-                      )}
+                      {neutralMode
+                        ? t(
+                            'Funds are added to your current account after payment.'
+                          )
+                        : t(
+                            'Credits are added to your current signed-in account for API usage.'
+                          )}
                     </FieldDescription>
                     <div className='grid grid-cols-2 gap-2'>
                       {presetAmounts.map((preset) => {
@@ -387,43 +407,47 @@ export function RechargeFormCard({
                         )
                       })}
                     </div>
-                    <Card className='bg-muted/30 border-dashed shadow-none'>
-                      <CardContent className='space-y-1.5 p-3 text-xs sm:p-4'>
-                        <div className='font-medium'>{t('Payment notes')}</div>
-                        <p className='text-muted-foreground'>
-                          {t(
-                            'The amount shown on each card is the platform credit. The actual payment and any discount are calculated for the selected payment method.'
-                          )}
-                        </p>
-                        {selectedPreset !== null && (
-                          <>
-                            <p className='text-muted-foreground'>
-                              {t(
-                                'Selected method: {{method}} · Estimated payment: {{amount}} (original {{original}})',
-                                {
-                                  method: selectedPaymentMethodName,
-                                  amount: formatPresetPaymentAmount(
-                                    selectedPresetPricing?.actualPrice ?? 0
-                                  ),
-                                  original: formatPresetPaymentAmount(
-                                    selectedPresetPricing?.originalPrice ?? 0
-                                  ),
-                                }
-                              )}
-                            </p>
-                            {selectedPresetPricing?.hasDiscount && (
-                              <p className='text-muted-foreground'>
-                                {t('Discount applied {{amount}}', {
-                                  amount: formatPresetPaymentAmount(
-                                    selectedPresetPricing.savedAmount
-                                  ),
-                                })}
-                              </p>
+                    {!neutralMode ? (
+                      <Card className='bg-muted/30 border-dashed shadow-none'>
+                        <CardContent className='space-y-1.5 p-3 text-xs sm:p-4'>
+                          <div className='font-medium'>
+                            {t('Payment notes')}
+                          </div>
+                          <p className='text-muted-foreground'>
+                            {t(
+                              'The amount shown on each card is the platform credit. The actual payment and any discount are calculated for the selected payment method.'
                             )}
-                          </>
-                        )}
-                      </CardContent>
-                    </Card>
+                          </p>
+                          {selectedPreset !== null && (
+                            <>
+                              <p className='text-muted-foreground'>
+                                {t(
+                                  'Selected method: {{method}} · Estimated payment: {{amount}} (original {{original}})',
+                                  {
+                                    method: selectedPaymentMethodName,
+                                    amount: formatPresetPaymentAmount(
+                                      selectedPresetPricing?.actualPrice ?? 0
+                                    ),
+                                    original: formatPresetPaymentAmount(
+                                      selectedPresetPricing?.originalPrice ?? 0
+                                    ),
+                                  }
+                                )}
+                              </p>
+                              {selectedPresetPricing?.hasDiscount && (
+                                <p className='text-muted-foreground'>
+                                  {t('Discount applied {{amount}}', {
+                                    amount: formatPresetPaymentAmount(
+                                      selectedPresetPricing.savedAmount
+                                    ),
+                                  })}
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ) : null}
                   </Field>
                 </FieldGroup>
               )}
@@ -431,12 +455,18 @@ export function RechargeFormCard({
               <FieldGroup>
                 <Field>
                   <FieldLabel htmlFor='topup-amount'>
-                    {t('Custom credited amount')}
+                    {neutralMode
+                      ? t('Current account balance')
+                      : t('Custom credited amount')}
                   </FieldLabel>
                   <FieldDescription id='topup-amount-description'>
-                    {t(
-                      'Destination: current signed-in account · API usage balance'
-                    )}
+                    {neutralMode
+                      ? t(
+                          'Funds are added to your current account after payment.'
+                        )
+                      : t(
+                          'Destination: current signed-in account · API usage balance'
+                        )}
                   </FieldDescription>
                   <div className='grid min-w-0 gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center'>
                     <InputGroup className='h-9 sm:h-10'>
@@ -501,7 +531,7 @@ export function RechargeFormCard({
                   </Label>
                   {hasStandardPaymentMethods ? (
                     <div className='grid grid-cols-2 gap-1.5 sm:gap-3 lg:grid-cols-3'>
-                      {topupInfo?.pay_methods?.map((method) => {
+                      {topupInfo?.pay_methods?.map((method, index) => {
                         const minTopup = Math.max(
                           method.min_topup || 0,
                           getMinTopupAmount(topupInfo)
@@ -519,6 +549,11 @@ export function RechargeFormCard({
                           ? getSettlementRule(method)
                           : null
                         const methodTopupRatio = getPaymentTopupRatio(method)
+                        const paymentMethodLabel = neutralMode
+                          ? t('Payment option {{number}}', {
+                              number: index + 1,
+                            })
+                          : method.name
 
                         const button = (
                           <Button
@@ -529,8 +564,8 @@ export function RechargeFormCard({
                             title={disabledReason}
                             aria-label={
                               disabledReason
-                                ? `${method.name}. ${disabledReason}`
-                                : method.name
+                                ? `${paymentMethodLabel}. ${disabledReason}`
+                                : paymentMethodLabel
                             }
                             className='min-h-14 min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left'
                           >
@@ -545,12 +580,12 @@ export function RechargeFormCard({
                                 method.type,
                                 'h-4 w-4',
                                 method.icon,
-                                method.name
+                                paymentMethodLabel
                               )
                             )}
                             <span className='flex min-w-0 flex-col items-start gap-0.5'>
                               <span className='max-w-full truncate'>
-                                {method.name}
+                                {paymentMethodLabel}
                               </span>
                               {disabledLabel && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
@@ -562,7 +597,7 @@ export function RechargeFormCard({
                                   {settlementRule}
                                 </span>
                               )}
-                              {methodTopupRatio !== 1 && (
+                              {!neutralMode && methodTopupRatio !== 1 && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
                                   {t('Channel multiplier ×{{ratio}}', {
                                     ratio: method.topup_ratio,
@@ -612,7 +647,7 @@ export function RechargeFormCard({
                 onWaffoMethodSelect && (
                   <div className='space-y-2.5 sm:space-y-3'>
                     <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-                      {t('Waffo Payment')}
+                      {neutralMode ? t('Payment Method') : t('Waffo Payment')}
                     </Label>
                     <div className='grid grid-cols-2 gap-1.5 sm:gap-3 lg:grid-cols-3'>
                       {waffoPayMethods?.map((method, index) => {
@@ -628,6 +663,11 @@ export function RechargeFormCard({
                         const disabledLabel = belowMin
                           ? `${t('Minimum:')} ${waffoMin}`
                           : undefined
+                        const paymentMethodLabel = neutralMode
+                          ? t('Payment option {{number}}', {
+                              number: index + 1,
+                            })
+                          : method.name
 
                         let methodIcon = getPaymentIcon('waffo')
                         if (paymentLoading === loadingKey) {
@@ -642,7 +682,7 @@ export function RechargeFormCard({
                           methodIcon = (
                             <img
                               src={method.icon}
-                              alt={method.name}
+                              alt={paymentMethodLabel}
                               className='h-4 w-4 object-contain'
                             />
                           )
@@ -657,15 +697,15 @@ export function RechargeFormCard({
                             title={disabledReason}
                             aria-label={
                               disabledReason
-                                ? `${method.name}. ${disabledReason}`
-                                : method.name
+                                ? `${paymentMethodLabel}. ${disabledReason}`
+                                : paymentMethodLabel
                             }
                             className='min-h-14 min-w-0 justify-start gap-2 rounded-lg px-3 py-2 text-left'
                           >
                             {methodIcon}
                             <span className='flex min-w-0 flex-col items-start gap-0.5'>
                               <span className='max-w-full truncate'>
-                                {method.name}
+                                {paymentMethodLabel}
                               </span>
                               {disabledLabel && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
@@ -696,9 +736,11 @@ export function RechargeFormCard({
       ) : (
         <Alert>
           <AlertDescription>
-            {t(
-              'Online topup is not enabled. Please use redemption code or contact administrator.'
-            )}
+            {neutralMode
+              ? t('No payment methods available. Please contact administrator.')
+              : t(
+                  'Online topup is not enabled. Please use redemption code or contact administrator.'
+                )}
           </AlertDescription>
         </Alert>
       )}
@@ -711,17 +753,18 @@ export function RechargeFormCard({
           <div className='flex flex-col gap-3 pt-4 sm:pt-6'>
             <Separator />
             <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-              {t('Creem Payment')}
+              {neutralMode ? t('Payment Method') : t('Creem Payment')}
             </Label>
             <CreemProductsSection
               products={creemProducts}
               onProductSelect={onCreemProductSelect}
+              neutralMode={neutralMode}
             />
           </div>
         )}
 
       {/* Redemption Code Section */}
-      {redemptionEnabled ? (
+      {!neutralMode && redemptionEnabled ? (
         <div className='flex flex-col gap-3 pt-4 sm:pt-6'>
           <Separator />
           <div className='flex items-center gap-2'>
@@ -774,7 +817,7 @@ export function RechargeFormCard({
             </p>
           )}
         </div>
-      ) : (
+      ) : !neutralMode ? (
         <Alert className='border-t'>
           <AlertDescription>
             {t(
@@ -782,7 +825,7 @@ export function RechargeFormCard({
             )}
           </AlertDescription>
         </Alert>
-      )}
+      ) : null}
     </TitledCard>
   )
 }

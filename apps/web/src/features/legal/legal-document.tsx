@@ -20,11 +20,11 @@ import { useQuery } from '@tanstack/react-query'
 import { FileWarning } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { PublicLayout } from '@/components/layout'
 import { RichContent } from '@/components/rich-content'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ForgePublicShell } from '@/features/forge/forge-public-shell'
 import { isHttpUrl, isLikelyHtml } from '@/lib/content-format'
 
 import type { LegalDocumentResponse } from './types'
@@ -57,20 +57,20 @@ export function LegalDocument({
 
   if (isLoading) {
     return (
-      <PublicLayout>
+      <ForgePublicShell>
         <div className='mx-auto flex max-w-4xl flex-col gap-4 py-12'>
           <Skeleton className='h-8 w-[45%]' />
           <Skeleton className='h-4 w-full' />
           <Skeleton className='h-4 w-[90%]' />
           <Skeleton className='h-4 w-[80%]' />
         </div>
-      </PublicLayout>
+      </ForgePublicShell>
     )
   }
 
   if (!success || !hasContent) {
     return (
-      <PublicLayout>
+      <ForgePublicShell>
         <div className='mx-auto max-w-2xl py-12'>
           <Card className='border-dashed'>
             <CardHeader className='flex flex-row items-center gap-4'>
@@ -86,13 +86,13 @@ export function LegalDocument({
             </CardHeader>
           </Card>
         </div>
-      </PublicLayout>
+      </ForgePublicShell>
     )
   }
 
   if (isUrl) {
     return (
-      <PublicLayout>
+      <ForgePublicShell>
         <div className='mx-auto max-w-2xl py-12'>
           <Card>
             <CardHeader>
@@ -118,12 +118,12 @@ export function LegalDocument({
             </CardContent>
           </Card>
         </div>
-      </PublicLayout>
+      </ForgePublicShell>
     )
   }
 
   return (
-    <PublicLayout showMainContainer={!contentIsHtml}>
+    <ForgePublicShell>
       {contentIsHtml ? (
         <RichContent mode='html' htmlVariant='isolated' content={rawContent} />
       ) : (
@@ -139,6 +139,6 @@ export function LegalDocument({
           />
         </div>
       )}
-    </PublicLayout>
+    </ForgePublicShell>
   )
 }

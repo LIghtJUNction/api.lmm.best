@@ -16,41 +16,128 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { AuthUser } from '@/stores/auth-store'
+import type { AuthUser, OnboardingStage } from '@/stores/auth-store'
 
-const ADMIN_ROLE = 10
+const ONBOARDING_STAGES = new Set<OnboardingStage>([
+  'activate',
+  'credential',
+  'first_request',
+  'complete',
+])
+
+export type NormalizedOnboardingState = {
+  activationComplete: boolean
+  credentialComplete: boolean
+  firstRequestComplete: boolean
+  stage: OnboardingStage
+  isExplicit: boolean
+}
+
+function isOnboardingStage(value: unknown): value is OnboardingStage {
+  return (
+    typeof value === 'string' && ONBOARDING_STAGES.has(value as OnboardingStage)
+  )
+}
+
+function deriveStage(state: {
+  activationComplete: boolean
+  credentialComplete: boolean
+  firstRequestComplete: boolean
+}): OnboardingStage {
+  if (!state.activationComplete) return 'activate'
+  if (!state.credentialComplete) return 'credential'
+  if (!state.firstRequestComplete) return 'first_request'
+  return 'complete'
+}
+
+/**
+ * Normalizes onboarding details without inferring access from legacy fields.
+ * The server-provided developer access decision is the only access boundary.
+ */
+export function getOnboardingState(
+  user: AuthUser | null | undefined
+): NormalizedOnboardingState {
+  if (!user) {
+    return {
+      activationComplete: false,
+      credentialComplete: false,
+      firstRequestComplete: false,
+      stage: 'activate',
+      isExplicit: false,
+    }
+  }
+
+  const activationComplete = user.developer_access_granted === true
+
+  const hasNestedState = user.onboarding !== undefined
+  const nested =
+    user.onboarding && typeof user.onboarding === 'object'
+      ? (user.onboarding as unknown as Record<string, unknown>)
+      : undefined
+  const hasFlatState =
+    user.activation_complete !== undefined ||
+    user.credential_complete !== undefined ||
+    user.first_request_complete !== undefined ||
+    user.onboarding_stage !== undefined
+
+  const source = nested ?? {
+    activation_complete: user.activation_complete,
+    credential_complete: user.credential_complete,
+    first_request_complete: user.first_request_complete,
+    stage: user.onboarding_stage,
+  }
+  const statedStage = isOnboardingStage(source.stage) ? source.stage : undefined
+  const mayInferFromStage = !hasNestedState
+  const rawCredentialComplete =
+    typeof source.credential_complete === 'boolean'
+      ? source.credential_complete
+      : mayInferFromStage &&
+        (statedStage === 'first_request' || statedStage === 'complete')
+  const rawFirstRequestComplete =
+    typeof source.first_request_complete === 'boolean'
+      ? source.first_request_complete
+      : mayInferFromStage && statedStage === 'complete'
+  const credentialComplete =
+    activationComplete && rawCredentialComplete === true
+  const firstRequestComplete =
+    credentialComplete && rawFirstRequestComplete === true
+
+  return {
+    activationComplete,
+    credentialComplete,
+    firstRequestComplete,
+    stage: deriveStage({
+      activationComplete,
+      credentialComplete,
+      firstRequestComplete,
+    }),
+    isExplicit:
+      user.developer_access_granted !== undefined ||
+      hasNestedState ||
+      hasFlatState,
+  }
+}
 
 export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
-  if (!user) return false
-  if (user.role >= ADMIN_ROLE) return true
-  const trustLevel = user.trust_level_info?.level
-  if (typeof trustLevel === 'number') return trustLevel >= 1
-  const activatedAt = user.permissions?.console_activated_at
-  // Older auth responses did not include permissions at all. Preserve their
-  // legacy full-console behavior, but require an explicit positive timestamp
-  // for the activation boundary introduced by this application.
-  return activatedAt === undefined || activatedAt > 0
+  return user?.developer_access_granted === true
 }
 
 export function getAuthenticatedLandingRoute(
   user: AuthUser | null | undefined
-): '/open-source-bounties' | '/workspace' {
-  return isConsoleActivated(user) ? '/open-source-bounties' : '/workspace'
+): '/dashboard' | '/getting-started' {
+  return getOnboardingState(user).stage === 'complete'
+    ? '/dashboard'
+    : '/getting-started'
 }
 
 export function isContributorRoute(pathname: string): boolean {
-  return [
-    '/challenges',
-    '/wallet',
-    '/profile',
-    '/developer-access',
-    '/workspace',
-    '/support',
-  ].some((path) => pathname === path || pathname.startsWith(`${path}/`))
+  return ['/getting-started', '/wallet', '/profile', '/support'].some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  )
 }
 
 export function isRestrictedPublicRoute(pathname: string): boolean {
-  return ['/about', '/pricing', '/rankings'].some(
+  return ['/about', '/rankings'].some(
     (path) => pathname === path || pathname.startsWith(`${path}/`)
   )
 }
