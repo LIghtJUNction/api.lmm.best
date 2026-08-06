@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { HugeiconsIcon } from '@hugeicons/react'
+import { Link } from '@tanstack/react-router'
 import type { TFunction } from 'i18next'
 import { Bell, Gift, Heart, Megaphone } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -40,7 +42,11 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { BountyTipNotification } from '@/features/open-source-bounties/types'
+import {
+  bountyNotificationPresentation,
+  bountyNotificationSearch,
+} from '@/features/open-source-bounties/notification-target'
+import type { BountyNotification } from '@/features/open-source-bounties/types'
 import { getAnnouncementColorClass } from '@/lib/colors'
 import { formatQuota } from '@/lib/format'
 import { formatDateTimeObject } from '@/lib/time'
@@ -64,7 +70,7 @@ interface NotificationPopoverProps {
   onTabChange: (tab: NotificationTab) => void
   notice: string
   announcements: AnnouncementItem[]
-  bountyTips: BountyTipNotification[]
+  bountyTips: BountyNotification[]
   thankingTipId: number
   onThankTip: (tipId: number) => void
   loading: boolean
@@ -294,14 +300,14 @@ function AnnouncementsContent({
   )
 }
 
-function BountyTipsContent({
+function BountyNotificationsContent({
   items,
   loading,
   thankingTipId,
   onThankTip,
   t,
 }: {
-  items: BountyTipNotification[]
+  items: BountyNotification[]
   loading: boolean
   thankingTipId: number
   onThankTip: (tipId: number) => void
@@ -311,53 +317,73 @@ function BountyTipsContent({
     return <EmptyState icon={<Gift />} title={t('Loading...')} />
   }
   if (items.length === 0) {
-    return <EmptyState icon={<Gift />} title={t('No bounty tips yet')} />
+    return (
+      <EmptyState icon={<Gift />} title={t('No bounty notifications yet')} />
+    )
   }
   return (
     <ScrollArea className='h-[min(52vh,28rem)] pr-3'>
       <div className='flex flex-col'>
         {items.map((item, index) => {
           const createdAt = new Date(item.created_at * 1000)
+          const presentation = bountyNotificationPresentation(item, t)
           return (
             <div key={item.id}>
               <div className='flex items-start gap-3 py-3'>
-                <Gift className='text-primary mt-0.5 size-4 shrink-0' />
+                <HugeiconsIcon
+                  icon={presentation.icon}
+                  strokeWidth={2}
+                  className='text-primary mt-0.5 size-4 shrink-0'
+                />
                 <div className='flex min-w-0 flex-1 flex-col gap-2'>
                   <p className='text-sm'>
                     <span className='font-medium'>@{item.sender_username}</span>{' '}
-                    {t('sent you a tip of')}{' '}
+                    {presentation.message}{' '}
                     <span className='font-semibold'>
                       {formatQuota(item.quota)}
                     </span>
                   </p>
-                  <p className='text-muted-foreground text-xs'>
-                    {item.project_title}
-                  </p>
-                  {item.note ? (
+                  <Button
+                    size='sm'
+                    variant='link'
+                    className='h-auto w-fit justify-start p-0 text-xs'
+                    render={
+                      <Link
+                        to='/open-source-bounties'
+                        search={bountyNotificationSearch(item)}
+                      />
+                    }
+                  >
+                    {t('View bounty')}: {item.project_title}
+                  </Button>
+                  {presentation.showNoteAndThank && item.note ? (
                     <p className='text-muted-foreground text-sm'>{item.note}</p>
                   ) : null}
                   <div className='flex flex-wrap items-center justify-between gap-2'>
                     <span className='text-muted-foreground text-xs'>
-                      {getRelativeTime(createdAt, t)}
+                      {getRelativeTime(createdAt, t)} ·{' '}
+                      {formatDateTimeObject(createdAt)}
                     </span>
-                    <Button
-                      size='sm'
-                      variant={item.thanked_at > 0 ? 'secondary' : 'outline'}
-                      disabled={
-                        item.thanked_at > 0 || thankingTipId === item.id
-                      }
-                      onClick={() => onThankTip(item.id)}
-                    >
-                      <Heart
-                        data-icon='inline-start'
-                        className={
-                          item.thanked_at > 0
-                            ? 'fill-current text-rose-500'
-                            : undefined
+                    {presentation.showNoteAndThank ? (
+                      <Button
+                        size='sm'
+                        variant={item.thanked_at > 0 ? 'secondary' : 'outline'}
+                        disabled={
+                          item.thanked_at > 0 || thankingTipId === item.id
                         }
-                      />
-                      {item.thanked_at > 0 ? t('Thanked') : t('Send thanks')}
-                    </Button>
+                        onClick={() => onThankTip(item.id)}
+                      >
+                        <Heart
+                          data-icon='inline-start'
+                          className={
+                            item.thanked_at > 0
+                              ? 'fill-current text-rose-500'
+                              : undefined
+                          }
+                        />
+                        {item.thanked_at > 0 ? t('Thanked') : t('Send thanks')}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -455,7 +481,7 @@ export function NotificationPopover({
           </TabsContent>
 
           <TabsContent value='bounty-tips' className='mt-2'>
-            <BountyTipsContent
+            <BountyNotificationsContent
               items={bountyTips}
               loading={loading}
               thankingTipId={thankingTipId}

@@ -167,6 +167,21 @@ type OpenSourceBountyTipNotification struct {
 	CreatedAt       int64  `json:"created_at"`
 }
 
+type OpenSourceBountyNotification struct {
+	Id              int    `json:"id"`
+	ProjectId       int    `json:"project_id"`
+	ChallengeId     int    `json:"challenge_id"`
+	SenderUserId    int    `json:"sender_user_id"`
+	SenderUsername  string `json:"sender_username"`
+	Kind            string `json:"kind"`
+	ProjectTitle    string `json:"project_title"`
+	Quota           int    `json:"quota"`
+	Note            string `json:"note"`
+	RecipientReadAt int64  `json:"recipient_read_at"`
+	ThankedAt       int64  `json:"thanked_at"`
+	CreatedAt       int64  `json:"created_at"`
+}
+
 type OpenSourceBountyChallengeView struct {
 	OpenSourceBountyChallenge
 	ParticipantUsername      string                       `json:"participant_username"`
@@ -709,6 +724,41 @@ func openSourceBountyTipNotificationQuery() *gorm.DB {
 			tip.recipient_read_at, tip.thanked_at, tip.created_at`).
 		Joins("JOIN users sender ON sender.id = tip.user_id AND sender.deleted_at IS NULL").
 		Joins("JOIN open_source_bounty_projects project ON project.id = tip.project_id")
+}
+
+func openSourceBountyNotificationQuery() *gorm.DB {
+	return DB.Table("open_source_bounty_ledgers AS notification").
+		Select(`notification.id, notification.project_id, notification.challenge_id,
+			notification.user_id AS sender_user_id, sender.username AS sender_username,
+			notification.kind, project.title AS project_title, notification.quota, notification.note,
+			notification.recipient_read_at, notification.thanked_at, notification.created_at`).
+		Joins("JOIN users sender ON sender.id = notification.user_id AND sender.deleted_at IS NULL").
+		Joins("JOIN open_source_bounty_projects project ON project.id = notification.project_id")
+}
+
+func openSourceBountyNotificationKinds() []string {
+	return []string{
+		OpenSourceBountyLedgerTipTransfer,
+		OpenSourceBountyLedgerRewardTransfer,
+		OpenSourceBountyLedgerDisputeRewardTransfer,
+	}
+}
+
+func ListOpenSourceBountyNotifications(recipientUserId int, limit int) ([]OpenSourceBountyNotification, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	items := make([]OpenSourceBountyNotification, 0)
+	err := openSourceBountyNotificationQuery().
+		Where("notification.kind IN ? AND notification.counterparty_user_id = ?", openSourceBountyNotificationKinds(), recipientUserId).
+		Order("notification.created_at DESC, notification.id DESC").Limit(limit).Scan(&items).Error
+	return items, err
+}
+
+func MarkOpenSourceBountyNotificationsRead(recipientUserId int) error {
+	return DB.Model(&OpenSourceBountyLedger{}).
+		Where("kind IN ? AND counterparty_user_id = ? AND recipient_read_at = 0", openSourceBountyNotificationKinds(), recipientUserId).
+		Update("recipient_read_at", common.GetTimestamp()).Error
 }
 
 func ListOpenSourceBountyTipNotifications(recipientUserId int, limit int) ([]OpenSourceBountyTipNotification, error) {
