@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -18,7 +19,7 @@ const (
 	trustAggregateTTL     = time.Minute
 )
 
-var trustLevelThresholds = [...]float64{0, 10, 100, 500, 2000}
+var trustLevelThresholds = [...]float64{0, 0, 100, 500, 2000}
 var trustLevelDiscountRatios = [...]float64{1, 1, 0.97, 0.94, 0.90}
 
 type TrustLevelInfo struct {
@@ -33,18 +34,46 @@ type TrustLevelInfo struct {
 	AmountToNextLevel    *float64 `json:"amount_to_next_level"`
 	NextDecayAt          *int64   `json:"next_decay_at"`
 	InactivityDecaySteps int      `json:"inactivity_decay_steps"`
+	DecayPeriodDays      int      `json:"decay_period_days"`
 	Overridden           bool     `json:"overridden"`
 }
 
-type paidTopUpAggregate struct {
-	PaidAmount         float64
-	LastPaidCompleteAt int64
+type TrustLevelTier struct {
+	Level                   int     `json:"level"`
+	MinPaidAmount           float64 `json:"min_paid_amount"`
+	RequiresSuccessfulTopUp bool    `json:"requires_successful_top_up"`
+	DiscountPercent         float64 `json:"discount_percent"`
 }
 
-type paidTopUpAggregateRow struct {
-	UserID             int   `gorm:"column:user_id"`
-	PaidQuota          int64 `gorm:"column:paid_quota"`
-	LastPaidCompleteAt int64 `gorm:"column:last_paid_complete_at"`
+func GetTrustLevelTiers() []TrustLevelTier {
+	tiers := make([]TrustLevelTier, 0, TrustLevelMaxUser-TrustLevelMinUser+1)
+	for level := TrustLevelMinUser; level <= TrustLevelMaxUser; level++ {
+		tiers = append(tiers, TrustLevelTier{
+			Level:                   level,
+			MinPaidAmount:           trustLevelThresholds[level],
+			RequiresSuccessfulTopUp: level == TrustLevelMinUser+1,
+			DiscountPercent:         (1 - trustLevelDiscountRatios[level]) * 100,
+		})
+	}
+	return tiers
+}
+
+type paidTopUpAggregate struct {
+	PaidAmountMicros   int64
+	PaidAmount         float64
+	LastPaidCompleteAt int64
+	ActivationComplete bool
+}
+
+// UserAccessSnapshot is the canonical payment-derived state for one user
+// response. Callers can reuse it for trust, access, and onboarding without
+// issuing duplicate recharge-history queries.
+type UserAccessSnapshot struct {
+	TrustLevel             TrustLevelInfo
+	DeveloperAccess        DeveloperAccessState
+	PaidAmountMicros       int64
+	LastPaidCompleteAt     int64
+	PaidActivationComplete bool
 }
 
 type cachedPaidTopUpAggregate struct {
@@ -57,16 +86,26 @@ var paidTopUpAggregateCache = struct {
 	values map[int]cachedPaidTopUpAggregate
 }{values: make(map[int]cachedPaidTopUpAggregate)}
 
-func automaticTrustLevel(paidAmount float64) int {
-	for level := TrustLevelMaxUser; level >= TrustLevelMinUser; level-- {
+func automaticTrustLevel(paidAmount float64, activationComplete bool) int {
+	if !activationComplete {
+		return TrustLevelMinUser
+	}
+	for level := TrustLevelMaxUser; level >= TrustLevelMinUser+2; level-- {
 		if paidAmount >= trustLevelThresholds[level] {
 			return level
 		}
 	}
-	return TrustLevelMinUser
+	return TrustLevelMinUser + 1
 }
 
 func EvaluateTrustLevel(role int, overrideLevel *int, paidAmount float64, activityAnchor int64, now int64) TrustLevelInfo {
+	return EvaluateTrustLevelWithActivation(role, overrideLevel, paidAmount, paidAmount > 0, activityAnchor, now)
+}
+
+// EvaluateTrustLevelWithActivation keeps the independent activation predicate
+// separate from cumulative credited platform amount. Only callers that have
+// established a real successful payment should set activationComplete.
+func EvaluateTrustLevelWithActivation(role int, overrideLevel *int, paidAmount float64, activationComplete bool, activityAnchor int64, now int64) TrustLevelInfo {
 	if now <= 0 {
 		now = time.Now().Unix()
 	}
@@ -77,26 +116,33 @@ func EvaluateTrustLevel(role int, overrideLevel *int, paidAmount float64, activi
 		return administratorTrustLevelInfo(TrustLevelAdmin)
 	}
 
-	automaticLevel := automaticTrustLevel(paidAmount)
+	automaticLevel := automaticTrustLevel(paidAmount, activationComplete)
 	effectiveLevel := automaticLevel
 	decaySteps := 0
 	var nextDecayAt *int64
 	if automaticLevel > 0 && activityAnchor > 0 && now > activityAnchor {
 		periodSeconds := int64(trustLevelDecayPeriod / time.Second)
 		decaySteps = int((now - activityAnchor) / periodSeconds)
-		if decaySteps > automaticLevel {
-			decaySteps = automaticLevel
+		maxDecaySteps := automaticLevel - (TrustLevelMinUser + 1)
+		if decaySteps > maxDecaySteps {
+			decaySteps = maxDecaySteps
 		}
 		effectiveLevel = automaticLevel - decaySteps
-		if effectiveLevel > 0 {
+		if effectiveLevel > TrustLevelMinUser+1 {
 			value := activityAnchor + int64(decaySteps+1)*periodSeconds
 			nextDecayAt = &value
 		}
 	}
 
-	overridden := overrideLevel != nil && *overrideLevel >= TrustLevelMinUser && *overrideLevel <= TrustLevelMaxUser
+	overridden := overrideLevel != nil
 	if overridden {
-		effectiveLevel = *overrideLevel
+		if *overrideLevel >= TrustLevelMinUser && *overrideLevel <= TrustLevelMaxUser {
+			effectiveLevel = *overrideLevel
+		} else {
+			// A corrupted ordinary-user override must never fall back to an
+			// automatically granted paid level.
+			effectiveLevel = TrustLevelMinUser
+		}
 		nextDecayAt = nil
 	}
 
@@ -109,6 +155,7 @@ func EvaluateTrustLevel(role int, overrideLevel *int, paidAmount float64, activi
 		DiscountPercent:      (1 - trustLevelDiscountRatios[effectiveLevel]) * 100,
 		NextDecayAt:          nextDecayAt,
 		InactivityDecaySteps: decaySteps,
+		DecayPeriodDays:      int(trustLevelDecayPeriod / (24 * time.Hour)),
 		Overridden:           overridden,
 	}
 	if automaticLevel < TrustLevelMaxUser {
@@ -131,6 +178,7 @@ func administratorTrustLevelInfo(level int) TrustLevelInfo {
 		AutomaticLevel:  level,
 		DiscountRatio:   trustLevelDiscountRatios[TrustLevelMaxUser],
 		DiscountPercent: (1 - trustLevelDiscountRatios[TrustLevelMaxUser]) * 100,
+		DecayPeriodDays: int(trustLevelDecayPeriod / (24 * time.Hour)),
 	}
 }
 
@@ -175,28 +223,13 @@ func getPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, error) {
 		return nil, gorm.ErrInvalidDB
 	}
 
-	var rows []paidTopUpAggregateRow
-	if err := DB.Model(&TopUp{}).
-		Select("user_id, COALESCE(SUM(amount), 0) AS paid_quota, COALESCE(MAX(complete_time), 0) AS last_paid_complete_at").
-		Where("user_id IN ? AND status = ? AND amount > 0 AND money > 0", missing, common.TopUpStatusSuccess).
-		Where("(payment_method IS NULL OR payment_method <> ?)", PaymentMethodBalance).
-		Where("(payment_provider IS NULL OR payment_provider <> ?)", PaymentProviderBalance).
-		Group("user_id").
-		Scan(&rows).Error; err != nil {
+	fresh, err := getFreshPaidTopUpAggregates(missing)
+	if err != nil {
 		return nil, err
-	}
-
-	rowsByUserID := make(map[int]paidTopUpAggregateRow, len(rows))
-	for _, row := range rows {
-		rowsByUserID[row.UserID] = row
 	}
 	paidTopUpAggregateCache.Lock()
 	for _, userID := range missing {
-		row := rowsByUserID[userID]
-		aggregate := paidTopUpAggregate{
-			PaidAmount:         float64(row.PaidQuota) / float64(common.QuotaPerUnit),
-			LastPaidCompleteAt: row.LastPaidCompleteAt,
-		}
+		aggregate := fresh[userID]
 		result[userID] = aggregate
 		paidTopUpAggregateCache.values[userID] = cachedPaidTopUpAggregate{
 			value:     aggregate,
@@ -207,10 +240,87 @@ func getPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, error) {
 	return result, nil
 }
 
+func getFreshPaidTopUpAggregate(userID int) (paidTopUpAggregate, error) {
+	if userID <= 0 {
+		return paidTopUpAggregate{}, nil
+	}
+	aggregates, err := getFreshPaidTopUpAggregates([]int{userID})
+	if err != nil {
+		return paidTopUpAggregate{}, err
+	}
+	return aggregates[userID], nil
+}
+
+func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, error) {
+	result := make(map[int]paidTopUpAggregate, len(userIDs))
+	uniqueUserIDs := make([]int, 0, len(userIDs))
+	seen := make(map[int]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID <= 0 {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		uniqueUserIDs = append(uniqueUserIDs, userID)
+	}
+	if len(uniqueUserIDs) == 0 {
+		return result, nil
+	}
+	if DB == nil {
+		return nil, gorm.ErrInvalidDB
+	}
+
+	type paidTopUpSummary struct {
+		UserId                 int
+		SettledAmountMicros    int64
+		LegacyPaidAmount       float64
+		LastPaidCompleteAt     int64
+		ActivationCompleteRows int64
+	}
+	var summaries []paidTopUpSummary
+	activityExpression := "CASE WHEN complete_time > 0 THEN complete_time ELSE create_time END"
+	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
+	selectClause := "user_id, " +
+		"COALESCE(SUM(CASE WHEN settled_amount_micros > 0 THEN settled_amount_micros ELSE 0 END), 0) AS settled_amount_micros, " +
+		"COALESCE(SUM(CASE WHEN settled_amount_micros = 0 THEN money ELSE 0 END), 0) AS legacy_paid_amount, " +
+		"COALESCE(MAX(" + activityExpression + "), 0) AS last_paid_complete_at, " +
+		"COUNT(*) AS activation_complete_rows"
+	query := DB.Model(&TopUp{}).
+		Select(selectClause).
+		Where("user_id IN ?", uniqueUserIDs).
+		Where("("+creditedQuotaExpression+") > 0", creditedQuotaArgs...).
+		Group("user_id")
+	if err := successfulExternalPaidTopUpQuery(query).Scan(&summaries).Error; err != nil {
+		return nil, err
+	}
+	for _, summary := range summaries {
+		legacyAmountMicros := decimal.NewFromFloat(summary.LegacyPaidAmount).
+			Mul(decimal.NewFromInt(1_000_000)).Round(0).IntPart()
+		paidAmountMicros := summary.SettledAmountMicros + legacyAmountMicros
+		result[summary.UserId] = paidTopUpAggregate{
+			PaidAmountMicros:   paidAmountMicros,
+			PaidAmount:         float64(paidAmountMicros) / 1_000_000,
+			LastPaidCompleteAt: summary.LastPaidCompleteAt,
+			ActivationComplete: summary.ActivationCompleteRows > 0,
+		}
+	}
+	return result, nil
+}
+
 func invalidatePaidTopUpAggregate(userID int) {
 	paidTopUpAggregateCache.Lock()
 	delete(paidTopUpAggregateCache.values, userID)
 	paidTopUpAggregateCache.Unlock()
+}
+
+// InvalidatePaidTopUpAggregate clears the bounded discount aggregate cache
+// after a durable top-up state transition on this process. Other instances use
+// fresh payment checks for activation; their discount cache may lag by at most
+// trustAggregateTTL.
+func InvalidatePaidTopUpAggregate(userID int) {
+	invalidatePaidTopUpAggregate(userID)
 }
 
 func (topUp *TopUp) AfterSave(_ *gorm.DB) error {
@@ -238,12 +348,66 @@ func GetTrustLevelInfoForUser(user *User) (TrustLevelInfo, error) {
 	if user.Role >= common.RoleAdminUser {
 		return EvaluateTrustLevel(user.Role, nil, 0, 0, time.Now().Unix()), nil
 	}
+	if user.TrustLevelOverride != nil {
+		return EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, time.Now().Unix()), nil
+	}
 	aggregate, err := getPaidTopUpAggregate(user.Id)
 	if err != nil {
 		return TrustLevelInfo{}, err
 	}
 	anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-	return EvaluateTrustLevel(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, anchor, time.Now().Unix()), nil
+	return EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix()), nil
+}
+
+// GetFreshTrustLevelInfoForUser bypasses the bounded discount cache for
+// account self-service responses immediately after a payment completes.
+func GetFreshTrustLevelInfoForUser(user *User) (TrustLevelInfo, error) {
+	snapshot, err := GetFreshUserAccessSnapshot(user)
+	if err != nil {
+		return TrustLevelInfo{}, err
+	}
+	return snapshot.TrustLevel, nil
+}
+
+func explicitDeveloperAccessDecision(role int, overrideLevel *int) (DeveloperAccessState, bool) {
+	if role >= common.RoleAdminUser {
+		return DeveloperAccessState{Granted: true}, true
+	}
+	if overrideLevel == nil {
+		return DeveloperAccessState{}, false
+	}
+	return DeveloperAccessState{Granted: *overrideLevel >= TrustLevelMinUser+1 && *overrideLevel <= TrustLevelMaxUser}, true
+}
+
+// GetFreshUserAccessSnapshot performs at most one bounded aggregate query for
+// an ordinary user and none for administrator or explicit-override access.
+func GetFreshUserAccessSnapshot(user *User) (UserAccessSnapshot, error) {
+	if user == nil {
+		return UserAccessSnapshot{}, gorm.ErrInvalidData
+	}
+	if access, explicit := explicitDeveloperAccessDecision(user.Role, user.TrustLevelOverride); explicit {
+		return UserAccessSnapshot{
+			TrustLevel:      EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, time.Now().Unix()),
+			DeveloperAccess: access,
+		}, nil
+	}
+	aggregate, err := getFreshPaidTopUpAggregate(user.Id)
+	if err != nil {
+		return UserAccessSnapshot{}, err
+	}
+	anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
+	return UserAccessSnapshot{
+		TrustLevel: EvaluateTrustLevelWithActivation(
+			user.Role, nil, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix(),
+		),
+		DeveloperAccess: DeveloperAccessState{
+			Granted:                aggregate.ActivationComplete,
+			PaidActivationComplete: aggregate.ActivationComplete,
+		},
+		PaidAmountMicros:       aggregate.PaidAmountMicros,
+		LastPaidCompleteAt:     aggregate.LastPaidCompleteAt,
+		PaidActivationComplete: aggregate.ActivationComplete,
+	}, nil
 }
 
 func GetTrustLevelInfoForUserBase(user *UserBase) (TrustLevelInfo, error) {
@@ -253,12 +417,15 @@ func GetTrustLevelInfoForUserBase(user *UserBase) (TrustLevelInfo, error) {
 	if user.Role >= common.RoleAdminUser {
 		return EvaluateTrustLevel(user.Role, nil, 0, 0, time.Now().Unix()), nil
 	}
+	if user.TrustLevelOverride != nil {
+		return EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, time.Now().Unix()), nil
+	}
 	aggregate, err := getPaidTopUpAggregate(user.Id)
 	if err != nil {
 		return TrustLevelInfo{}, err
 	}
 	anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-	return EvaluateTrustLevel(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, anchor, time.Now().Unix()), nil
+	return EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix()), nil
 }
 
 func GetTrustLevelInfoByUserID(userID int) (TrustLevelInfo, error) {
@@ -269,10 +436,109 @@ func GetTrustLevelInfoByUserID(userID int) (TrustLevelInfo, error) {
 	return GetTrustLevelInfoForUserBase(user)
 }
 
+// DeveloperAccessState separates the durable paid-activation fact from the
+// effective access decision, which may be granted or denied by role/override.
+type DeveloperAccessState struct {
+	Granted                bool `json:"granted"`
+	PaidActivationComplete bool `json:"paid_activation_complete"`
+}
+
+func GetDeveloperAccessStateForUserBase(user *UserBase) (DeveloperAccessState, error) {
+	if user == nil {
+		return DeveloperAccessState{}, gorm.ErrInvalidData
+	}
+	if state, explicit := explicitDeveloperAccessDecision(user.Role, user.TrustLevelOverride); explicit {
+		// Access short-circuits without payment history. The paid-activation fact
+		// remains intentionally unknown/false on this bounded path.
+		return state, nil
+	}
+	paid, err := HasSuccessfulPaidTopUp(user.Id)
+	if err != nil {
+		return DeveloperAccessState{}, err
+	}
+	return DeveloperAccessState{Granted: paid, PaidActivationComplete: paid}, nil
+}
+
+func GetDeveloperAccessStateForUser(user *User) (DeveloperAccessState, error) {
+	if user == nil {
+		return DeveloperAccessState{}, gorm.ErrInvalidData
+	}
+	return GetDeveloperAccessStateForUserBase(user.ToBaseUser())
+}
+
+// OnboardingState is derived from durable account records so it cannot drift
+// from the payment, credential, and request state it represents.
+type OnboardingState struct {
+	ActivationComplete     bool   `json:"activation_complete"`
+	PaidActivationComplete bool   `json:"paid_activation_complete"`
+	CredentialComplete     bool   `json:"credential_complete"`
+	FirstRequestComplete   bool   `json:"first_request_complete"`
+	Stage                  string `json:"stage"`
+}
+
+func GetOnboardingStateForUser(user *User) (OnboardingState, error) {
+	if user == nil {
+		return OnboardingState{}, gorm.ErrInvalidData
+	}
+	snapshot, err := GetFreshUserAccessSnapshot(user)
+	if err != nil {
+		return OnboardingState{}, err
+	}
+	return GetOnboardingStateForUserSnapshot(user, snapshot)
+}
+
+func GetOnboardingStateForUserSnapshot(user *User, snapshot UserAccessSnapshot) (OnboardingState, error) {
+	if user == nil {
+		return OnboardingState{}, gorm.ErrInvalidData
+	}
+	access := snapshot.DeveloperAccess
+	if user.Role >= common.RoleAdminUser {
+		return OnboardingState{
+			ActivationComplete:     access.Granted,
+			PaidActivationComplete: access.PaidActivationComplete,
+			CredentialComplete:     true,
+			FirstRequestComplete:   true,
+			Stage:                  "complete",
+		}, nil
+	}
+	state := OnboardingState{
+		ActivationComplete:     access.Granted,
+		PaidActivationComplete: access.PaidActivationComplete,
+	}
+	if DB == nil {
+		state.Stage = onboardingStage(state)
+		return state, gorm.ErrInvalidDB
+	}
+	var activeCredentialCount int64
+	if err := DB.Model(&Token{}).
+		Where("user_id = ? AND status = ?", user.Id, common.TokenStatusEnabled).
+		Count(&activeCredentialCount).Error; err != nil {
+		state.Stage = onboardingStage(state)
+		return state, err
+	}
+	state.CredentialComplete = activeCredentialCount > 0
+	state.FirstRequestComplete = state.CredentialComplete && user.LastAPIActivityAt > 0
+	state.Stage = onboardingStage(state)
+	return state, nil
+}
+
+func onboardingStage(state OnboardingState) string {
+	switch {
+	case !state.ActivationComplete:
+		return "activate"
+	case !state.CredentialComplete:
+		return "credential"
+	case !state.FirstRequestComplete:
+		return "first_request"
+	default:
+		return "complete"
+	}
+}
+
 func EnrichUsersTrustLevels(users []*User) error {
 	userIDs := make([]int, 0, len(users))
 	for _, user := range users {
-		if user != nil && user.Role < common.RoleAdminUser {
+		if user != nil && user.Role < common.RoleAdminUser && user.TrustLevelOverride == nil {
 			userIDs = append(userIDs, user.Id)
 		}
 	}
@@ -288,10 +554,12 @@ func EnrichUsersTrustLevels(users []*User) error {
 		var info TrustLevelInfo
 		if user.Role >= common.RoleAdminUser {
 			info = EvaluateTrustLevel(user.Role, nil, 0, 0, now)
+		} else if user.TrustLevelOverride != nil {
+			info = EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, now)
 		} else {
 			aggregate := aggregates[user.Id]
 			anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-			info = EvaluateTrustLevel(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, anchor, now)
+			info = EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, now)
 		}
 		user.TrustLevelInfo = &info
 	}

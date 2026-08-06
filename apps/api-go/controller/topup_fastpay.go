@@ -20,7 +20,6 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 )
 
 type FastPayPayRequest struct {
@@ -256,33 +255,37 @@ func RequestFastPay(c *gin.Context) {
 
 	returnUrl := paymentReturnPath("/usage-logs")
 	tradeNo := fmt.Sprintf("USR%dNO%s%d", id, common.GetRandomString(6), time.Now().Unix())
+	paymentAmount := strconv.FormatFloat(payMoney, 'f', 2, 64)
 
 	params := buildFastPayOrderParams(
 		cfg,
 		tradeNo,
-		strconv.FormatFloat(payMoney, 'f', 2, 64),
+		paymentAmount,
 		fmt.Sprintf("TUC%d", int64Amount),
 		req.PaymentMethod,
 		returnUrl,
 		time.Now().Unix(),
 	)
 
-	amount := int64Amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dAmount := decimal.NewFromInt(int64(amount))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-		amount = dAmount.Div(dQuotaPerUnit).IntPart()
+	amount, creditedQuota := topUpOrderAmounts(int64Amount)
+	expectedAmountMicros, err := monetaryStringToMicros(paymentAmount)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("FAST易支付 结算金额无效 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付金额无效"})
+		return
 	}
 
 	topUp := &model.TopUp{
-		UserId:          id,
-		Amount:          amount,
-		Money:           payMoney,
-		TradeNo:         tradeNo,
-		PaymentMethod:   req.PaymentMethod,
-		PaymentProvider: model.PaymentProviderFastPay,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:               id,
+		Amount:               amount,
+		CreditedQuota:        creditedQuota,
+		ExpectedAmountMicros: expectedAmountMicros,
+		Money:                monetaryMicrosToFloat(expectedAmountMicros),
+		TradeNo:              tradeNo,
+		PaymentMethod:        req.PaymentMethod,
+		PaymentProvider:      model.PaymentProviderFastPay,
+		CreateTime:           time.Now().Unix(),
+		Status:               common.TopUpStatusPending,
 	}
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("FAST易支付 创建充值订单失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
@@ -360,6 +363,14 @@ func fastPayNotifySignParams(payload FastPayNotifyPayload) map[string]string {
 	}
 }
 
+func fastPaySettlementMicros(payload FastPayNotifyPayload) (int64, error) {
+	value := strings.TrimSpace(fmt.Sprintf("%v", payload.PayAmount))
+	if value == "" || value == "<nil>" {
+		return 0, fmt.Errorf("signed payAmount is required")
+	}
+	return monetaryStringToMicros(value)
+}
+
 func FastPayNotify(c *gin.Context) {
 	payload, bodyBytes, err := readFastPayNotifyPayload(c)
 	if err != nil {
@@ -377,6 +388,11 @@ func FastPayNotify(c *gin.Context) {
 
 	if !VerifyFastPaySign(params, secret, payload.Sign) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 回调验签失败 outTradeNo=%s client_ip=%s", payload.OutTradeNo, c.ClientIP()))
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	if cfg == nil || strings.TrimSpace(payload.MerchantNo) != cfg.MerchantNo {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 回调商户号不匹配 outTradeNo=%s merchantNo=%s client_ip=%s", payload.OutTradeNo, payload.MerchantNo, c.ClientIP()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -406,29 +422,33 @@ func FastPayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-
-	if topUp.Status == common.TopUpStatusPending {
-		if payload.PayType != "" {
-			topUp.PaymentMethod = payload.PayType
-		}
-		topUp.Status = common.TopUpStatusSuccess
-		if err := topUp.Update(); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("FAST易支付 更新充值订单失败 trade_no=%s error=%q", topUp.TradeNo, err.Error()))
-			_, _ = c.Writer.Write([]byte("fail"))
-			return
-		}
-
-		dAmount := decimal.NewFromInt(int64(topUp.Amount))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-		quotaToAdd := int(dAmount.Mul(dQuotaPerUnit).IntPart())
-		if err := model.IncreaseUserQuota(topUp.UserId, quotaToAdd, true); err != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("FAST易支付 更新用户额度失败 trade_no=%s error=%q", topUp.TradeNo, err.Error()))
-			_, _ = c.Writer.Write([]byte("fail"))
-			return
-		}
-
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("FAST易支付 充值成功 trade_no=%s user_id=%d quota_to_add=%d money=%.2f", topUp.TradeNo, topUp.UserId, quotaToAdd, topUp.Money))
-		model.RecordTopupLog(topUp.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(quotaToAdd), topUp.Money), c.ClientIP(), topUp.PaymentMethod, "fastpay")
+	if payload.PayType != "" && topUp.PaymentMethod != "" && payload.PayType != topUp.PaymentMethod {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 回调支付方式不匹配 trade_no=%s expected=%s actual=%s client_ip=%s", topUp.TradeNo, topUp.PaymentMethod, payload.PayType, c.ClientIP()))
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	settledAmountMicros, err := fastPaySettlementMicros(payload)
+	if err != nil {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 回调金额无效 trade_no=%s client_ip=%s error=%q", topUp.TradeNo, c.ClientIP(), err.Error()))
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	wasPending := topUp.Status == common.TopUpStatusPending
+	completed, err := model.CompleteExternalTopUp(model.ExternalTopUpSettlement{
+		TradeNo:               payload.OutTradeNo,
+		PaymentProvider:       model.PaymentProviderFastPay,
+		PaymentMethod:         payload.PayType,
+		SettledAmountMicros:   settledAmountMicros,
+		ProviderTransactionId: payload.OrderNo,
+	})
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("FAST易支付 充值结算失败 trade_no=%s client_ip=%s error=%q", topUp.TradeNo, c.ClientIP(), err.Error()))
+		_, _ = c.Writer.Write([]byte("fail"))
+		return
+	}
+	if wasPending {
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("FAST易支付 充值成功 trade_no=%s user_id=%d quota_to_add=%d money=%.2f", completed.TradeNo, completed.UserId, completed.CreditedQuota, completed.Money))
+		model.RecordTopupLog(completed.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %v，支付金额：%f", logger.LogQuota(int(completed.CreditedQuota)), completed.Money), c.ClientIP(), completed.PaymentMethod, "fastpay")
 	}
 
 	_, _ = c.Writer.Write([]byte("success"))
