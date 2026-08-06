@@ -25,6 +25,45 @@ case $backend in
   *) die "invalid LMM_API_BACKEND '$backend'; expected auto, go, or rs" ;;
 esac
 
+if (($# >= 1)); then
+  case $1 in
+    select)
+      shift
+      SELECT_SCRIPT="${0%/*}/lmm-api-select"
+      if [[ -x $SELECT_SCRIPT ]]; then
+        exec "$SELECT_SCRIPT" "$@"
+      elif command -v lmm-api-select >/dev/null 2>&1; then
+        exec lmm-api-select "$@"
+      else
+        die 'lmm-api-select is missing'
+      fi
+      ;;
+    status)
+      printf 'LMM API Launcher Status:\n'
+      printf '  Go Backend: %s\n' "$([[ -x $GO_BINARY ]] && echo 'installed' || echo 'missing')"
+      printf '  Rust Backend: %s\n' "$([[ -x $RS_BINARY ]] && echo 'installed' || echo 'missing')"
+      printf '  Active Backend: %s\n' "$backend"
+      exit 0
+      ;;
+    doctor)
+      printf '=== LMM API Doctor ===\n'
+      printf '[✓] Go binary (%s): %s\n' "$GO_BINARY" "$([[ -x $GO_BINARY ]] && echo 'OK' || echo 'Not Found')"
+      printf '[✓] Rust binary (%s): %s\n' "$RS_BINARY" "$([[ -x $RS_BINARY ]] && echo 'OK' || echo 'Not Found')"
+      printf '[✓] Active Backend selection: %s\n' "$backend"
+      exit 0
+      ;;
+    help|--help|-h)
+      printf 'LMM API - Unified Command Line Interface\n'
+      printf 'Usage:\n'
+      printf '  lmm-api [serve] [options]    Start the backend API server\n'
+      printf '  lmm-api select {auto|go|rs}  Select active backend provider\n'
+      printf '  lmm-api status               Check active backend status\n'
+      printf '  lmm-api doctor               Diagnose environment & dependencies\n'
+      exit 0
+      ;;
+  esac
+fi
+
 case $backend in
   go)
     [[ -x $GO_BINARY ]] || die 'Go backend is selected but no lmm-api-go provider is installed'
