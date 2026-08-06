@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -96,9 +97,20 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "产品不存在"})
 		return
 	}
+	if strings.TrimSpace(selectedProduct.Currency) == "" {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 产品币种为空 user_id=%d product_id=%s", c.GetInt("id"), selectedProduct.ProductId))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "产品币种配置错误"})
+		return
+	}
 
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
+	expectedAmountMicros, err := monetaryFloatToMicros(selectedProduct.Price)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 产品金额无效 user_id=%d product_id=%s error=%q", id, selectedProduct.ProductId, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "产品金额无效"})
+		return
+	}
 
 	// 生成唯一的订单引用ID
 	reference := fmt.Sprintf("creem-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
@@ -106,14 +118,18 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 
 	// 先创建订单记录，使用产品配置的金额和充值额度
 	topUp := &model.TopUp{
-		UserId:          id,
-		Amount:          selectedProduct.Quota, // 充值额度
-		Money:           selectedProduct.Price, // 支付金额
-		TradeNo:         referenceId,
-		PaymentMethod:   model.PaymentMethodCreem,
-		PaymentProvider: model.PaymentProviderCreem,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:               id,
+		Amount:               selectedProduct.Quota, // 充值额度
+		CreditedQuota:        selectedProduct.Quota,
+		ExpectedAmountMicros: expectedAmountMicros,
+		SettlementCurrency:   strings.ToUpper(strings.TrimSpace(selectedProduct.Currency)),
+		Money:                monetaryMicrosToFloat(expectedAmountMicros),
+		TradeNo:              referenceId,
+		PaymentMethod:        model.PaymentMethodCreem,
+		PaymentProvider:      model.PaymentProviderCreem,
+		ProviderProductId:    selectedProduct.ProductId,
+		CreateTime:           time.Now().Unix(),
+		Status:               common.TopUpStatusPending,
 	}
 	err = topUp.Insert()
 	if err != nil {
@@ -329,13 +345,9 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		return
 	}
 
-	if topUp.Status != common.TopUpStatusPending {
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 充值订单状态非 pending，忽略处理 trade_no=%s status=%s creem_order_id=%s", referenceId, topUp.Status, event.Object.Order.Id))
-		c.Status(http.StatusOK) // 已处理过的订单，返回成功避免重复处理
-		return
-	}
+	wasPending := topUp.Status == common.TopUpStatusPending
 
-	// 处理充值，传入客户邮箱和姓名信息
+	// 处理充值，传入客户邮箱信息
 	customerEmail := event.Object.Customer.Email
 	customerName := event.Object.Customer.Name
 
@@ -347,14 +359,41 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Creem 回调客户姓名为空 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 	}
 
-	err := model.RechargeCreem(referenceId, customerEmail, customerName, c.ClientIP())
+	settledAmountMicros, err := minorCurrencyUnitsToMicros(int64(event.Object.Order.AmountPaid), event.Object.Order.Currency)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 回调金额无效 trade_no=%s creem_order_id=%s error=%q", referenceId, event.Object.Order.Id, err.Error()))
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	providerProductId := event.Object.Order.Product
+	if providerProductId == "" {
+		providerProductId = event.Object.Product.Id
+	}
+	providerTransactionId := event.Object.Order.Transaction
+	if providerTransactionId == "" {
+		providerTransactionId = event.Object.Order.Id
+	}
+	completed, err := model.CompleteExternalTopUp(model.ExternalTopUpSettlement{
+		TradeNo:               referenceId,
+		PaymentProvider:       model.PaymentProviderCreem,
+		PaymentMethod:         model.PaymentMethodCreem,
+		SettlementCurrency:    event.Object.Order.Currency,
+		SettledAmountMicros:   settledAmountMicros,
+		ProviderProductId:     providerProductId,
+		ProviderEventId:       event.Id,
+		ProviderTransactionId: providerTransactionId,
+		CustomerEmail:         customerEmail,
+	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 充值处理失败 trade_no=%s creem_order_id=%s client_ip=%s error=%q", referenceId, event.Object.Order.Id, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 充值成功 trade_no=%s creem_order_id=%s quota=%d money=%.2f client_ip=%s", referenceId, event.Object.Order.Id, topUp.Amount, topUp.Money, c.ClientIP()))
+	if wasPending {
+		model.RecordTopupLog(completed.UserId, fmt.Sprintf("使用Creem充值成功，充值额度: %v，支付金额：%.2f", completed.CreditedQuota, completed.Money), c.ClientIP(), completed.PaymentMethod, model.PaymentMethodCreem)
+	}
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 充值成功 trade_no=%s creem_order_id=%s quota=%d money=%.2f client_ip=%s", referenceId, event.Object.Order.Id, completed.CreditedQuota, completed.Money, c.ClientIP()))
 	c.Status(http.StatusOK)
 }
 

@@ -43,7 +43,16 @@ func setupTopupInfoUser(t *testing.T, id int, group string) {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
 	model.DB = db
-	require.NoError(t, db.Create(&model.User{Id: id, Username: "topup-info-user", Password: "test-password", Group: group}).Error)
+	levelOne := model.TrustLevelMinUser + 1
+	require.NoError(t, db.Create(&model.User{
+		Id:                 id,
+		Username:           "topup-info-user",
+		Password:           "test-password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              group,
+		TrustLevelOverride: &levelOne,
+	}).Error)
 	t.Cleanup(func() {
 		model.DB = previousDB
 		common.SetMainDatabaseType(previousDatabaseType)

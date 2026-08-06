@@ -197,7 +197,11 @@ func RequestWaffoPay(c *gin.Context) {
 	}
 	// resolvedPayMethodType/Name 为空时，Waffo 自动选择支付方式
 
-	group, _ := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(id, true)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
+		return
+	}
 	payMoney := getWaffoPayMoney(float64(req.Amount), group)
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
@@ -208,25 +212,29 @@ func RequestWaffoPay(c *gin.Context) {
 	merchantOrderId := fmt.Sprintf("WAFFO-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 	paymentRequestId := merchantOrderId
 
-	// Token 模式下归一化 Amount（存等价美元/CNY 数量，避免 RechargeWaffo 双重放大）
-	amount := req.Amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = int64(float64(req.Amount) / common.QuotaPerUnit)
-		if amount < 1 {
-			amount = 1
-		}
+	amount, creditedQuota := topUpOrderAmounts(req.Amount)
+	currency := getWaffoCurrency()
+	paymentAmount := formatWaffoAmount(payMoney, currency)
+	expectedAmountMicros, err := monetaryStringToMicros(paymentAmount)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 结算金额无效 user_id=%d trade_no=%s error=%q", id, merchantOrderId, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付金额无效"})
+		return
 	}
 
 	// 创建本地订单
 	topUp := &model.TopUp{
-		UserId:          id,
-		Amount:          amount,
-		Money:           payMoney,
-		TradeNo:         merchantOrderId,
-		PaymentMethod:   model.PaymentMethodWaffo,
-		PaymentProvider: model.PaymentProviderWaffo,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:               id,
+		Amount:               amount,
+		CreditedQuota:        creditedQuota,
+		ExpectedAmountMicros: expectedAmountMicros,
+		SettlementCurrency:   strings.ToUpper(currency),
+		Money:                monetaryMicrosToFloat(expectedAmountMicros),
+		TradeNo:              merchantOrderId,
+		PaymentMethod:        model.PaymentMethodWaffo,
+		PaymentProvider:      model.PaymentProviderWaffo,
+		CreateTime:           time.Now().Unix(),
+		Status:               common.TopUpStatusPending,
 	}
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, merchantOrderId, req.Amount, err.Error()))
@@ -253,12 +261,11 @@ func RequestWaffoPay(c *gin.Context) {
 		returnUrl = setting.WaffoReturnUrl
 	}
 
-	currency := getWaffoCurrency()
 	goodsInfo := buildWaffoTopUpGoodsInfo(req.Amount)
 	createParams := &order.CreateOrderParams{
 		PaymentRequestID: paymentRequestId,
 		MerchantOrderID:  merchantOrderId,
-		OrderAmount:      formatWaffoAmount(payMoney, currency),
+		OrderAmount:      paymentAmount,
 		OrderCurrency:    currency,
 		OrderDescription: goodsInfo.GoodsName,
 		OrderRequestedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
@@ -404,17 +411,40 @@ func handleWaffoPayment(c *gin.Context, wh *core.WebhookHandler, result *core.Pa
 	}
 
 	merchantOrderId := result.MerchantOrderID
+	if merchantOrderId == "" || (result.PaymentRequestID != "" && result.PaymentRequestID != merchantOrderId) {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 回调订单标识不匹配 trade_no=%s payment_request_id=%s client_ip=%s", merchantOrderId, result.PaymentRequestID, c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "invalid order identity")
+		return
+	}
 
 	LockOrder(merchantOrderId)
 	defer UnlockOrder(merchantOrderId)
 
-	if err := model.RechargeWaffo(merchantOrderId, c.ClientIP()); err != nil {
+	settledAmountMicros, err := monetaryStringToMicros(result.OrderAmount)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 回调金额无效 trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
+		sendWaffoWebhookResponse(c, wh, false, "invalid settlement amount")
+		return
+	}
+	providerTransactionId := result.AcquiringOrderID
+	if providerTransactionId == "" {
+		providerTransactionId = result.PaymentRequestID
+	}
+	completed, err := model.CompleteExternalTopUp(model.ExternalTopUpSettlement{
+		TradeNo:               merchantOrderId,
+		PaymentProvider:       model.PaymentProviderWaffo,
+		PaymentMethod:         model.PaymentMethodWaffo,
+		SettlementCurrency:    result.OrderCurrency,
+		SettledAmountMicros:   settledAmountMicros,
+		ProviderTransactionId: providerTransactionId,
+	})
+	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 充值处理失败 trade_no=%s client_ip=%s error=%q", merchantOrderId, c.ClientIP(), err.Error()))
 		sendWaffoWebhookResponse(c, wh, false, err.Error())
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo 充值成功 trade_no=%s client_ip=%s", merchantOrderId, c.ClientIP()))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo 充值成功 trade_no=%s user_id=%d quota=%d client_ip=%s", merchantOrderId, completed.UserId, completed.CreditedQuota, c.ClientIP()))
 	sendWaffoWebhookResponse(c, wh, true, "")
 }
 

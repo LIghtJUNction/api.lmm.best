@@ -73,6 +73,7 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 func TestTrustLevelDeveloperAccessBoundary(t *testing.T) {
 	levelZero := 0
 	levelOne := 1
+	invalidLevel := 99
 	for _, test := range []struct {
 		name    string
 		user    *model.UserBase
@@ -80,6 +81,7 @@ func TestTrustLevelDeveloperAccessBoundary(t *testing.T) {
 	}{
 		{name: "level zero", user: &model.UserBase{Role: common.RoleCommonUser, TrustLevelOverride: &levelZero}},
 		{name: "level one", user: &model.UserBase{Role: common.RoleCommonUser, TrustLevelOverride: &levelOne}, granted: true},
+		{name: "invalid ordinary override", user: &model.UserBase{Role: common.RoleCommonUser, TrustLevelOverride: &invalidLevel}},
 		{name: "administrator", user: &model.UserBase{Role: common.RoleAdminUser}, granted: true},
 		{name: "root", user: &model.UserBase{Role: common.RoleRootUser}, granted: true},
 	} {
@@ -183,7 +185,7 @@ func TestConsoleAccessGateReturnsTheGenericNotFoundForRestrictedRoutes(t *testin
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/models", nil))
 
-		if user.ConsoleActivatedAt == 0 && user.Role < common.RoleAdminUser {
+		if user.Role < common.RoleAdminUser {
 			assert.Equal(t, http.StatusNotFound, response.Code)
 			assert.JSONEq(t, `{"message":"Not Found"}`, response.Body.String())
 			continue
@@ -200,7 +202,7 @@ func TestConsoleAccessGateAnnotatesActivationForStatusSurfaces(t *testing.T) {
 		activated bool
 	}{
 		{name: "unactivated", user: &model.UserBase{Id: 7, Role: common.RoleCommonUser}},
-		{name: "activated", user: &model.UserBase{Id: 8, Role: common.RoleCommonUser, ConsoleActivatedAt: 10}, activated: true},
+		{name: "legacy timestamp does not activate", user: &model.UserBase{Id: 8, Role: common.RoleCommonUser, ConsoleActivatedAt: 10}},
 		{name: "administrator", user: &model.UserBase{Id: 9, Role: common.RoleAdminUser}, activated: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -224,4 +226,28 @@ func TestConsoleAccessGateAnnotatesActivationForStatusSurfaces(t *testing.T) {
 			assert.JSONEq(t, `{"activated":`+strconv.FormatBool(test.activated)+`}`, response.Body.String())
 		})
 	}
+}
+
+func TestConsoleAccessGateFailsClosedWhenTrustCalculationFails(t *testing.T) {
+	previousDB := model.DB
+	model.DB = nil
+	t.Cleanup(func() { model.DB = previousDB })
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
+			user:           &model.UserBase{Id: 17, Role: common.RoleCommonUser, ConsoleActivatedAt: 123},
+			credentialKind: dashboardCredentialInternal,
+		})
+		c.Next()
+	})
+	router.Use(ConsoleAccessGate())
+	router.GET("/api/models", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/models", nil))
+
+	assert.Equal(t, http.StatusNotFound, response.Code)
+	assert.JSONEq(t, `{"message":"Not Found"}`, response.Body.String())
 }

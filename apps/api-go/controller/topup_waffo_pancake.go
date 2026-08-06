@@ -372,15 +372,28 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	}
 
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
+	storedAmount, creditedQuota := topUpOrderAmounts(req.Amount)
+	paymentAmount := formatWaffoPancakeAmount(payMoney)
+	expectedAmountMicros, err := monetaryStringToMicros(paymentAmount)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 结算金额无效 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付金额无效"})
+		return
+	}
 	topUp := &model.TopUp{
-		UserId:          id,
-		Amount:          normalizeWaffoPancakeTopUpAmount(req.Amount),
-		Money:           payMoney,
-		TradeNo:         tradeNo,
-		PaymentMethod:   model.PaymentMethodWaffoPancake,
-		PaymentProvider: model.PaymentProviderWaffoPancake,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:               id,
+		Amount:               storedAmount,
+		CreditedQuota:        creditedQuota,
+		ExpectedAmountMicros: expectedAmountMicros,
+		SettlementCurrency:   "USD",
+		Money:                monetaryMicrosToFloat(expectedAmountMicros),
+		TradeNo:              tradeNo,
+		PaymentMethod:        model.PaymentMethodWaffoPancake,
+		PaymentProvider:      model.PaymentProviderWaffoPancake,
+		ProviderProductId:    strings.TrimSpace(setting.WaffoPancakeProductID),
+		ProviderStoreId:      strings.TrimSpace(setting.WaffoPancakeStoreID),
+		CreateTime:           time.Now().Unix(),
+		Status:               common.TopUpStatusPending,
 	}
 	if err := topUp.Insert(); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, tradeNo, req.Amount, err.Error()))
@@ -393,7 +406,7 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		ProductID:     setting.WaffoPancakeProductID,
 		BuyerIdentity: getWaffoPancakeBuyerIdentity(user),
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
-			Amount:      formatWaffoPancakeAmount(payMoney),
+			Amount:      paymentAmount,
 			TaxCategory: "saas",
 		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
@@ -517,12 +530,36 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
 
-	if err := model.RechargeWaffoPancake(tradeNo); err != nil {
+	settledAmountMicros, err := monetaryStringToMicros(event.Data.Amount)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 回调金额无效 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
+		c.String(http.StatusInternalServerError, "retry")
+		return
+	}
+	providerEventId := event.ID
+	if providerEventId == "" {
+		providerEventId = event.EventID
+	}
+	// StoreID is bound below. The current Pancake webhook DTO exposes only
+	// ProductName, not the immutable product ID used at checkout. The order
+	// records the configured product ID, but callback product comparison remains
+	// unavailable until the provider includes that identifier in its signed event.
+	completed, err := model.CompleteExternalTopUp(model.ExternalTopUpSettlement{
+		TradeNo:               tradeNo,
+		PaymentProvider:       model.PaymentProviderWaffoPancake,
+		PaymentMethod:         model.PaymentMethodWaffoPancake,
+		SettlementCurrency:    event.Data.Currency,
+		SettledAmountMicros:   settledAmountMicros,
+		ProviderEventId:       providerEventId,
+		ProviderTransactionId: event.Data.OrderID,
+		ProviderStoreId:       event.StoreID,
+	})
+	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值处理失败 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q", tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
 		c.String(http.StatusInternalServerError, "retry")
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s event_id=%s order_id=%s client_ip=%s", tradeNo, event.ID, event.Data.OrderID, c.ClientIP()))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s user_id=%d quota=%d event_id=%s order_id=%s client_ip=%s", tradeNo, completed.UserId, completed.CreditedQuota, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
 }

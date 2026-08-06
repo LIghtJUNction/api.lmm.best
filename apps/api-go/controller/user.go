@@ -388,7 +388,7 @@ func GetUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
-	trustLevel, err := model.GetTrustLevelInfoForUser(user)
+	trustLevel, err := model.GetFreshTrustLevelInfoForUser(user)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -515,45 +515,59 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
 	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
-	trustLevel, err := model.GetTrustLevelInfoForUser(user)
+	accessSnapshot, err := model.GetFreshUserAccessSnapshot(user)
 	if err != nil {
-		common.SysError(fmt.Sprintf("failed to calculate trust level for user %d: %s", user.Id, err.Error()))
-		trustLevel = model.EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, common.GetTimestamp())
+		common.SysError(fmt.Sprintf("failed to calculate access state for user %d: %s", user.Id, err.Error()))
+		fallbackTrustLevel := model.EvaluateTrustLevel(user.Role, user.TrustLevelOverride, 0, user.CreatedAt, common.GetTimestamp())
+		accessSnapshot = model.UserAccessSnapshot{TrustLevel: fallbackTrustLevel}
+	}
+	onboarding, err := model.GetOnboardingStateForUserSnapshot(user, accessSnapshot)
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to calculate onboarding state for user %d: %s", user.Id, err.Error()))
 	}
 	consoleActivatedAt := int64(0)
-	if trustLevel.Level >= 1 {
+	if onboarding.ActivationComplete {
 		consoleActivatedAt = 1
 	}
 	permissions["console_activated_at"] = consoleActivatedAt
-	docsAccess := trustLevel.Level >= 1
+	docsAccess := onboarding.ActivationComplete
 	permissions["docs_access"] = docsAccess
 	return map[string]interface{}{
-		"id":                user.Id,
-		"username":          user.Username,
-		"display_name":      user.DisplayName,
-		"role":              user.Role,
-		"status":            user.Status,
-		"email":             user.Email,
-		"github_id":         user.GitHubId,
-		"discord_id":        user.DiscordId,
-		"oidc_id":           user.OidcId,
-		"wechat_id":         user.WeChatId,
-		"telegram_id":       user.TelegramId,
-		"group":             user.Group,
-		"quota":             user.Quota,
-		"used_quota":        user.UsedQuota,
-		"request_count":     user.RequestCount,
-		"aff_code":          user.AffCode,
-		"aff_count":         user.AffCount,
-		"aff_quota":         user.AffQuota,
-		"aff_history_quota": user.AffHistoryQuota,
-		"inviter_id":        user.InviterId,
-		"linux_do_id":       user.LinuxDOId,
-		"setting":           user.Setting,
-		"stripe_customer":   user.StripeCustomer,
-		"trust_level_info":  trustLevel,
-		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":       permissions,
+		"id":                       user.Id,
+		"developer_access_granted": onboarding.ActivationComplete,
+		"username":                 user.Username,
+		"display_name":             user.DisplayName,
+		"role":                     user.Role,
+		"status":                   user.Status,
+		"email":                    user.Email,
+		"github_id":                user.GitHubId,
+		"discord_id":               user.DiscordId,
+		"oidc_id":                  user.OidcId,
+		"wechat_id":                user.WeChatId,
+		"telegram_id":              user.TelegramId,
+		"group":                    user.Group,
+		"quota":                    user.Quota,
+		"used_quota":               user.UsedQuota,
+		"request_count":            user.RequestCount,
+		"aff_code":                 user.AffCode,
+		"aff_count":                user.AffCount,
+		"aff_quota":                user.AffQuota,
+		"aff_history_quota":        user.AffHistoryQuota,
+		"inviter_id":               user.InviterId,
+		"linux_do_id":              user.LinuxDOId,
+		"setting":                  user.Setting,
+		"stripe_customer":          user.StripeCustomer,
+		"trust_level_info":         accessSnapshot.TrustLevel,
+		"trust_level_tiers":        model.GetTrustLevelTiers(),
+		"onboarding": gin.H{
+			"activation_complete":      onboarding.ActivationComplete,
+			"paid_activation_complete": onboarding.PaidActivationComplete,
+			"credential_complete":      onboarding.CredentialComplete,
+			"first_request_complete":   onboarding.FirstRequestComplete,
+			"stage":                    onboarding.Stage,
+		},
+		"sidebar_modules": userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"permissions":     permissions,
 	}
 }
 

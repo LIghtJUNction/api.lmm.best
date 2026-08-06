@@ -201,9 +201,9 @@ func classifyDashboardCredentialUncached(c *gin.Context) (*model.UserBase, servi
 	return user, service.AuthIdentity{UserID: user.Id, UserAuthVersion: user.AuthVersion}, dashboardCredentialPAT, nil
 }
 
-// ConsoleAccessGate keeps the contributor workspace deliberately small until
-// the account creates its first relay credential. It reuses the authentication
-// result in UserAuth so activated users do not pay for a second session lookup.
+// ConsoleAccessGate keeps developer surfaces unavailable until the account has
+// earned the current trust-level access boundary. It reuses the authentication
+// result in UserAuth so requests do not pay for a second session lookup.
 func ConsoleAccessGate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		user, _, credentialKind, err := classifyDashboardCredential(c)
@@ -218,9 +218,7 @@ func ConsoleAccessGate() gin.HandlerFunc {
 		activated, trustErr := trustLevelAllowsDeveloperAccess(user)
 		if trustErr != nil {
 			common.SysLog(fmt.Sprintf("failed to calculate console trust level for user %d: %s", user.Id, trustErr.Error()))
-			// Preserve the legacy gate only while the database is unavailable. New
-			// accounts never receive ConsoleActivatedAt, so this cannot unlock L0.
-			activated = user.ConsoleActivatedAt > 0
+			activated = false
 		}
 		c.Set(consoleActivationContextKey, activated)
 		if activated || preActivationRouteAllowed(c.Request.Method, c.Request.URL.Path) {
@@ -232,20 +230,11 @@ func ConsoleAccessGate() gin.HandlerFunc {
 }
 
 func trustLevelAllowsDeveloperAccess(user *model.UserBase) (bool, error) {
-	if user == nil {
-		return false, gorm.ErrInvalidData
-	}
-	if user.Role >= common.RoleAdminUser {
-		return true, nil
-	}
-	if user.TrustLevelOverride != nil {
-		return *user.TrustLevelOverride >= 1, nil
-	}
-	trustLevel, err := model.GetTrustLevelInfoForUserBase(user)
+	access, err := model.GetDeveloperAccessStateForUserBase(user)
 	if err != nil {
 		return false, err
 	}
-	return trustLevel.Level >= 1, nil
+	return access.Granted, nil
 }
 
 // consoleDiscoveryRoute hides relay-console inventory from unauthenticated and
@@ -295,8 +284,8 @@ func consoleDiscoveryRoute(method string, path string) bool {
 }
 
 // ConsoleActivationGranted reports whether the current dashboard request has
-// crossed the permanent first-credential activation boundary. Anonymous and
-// invalid credentials deliberately return false.
+// passed the trust-level developer access boundary. Anonymous and invalid
+// credentials deliberately return false.
 func ConsoleActivationGranted(c *gin.Context) bool {
 	value, ok := c.Get(consoleActivationContextKey)
 	activated, ok := value.(bool)
