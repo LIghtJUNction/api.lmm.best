@@ -23,8 +23,10 @@ import { api } from '@/lib/api'
 
 import {
   cancelChallenge,
+  listBountyNotifications,
   listBounties,
   listReceivedBountyTips,
+  markBountyNotificationsRead,
   markReceivedBountyTipsRead,
   openBountyDispute,
   thankBountyTip,
@@ -122,6 +124,27 @@ describe('open-source bounty tips', () => {
       '/api/open-source-bounties/tips/received/read',
       '/api/open-source-bounties/tips/17/thank',
     ])
+  })
+})
+
+describe('open-source bounty notifications', () => {
+  test('uses neutral recipient-scoped list and read endpoints', async () => {
+    const gets: string[] = []
+    const posts: string[] = []
+    api.get = (async (url) => {
+      gets.push(url)
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+    api.post = (async (url) => {
+      posts.push(url)
+      return { data: { success: true, data: null } }
+    }) as typeof api.post
+
+    await listBountyNotifications()
+    await markBountyNotificationsRead()
+
+    assert.deepEqual(gets, ['/api/open-source-bounties/notifications'])
+    assert.deepEqual(posts, ['/api/open-source-bounties/notifications/read'])
   })
 })
 

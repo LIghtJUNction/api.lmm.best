@@ -207,11 +207,20 @@ func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 	require.Len(t, ledger, 2)
 	assert.Equal(t, OpenSourceBountyLedgerEscrowFund, ledger[0].Kind)
 	assert.Equal(t, OpenSourceBountyLedgerRewardTransfer, ledger[1].Kind)
+	rewardNotifications, err := ListOpenSourceBountyNotifications(participant.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, rewardNotifications, 1)
+	assert.Equal(t, OpenSourceBountyLedgerRewardTransfer, rewardNotifications[0].Kind)
+	assert.Equal(t, challenge.Id, rewardNotifications[0].ChallengeId)
+	assert.Equal(t, 2_000, rewardNotifications[0].Quota)
 
 	_, _, err = ReviewOpenSourceBountyChallenge(owner.Id, challenge.Id, true, "duplicate approval", 5, "Already reviewed.")
 	require.Error(t, err)
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
 	assert.Equal(t, 2_100, participantAfter.Quota, "approval must transfer balance exactly once")
+	rewardNotifications, err = ListOpenSourceBountyNotifications(participant.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, rewardNotifications, 1, "duplicate approval must not duplicate its notification")
 }
 
 func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
@@ -304,6 +313,66 @@ func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
 	assert.Equal(t, "Thanks for isolating the failing path.", tipLedger.Note)
 	assert.NotZero(t, tipLedger.RecipientReadAt)
 	assert.Equal(t, thanked.ThankedAt, tipLedger.ThankedAt)
+}
+
+func TestOpenSourceBountyNotificationsListReadAndKeepTipCompatibility(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "notification-owner", 10_000, common.RoleCommonUser)
+	recipient := createOpenSourceBountyUser(t, db, "notification-recipient", 0, common.RoleCommonUser)
+	stranger := createOpenSourceBountyUser(t, db, "notification-stranger", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/notifications", 2_000, 1))
+	require.NoError(t, err)
+
+	rows := []OpenSourceBountyLedger{
+		{ProjectId: project.Id, ChallengeId: 11, UserId: owner.Id, CounterpartyUserId: recipient.Id, Kind: OpenSourceBountyLedgerTipTransfer, Quota: 100, Note: "tip", CreatedAt: 1},
+		{ProjectId: project.Id, ChallengeId: 12, UserId: owner.Id, CounterpartyUserId: recipient.Id, Kind: OpenSourceBountyLedgerRewardTransfer, Quota: 200, CreatedAt: 2},
+		{ProjectId: project.Id, ChallengeId: 13, UserId: owner.Id, CounterpartyUserId: recipient.Id, Kind: OpenSourceBountyLedgerDisputeRewardTransfer, Quota: 300, Note: "settled", CreatedAt: 3},
+		{ProjectId: project.Id, ChallengeId: 14, UserId: owner.Id, CounterpartyUserId: stranger.Id, Kind: OpenSourceBountyLedgerRewardTransfer, Quota: 400, CreatedAt: 4},
+		{ProjectId: project.Id, UserId: owner.Id, Kind: OpenSourceBountyLedgerEscrowFund, Quota: 2_000, CreatedAt: 5},
+	}
+	require.NoError(t, db.Create(&rows).Error)
+
+	notifications, err := ListOpenSourceBountyNotifications(recipient.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, notifications, 3)
+	assert.Equal(t, []string{
+		OpenSourceBountyLedgerDisputeRewardTransfer,
+		OpenSourceBountyLedgerRewardTransfer,
+		OpenSourceBountyLedgerTipTransfer,
+	}, []string{notifications[0].Kind, notifications[1].Kind, notifications[2].Kind})
+	for _, notification := range notifications {
+		assert.Equal(t, owner.Id, notification.SenderUserId)
+		assert.Equal(t, owner.Username, notification.SenderUsername)
+		assert.Equal(t, project.Title, notification.ProjectTitle)
+		assert.Zero(t, notification.RecipientReadAt)
+	}
+
+	legacyTips, err := ListOpenSourceBountyTipNotifications(recipient.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, legacyTips, 1)
+	assert.Equal(t, OpenSourceBountyLedgerTipTransfer, rows[0].Kind)
+	assert.Equal(t, rows[0].Id, legacyTips[0].Id)
+	require.NoError(t, MarkOpenSourceBountyTipNotificationsRead(recipient.Id))
+
+	notifications, err = ListOpenSourceBountyNotifications(recipient.Id, 50)
+	require.NoError(t, err)
+	assert.Zero(t, notifications[0].RecipientReadAt, "legacy read endpoint must not mark dispute rewards")
+	assert.Zero(t, notifications[1].RecipientReadAt, "legacy read endpoint must not mark rewards")
+	assert.NotZero(t, notifications[2].RecipientReadAt, "legacy read endpoint must still mark tips")
+
+	_, err = ThankOpenSourceBountyTip(recipient.Id, rows[1].Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_TIP_NOT_FOUND", OpenSourceBountyErrorCode(err))
+	require.NoError(t, MarkOpenSourceBountyNotificationsRead(recipient.Id))
+	notifications, err = ListOpenSourceBountyNotifications(recipient.Id, 50)
+	require.NoError(t, err)
+	for _, notification := range notifications {
+		assert.NotZero(t, notification.RecipientReadAt)
+	}
+
+	strangerNotifications, err := ListOpenSourceBountyNotifications(stranger.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, strangerNotifications, 1)
+	assert.Equal(t, 14, strangerNotifications[0].ChallengeId)
 }
 
 func TestOpenSourceBountyRESTTipIdempotencyReplayMismatchAndRetry(t *testing.T) {
@@ -581,6 +650,12 @@ func TestOpenSourceBountyDisputeAllowsThirdPartyEscrowIntervention(t *testing.T)
 	var ledger OpenSourceBountyLedger
 	require.NoError(t, db.Where("challenge_id = ? AND kind = ?", challenge.Id, OpenSourceBountyLedgerDisputeRewardTransfer).First(&ledger).Error)
 	assert.Equal(t, 2_000, ledger.Quota)
+	rewardNotifications, err := ListOpenSourceBountyNotifications(participant.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, rewardNotifications, 1)
+	assert.Equal(t, OpenSourceBountyLedgerDisputeRewardTransfer, rewardNotifications[0].Kind)
+	assert.Equal(t, challenge.Id, rewardNotifications[0].ChallengeId)
+	assert.Equal(t, 2_000, rewardNotifications[0].Quota)
 	persisted, found, err := GetOpenSourceBountyMCPOperationResult(admin.Id, "open_source_bounties.resolve_dispute", state)
 	require.NoError(t, err)
 	assert.True(t, found)
@@ -591,6 +666,9 @@ func TestOpenSourceBountyDisputeAllowsThirdPartyEscrowIntervention(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, OpenSourceBountyDisputeResolvedPaid, duplicate.Status)
 	assert.Zero(t, duplicateTransferred)
+	rewardNotifications, err = ListOpenSourceBountyNotifications(participant.Id, 50)
+	require.NoError(t, err)
+	require.Len(t, rewardNotifications, 1, "dispute payout replay must not duplicate its notification")
 	require.NoError(t, db.First(&participantAfter, participant.Id).Error)
 	assert.Equal(t, 2_000, participantAfter.Quota)
 	var challengeAfter OpenSourceBountyChallenge

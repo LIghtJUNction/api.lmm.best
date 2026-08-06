@@ -237,6 +237,15 @@ export interface BountyTipNotification {
   created_at: number
 }
 
+export type BountyNotificationKind =
+  | 'tip_transfer'
+  | 'reward_transfer'
+  | 'dispute_reward_transfer'
+
+export interface BountyNotification extends BountyTipNotification {
+  kind: BountyNotificationKind
+}
+
 export interface BountyDraftInput {
   repository_url: string
   title: string

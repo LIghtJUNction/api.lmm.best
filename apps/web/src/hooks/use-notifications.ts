@@ -23,11 +23,11 @@ import { toast } from 'sonner'
 
 import type { NotificationTab } from '@/components/notification-popover'
 import {
-  listReceivedBountyTips,
-  markReceivedBountyTipsRead,
+  listBountyNotifications,
+  markBountyNotificationsRead,
   thankBountyTip,
 } from '@/features/open-source-bounties/api'
-import type { BountyTipNotification } from '@/features/open-source-bounties/types'
+import type { BountyNotification } from '@/features/open-source-bounties/types'
 import { useStatus } from '@/hooks/use-status'
 import { getNotice } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
@@ -105,13 +105,15 @@ export function useNotifications() {
         : [],
     [announcementsEnabled, statusAnnouncements]
   )
-  const { data: bountyTips = [], isLoading: bountyTipsLoading } = useQuery({
-    queryKey: ['open-source-bounties', 'tip-notifications', userId],
-    queryFn: listReceivedBountyTips,
-    enabled: userId > 0,
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-  })
+  const { data: bountyNotifications = [], isLoading: bountyLoading } = useQuery(
+    {
+      queryKey: ['open-source-bounties', 'notifications', userId],
+      queryFn: listBountyNotifications,
+      enabled: userId > 0,
+      staleTime: 30_000,
+      refetchInterval: 30_000,
+    }
+  )
 
   // Notification store
   const {
@@ -137,22 +139,22 @@ export function useNotifications() {
         return !isAnnouncementRead(key)
       }
     ).length
-    const bountyTipsUnread = bountyTips.filter(
+    const bountyUnread = bountyNotifications.filter(
       (item) => item.recipient_read_at === 0
     ).length
 
     return {
       notice: noticeUnread,
       announcements: announcementsUnread,
-      bountyTips: bountyTipsUnread,
-      total: noticeUnread + announcementsUnread + bountyTipsUnread,
+      bountyNotifications: bountyUnread,
+      total: noticeUnread + announcementsUnread + bountyUnread,
     }
   }, [
     noticeContent,
     lastReadNotice,
     announcements,
     isAnnouncementRead,
-    bountyTips,
+    bountyNotifications,
   ])
 
   const markAnnouncementsAsRead = () => {
@@ -165,11 +167,11 @@ export function useNotifications() {
   }
 
   // Handle popover open
-  const markBountyTipsAsRead = () => {
-    if (userId <= 0 || unreadCounts.bountyTips === 0) return
+  const markBountyNotificationsAsRead = () => {
+    if (userId <= 0 || unreadCounts.bountyNotifications === 0) return
     const readAt = Math.floor(Date.now() / 1000)
-    queryClient.setQueryData<BountyTipNotification[]>(
-      ['open-source-bounties', 'tip-notifications', userId],
+    queryClient.setQueryData<BountyNotification[]>(
+      ['open-source-bounties', 'notifications', userId],
       (items = []) =>
         items.map((item) =>
           item.recipient_read_at > 0
@@ -177,9 +179,9 @@ export function useNotifications() {
             : { ...item, recipient_read_at: readAt }
         )
     )
-    void markReceivedBountyTipsRead().catch(() => {
+    void markBountyNotificationsRead().catch(() => {
       void queryClient.invalidateQueries({
-        queryKey: ['open-source-bounties', 'tip-notifications', userId],
+        queryKey: ['open-source-bounties', 'notifications', userId],
       })
     })
   }
@@ -195,7 +197,7 @@ export function useNotifications() {
       markAnnouncementsAsRead()
     }
     if (nextTab === 'bounty-tips') {
-      markBountyTipsAsRead()
+      markBountyNotificationsAsRead()
     }
 
     setActiveTab(nextTab)
@@ -219,7 +221,7 @@ export function useNotifications() {
       markAnnouncementsAsRead()
     }
     if (tab === 'bounty-tips') {
-      markBountyTipsAsRead()
+      markBountyNotificationsAsRead()
     }
   }
 
@@ -227,10 +229,12 @@ export function useNotifications() {
     setThankingTipId(tipId)
     try {
       const updated = await thankBountyTip(tipId)
-      queryClient.setQueryData<BountyTipNotification[]>(
-        ['open-source-bounties', 'tip-notifications', userId],
+      queryClient.setQueryData<BountyNotification[]>(
+        ['open-source-bounties', 'notifications', userId],
         (items = []) =>
-          items.map((item) => (item.id === tipId ? updated : item))
+          items.map((item) =>
+            item.id === tipId ? { ...item, ...updated } : item
+          )
       )
       await queryClient.invalidateQueries({
         queryKey: ['open-source-bounties'],
@@ -247,8 +251,8 @@ export function useNotifications() {
     // Data
     notice: noticeContent,
     announcements,
-    bountyTips,
-    loading: noticeLoading || statusLoading || bountyTipsLoading,
+    bountyTips: bountyNotifications,
+    loading: noticeLoading || statusLoading || bountyLoading,
 
     // Unread counts
     unreadCount: unreadCounts.total,

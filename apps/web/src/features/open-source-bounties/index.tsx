@@ -42,7 +42,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Heart } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -76,6 +76,7 @@ import {
   parseQuotaFromDollars,
   quotaUnitsToDollars,
 } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getChallengeAcceptanceState } from './acceptance'
@@ -106,6 +107,10 @@ import {
   updateBounty,
   withdrawChallenge,
 } from './api'
+import {
+  selectBountyNotificationChallenge,
+  type BountyNotificationDetailTarget,
+} from './notification-target'
 import {
   getBountyDisputeEvidenceComparison,
   type BountyChallenge,
@@ -229,7 +234,13 @@ function disputeTicketSearch(challenge: BountyChallenge) {
   } as const
 }
 
-export function OpenSourceBounties() {
+export function OpenSourceBounties({
+  detailTarget,
+  onDetailTargetConsumed,
+}: {
+  detailTarget?: BountyNotificationDetailTarget
+  onDetailTargetConsumed?: () => void
+} = {}) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
@@ -255,6 +266,7 @@ export function OpenSourceBounties() {
   })
   const [detail, setDetail] = useState<BountyProjectDetail | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [focusedChallengeId, setFocusedChallengeId] = useState<number>()
   const [reviewTarget, setReviewTarget] = useState<{
     challenge: BountyChallenge
     action: 'approve' | 'reject'
@@ -336,12 +348,15 @@ export function OpenSourceBounties() {
     }
   }
 
-  const errorMessage = (error: unknown) => {
-    const code = (error as Error & { code?: string })?.code
-    return t(
-      (code && ERROR_KEYS[code]) || 'Unable to complete the bounty action.'
-    )
-  }
+  const errorMessage = useCallback(
+    (error: unknown) => {
+      const code = (error as Error & { code?: string })?.code
+      return t(
+        (code && ERROR_KEYS[code]) || 'Unable to complete the bounty action.'
+      )
+    },
+    [t]
+  )
 
   const runAction = async (
     key: string,
@@ -417,6 +432,39 @@ export function OpenSourceBounties() {
       setPending('')
     }
   }
+
+  useEffect(() => {
+    if (!detailTarget) return
+    let cancelled = false
+    setPending(`detail-${detailTarget.projectId}`)
+    void getBountyDetail(detailTarget.projectId)
+      .then((nextDetail) => {
+        if (cancelled) return
+        const challenge = selectBountyNotificationChallenge(
+          nextDetail,
+          detailTarget
+        )
+        if (!challenge) {
+          onDetailTargetConsumed?.()
+          return
+        }
+        setDetail(nextDetail)
+        setFocusedChallengeId(challenge.id)
+        setDetailOpen(true)
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(errorMessage(error))
+          onDetailTargetConsumed?.()
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPending('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [detailTarget, errorMessage, onDetailTargetConsumed])
 
   const handleCancelChallenge = async (challenge: BountyChallenge) => {
     if (
@@ -952,8 +1000,15 @@ export function OpenSourceBounties() {
 
       <ProjectReviewDialog
         open={detailOpen}
-        onOpenChange={setDetailOpen}
+        onOpenChange={(open) => {
+          setDetailOpen(open)
+          if (!open && focusedChallengeId) {
+            setFocusedChallengeId(undefined)
+            onDetailTargetConsumed?.()
+          }
+        }}
         detail={detail}
+        focusedChallengeId={focusedChallengeId}
         pending={pending}
         onReview={(challenge, action) => {
           setReviewTarget({ challenge, action })
@@ -1972,12 +2027,22 @@ function ProjectReviewDialog(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
   detail: BountyProjectDetail | null
+  focusedChallengeId?: number
   pending: string
   onReview: (challenge: BountyChallenge, action: 'approve' | 'reject') => void
   onTip: (challenge: BountyChallenge) => void
   onCancel: (challenge: BountyChallenge) => void
 }) {
   const { t } = useTranslation()
+  const focusedChallengeRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!props.open || !props.focusedChallengeId) return
+    const frame = requestAnimationFrame(() => {
+      focusedChallengeRef.current?.scrollIntoView({ block: 'nearest' })
+      focusedChallengeRef.current?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [props.detail, props.focusedChallengeId, props.open])
   return (
     <Dialog
       open={props.open}
@@ -2003,7 +2068,23 @@ function ProjectReviewDialog(props: {
           props.detail?.challenges.map((challenge) => (
             <div
               key={challenge.id}
-              className='flex flex-col gap-3 rounded-xl border p-4'
+              ref={
+                challenge.id === props.focusedChallengeId
+                  ? focusedChallengeRef
+                  : undefined
+              }
+              id={`bounty-challenge-${challenge.id}`}
+              tabIndex={
+                challenge.id === props.focusedChallengeId ? -1 : undefined
+              }
+              aria-current={
+                challenge.id === props.focusedChallengeId ? 'true' : undefined
+              }
+              className={cn(
+                'flex flex-col gap-3 rounded-xl border p-4',
+                challenge.id === props.focusedChallengeId &&
+                  'border-primary ring-primary/20 ring-2'
+              )}
             >
               <div className='flex flex-wrap items-start justify-between gap-2'>
                 <div>

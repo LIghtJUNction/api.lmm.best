@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 
 import type {
+  BountyNotification,
   BountyChallenge,
   BountyDraftInput,
   BountyDispute,
@@ -199,6 +200,16 @@ export function tipChallenge(
       headers: { 'Idempotency-Key': idempotencyKey },
     })
   )
+}
+
+export function listBountyNotifications() {
+  return unwrap<BountyNotification[]>(
+    api.get('/api/open-source-bounties/notifications')
+  )
+}
+
+export function markBountyNotificationsRead() {
+  return unwrap<null>(api.post('/api/open-source-bounties/notifications/read'))
 }
 
 export function listReceivedBountyTips() {

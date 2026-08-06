@@ -294,6 +294,8 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("", controller.CreateOpenSourceBounty)
 			openSourceBountyRoute.GET("/mine", controller.ListOwnedOpenSourceBounties)
 			openSourceBountyRoute.GET("/accepted", controller.ListAcceptedOpenSourceBounties)
+			openSourceBountyRoute.GET("/notifications", middleware.DisableCache(), controller.ListOpenSourceBountyNotifications)
+			openSourceBountyRoute.POST("/notifications/read", controller.MarkOpenSourceBountyNotificationsRead)
 			openSourceBountyRoute.GET("/tips/received", middleware.DisableCache(), controller.ListOpenSourceBountyTipNotifications)
 			openSourceBountyRoute.POST("/tips/received/read", controller.MarkOpenSourceBountyTipNotificationsRead)
 			openSourceBountyRoute.POST("/tips/:tip_id/thank", controller.ThankOpenSourceBountyTip)
