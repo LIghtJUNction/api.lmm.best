@@ -1,6 +1,6 @@
 pkgbase = lmm-api-git
 	pkgdesc = LMM API shared launcher, service, configuration, and web frontend (git)
-	pkgver = 0.1.0.r1.ge68b73186
+	pkgver = 0.1.1.r7.g24093b139
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/api.lmm.best
 	install = lmm-api-git.install
