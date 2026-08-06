@@ -40,7 +40,7 @@ export const Route = createFileRoute('/_authenticated')({
       !isConsoleActivated(auth.user) &&
       !isContributorRoute(location.pathname)
     ) {
-      throw redirect({ to: '/challenges' })
+      throw redirect({ to: '/getting-started' })
     }
   },
   component: AuthenticatedLayout,

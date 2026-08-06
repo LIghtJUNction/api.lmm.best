@@ -102,6 +102,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         revision = option_env!("LMM_BUILD_REVISION").unwrap_or("unknown"),
         "Rust migration edge listening"
     );
+    if config.local_acceptance {
+        tracing::warn!(
+            "LMM_LOCAL_ACCEPTANCE enabled; developer access granted without paid activation"
+        );
+    }
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let app_state = AppState {
         readiness: Arc::new(probe),

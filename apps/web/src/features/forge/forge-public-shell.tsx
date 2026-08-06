@@ -16,29 +16,32 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useEffect } from 'react'
+
 import { PublicLayout } from '@/components/layout'
+import { LmmBrandMark } from '@/components/lmm-brand-mark'
 
 type ForgePublicShellProps = {
   children: React.ReactNode
 }
 
-function ForgeMark() {
-  return (
-    <span
-      className='relative block size-7 -rotate-3 border-[3px] border-[#141413] before:absolute before:top-[6px] before:left-[3px] before:h-[3px] before:w-4 before:rotate-12 before:bg-[#141413] after:absolute after:top-[7px] after:left-[11px] after:h-3 after:w-[3px] after:-rotate-6 after:bg-[#141413]'
-      aria-hidden='true'
-    />
-  )
-}
-
 export function ForgePublicShell(props: ForgePublicShellProps) {
+  useEffect(() => {
+    const previousTitle = document.title
+    document.title = 'LMM Forge'
+    return () => {
+      document.title = previousTitle
+    }
+  }, [])
+
   return (
     <PublicLayout
       showMainContainer={false}
       siteName='LMM Forge'
-      logo={<ForgeMark />}
+      logo={<LmmBrandMark className='size-7' title='LMM Forge' />}
       navLinks={[
         { title: 'Challenges', href: '/challenges' },
+        { title: 'Pricing', href: '/pricing' },
         { title: 'How it works', href: '/#workflow' },
       ]}
       showNotifications={false}

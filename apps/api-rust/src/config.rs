@@ -75,6 +75,11 @@ pub struct Config {
     /// Explicit opt-in for the isolated candidate surface on the test host.
     /// Any value other than exactly `1` is rejected before the listener binds.
     pub test_instance: bool,
+    /// When `true`, developer access is granted to all ordinary users without
+    /// paid activation.  Requires the listen address to be an exact IPv4 or
+    /// IPv6 loopback address (127.0.0.1 or ::1).  Mirrors Go's
+    /// `LMM_LOCAL_ACCEPTANCE` startup policy.
+    pub local_acceptance: bool,
 }
 
 impl std::fmt::Debug for Config {
@@ -135,6 +140,7 @@ impl std::fmt::Debug for Config {
             )
             .field("trusted_proxies", &self.trusted_proxies)
             .field("test_instance", &self.test_instance)
+            .field("local_acceptance", &self.local_acceptance)
             .finish()
     }
 }
@@ -151,11 +157,13 @@ impl Config {
         let auth_cookie_secure =
             boolean_with_legacy("AUTH_COOKIE_SECURE", "SESSION_COOKIE_SECURE", false)?;
         let auth_trusted_origins = auth_trusted_origins(auth_cookie_secure)?;
+        let listen_addr: SocketAddr = read("LMM_RS_LISTEN_ADDR")?
+            .parse()
+            .map_err(|_| ConfigError::Invalid("LMM_RS_LISTEN_ADDR"))?;
+        let local_acceptance = local_acceptance_policy(listen_addr)?;
         let config = Self {
             slot: validated_slot(read("LMM_RS_SLOT")?, test_instance)?,
-            listen_addr: read("LMM_RS_LISTEN_ADDR")?
-                .parse()
-                .map_err(|_| ConfigError::Invalid("LMM_RS_LISTEN_ADDR"))?,
+            listen_addr,
             database_url: read("DATABASE_URL")?,
             valkey_url: read("VALKEY_URL")?,
             schema_contract: read("LMM_SCHEMA_CONTRACT")?
@@ -201,6 +209,7 @@ impl Config {
             api_token_search_rate_limit_window: positive_seconds("SEARCH_RATE_LIMIT_DURATION", 60)?,
             trusted_proxies: trusted_proxies()?,
             test_instance,
+            local_acceptance,
         };
         if config.test_instance {
             validate_test_instance_isolation(&config)?;
@@ -356,6 +365,40 @@ fn parse_test_instance_value(value: Option<&str>) -> Result<bool, ConfigError> {
         Some("1") => Ok(true),
         Some(_) => Err(ConfigError::Invalid("LMM_RS_TEST_INSTANCE")),
     }
+}
+
+/// Mirrors Go's `localAcceptancePolicy`.  When `LMM_LOCAL_ACCEPTANCE=true`,
+/// developer access is granted without paid activation.  The listen address
+/// must be an exact IPv4 or IPv6 loopback (127.0.0.1 or ::1); mapped IPv6
+/// (::ffff:127.0.0.1) and scoped addresses are rejected, matching Go's
+/// family-aware `netip.Addr` equality.
+fn local_acceptance_policy(listen_addr: SocketAddr) -> Result<bool, ConfigError> {
+    let flag = env::var("LMM_LOCAL_ACCEPTANCE").unwrap_or_default();
+    parse_local_acceptance_policy(&flag, listen_addr)
+}
+
+fn parse_local_acceptance_policy(flag: &str, listen_addr: SocketAddr) -> Result<bool, ConfigError> {
+    if flag != "true" {
+        return Ok(false);
+    }
+    if !is_exact_loopback(listen_addr.ip()) {
+        return Err(ConfigError::Invalid("LMM_LOCAL_ACCEPTANCE"));
+    }
+    Ok(true)
+}
+
+/// Returns `true` only for exactly `127.0.0.1` (IPv4) or `::1` (IPv6).
+/// IPv4-mapped IPv6 (`::ffff:127.0.0.1`) and any other loopback-range
+/// address (e.g. `127.0.0.2`) are rejected, matching Go's
+/// `isExactLoopbackHost` which uses `netip.Addr` equality.
+fn is_exact_loopback(ip: IpAddr) -> bool {
+    matches!(
+        ip,
+        IpAddr::V4(v4) if v4 == std::net::Ipv4Addr::LOCALHOST
+    ) || matches!(
+        ip,
+        IpAddr::V6(v6) if v6 == std::net::Ipv6Addr::LOCALHOST
+    )
 }
 
 fn validated_slot(value: String, test_instance: bool) -> Result<String, ConfigError> {
@@ -640,6 +683,7 @@ mod tests {
             api_token_search_rate_limit_window: Duration::from_secs(60),
             trusted_proxies: TrustedProxyPolicy::Disabled,
             test_instance: false,
+            local_acceptance: false,
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("postgres://secret"));
@@ -765,6 +809,69 @@ mod tests {
                 "{invalid:?}"
             );
         }
+    }
+
+    #[test]
+    fn local_acceptance_disabled_by_default() {
+        let addr: SocketAddr = "127.0.0.1:3101".parse().unwrap();
+        assert!(!super::parse_local_acceptance_policy("", addr).expect("absent flag"));
+        assert!(!super::parse_local_acceptance_policy("false", addr).expect("false flag"));
+        assert!(!super::parse_local_acceptance_policy("TRUE", addr).expect("uppercase"));
+        assert!(!super::parse_local_acceptance_policy("1", addr).expect("numeric"));
+    }
+
+    #[test]
+    fn local_acceptance_ipv4_loopback() {
+        let addr: SocketAddr = "127.0.0.1:3101".parse().unwrap();
+        assert!(super::parse_local_acceptance_policy("true", addr).expect("IPv4 loopback"));
+    }
+
+    #[test]
+    fn local_acceptance_ipv6_loopback() {
+        let addr: SocketAddr = "[::1]:3101".parse().unwrap();
+        assert!(super::parse_local_acceptance_policy("true", addr).expect("IPv6 loopback"));
+    }
+
+    #[test]
+    fn local_acceptance_rejects_ipv4_wildcard() {
+        let addr: SocketAddr = "0.0.0.0:3101".parse().unwrap();
+        assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+    }
+
+    #[test]
+    fn local_acceptance_rejects_ipv6_wildcard() {
+        let addr: SocketAddr = "[::]:3101".parse().unwrap();
+        assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+    }
+
+    #[test]
+    fn local_acceptance_rejects_other_loopback_address() {
+        let addr: SocketAddr = "127.0.0.2:3101".parse().unwrap();
+        assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+    }
+
+    #[test]
+    fn local_acceptance_rejects_public_address() {
+        let addr: SocketAddr = "192.0.2.10:3101".parse().unwrap();
+        assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+    }
+
+    #[test]
+    fn is_exact_loopback_accepts_only_canonical_addresses() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        assert!(super::is_exact_loopback(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(super::is_exact_loopback(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        // 127.0.0.2 is in the loopback range but not the canonical address
+        assert!(!super::is_exact_loopback(IpAddr::V4(Ipv4Addr::new(
+            127, 0, 0, 2
+        ))));
+        // Wildcard
+        assert!(!super::is_exact_loopback(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+        assert!(!super::is_exact_loopback(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+        // Public
+        assert!(!super::is_exact_loopback(IpAddr::V4(Ipv4Addr::new(
+            192, 0, 2, 10
+        ))));
     }
 
     #[test]

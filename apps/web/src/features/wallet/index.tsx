@@ -21,9 +21,11 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
+import { useAuthUserRefresh } from '@/features/onboarding'
 import { useStatus } from '@/hooks/use-status'
-import { getSelf } from '@/lib/api'
-import { useAuthStore, type AuthUser } from '@/stores/auth-store'
+import { isConsoleActivated } from '@/lib/console-activation'
+import { isLocalPreview } from '@/lib/local-preview'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
@@ -32,6 +34,7 @@ import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialo
 import { TransferDialog } from './components/dialogs/transfer-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
+import { TrustLevelPanel } from './components/trust-level-panel'
 import { WalletStatsCard } from './components/wallet-stats-card'
 import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from './constants'
 import {
@@ -61,11 +64,17 @@ interface WalletProps {
   initialShowHistory?: boolean
 }
 
+const PAYMENT_REFRESH_INTERVAL_MS = 3_000
+const PAYMENT_REFRESH_DEADLINE_MS = 2 * 60 * 1_000
+
 export function Wallet(props: WalletProps) {
   const { t } = useTranslation()
-  const setAuthUser = useAuthStore((state) => state.auth.setUser)
-  const [user, setUser] = useState<UserWalletData | null>(null)
-  const [userLoading, setUserLoading] = useState(true)
+  const authUser = useAuthStore((state) => state.auth.user)
+  const { refreshUser } = useAuthUserRefresh()
+  const user = authUser as UserWalletData | null
+  const userLoading = authUser === null
+  const localPreview = isLocalPreview()
+  const developerAccessGranted = !localPreview && isConsoleActivated(authUser)
   const [topupAmount, setTopupAmount] = useState(0)
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null)
   const [selectedPaymentMethod, setSelectedPaymentMethod] =
@@ -82,6 +91,9 @@ export function Wallet(props: WalletProps) {
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
+  const [pendingCheckoutDeadline, setPendingCheckoutDeadline] = useState<
+    number | null
+  >(null)
 
   const { status } = useStatus()
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
@@ -97,41 +109,74 @@ export function Wallet(props: WalletProps) {
     loading: affiliateLoading,
     transferQuota,
     transferring,
-  } = useAffiliate()
+  } = useAffiliate({ enabled: developerAccessGranted })
   const { redeeming, redeemCode } = useRedemption()
   const { processing: creemProcessing, processCreemPayment } = useCreemPayment()
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
 
-  // Fetch and refresh user data
-  const fetchUser = useCallback(async () => {
-    try {
-      setUserLoading(true)
-      const response = await getSelf()
-      if (response.success && response.data) {
-        const refreshedUser = response.data as AuthUser
-        setUser(refreshedUser as UserWalletData)
-        setAuthUser(refreshedUser)
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to fetch user data:', error)
-    } finally {
-      setUserLoading(false)
+  const refreshWalletUser = useCallback(async () => {
+    await refreshUser()
+  }, [refreshUser])
+
+  const refreshAfterPaymentLaunch = useCallback(async () => {
+    const refreshedUser = await refreshUser()
+    if (!developerAccessGranted && !isConsoleActivated(refreshedUser)) {
+      setPendingCheckoutDeadline(Date.now() + PAYMENT_REFRESH_DEADLINE_MS)
     }
-  }, [setAuthUser])
+  }, [developerAccessGranted, refreshUser])
 
   useEffect(() => {
-    fetchUser()
-  }, [fetchUser])
+    if (pendingCheckoutDeadline === null) return
+    if (developerAccessGranted) {
+      setPendingCheckoutDeadline(null)
+      return
+    }
+
+    let cancelled = false
+    let timeoutId: number | undefined
+
+    const scheduleNextPoll = () => {
+      timeoutId = window.setTimeout(
+        () => void poll(),
+        PAYMENT_REFRESH_INTERVAL_MS
+      )
+    }
+    const poll = async () => {
+      if (cancelled) return
+      if (Date.now() >= pendingCheckoutDeadline) {
+        setPendingCheckoutDeadline(null)
+        return
+      }
+      if (document.visibilityState !== 'visible') {
+        scheduleNextPoll()
+        return
+      }
+
+      const refreshedUser = await refreshUser()
+      if (cancelled) return
+      if (isConsoleActivated(refreshedUser)) {
+        setPendingCheckoutDeadline(null)
+        return
+      }
+      scheduleNextPoll()
+    }
+
+    scheduleNextPoll()
+
+    return () => {
+      cancelled = true
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+    }
+  }, [developerAccessGranted, pendingCheckoutDeadline, refreshUser])
 
   useEffect(() => {
     if (props.initialShowHistory) {
-      setBillingDialogOpen(true)
+      if (developerAccessGranted) setBillingDialogOpen(true)
       window.history.replaceState({}, '', window.location.pathname)
     }
-  }, [props.initialShowHistory])
+  }, [developerAccessGranted, props.initialShowHistory])
 
   // Initialize topup amount when topup info is loaded
   const topupAmountInitializedRef = useRef(false)
@@ -198,6 +243,15 @@ export function Wallet(props: WalletProps) {
 
   // Handle payment confirmation
   const handlePaymentConfirm = async () => {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview only: no payment is started and no balance is changed.'
+        )
+      )
+      return
+    }
+
     if (!selectedPaymentMethod) return
 
     if (!isPaymentMethodCurrencySupported(selectedPaymentMethod.type)) {
@@ -223,26 +277,44 @@ export function Wallet(props: WalletProps) {
 
     if (success) {
       setConfirmDialogOpen(false)
-      await fetchUser()
+      await refreshAfterPaymentLaunch()
     }
   }
 
   // Handle redemption
   const handleRedeem = async () => {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview only: no payment is started and no balance is changed.'
+        )
+      )
+      return
+    }
+
     if (!redemptionCode) return
 
     const success = await redeemCode(redemptionCode)
     if (success) {
       setRedemptionCode('')
-      await fetchUser()
+      await refreshWalletUser()
     }
   }
 
   // Handle transfer
   const handleTransfer = async (amount: number) => {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview only: no payment is started and no balance is changed.'
+        )
+      )
+      return false
+    }
+
     const success = await transferQuota(amount)
     if (success) {
-      await fetchUser()
+      await refreshWalletUser()
     }
     return success
   }
@@ -255,13 +327,22 @@ export function Wallet(props: WalletProps) {
 
   // Handle Creem payment confirmation
   const handleCreemConfirm = async () => {
+    if (localPreview) {
+      toast.info(
+        t(
+          'Local preview only: no payment is started and no balance is changed.'
+        )
+      )
+      return
+    }
+
     if (!selectedCreemProduct) return
 
     const success = await processCreemPayment(selectedCreemProduct.productId)
     if (success) {
       setCreemDialogOpen(false)
       setSelectedCreemProduct(null)
-      await fetchUser()
+      await refreshAfterPaymentLaunch()
     }
   }
 
@@ -304,11 +385,16 @@ export function Wallet(props: WalletProps) {
         <SectionPageLayout.Title>{t('Wallet')}</SectionPageLayout.Title>
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
-            <WalletStatsCard user={user} loading={userLoading} />
+            {developerAccessGranted ? (
+              <>
+                <WalletStatsCard user={user} loading={userLoading} />
+                <TrustLevelPanel user={user} loading={userLoading} />
+              </>
+            ) : null}
 
             <div
               className={
-                showSubscriptionPanel
+                developerAccessGranted && showSubscriptionPanel
                   ? 'grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] xl:items-start'
                   : 'grid gap-4'
               }
@@ -344,26 +430,31 @@ export function Wallet(props: WalletProps) {
                   enableWaffoPancakeTopup={
                     topupInfo?.enable_waffo_pancake_topup
                   }
+                  neutralMode={!developerAccessGranted}
                 />
               </div>
 
-              <SubscriptionPlansCard
-                topupInfo={topupInfo}
-                onAvailabilityChange={handleSubscriptionAvailabilityChange}
-                userQuota={user?.quota}
-                onPurchaseSuccess={fetchUser}
-              />
+              {developerAccessGranted ? (
+                <SubscriptionPlansCard
+                  topupInfo={topupInfo}
+                  onAvailabilityChange={handleSubscriptionAvailabilityChange}
+                  userQuota={user?.quota}
+                  onPurchaseSuccess={refreshWalletUser}
+                />
+              ) : null}
             </div>
 
-            <AffiliateRewardsCard
-              user={user}
-              affiliateLink={affiliateLink}
-              onTransfer={() => setTransferDialogOpen(true)}
-              complianceConfirmed={
-                topupInfo?.payment_compliance_confirmed !== false
-              }
-              loading={affiliateLoading}
-            />
+            {developerAccessGranted ? (
+              <AffiliateRewardsCard
+                user={user}
+                affiliateLink={affiliateLink}
+                onTransfer={() => setTransferDialogOpen(true)}
+                complianceConfirmed={
+                  topupInfo?.payment_compliance_confirmed !== false
+                }
+                loading={affiliateLoading}
+              />
+            ) : null}
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
@@ -378,20 +469,25 @@ export function Wallet(props: WalletProps) {
         calculating={calculating}
         processing={processing || waffoProcessing || pancakeProcessing}
         discountRate={getDiscountRate()}
+        neutralMode={!developerAccessGranted}
       />
 
-      <TransferDialog
-        open={transferDialogOpen}
-        onOpenChange={setTransferDialogOpen}
-        onConfirm={handleTransfer}
-        availableQuota={user?.aff_quota ?? 0}
-        transferring={transferring}
-      />
+      {developerAccessGranted ? (
+        <TransferDialog
+          open={transferDialogOpen}
+          onOpenChange={setTransferDialogOpen}
+          onConfirm={handleTransfer}
+          availableQuota={user?.aff_quota ?? 0}
+          transferring={transferring}
+        />
+      ) : null}
 
-      <BillingHistoryDialog
-        open={billingDialogOpen}
-        onOpenChange={setBillingDialogOpen}
-      />
+      {developerAccessGranted ? (
+        <BillingHistoryDialog
+          open={billingDialogOpen}
+          onOpenChange={setBillingDialogOpen}
+        />
+      ) : null}
 
       <CreemConfirmDialog
         open={creemDialogOpen}
@@ -399,6 +495,7 @@ export function Wallet(props: WalletProps) {
         onConfirm={handleCreemConfirm}
         product={selectedCreemProduct}
         processing={creemProcessing}
+        neutralMode={!developerAccessGranted}
       />
     </>
   )

@@ -20,6 +20,7 @@ import {
   Activity,
   Box,
   Bug,
+  Compass,
   CreditCard,
   FileText,
   FlaskConical,
@@ -37,7 +38,6 @@ import {
   User,
   Users,
   Wallet,
-  ShieldCheck,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -60,28 +60,28 @@ export function useSidebarData(): SidebarData {
     return {
       navGroups: [
         {
-          id: 'contributor',
-          title: t('Contributor workspace'),
+          id: 'onboarding',
+          title: t('Getting started'),
           items: [
             {
-              title: t('Challenges'),
-              url: '/workspace',
-              icon: Trophy,
+              title: t('Getting started'),
+              url: '/getting-started',
+              icon: Compass,
             },
             {
-              title: t('Wallet'),
+              title: t('Add funds'),
               url: '/wallet',
               icon: Wallet,
-            },
-            {
-              title: t('Trust & access'),
-              url: '/wallet',
-              icon: ShieldCheck,
             },
             {
               title: t('Profile'),
               url: '/profile',
               icon: User,
+            },
+            {
+              title: t('Support'),
+              url: '/support',
+              icon: LifeBuoy,
             },
           ],
         },

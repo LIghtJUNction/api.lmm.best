@@ -32,6 +32,7 @@ interface CreemConfirmDialogProps {
   onConfirm: () => void
   product: CreemProduct | null
   processing: boolean
+  neutralMode?: boolean
 }
 
 export function CreemConfirmDialog({
@@ -40,6 +41,7 @@ export function CreemConfirmDialog({
   onConfirm,
   product,
   processing,
+  neutralMode = false,
 }: CreemConfirmDialogProps) {
   const { t } = useTranslation()
 
@@ -49,7 +51,7 @@ export function CreemConfirmDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={t('Confirm Creem Purchase')}
+      title={neutralMode ? t('Confirm Payment') : t('Confirm Creem Purchase')}
       description={t('Review your purchase details before proceeding.')}
       contentClassName='max-sm:w-[calc(100vw-1.5rem)] sm:max-w-[425px]'
       footerClassName='grid grid-cols-2 gap-2 sm:flex'
@@ -72,20 +74,24 @@ export function CreemConfirmDialog({
       }
     >
       <div className='space-y-3 py-3 sm:space-y-4 sm:py-4'>
-        <div className='flex items-center justify-between'>
-          <span className='text-muted-foreground'>{t('Product')}</span>
-          <span className='font-medium'>{product.name}</span>
-        </div>
+        {!neutralMode ? (
+          <div className='flex items-center justify-between'>
+            <span className='text-muted-foreground'>{t('Product')}</span>
+            <span className='font-medium'>{product.name}</span>
+          </div>
+        ) : null}
         <div className='flex items-center justify-between'>
           <span className='text-muted-foreground'>{t('Price')}</span>
           <span className='text-primary font-medium'>
             {formatCreemPrice(product.price, product.currency)}
           </span>
         </div>
-        <div className='flex items-center justify-between'>
-          <span className='text-muted-foreground'>{t('Quota')}</span>
-          <span className='font-medium'>{formatNumber(product.quota)}</span>
-        </div>
+        {!neutralMode ? (
+          <div className='flex items-center justify-between'>
+            <span className='text-muted-foreground'>{t('Quota')}</span>
+            <span className='font-medium'>{formatNumber(product.quota)}</span>
+          </div>
+        ) : null}
       </div>
     </Dialog>
   )

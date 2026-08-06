@@ -76,6 +76,35 @@ func TestBuildSelfUserDataReportsServerDerivedOnboardingStages(t *testing.T) {
 	assertOnboarding("complete", true, true, true, true)
 }
 
+func TestBuildSelfUserDataLocalAcceptanceUsesOrdinaryCredentialMilestones(t *testing.T) {
+	previousCapability := model.LocalAcceptanceDeveloperAccessEnabled()
+	model.SetLocalAcceptanceDeveloperAccess(true)
+	t.Cleanup(func() {
+		model.SetLocalAcceptanceDeveloperAccess(previousCapability)
+	})
+
+	db := setupUserOnboardingTestDB(t)
+	user := model.User{Username: "acceptance-onboarding-user", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+
+	data := buildSelfUserData(&user)
+	onboarding := data["onboarding"].(gin.H)
+	assert.True(t, data["developer_access_granted"].(bool))
+	assert.True(t, onboarding["activation_complete"].(bool))
+	assert.False(t, onboarding["paid_activation_complete"].(bool))
+	assert.False(t, onboarding["credential_complete"].(bool))
+	assert.Equal(t, "credential", onboarding["stage"])
+
+	require.NoError(t, db.Create(&model.Token{UserId: user.Id, Key: "acceptance-onboarding-token", Status: common.TokenStatusEnabled}).Error)
+	data = buildSelfUserData(&user)
+	onboarding = data["onboarding"].(gin.H)
+	assert.True(t, data["developer_access_granted"].(bool))
+	assert.False(t, onboarding["paid_activation_complete"].(bool))
+	assert.True(t, onboarding["credential_complete"].(bool))
+	assert.False(t, onboarding["first_request_complete"].(bool))
+	assert.Equal(t, "first_request", onboarding["stage"])
+}
+
 func TestBuildSelfUserDataCompletesOnboardingForAdministrators(t *testing.T) {
 	db := setupUserOnboardingTestDB(t)
 	for _, role := range []int{common.RoleAdminUser, common.RoleRootUser} {

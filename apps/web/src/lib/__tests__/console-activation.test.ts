@@ -28,52 +28,183 @@ import {
   isRestrictedPublicRoute,
 } from '../console-activation'
 
-function user(role: number, consoleActivatedAt?: number): AuthUser {
+function user(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: 7,
     username: 'contributor',
-    role,
-    permissions: { console_activated_at: consoleActivatedAt },
+    role: 1,
+    ...overrides,
   }
 }
 
 describe('console activation boundary', () => {
-  test('keeps explicit new accounts restricted until first credential activation', () => {
-    assert.equal(isConsoleActivated(user(1, 0)), false)
-    assert.equal(isConsoleActivated(user(1, -1)), false)
-    assert.equal(isConsoleActivated(user(1, 1720000000)), true)
-  })
-
-  test('keeps administrators and legacy responses activated', () => {
-    assert.equal(isConsoleActivated(user(10, 0)), true)
-    assert.equal(isConsoleActivated(user(1)), true)
-  })
-
-  test('lands every authenticated user in a bounty workspace', () => {
-    assert.equal(getAuthenticatedLandingRoute(user(1, 0)), '/workspace')
+  test('keeps new accounts restricted until the server grants access', () => {
     assert.equal(
-      getAuthenticatedLandingRoute(user(1, 1720000000)),
-      '/open-source-bounties'
-    )
-    assert.equal(
-      getAuthenticatedLandingRoute(user(10, 0)),
-      '/open-source-bounties'
+      isConsoleActivated(
+        user({
+          developer_access_granted: false,
+          onboarding: {
+            activation_complete: false,
+            credential_complete: false,
+            first_request_complete: false,
+            stage: 'activate',
+          },
+        })
+      ),
+      false
     )
   })
 
-  test('allows only contributor, wallet, and profile routes before activation', () => {
-    assert.equal(isContributorRoute('/workspace'), true)
-    assert.equal(isContributorRoute('/challenges/42'), true)
+  test('uses the nested server state before temporary flat compatibility fields', () => {
+    const account = user({
+      developer_access_granted: false,
+      onboarding: {
+        activation_complete: false,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'activate',
+      },
+      activation_complete: true,
+      onboarding_stage: 'complete',
+      trust_level_info: {
+        level: 2,
+        automatic_level: 2,
+        override_level: null,
+        paid_amount: 10,
+        discount_ratio: 0.9,
+        discount_percent: 10,
+        inactivity_decay_steps: 0,
+        decay_period_days: 90,
+        overridden: false,
+      },
+    })
+
+    assert.equal(isConsoleActivated(account), false)
+    assert.equal(getAuthenticatedLandingRoute(account), '/getting-started')
+  })
+
+  test('keeps activation distinct from onboarding completion', () => {
+    const account = user({
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
+
+    assert.equal(isConsoleActivated(account), true)
+    assert.equal(getAuthenticatedLandingRoute(account), '/getting-started')
+  })
+
+  test('lands only explicitly granted complete accounts in the dashboard', () => {
+    assert.equal(
+      getAuthenticatedLandingRoute(
+        user({
+          developer_access_granted: true,
+          onboarding: {
+            activation_complete: true,
+            credential_complete: true,
+            first_request_complete: true,
+            stage: 'complete',
+          },
+        })
+      ),
+      '/dashboard'
+    )
+    assert.equal(
+      getAuthenticatedLandingRoute(user({ role: 10 })),
+      '/getting-started'
+    )
+    assert.equal(
+      getAuthenticatedLandingRoute(
+        user({
+          developer_access_granted: true,
+          trust_level_info: {
+            level: 0,
+            paid_amount: 1,
+          } as AuthUser['trust_level_info'],
+        })
+      ),
+      '/getting-started'
+    )
+  })
+
+  test('does not infer access from an administrator level override or legacy fields', () => {
+    const overridden = user({
+      trust_level_info: {
+        level: 2,
+        paid_amount: 0,
+        overridden: true,
+      } as AuthUser['trust_level_info'],
+    })
+
+    assert.equal(isConsoleActivated(overridden), false)
+    assert.equal(getAuthenticatedLandingRoute(overridden), '/getting-started')
+    assert.equal(
+      isConsoleActivated(
+        user({ permissions: { console_activated_at: 1720000000 } })
+      ),
+      false
+    )
+  })
+
+  test('derives nested stages from monotonic booleans and fails closed on malformed state', () => {
+    const contradictory = user({
+      onboarding: {
+        activation_complete: false,
+        credential_complete: true,
+        first_request_complete: true,
+        stage: 'complete',
+      },
+    })
+    const malformed = user({
+      onboarding: 'complete' as unknown as AuthUser['onboarding'],
+    })
+
+    assert.equal(isConsoleActivated(contradictory), false)
+    assert.equal(
+      getAuthenticatedLandingRoute(contradictory),
+      '/getting-started'
+    )
+    assert.equal(isConsoleActivated(malformed), false)
+    assert.equal(getAuthenticatedLandingRoute(malformed), '/getting-started')
+  })
+
+  test('fails closed for unknown activation state', () => {
+    assert.equal(isConsoleActivated(user()), false)
+    assert.equal(getAuthenticatedLandingRoute(user()), '/getting-started')
+    assert.equal(
+      isConsoleActivated(
+        user({
+          trust_level_info: {
+            paid_amount: Number.POSITIVE_INFINITY,
+          } as AuthUser['trust_level_info'],
+        })
+      ),
+      false
+    )
+    assert.equal(
+      isConsoleActivated(user({ permissions: { console_activated_at: 0 } })),
+      false
+    )
+  })
+
+  test('allows only onboarding, wallet, profile, and support routes before activation', () => {
+    assert.equal(isContributorRoute('/getting-started'), true)
     assert.equal(isContributorRoute('/wallet'), true)
     assert.equal(isContributorRoute('/profile/security'), true)
     assert.equal(isContributorRoute('/support'), true)
+    assert.equal(isContributorRoute('/workspace'), false)
+    assert.equal(isContributorRoute('/challenges/42'), false)
     assert.equal(isContributorRoute('/models'), false)
     assert.equal(isContributorRoute('/open-source-bounties'), false)
   })
 
   test('hides legacy public discovery surfaces before activation', () => {
-    assert.equal(isRestrictedPublicRoute('/pricing'), true)
-    assert.equal(isRestrictedPublicRoute('/pricing/model-1'), true)
+    assert.equal(isRestrictedPublicRoute('/pricing'), false)
+    assert.equal(isRestrictedPublicRoute('/pricing/model-1'), false)
     assert.equal(isRestrictedPublicRoute('/rankings'), true)
     assert.equal(isRestrictedPublicRoute('/about'), true)
     assert.equal(isRestrictedPublicRoute('/challenges/42'), false)

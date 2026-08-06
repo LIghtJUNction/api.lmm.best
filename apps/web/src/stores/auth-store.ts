@@ -40,7 +40,27 @@ export interface TrustLevelInfo {
   amount_to_next_level?: number | null
   next_decay_at?: number | null
   inactivity_decay_steps: number
+  decay_period_days: number
   overridden: boolean
+}
+
+export interface TrustLevelTier {
+  level: number
+  min_paid_amount: number
+  discount_percent: number
+}
+
+export type OnboardingStage =
+  | 'activate'
+  | 'credential'
+  | 'first_request'
+  | 'complete'
+
+export interface OnboardingState {
+  activation_complete: boolean
+  credential_complete: boolean
+  first_request_complete: boolean
+  stage: OnboardingStage
 }
 
 export interface AuthUser {
@@ -70,7 +90,17 @@ export interface AuthUser {
   stripe_customer?: string
   sidebar_modules?: string
   permissions?: UserPermissions
+  /** Authoritative server decision for developer access. Unknown means denied. */
+  developer_access_granted?: boolean
   trust_level_info?: TrustLevelInfo
+  trust_level_tiers?: TrustLevelTier[]
+  // The nested state is the current API contract. Flat fields remain optional
+  // while locally running binaries transition to the nested response shape.
+  onboarding?: OnboardingState
+  activation_complete?: boolean
+  credential_complete?: boolean
+  first_request_complete?: boolean
+  onboarding_stage?: OnboardingStage
 }
 
 export interface LoginSession {

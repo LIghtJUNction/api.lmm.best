@@ -17,18 +17,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
+import { useEffect } from 'react'
 
 import { AccessRestrictionNotice } from '@/components/access-restriction-notice'
-import { BrandLogo } from '@/components/brand-logo'
-import { Skeleton } from '@/components/ui/skeleton'
-import { useSystemConfig } from '@/hooks/use-system-config'
+import { LmmBrandMark } from '@/components/lmm-brand-mark'
 
 type AuthLayoutProps = {
   children: React.ReactNode
 }
 
 export function AuthLayout({ children }: AuthLayoutProps) {
-  const { systemName, logo, loading } = useSystemConfig()
+  useEffect(() => {
+    const previousTitle = document.title
+    document.title = 'LMM Forge'
+    return () => {
+      document.title = previousTitle
+    }
+  }, [])
 
   return (
     <div className='relative grid min-h-svh max-w-none grid-rows-[1fr_auto]'>
@@ -36,18 +41,8 @@ export function AuthLayout({ children }: AuthLayoutProps) {
         to='/'
         className='absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity hover:opacity-80 sm:top-8 sm:left-8'
       >
-        <div className='relative h-8 w-8'>
-          {loading ? (
-            <Skeleton className='absolute inset-0 rounded-full' />
-          ) : (
-            <BrandLogo src={logo} className='h-8 w-8 object-contain' />
-          )}
-        </div>
-        {loading ? (
-          <Skeleton className='h-6 w-24' />
-        ) : (
-          <h1 className='text-xl font-medium'>{systemName}</h1>
-        )}
+        <LmmBrandMark className='size-8' title='LMM Forge' />
+        <h1 className='text-xl font-medium'>LMM Forge</h1>
       </Link>
       <div className='container flex items-center pt-16 sm:pt-0'>
         <div className='mx-auto flex w-full flex-col justify-center space-y-2 px-4 py-8 sm:w-[480px] sm:p-8'>

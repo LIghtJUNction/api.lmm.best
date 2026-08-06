@@ -118,20 +118,52 @@ if (!rootElement) {
 ;(function initSystemBranding() {
   try {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
+    const forgePublicPaths = [
+      '/pricing',
+      '/challenges',
+      '/about',
+      '/rankings',
+      '/privacy-policy',
+      '/user-agreement',
+      '/terms',
+      '/terms-of-service',
+      '/sign-in',
+      '/sign-up',
+      '/signup',
+      '/register',
+      '/forgot-password',
+      '/reset',
+      '/otp',
+      '/oauth',
+    ]
+    const isForgePublicRoute = () => {
+      const { pathname } = window.location
+      return (
+        pathname === '/' ||
+        forgePublicPaths.some(
+          (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+        )
+      )
+    }
+    const forgeTitle = 'LMM Forge'
     const apply = (name: string) => {
-      document.title = name
+      const title = isForgePublicRoute() ? forgeTitle : name
+      document.title = title
       const metaTitle = document.querySelector(
         'meta[name="title"]'
       ) as HTMLMetaElement | null
-      if (metaTitle) metaTitle.setAttribute('content', name)
+      if (metaTitle) metaTitle.setAttribute('content', title)
     }
+    if (isForgePublicRoute()) apply(forgeTitle)
     // Cache-first
     try {
       const saved = localStorage.getItem('status')
       if (saved) {
         const s = JSON.parse(saved)
         if (s?.system_name) apply(s.system_name)
-        if (s?.logo && s.logo !== DEFAULT_LOGO) applyFaviconToDom(s.logo)
+        if (!isForgePublicRoute() && s?.logo && s.logo !== DEFAULT_LOGO) {
+          applyFaviconToDom(s.logo)
+        }
       }
     } catch {
       /* empty */
@@ -147,7 +179,7 @@ if (!rootElement) {
             /* empty */
           }
         }
-        if (s?.logo && s.logo !== DEFAULT_LOGO) {
+        if (!isForgePublicRoute() && s?.logo && s.logo !== DEFAULT_LOGO) {
           applyFaviconToDom(s.logo as string)
         }
       })

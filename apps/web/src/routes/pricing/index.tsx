@@ -20,8 +20,16 @@ import { createFileRoute, redirect } from '@tanstack/react-router'
 import z from 'zod'
 
 import { Pricing } from '@/features/pricing'
+import { PublicAccessPricing } from '@/features/pricing/public-access-pricing'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { getFreshModuleAccess } from '@/lib/nav-modules'
 import { useAuthStore } from '@/stores/auth-store'
+
+function PricingRoute() {
+  const user = useAuthStore((state) => state.auth.user)
+
+  return isConsoleActivated(user) ? <Pricing /> : <PublicAccessPricing />
+}
 
 const pricingSearchSchema = z.object({
   search: z.string().optional(),
@@ -43,8 +51,11 @@ export const Route = createFileRoute('/pricing/')({
     if (!access.enabled) {
       throw redirect({ to: '/' })
     }
+
+    const { auth } = useAuthStore.getState()
+    if (!isConsoleActivated(auth.user)) return
+
     if (access.requireAuth) {
-      const { auth } = useAuthStore.getState()
       if (!auth.user) {
         throw redirect({
           to: '/sign-in',
@@ -53,5 +64,5 @@ export const Route = createFileRoute('/pricing/')({
       }
     }
   },
-  component: Pricing,
+  component: PricingRoute,
 })

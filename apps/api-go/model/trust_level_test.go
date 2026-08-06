@@ -202,6 +202,22 @@ func TestExplicitAccessSnapshotTreatsPaidActivationAsUnqueried(t *testing.T) {
 	assert.False(t, snapshot.PaidActivationComplete)
 }
 
+func TestLocalAcceptanceDeveloperAccessPreservesPaidActivationFact(t *testing.T) {
+	previousCapability := LocalAcceptanceDeveloperAccessEnabled()
+	SetLocalAcceptanceDeveloperAccess(true)
+	t.Cleanup(func() {
+		SetLocalAcceptanceDeveloperAccess(previousCapability)
+	})
+
+	state := ordinaryDeveloperAccessState(false)
+	assert.True(t, state.Granted)
+	assert.False(t, state.PaidActivationComplete)
+
+	paidState := ordinaryDeveloperAccessState(true)
+	assert.True(t, paidState.Granted)
+	assert.True(t, paidState.PaidActivationComplete)
+}
+
 func TestFreshUserAccessSnapshotUsesOneBoundedAggregateQuery(t *testing.T) {
 	previousDB := DB
 	baseLogger := logger.Default.LogMode(logger.Silent)

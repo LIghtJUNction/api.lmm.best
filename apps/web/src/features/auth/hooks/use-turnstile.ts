@@ -21,6 +21,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { useStatus } from '@/hooks/use-status'
+import { isLocalPreview } from '@/lib/local-preview'
 
 /**
  * Hook for managing Turnstile verification
@@ -28,9 +29,12 @@ import { useStatus } from '@/hooks/use-status'
 export function useTurnstile() {
   const { status } = useStatus()
   const [turnstileToken, setTurnstileToken] = useState('')
+  const localPreview = isLocalPreview()
 
   const isTurnstileEnabled = !!(
-    status?.turnstile_check && status?.turnstile_site_key
+    !localPreview &&
+    status?.turnstile_check &&
+    status?.turnstile_site_key
   )
   const turnstileSiteKey = status?.turnstile_site_key || ''
 

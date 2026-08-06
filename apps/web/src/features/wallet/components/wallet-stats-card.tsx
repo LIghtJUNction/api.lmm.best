@@ -25,6 +25,10 @@ import { formatQuota } from '@/lib/format'
 
 import type { UserWalletData } from '../types'
 
+function formatDiscount(percent: number) {
+  return `${Math.round(percent)}%`
+}
+
 interface WalletStatsCardProps {
   user: UserWalletData | null
   loading?: boolean
@@ -77,7 +81,7 @@ export function WalletStatsCard(props: WalletStatsCardProps) {
     {
       label: t('Trust level'),
       value: `L${props.user?.trust_level_info?.level ?? 0}`,
-      description: `${props.user?.trust_level_info?.discount_percent ?? 0}% ${t('discount')}`,
+      description: `${formatDiscount(props.user?.trust_level_info?.discount_percent ?? 0)} ${t('discount')}`,
       icon: ShieldCheck,
       tone: 'warning',
     },

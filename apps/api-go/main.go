@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strconv"
@@ -179,9 +181,24 @@ func main() {
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
 	}
+	listenAddress, err := buildListenAddress(os.Getenv("LMM_API_BIND_ADDRESS"), port)
+	if err != nil {
+		common.FatalLog("failed to configure HTTP listen address: " + err.Error())
+		return
+	}
+	localAcceptance, err := localAcceptancePolicy(
+		os.Getenv("LMM_LOCAL_ACCEPTANCE"),
+		os.Getenv("LMM_API_BIND_ADDRESS"),
+		listenAddress,
+	)
+	if err != nil {
+		common.FatalLog("failed to configure local acceptance: " + err.Error())
+		return
+	}
+	model.SetLocalAcceptanceDeveloperAccess(localAcceptance)
 
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    listenAddress,
 		Handler: server,
 	}
 
@@ -212,6 +229,55 @@ func main() {
 		model.SaveQuotaDataCache()
 	}
 	common.SysLog("server exited")
+}
+
+func buildListenAddress(bindAddress, port string) (string, error) {
+	if bindAddress == "" {
+		// Preserve the historical public default when no explicit bind address is
+		// configured.
+		return ":" + port, nil
+	}
+	bindAddress = strings.TrimSpace(bindAddress)
+	if bindAddress == "" {
+		return "", fmt.Errorf("LMM_API_BIND_ADDRESS must not contain only whitespace")
+	}
+	if net.ParseIP(bindAddress) == nil {
+		return "", fmt.Errorf("LMM_API_BIND_ADDRESS must be an IPv4 or IPv6 address without a port: %q", bindAddress)
+	}
+
+	return net.JoinHostPort(bindAddress, port), nil
+}
+
+func localAcceptancePolicy(flagValue, configuredBindAddress, listenAddress string) (bool, error) {
+	if flagValue != "true" {
+		return false, nil
+	}
+
+	if !isExactLoopbackHost(configuredBindAddress) {
+		return false, fmt.Errorf("LMM_LOCAL_ACCEPTANCE requires LMM_API_BIND_ADDRESS to be exactly 127.0.0.1 or ::1")
+	}
+
+	listenHost, listenPort, err := net.SplitHostPort(listenAddress)
+	if err != nil {
+		return false, fmt.Errorf("LMM_LOCAL_ACCEPTANCE requires an unambiguous loopback listen address: %w", err)
+	}
+	if !isExactLoopbackHost(listenHost) {
+		return false, fmt.Errorf("LMM_LOCAL_ACCEPTANCE requires the final listen host to be exactly 127.0.0.1 or ::1")
+	}
+	port, err := strconv.Atoi(listenPort)
+	if err != nil || port < 1 || port > 65535 {
+		return false, fmt.Errorf("LMM_LOCAL_ACCEPTANCE requires a numeric final listen port between 1 and 65535")
+	}
+
+	return true, nil
+}
+
+func isExactLoopbackHost(host string) bool {
+	address, err := netip.ParseAddr(host)
+	if err != nil || address.Is4In6() || address.Zone() != "" {
+		return false
+	}
+	return address == netip.MustParseAddr("127.0.0.1") || address == netip.IPv6Loopback()
 }
 
 func InitResources() error {
