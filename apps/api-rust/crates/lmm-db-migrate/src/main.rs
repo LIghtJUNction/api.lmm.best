@@ -6,9 +6,7 @@ use lmm_db_migrate::{
     inspect::inspect_sqlite,
     manifest::Manifest,
     migrate::{RehearseOptions, VerifyOptions, rehearse, verify},
-    postgres_adopt::{
-        AdoptExistingOptions, MaintenanceQuiescenceAttestation, adopt_existing,
-    },
+    postgres_adopt::{AdoptExistingOptions, MaintenanceQuiescenceAttestation, adopt_existing},
     release::{
         CompatibilityRange, ComponentHash, ReleaseBinding, ReleaseId, Sha256Digest, Version,
     },
