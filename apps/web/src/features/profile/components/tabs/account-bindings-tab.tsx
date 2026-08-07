@@ -37,6 +37,7 @@ import type { CustomOAuthProviderInfo } from '@/features/auth/types'
 import { useDialogs } from '@/hooks/use-dialog'
 import { useStatus } from '@/hooks/use-status'
 import { api } from '@/lib/api'
+import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import {
   buildDiscordOAuthUrl,
   buildGitHubOAuthUrl,
@@ -111,6 +112,7 @@ export function AccountBindingsTab({
   const customProviders = status?.custom_oauth_providers as
     | CustomOAuthProviderInfo[]
     | undefined
+  const canUnbindBuiltInOAuth = getBackendCapabilities(status).self_oauth_unbind
 
   const fetchCustomBindings = useCallback(async () => {
     if (!customProviders || customProviders.length === 0) return
@@ -130,6 +132,10 @@ export function AccountBindingsTab({
 
   const handleUnbind = async () => {
     if (!unbindTarget) return
+    if (unbindTarget.kind === 'built-in' && !canUnbindBuiltInOAuth) {
+      setUnbindTarget(null)
+      return
+    }
     setUnbinding(true)
     try {
       const res =
@@ -306,12 +312,14 @@ export function AccountBindingsTab({
         ),
         isEnabled: status?.wechat_login || false,
         onBind: () => dialogs.open('wechat'),
-        onUnbind: () =>
-          setUnbindTarget({
-            kind: 'built-in',
-            label: t('WeChat'),
-            bindingType: 'wechat',
-          }),
+        onUnbind: canUnbindBuiltInOAuth
+          ? () =>
+              setUnbindTarget({
+                kind: 'built-in',
+                label: t('WeChat'),
+                bindingType: 'wechat',
+              })
+          : undefined,
       },
       {
         id: 'github',
@@ -332,12 +340,14 @@ export function AccountBindingsTab({
             )
           }
         },
-        onUnbind: () =>
-          setUnbindTarget({
-            kind: 'built-in',
-            label: t('GitHub'),
-            bindingType: 'github',
-          }),
+        onUnbind: canUnbindBuiltInOAuth
+          ? () =>
+              setUnbindTarget({
+                kind: 'built-in',
+                label: t('GitHub'),
+                bindingType: 'github',
+              })
+          : undefined,
       },
       {
         id: 'discord',
@@ -358,12 +368,14 @@ export function AccountBindingsTab({
             )
           }
         },
-        onUnbind: () =>
-          setUnbindTarget({
-            kind: 'built-in',
-            label: t('Discord'),
-            bindingType: 'discord',
-          }),
+        onUnbind: canUnbindBuiltInOAuth
+          ? () =>
+              setUnbindTarget({
+                kind: 'built-in',
+                label: t('Discord'),
+                bindingType: 'discord',
+              })
+          : undefined,
       },
       {
         id: 'oidc',
@@ -385,12 +397,14 @@ export function AccountBindingsTab({
             )
           }
         },
-        onUnbind: () =>
-          setUnbindTarget({
-            kind: 'built-in',
-            label: t('OIDC'),
-            bindingType: 'oidc',
-          }),
+        onUnbind: canUnbindBuiltInOAuth
+          ? () =>
+              setUnbindTarget({
+                kind: 'built-in',
+                label: t('OIDC'),
+                bindingType: 'oidc',
+              })
+          : undefined,
       },
       {
         id: 'telegram',
@@ -404,12 +418,14 @@ export function AccountBindingsTab({
         ),
         isEnabled: status?.telegram_oauth || false,
         onBind: () => dialogs.open('telegram'),
-        onUnbind: () =>
-          setUnbindTarget({
-            kind: 'built-in',
-            label: t('Telegram'),
-            bindingType: 'telegram',
-          }),
+        onUnbind: canUnbindBuiltInOAuth
+          ? () =>
+              setUnbindTarget({
+                kind: 'built-in',
+                label: t('Telegram'),
+                bindingType: 'telegram',
+              })
+          : undefined,
       },
       {
         id: 'linuxdo',
@@ -430,16 +446,18 @@ export function AccountBindingsTab({
             )
           }
         },
-        onUnbind: () =>
-          setUnbindTarget({
-            kind: 'built-in',
-            label: t('LinuxDO'),
-            bindingType: 'linuxdo',
-          }),
+        onUnbind: canUnbindBuiltInOAuth
+          ? () =>
+              setUnbindTarget({
+                kind: 'built-in',
+                label: t('LinuxDO'),
+                bindingType: 'linuxdo',
+              })
+          : undefined,
       },
     ].filter((binding) => binding.isEnabled)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile, status, t])
+  }, [canUnbindBuiltInOAuth, profile, status, t])
 
   if (!profile || loading) return null
 
@@ -452,6 +470,9 @@ export function AccountBindingsTab({
           if (binding.isBound) {
             actionLabel = binding.id === 'email' ? t('Change') : t('Unbind')
           }
+
+          const canChangeBinding =
+            binding.id === 'email' || !binding.isBound || canUnbind
 
           return (
             <div
@@ -478,15 +499,17 @@ export function AccountBindingsTab({
                   </p>
                 </div>
               </div>
-              <Button
-                variant={canUnbind ? 'destructive' : 'outline'}
-                size='sm'
-                className='h-7 shrink-0 px-2.5 text-xs'
-                onClick={canUnbind ? binding.onUnbind : binding.onBind}
-              >
-                {canUnbind && <Unlink data-icon='inline-start' />}
-                {actionLabel}
-              </Button>
+              {canChangeBinding && (
+                <Button
+                  variant={canUnbind ? 'destructive' : 'outline'}
+                  size='sm'
+                  className='h-7 shrink-0 px-2.5 text-xs'
+                  onClick={canUnbind ? binding.onUnbind : binding.onBind}
+                >
+                  {canUnbind && <Unlink data-icon='inline-start' />}
+                  {actionLabel}
+                </Button>
+              )}
             </div>
           )
         })}

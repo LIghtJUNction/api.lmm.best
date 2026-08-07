@@ -6,6 +6,9 @@ use lmm_db_migrate::{
     inspect::inspect_sqlite,
     manifest::Manifest,
     migrate::{RehearseOptions, VerifyOptions, rehearse, verify},
+    postgres_adopt::{
+        AdoptExistingOptions, MaintenanceQuiescenceAttestation, adopt_existing,
+    },
     release::{
         CompatibilityRange, ComponentHash, ReleaseBinding, ReleaseId, Sha256Digest, Version,
     },
@@ -79,6 +82,33 @@ enum Command {
         #[arg(long)]
         catalog: PathBuf,
     },
+    /// Adopt an exact existing PostgreSQL public schema without application DDL.
+    PostgresAdoptExisting {
+        /// Strict JSON plan whose exact bytes are content-addressed.
+        #[arg(long)]
+        plan: PathBuf,
+        /// SHA-256 of the exact plan bytes.
+        #[arg(long)]
+        expected_plan_sha256: Sha256Digest,
+        /// Exact database name expected after connecting.
+        #[arg(long)]
+        expected_database: String,
+        /// Exact PostgreSQL role expected after connecting.
+        #[arg(long)]
+        expected_role: String,
+        /// Immutable release revision duplicated in the plan.
+        #[arg(long)]
+        release_revision: ReleaseId,
+        /// SHA-256 of the immutable release artifact duplicated in the plan.
+        #[arg(long)]
+        release_artifact_sha256: Sha256Digest,
+        /// Strict JSON maintenance-quiescence attestation duplicated outside the plan.
+        #[arg(long)]
+        maintenance_quiescence: PathBuf,
+        /// Atomic, redacted candidate report path.
+        #[arg(long)]
+        report: PathBuf,
+    },
     /// Inspect SQLite read-only and atomically publish a non-sensitive report.
     Inspect {
         #[arg(long)]
@@ -127,6 +157,7 @@ impl Command {
         match self {
             Self::ManifestValidate { .. } => "manifest_validate",
             Self::PostgresCatalogValidate { .. } => "postgres_catalog_validate",
+            Self::PostgresAdoptExisting { .. } => "postgres_adopt_existing",
             Self::Inspect { .. } => "inspect",
             Self::Rehearse { .. } => "rehearse",
             Self::Verify { .. } => "verify",
@@ -143,6 +174,43 @@ fn run(cli: Cli) -> Result<(), MigrationError> {
         Command::PostgresCatalogValidate { manifest, catalog } => {
             Manifest::load(&manifest)?.validate_postgres_catalog(&catalog)?;
             println!("PostgreSQL catalog valid");
+        }
+        Command::PostgresAdoptExisting {
+            plan,
+            expected_plan_sha256,
+            expected_database,
+            expected_role,
+            release_revision,
+            release_artifact_sha256,
+            maintenance_quiescence,
+            report,
+        } => {
+            let outcome = (|| {
+                let database_url = std::env::var("LMM_MIGRATE_DATABASE_URL").map_err(|_| {
+                    MigrationError::Manifest("LMM_MIGRATE_DATABASE_URL must be set".into())
+                })?;
+                let maintenance_quiescence_bytes = std::fs::read(&maintenance_quiescence)
+                    .map_err(|error| MigrationError::Manifest(error.to_string()))?;
+                let maintenance_quiescence: MaintenanceQuiescenceAttestation =
+                    serde_json::from_slice(&maintenance_quiescence_bytes).map_err(|error| {
+                        MigrationError::Manifest(format!(
+                            "maintenance quiescence attestation JSON is invalid: {error}"
+                        ))
+                    })?;
+                adopt_existing(&AdoptExistingOptions {
+                    database_url: &database_url,
+                    plan: &plan,
+                    expected_plan_sha256: &expected_plan_sha256,
+                    expected_database: &expected_database,
+                    expected_role: &expected_role,
+                    release_revision: &release_revision,
+                    release_artifact_sha256: &release_artifact_sha256,
+                    maintenance_quiescence: &maintenance_quiescence,
+                })
+                .map_err(MigrationError::from)
+            })();
+            publish_audited(&report, "postgres_adopt_existing", outcome)?;
+            println!("PostgreSQL adoption verified");
         }
         Command::Inspect {
             sqlite,

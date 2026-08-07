@@ -110,6 +110,13 @@ func GetStatus(c *gin.Context) {
 		"password_login_enabled":        common.PasswordLoginEnabled,
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
+		"backend_capabilities": gin.H{
+			"bounty_notifications":    true,
+			"bounty_challenge_cancel": true,
+			"bounty_public_read":      true,
+			"self_oauth_unbind":       true,
+			"responses_websocket":     true,
+		},
 
 		"usd_exchange_rate": operation_setting.USDExchangeRate,
 		"price":             operation_setting.Price,

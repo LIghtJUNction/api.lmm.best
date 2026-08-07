@@ -46,12 +46,39 @@ cleanup() { rm -rf -- "$build_dir" "$pkgdest"; }
 trap cleanup EXIT
 mkdir -p -- "$build_dir/makepkg"
 
-for file in lmm-api-launcher lmm-api-select lmm-api.service lmm-api.env \
+for file in lmm-api-launcher lmm-api.service lmm-api.env \
   backend.conf lmm-api.install lmm-api-rs.env.example; do
   install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/$file" "$build_dir/$file"
 done
+install -Dm0755 "$REPO_ROOT/apps/web/scripts/production-acceptance.mjs" \
+  "$build_dir/production-acceptance.mjs"
+install -Dm0644 "$REPO_ROOT/apps/web/scripts/production-acceptance-lib.mjs" \
+  "$build_dir/production-acceptance-lib.mjs"
+install -Dm0644 "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/migration-gate.tsv" \
+  "$build_dir/migration-gate.tsv"
+install -Dm0755 "$REPO_ROOT/packaging/common/lmm-api/validate-route-gate" \
+  "$build_dir/validate-route-gate"
+install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/migration-compatibility.env" \
+  "$build_dir/migration-compatibility.env"
+install -Dm0644 "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv" \
+  "$build_dir/frozen-route-auth.tsv"
+mkdir -p "$build_dir/route-evidence-stage" "$build_dir/migration-evidence-stage"
+if [[ -d $REPO_ROOT/apps/api-rust/tests/fixtures/routes/evidence ]]; then
+  cp -R -- "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/evidence/." \
+    "$build_dir/route-evidence-stage/"
+fi
+if [[ -d $REPO_ROOT/packaging/common/lmm-api/evidence ]]; then
+  cp -R -- "$REPO_ROOT/packaging/common/lmm-api/evidence/." \
+    "$build_dir/migration-evidence-stage/"
+fi
+tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+  -C "$build_dir/route-evidence-stage" -cf "$build_dir/route-evidence.tar" .
+tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+  -C "$build_dir/migration-evidence-stage" -cf "$build_dir/migration-evidence.tar" .
+(cd "$build_dir" && \
+  sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env frozen-route-auth.tsv >route-gate-assets.sha256)
 install -Dm0644 "$SCRIPT_DIR/PKGBUILD" "$build_dir/PKGBUILD"
-chmod 0755 "$build_dir/lmm-api-launcher" "$build_dir/lmm-api-select" "$build_dir/lmm-api.install"
+chmod 0755 "$build_dir/lmm-api-launcher" "$build_dir/lmm-api.install"
 install -Dm0755 "$GO_BINARY" "$build_dir/lmm-api-go-bin"
 install -Dm0755 "$RS_BINARY" "$build_dir/lmm-api-rs-bin"
 install -Dm0755 "$MIGRATOR_BINARY" "$build_dir/lmm-db-migrate-bin"

@@ -77,6 +77,48 @@ func TestInitOnSlaveOnlyLoadsPolicies(t *testing.T) {
 	assert.False(t, Can(2, common.RoleAdminUser, ChannelRead))
 }
 
+func TestInitForStartupVerifyRequiresAuthoritativeSeedDataWithoutWriting(t *testing.T) {
+	db := newAuthzTestDB(t)
+
+	var rolesBefore, policiesBefore int64
+	require.NoError(t, db.Model(&model.AuthzRole{}).Count(&rolesBefore).Error)
+	require.NoError(t, db.Model(&model.CasbinRule{}).Count(&policiesBefore).Error)
+	require.ErrorContains(t, InitForStartup(db, false), "built-in authorization roles are incomplete")
+
+	var rolesAfter, policiesAfter int64
+	require.NoError(t, db.Model(&model.AuthzRole{}).Count(&rolesAfter).Error)
+	require.NoError(t, db.Model(&model.CasbinRule{}).Count(&policiesAfter).Error)
+	assert.Equal(t, rolesBefore, rolesAfter)
+	assert.Equal(t, policiesBefore, policiesAfter)
+}
+
+func TestInitForStartupVerifyRejectsMissingBuiltInPolicy(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+	require.NoError(t, InitForStartup(db, false))
+	permission := PermissionsForRole(BuiltInRoleAdmin)[0]
+	require.NoError(t, db.Where(
+		"ptype = ? AND v0 = ? AND v1 = ? AND v2 = ? AND v3 = ?",
+		"p", RoleSubject(BuiltInRoleAdmin), permission.Resource, permission.Action, EffectAllow,
+	).Delete(&model.CasbinRule{}).Error)
+
+	var before int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Count(&before).Error)
+	require.ErrorContains(t, InitForStartup(db, false), "built-in authorization policies are incomplete")
+	var after int64
+	require.NoError(t, db.Model(&model.CasbinRule{}).Count(&after).Error)
+	assert.Equal(t, before, after)
+}
+
+func TestInitForStartupVerifyRejectsMutatedBuiltInRole(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+	require.NoError(t, db.Model(&model.AuthzRole{}).
+		Where("key = ?", BuiltInRoleAdmin).Update("name", "Changed").Error)
+
+	require.ErrorContains(t, InitForStartup(db, false), "does not match its authoritative definition")
+}
+
 func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 	db := newAuthzTestDB(t)
 	require.NoError(t, Init(db))

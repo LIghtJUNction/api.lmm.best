@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -78,6 +79,40 @@ func createRootAccountIfNeed() error {
 }
 
 func CheckSetup() {
+	checkSetup()
+}
+
+func CheckSetupForStartup(allowMigrationWrite bool) error {
+	if allowMigrationWrite {
+		checkSetup()
+		return nil
+	}
+	if err := verifySetupState(); err != nil {
+		return err
+	}
+	constant.Setup = true
+	return nil
+}
+
+func verifySetupState() error {
+	var setupCount int64
+	if err := DB.Model(&Setup{}).Count(&setupCount).Error; err != nil {
+		return fmt.Errorf("count setup records: %w", err)
+	}
+	if setupCount != 1 {
+		return fmt.Errorf("expected exactly one setup record, found %d", setupCount)
+	}
+	var rootCount int64
+	if err := DB.Model(&User{}).Where("role = ?", common.RoleRootUser).Count(&rootCount).Error; err != nil {
+		return fmt.Errorf("count root users: %w", err)
+	}
+	if rootCount == 0 {
+		return errors.New("setup record exists without a root user")
+	}
+	return nil
+}
+
+func checkSetup() {
 	setup := GetSetup()
 	if setup == nil {
 		// No setup record exists, check if we have a root user
@@ -168,8 +203,30 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 	return db, common.DatabaseTypeSQLite, err
 }
 
-func InitDB() (err error) {
-	db, dbType, err := chooseDB("SQL_DSN", false)
+type databaseChooser func(string, bool) (*gorm.DB, common.DatabaseType, error)
+
+func InitDB() error {
+	session, err := InitDBWithMigrationSession()
+	if err != nil {
+		return err
+	}
+	return session.Close()
+}
+
+func InitDBWithMigrationSession() (*StartupMigrationSession, error) {
+	return initDBWithMigrationSession(chooseDB)
+}
+
+func initDBWithMigrationSession(chooser databaseChooser) (*StartupMigrationSession, error) {
+	mode, err := databaseMigrationModeFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePrimaryMigrationDSNBeforeOpen(mode, os.Getenv("SQL_DSN")); err != nil {
+		return nil, err
+	}
+	session := newStartupMigrationSession(mode)
+	db, dbType, err := chooser("SQL_DSN", false)
 	if err == nil {
 		common.SetMainDatabaseType(dbType)
 		if os.Getenv("LOG_SQL_DSN") == "" {
@@ -188,28 +245,47 @@ func InitDB() (err error) {
 		}
 		sqlDB, err := DB.DB()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		sqlDB.SetMaxIdleConns(common.GetEnvOrDefault("SQL_MAX_IDLE_CONNS", 100))
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
-		if !common.IsMasterNode {
-			return nil
+		if mode == DBMigrationModeApply && !common.IsMasterNode {
+			return session, nil
 		}
-		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+		if mode == DBMigrationModeApply && common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 			//_, _ = sqlDB.Exec("ALTER TABLE channels MODIFY model_mapping TEXT;") // TODO: delete this line when most users have upgraded
 		}
-		common.SysLog("database migration started")
-		err = migrateDB()
-		return err
-	} else {
-		common.FatalLog(err)
+		err = session.runPrimaryPhase(DB, dbType, func() error {
+			common.SysLog("database migration started")
+			return migrateDB()
+		}, func() error {
+			common.SysLog("database migration verification started")
+			return verifyPostgresRuntimeAndSchema(DB)
+		})
+		if err != nil {
+			return nil, errors.Join(session.closeOnFailure(err), closeDB(DB))
+		}
+		return session, nil
 	}
-	return err
+	return nil, err
 }
 
-func InitLogDB() (err error) {
+func InitLogDB(session *StartupMigrationSession) (err error) {
+	if session == nil {
+		return errors.New("database migration session is missing")
+	}
+	separateLogDatabase := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		err = errors.Join(err, session.Close())
+		if separateLogDatabase {
+			err = errors.Join(err, closeDB(LOG_DB))
+		}
+	}()
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
 		common.SetLogDatabaseType(common.MainDatabaseType())
@@ -224,6 +300,7 @@ func InitLogDB() (err error) {
 			db = db.Debug()
 		}
 		LOG_DB = db
+		separateLogDatabase = true
 		// If log DB is MySQL, also ensure Chinese-capable charset
 		if common.UsingLogDatabase(common.DatabaseTypeMySQL) {
 			if err := checkMySQLChineseSupport(LOG_DB); err != nil {
@@ -238,16 +315,32 @@ func InitLogDB() (err error) {
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
-		if !common.IsMasterNode {
+		if session.Applies() && !common.IsMasterNode {
 			return nil
 		}
-		common.SysLog("database migration started")
-		err = migrateLOGDB()
-		return err
-	} else {
-		common.FatalLog(err)
+		return session.runLogPhase(LOG_DB, dbType, func() error {
+			common.SysLog("database migration started")
+			return migrateLOGDB()
+		}, func() error {
+			common.SysLog("log database migration verification started")
+			return verifyLogDatabaseSchema(LOG_DB, dbType)
+		})
 	}
 	return err
+}
+
+func mainMigrationModels() []interface{} {
+	return []interface{}{
+		&Channel{}, &Token{}, &User{}, &UserSession{}, &AuthFlow{}, &ExternalIdentityClaim{},
+		&PasskeyCredential{}, &Option{}, &Redemption{}, &Ability{}, &Log{}, &Midjourney{},
+		&TopUp{}, &QuotaData{}, &Task{}, &Model{}, &Vendor{}, &PrefillGroup{}, &Setup{}, &TwoFA{},
+		&TwoFABackupCode{}, &Checkin{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
+		&OpenSourceBountyLedger{}, &OpenSourceBountyDispute{}, &OpenSourceBountyMCPToken{},
+		&OpenSourceBountyMCPConfirmation{}, &OpenSourceBountyMCPOperation{}, &OpenSourceBountyRESTOperation{},
+		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
+		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
+		&CasbinRule{}, &AuthzRole{},
+	}
 }
 
 func migrateDB() error {
@@ -259,49 +352,7 @@ func migrateDB() error {
 		return err
 	}
 
-	err := DB.AutoMigrate(
-		&Channel{},
-		&Token{},
-		&User{},
-		&UserSession{},
-		&AuthFlow{},
-		&ExternalIdentityClaim{},
-		&PasskeyCredential{},
-		&Option{},
-		&Redemption{},
-		&Ability{},
-		&Log{},
-		&Midjourney{},
-		&TopUp{},
-		&QuotaData{},
-		&Task{},
-		&Model{},
-		&Vendor{},
-		&PrefillGroup{},
-		&Setup{},
-		&TwoFA{},
-		&TwoFABackupCode{},
-		&Checkin{},
-		&OpenSourceBountyProject{},
-		&OpenSourceBountyChallenge{},
-		&OpenSourceBountyLedger{},
-		&OpenSourceBountyDispute{},
-		&OpenSourceBountyMCPToken{},
-		&OpenSourceBountyMCPConfirmation{},
-		&OpenSourceBountyMCPOperation{},
-		&OpenSourceBountyRESTOperation{},
-		&SubscriptionOrder{},
-		&UserSubscription{},
-		&SubscriptionPreConsumeRecord{},
-		&CustomOAuthProvider{},
-		&UserOAuthBinding{},
-		&PerfMetric{},
-		&SystemInstance{},
-		&SystemTask{},
-		&SystemTaskLock{},
-		&CasbinRule{},
-		&AuthzRole{},
-	)
+	err := DB.AutoMigrate(mainMigrationModels()...)
 	if err != nil {
 		return err
 	}
@@ -628,8 +679,10 @@ func migrateTokenModelLimitsToText() error {
 	var alterSQL string
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		var dataType string
-		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+		if err := DB.Raw(`SELECT columns.data_type FROM information_schema.columns AS columns
+				WHERE columns.table_schema OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+				  AND columns.table_name OPERATOR(pg_catalog.=) ?
+				  AND columns.column_name OPERATOR(pg_catalog.=) ?`,
 			tableName, columnName).Scan(&dataType).Error; err != nil {
 			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
 		} else if dataType == "text" {
@@ -685,8 +738,10 @@ func migrateSubscriptionPlanPriceAmount() {
 	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		// PostgreSQL: Check if already decimal/numeric
 		var dataType string
-		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+		if err := DB.Raw(`SELECT columns.data_type FROM information_schema.columns AS columns
+				WHERE columns.table_schema OPERATOR(pg_catalog.=) pg_catalog.current_schema()
+				  AND columns.table_name OPERATOR(pg_catalog.=) ?
+				  AND columns.column_name OPERATOR(pg_catalog.=) ?`,
 			tableName, columnName).Scan(&dataType).Error; err != nil {
 			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
 		} else if dataType == "numeric" {

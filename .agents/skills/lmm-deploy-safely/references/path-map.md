@@ -1,9 +1,11 @@
 # LMM deployment path map
 
-Treat this as a map of current, separate mechanisms. It is not a claim that the
-paths already form one unified deployment system.
+The installed package has one public operator entry point: `/usr/bin/lmm-api`.
+Use `lmm-api deploy ...` for deployment phases and `lmm-api serve` for the
+systemd service. Do not document or invoke a source-tree deployment helper or
+a second public CLI.
 
-## Controller and local package inputs
+## Controller and package inputs
 
 | Purpose | Current path or entry point |
 | --- | --- |
@@ -16,15 +18,14 @@ paths already form one unified deployment system.
 | Required controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
 
 The local split package installs frontend files at
-`/usr/share/lmm-api/frontend-dist`, but no current installer publishes that
-directory into the nginx release root automatically.
+`/usr/share/lmm-api/frontend-dist`. Deployment publishes immutable frontend
+releases through the installed CLI transaction.
 
 ## Shared installed package layout
 
 | Purpose | Current path |
 | --- | --- |
-| Launcher | `/usr/bin/lmm-api` |
-| Backend selector | `/usr/bin/lmm-api-select` |
+| Launcher and public CLI | `/usr/bin/lmm-api` |
 | Go backend | `/usr/lib/lmm-api/backends/go/lmm-api` |
 | Rust backend and migrator | `/usr/lib/lmm-api/backends/rs/` |
 | Backend selection | `/etc/lmm-api/backend.conf` |
@@ -34,48 +35,50 @@ directory into the nginx release root automatically.
 | Service port | `3000` |
 
 The AUR matrix consists of one core package (`lmm-api-bin` or `lmm-api-git`)
-and a Go and/or Rust provider package. Package installation does not authorize
-starting, restarting, enabling, or switching a service.
+and a Go and/or Rust provider package. Package installation does not
+authorize starting, restarting, enabling, or switching a service. The service
+unit invokes exactly `/usr/bin/lmm-api serve`.
 
-## Go production transaction
+## Production transaction
 
-| Purpose | Current path or behavior |
+| Purpose | Current path or entry point |
 | --- | --- |
-| Controller entry point | `deploy/production/deploy-go.sh` |
-| Target activator | `deploy/production/activate-go-release.sh` |
+| Controller entry point | `/usr/bin/lmm-api deploy production ...` |
+| Target activator | Immutable payload under the marker-owned deployment workspace |
 | Default SSH alias | `ArchDmit` |
 | Required static hostname | `arch-dmit` |
-| Target work root required by this skill | `/var/lib/lmm-api/deploy-work` |
-| Existing target staging | `/var/lib/lmm-api/deploy-staging/<version>` |
-| Existing target snapshots | `/var/lib/lmm-api/deploy-backups/<UTC>-<version>` |
+| Target work root | `/var/lib/lmm-api/deploy-work` |
 | Frontend release root | `/srv/lmm-api-frontend` |
 | Frontend releases | `/srv/lmm-api-frontend/releases/<version>` |
 | Active frontend | `/srv/lmm-api-frontend/current` |
-| Frontend publisher | `deploy/frontend-release.sh` |
 | Backend service | `lmm-api.service` |
 
-The current production controller uses `/tmp/lmm-api-production.*` and deletes
-the locally downloaded rollback package on exit. The target snapshot includes
-the old binary, configuration, package metadata, frontend identity, and a
-PostgreSQL dump, but no controller or off-host copy is produced. The current
-transaction also lacks a persistent ten-minute rollback watchdog and manual
-confirmation state.
+The supported phases are `preflight`, `inspect`, `build`, `package`,
+`backup`, `watchdog`, `switch`, `confirm`, `rollback`, and `cleanup`. The
+default is read-only preflight. Remote mutation requires explicit execution,
+verified role/host identity, and current-turn authorization.
+
+The transaction is marker-owned and persistent. Before a switch it requires
+the role-appropriate target/controller/off-host backup set, checksum
+verification, encrypted secret-bearing controller and off-host archives, and
+a persistent ten-minute watchdog armed before switching. A switch ends in
+`AWAITING_CONFIRMATION`; only exact-release identity checks and explicit
+confirmation produce `CONFIRMED`. Automatic rollback never restores a
+database.
 
 ## Existing database backups
 
-`deploy/backup/backup-sqlite-to-archczy.sh` creates an online SQLite backup in a
-temporary directory, verifies it, and publishes a checksum pair to:
+`deploy/backup/backup-sqlite-to-archczy.sh` creates an online SQLite backup in
+a temporary directory and publishes a checksum pair to
+`/var/backups/lmm-api/sqlite/<instance>` on ArchCzy. It does not create a
+controller copy. Inspect live configuration and fail closed on any disagreement
+between the configured engine and the selected backup/deployment path.
 
-`/var/backups/lmm-api/sqlite/<instance>` on ArchCzy.
+The SQLite-to-PostgreSQL cutover remains a separate, explicitly authorized
+maintenance operation. Do not infer production migration or Rust activation
+from the presence of its scripts or artifacts.
 
-The default instance is `production`, and retention is three valid snapshots.
-It does not create a controller copy. Its documentation describes SQLite as
-production authority, while the Go production activator requires `SQL_DSN` and
-`pg_dump`. Inspect the live configuration and fail on disagreement.
-
-## Rust deployment layouts
-
-### Internal-probe blue/green
+## Rust internal-probe blue/green
 
 | Purpose | Current path |
 | --- | --- |
@@ -87,18 +90,7 @@ production authority, while the Go production activator requires `SQL_DSN` and
 | Blue/green ports | `3100`, `3101` |
 | Entrypoint | `deploy/backend-rust/deploy-lmm-api-rs.sh` |
 
-This mechanism currently owns internal probes only, not production business
-traffic.
-
-### Isolated test instance
-
-| Purpose | Current path |
-| --- | --- |
-| Release root | `/opt/lmm-api-rs-single` |
-| Configuration | `/etc/lmm-api-rs-single` |
-| State | `/var/lib/lmm-api-rs-single` |
-| Unit | `lmm-api-rs-single.service` |
-| Port | `3100` |
+This mechanism owns internal probes only, not production business traffic.
 
 ## Other retained deployment state
 
@@ -109,16 +101,12 @@ traffic.
 | dedicated Valkey installer | `/var/lib/valkey-lmm-api-deploy/backups` |
 | database cutover | `/var/lib/lmm-api-cutover`, `/var/log/lmm-api-cutover` |
 
-The frontend keeps three HTML releases by default, while cumulative immutable
-assets are not garbage-collected. Existing Go staging, Go snapshots, Rust
-releases/artifacts/audits, nginx backups, and Valkey backups have no common
-retention coordinator.
+These older mechanisms have independent retention. Do not broaden cleanup to
+`/tmp`, backup roots, release roots, or another deployment's workspace.
 
 ## Temporary-path findings
 
-Most current scripts use `mktemp` with cleanup traps, but production build and
-package scripts, backup scripts, several tests, and sanitized-import helpers
-still default to `/tmp`. The Valkey deployer hard-codes
-`/tmp/valkey-lmm-api.*`. Do not broaden cleanup to `/tmp`; future deployment
-work must redirect task-specific caches and staging into the marker-owned
-persistent work directory.
+Future deployment work must redirect task-specific caches, staging, manifests,
+and logs into the marker-owned persistent work directory. Never use `/tmp` or
+`/var/tmp` for deployment artifacts or cleanup targets, and never perform a
+broad temporary-directory deletion.

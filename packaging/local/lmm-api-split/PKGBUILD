@@ -9,7 +9,15 @@ url='https://github.com/LIghtJUNction/api.lmm.best'
 options=('!strip')
 source=(
   lmm-api-launcher
-  lmm-api-select
+  production-acceptance.mjs
+  production-acceptance-lib.mjs
+  migration-gate.tsv
+  validate-route-gate
+  migration-compatibility.env
+  frozen-route-auth.tsv
+  route-gate-assets.sha256
+  route-evidence.tar
+  migration-evidence.tar
   lmm-api.service
   lmm-api.env
   backend.conf
@@ -23,18 +31,22 @@ source=(
   NOTICE
   THIRD-PARTY-LICENSES.md
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
+            'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
             'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 prepare() {
   install -d -m0755 "$srcdir/frontend-dist"
   tar -xf "$srcdir/frontend-dist.tar" -C "$srcdir/frontend-dist"
+  install -d -m0755 "$srcdir/route-evidence" "$srcdir/migration-evidence"
+  tar -xf "$srcdir/route-evidence.tar" -C "$srcdir/route-evidence"
+  tar -xf "$srcdir/migration-evidence.tar" -C "$srcdir/migration-evidence"
 }
 
 package_lmm-api() {
   pkgdesc='LMM API shared service, configuration, and backend launcher'
   license=('AGPL-3.0-only')
-  depends=('bash' 'ca-certificates' 'coreutils' 'sed' 'systemd' 'tzdata')
+  depends=('bash' 'ca-certificates' 'coreutils' 'diffutils' 'jq' 'nodejs' 'sed' 'systemd' 'tzdata')
   optdepends=(
     "lmm-api-go=${pkgver}-${pkgrel}: stable production Go backend"
     "lmm-api-rs=${pkgver}-${pkgrel}: optional Rust migration preview"
@@ -43,7 +55,23 @@ package_lmm-api() {
   install=lmm-api.install
 
   install -Dm0755 "$srcdir/lmm-api-launcher" "$pkgdir/usr/bin/lmm-api"
-  install -Dm0755 "$srcdir/lmm-api-select" "$pkgdir/usr/bin/lmm-api-select"
+  install -Dm0755 "$srcdir/production-acceptance.mjs" \
+    "$pkgdir/usr/lib/lmm-api/deploy/production-acceptance.mjs"
+  install -Dm0644 "$srcdir/production-acceptance-lib.mjs" \
+    "$pkgdir/usr/lib/lmm-api/deploy/production-acceptance-lib.mjs"
+  install -Dm0644 "$srcdir/migration-gate.tsv" "$pkgdir/usr/lib/lmm-api/deploy/migration-gate.tsv"
+  install -Dm0755 "$srcdir/validate-route-gate" "$pkgdir/usr/lib/lmm-api/deploy/validate-route-gate"
+  install -Dm0644 "$srcdir/migration-compatibility.env" \
+    "$pkgdir/usr/lib/lmm-api/deploy/migration-compatibility.env"
+  install -Dm0644 "$srcdir/frozen-route-auth.tsv" \
+    "$pkgdir/usr/lib/lmm-api/deploy/frozen-route-auth.tsv"
+  install -Dm0644 "$srcdir/route-gate-assets.sha256" \
+    "$pkgdir/usr/lib/lmm-api/deploy/route-gate-assets.sha256"
+  for evidence_dir in route-evidence migration-evidence; do
+    install -d -m0755 "$pkgdir/usr/lib/lmm-api/deploy/$evidence_dir"
+    cp -R --no-preserve=ownership,mode,timestamps -- "$srcdir/$evidence_dir/." \
+      "$pkgdir/usr/lib/lmm-api/deploy/$evidence_dir/"
+  done
   install -Dm0644 "$srcdir/lmm-api.service" "$pkgdir/usr/lib/systemd/system/lmm-api.service"
   install -Dm0644 "$srcdir/backend.conf" "$pkgdir/etc/lmm-api/backend.conf"
   install -Dm0600 "$srcdir/lmm-api.env" "$pkgdir/etc/lmm-api/lmm-api.env"
