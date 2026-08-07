@@ -65,7 +65,8 @@ export class SecretRedactor {
     result = result
       .replaceAll(/\bsk-[A-Za-z0-9._-]{8,}\b/g, '[REDACTED_API_KEY]')
       .replaceAll(/\bBearer\s+[^\s,;]+/gi, 'Bearer [REDACTED]')
-      .replaceAll(/[\r\n\t\0]/g, ' ')
+      .replaceAll(/[\r\n\t]/g, ' ')
+      .replaceAll('\0', ' ')
     return result.slice(0, 300)
   }
 }
