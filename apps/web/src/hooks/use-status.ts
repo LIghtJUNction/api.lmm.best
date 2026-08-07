@@ -20,6 +20,10 @@ import { useQuery } from '@tanstack/react-query'
 
 import type { SystemStatus } from '@/features/auth/types'
 import { getStatus } from '@/lib/api'
+import {
+  getCapabilitySafeStatus,
+  normalizeBackendCapabilities,
+} from '@/lib/backend-capabilities'
 import { useAuthStore } from '@/stores/auth-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
@@ -30,7 +34,9 @@ function getInitialStatus(): SystemStatus | undefined {
   try {
     if (typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('status')
-      return saved ? (JSON.parse(saved) as SystemStatus) : undefined
+      return saved
+        ? normalizeBackendCapabilities(JSON.parse(saved) as SystemStatus, false)
+        : undefined
     }
   } catch {
     /* empty */
@@ -44,14 +50,21 @@ export function useStatus() {
     if (!user) return 'anonymous'
     return `user:${user.id}:docs:${user.permissions?.docs_access === true ? 1 : 0}`
   })
-  const { data, isLoading, error } = useQuery({
+  const { data, isFetchedAfterMount, isFetching, isLoading, error } = useQuery({
     queryKey: ['status', statusScope],
     queryFn: async () => {
-      const status = await getStatus()
+      const rawStatus = await getStatus()
+      const status = rawStatus
+        ? normalizeBackendCapabilities(rawStatus as SystemStatus)
+        : null
       try {
         if (status) {
           const { setConfig } = useSystemConfigStore.getState()
-          setConfig(mapStatusDataToConfig(status))
+          setConfig(
+            mapStatusDataToConfig(
+              status as Parameters<typeof mapStatusDataToConfig>[0]
+            )
+          )
         }
       } catch (err) {
         if (import.meta.env.DEV) {
@@ -74,15 +87,24 @@ export function useStatus() {
     },
     // Use localStorage data as initial data
     placeholderData: getInitialStatus(),
-    // Data becomes stale after 5 minutes
-    staleTime: 5 * 60 * 1000,
+    // Capability decisions require a live response for this observer mount.
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
     // Cache expires after 30 minutes
     gcTime: 30 * 60 * 1000,
   })
 
+  const capabilitiesReady =
+    Boolean(data) && isFetchedAfterMount && !isFetching && !error
+
   return {
-    status: data ?? null,
+    status: getCapabilitySafeStatus(data, capabilitiesReady),
     loading: isLoading,
+    capabilitiesReady,
     error,
   }
 }

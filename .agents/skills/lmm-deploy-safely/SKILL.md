@@ -7,6 +7,10 @@ description: Safely inspect, stage, back up, deploy, update, confirm, roll back,
 
 Apply one controlled deployment transaction. Do not infer production authority
 from an earlier turn, a generic request to “update,” or access to an SSH host.
+The installed package exposes one public operator CLI, `/usr/bin/lmm-api`:
+use `lmm-api deploy ...` for deployment phases and `lmm-api serve` for the
+systemd service. Do not invoke a source-tree deployment helper or document a
+second public deploy command.
 
 ## Read the deployment map
 
@@ -15,11 +19,12 @@ package, service, frontend, database, or rollback path. Read
 [references/safety-contract.md](references/safety-contract.md) before any
 mutation, backup, retention, confirmation, rollback, or cleanup operation.
 
-The repository's current paths are not fully unified. In particular, the
-existing Go production transaction does not yet provide the required local and
-off-host backup copies or a persistent ten-minute rollback watchdog. Refuse a
-production deployment until those mechanisms exist and pass their offline
-contract tests.
+Use the canonical installed CLI transaction and its immutable package payloads.
+The transaction requires role-appropriate backup copies, encrypted
+secret-bearing controller and off-host archives, checksum verification, a
+persistent ten-minute watchdog armed before switching, and explicit exact-
+release confirmation. Refuse a production deployment until these mechanisms
+exist and pass their offline contract tests.
 
 ## Classify authority
 

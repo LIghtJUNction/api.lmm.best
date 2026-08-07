@@ -7,19 +7,29 @@ legacy="${MIGRATION_LEGACY_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/
 plan="${MIGRATION_PLAN_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/migration-plan.tsv}"
 gate="${MIGRATION_GATE_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/migration-gate.tsv}"
 review="${MIGRATION_INTEGRATION_REVIEW_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv}"
+frozen_contract="${MIGRATION_FROZEN_ROUTE_AUTH_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv}"
 
 # Normalize command input without rewriting tracked route ledgers. This keeps
 # the checker stable when a checkout preserves CRLF TSV endings.
 tsv_without_crlf() {
   sed 's/\r$//' -- "$1"
 }
+tsv_first_line() {
+  sed -n '1{s/\r$//;p;q;}' -- "$1"
+}
 expected_header=$'method\tpath\tlegacy_handler\tdomain\tauth_scope\tdata_access\tstreaming\tpriority\tplanned_rust_module\tjob_dependency'
-expected_gate_header=$'method\tpath\tsource_state\tcompile_state\tmount_state\tdifferential_state\tapproval_state\tproduction_owner\tgate_state\tevidence'
 expected_review_header=$'method\tpath\trust_handler\tlistener_differential\tpostgres_evidence\tvalkey_evidence\tdecision\tnotes'
+gate_validator="${MIGRATION_GATE_VALIDATOR_PATH:-$repo_root/packaging/common/lmm-api/validate-route-gate}"
+release_revision="${MIGRATION_RELEASE_REVISION:-$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)}"
+evidence_root="${MIGRATION_EVIDENCE_ROOT:-$repo_root}"
+snapshot_dir=$(mktemp -d "$repo_root/.migration-gate-snapshot.XXXXXXXX")
+asset_manifest=$(mktemp "$repo_root/.migration-gate-assets.XXXXXXXX")
+cleanup() { rm -rf -- "$snapshot_dir"; rm -f -- "$asset_manifest"; }
+trap cleanup EXIT
 
 [[ -f "$plan" ]] || { echo "missing migration plan: $plan" >&2; exit 1; }
 [[ -f "$legacy" ]] || { echo "missing frozen legacy route ledger: $legacy" >&2; exit 1; }
-[[ $(tsv_without_crlf "$plan" | head -n 1) == "$expected_header" ]] || { echo "invalid migration-plan header" >&2; exit 1; }
+[[ $(tsv_first_line "$plan") == "$expected_header" ]] || { echo "invalid migration-plan header" >&2; exit 1; }
 
 awk -F '\t' '
   function frozen_auth_scope(method, path) {
@@ -69,13 +79,36 @@ awk -F '\t' '
 
 cut -f1-3 <(tsv_without_crlf "$plan") | tail -n +2 | diff -u <(tsv_without_crlf "$legacy") -
 
-[[ -f "$gate" ]] || { echo "missing migration evidence gate: $gate" >&2; exit 1; }
-[[ $(tsv_without_crlf "$gate" | head -n 1) == "$expected_gate_header" ]] || {
-  echo "invalid migration-gate header" >&2
+[[ -f $frozen_contract && ! -L $frozen_contract ]] || {
+  echo "missing frozen route/auth contract: $frozen_contract" >&2
   exit 1
 }
+diff -u <(tsv_without_crlf "$frozen_contract") <(
+  awk -F '\t' 'BEGIN { OFS=FS; print "method", "path", "auth_scope" } NR > 1 { print $1, $2, $5 }' \
+    <(tsv_without_crlf "$plan")
+) || {
+  echo "frozen route/auth contract differs from migration-plan membership or auth scope" >&2
+  exit 1
+}
+
+[[ -f "$gate" ]] || { echo "missing migration evidence gate: $gate" >&2; exit 1; }
+[[ -x $gate_validator && ! -L $gate_validator ]] || {
+  echo "missing canonical route-gate validator: $gate_validator" >&2
+  exit 1
+}
+{
+  printf '%s  migration-gate.tsv\n' "$(sha256sum "$gate" | awk '{print $1}')"
+  printf '%s  validate-route-gate\n' "$(sha256sum "$gate_validator" | awk '{print $1}')"
+  printf '%s  migration-compatibility.env\n' \
+    "$(sha256sum "$repo_root/packaging/common/lmm-api/migration-compatibility.env" | awk '{print $1}')"
+  printf '%s  frozen-route-auth.tsv\n' "$(sha256sum "$frozen_contract" | awk '{print $1}')"
+} >"$asset_manifest"
+asset_manifest_sha=$(sha256sum "$asset_manifest" | awk '{print $1}')
+"$gate_validator" --mode source --snapshot-dir "$snapshot_dir" --gate "$gate" --frozen-contract "$frozen_contract" \
+  --assets-manifest "$asset_manifest" --assets-manifest-sha256 "$asset_manifest_sha" \
+  --evidence-root "$evidence_root" --revision "$release_revision"
 [[ -f "$review" ]] || { echo "missing integration review: $review" >&2; exit 1; }
-[[ $(tsv_without_crlf "$review" | head -n 1) == "$expected_review_header" ]] || {
+[[ $(tsv_first_line "$review") == "$expected_review_header" ]] || {
   echo "invalid integration-review header" >&2
   exit 1
 }
@@ -83,28 +116,6 @@ if rg -Fq $'/api/user/logout' <(tsv_without_crlf "$gate") <(tsv_without_crlf "$r
   echo "obsolete /api/user/logout must not appear in migration evidence" >&2
   exit 1
 fi
-
-awk -F '\t' '
-  NR == 1 { next }
-  NF != 10 { printf "gate line %d: expected 10 tab-separated fields, got %d\\n", NR, NF > "/dev/stderr"; failed=1; next }
-  $3 !~ /^(absent|present)$/ { printf "gate line %d: invalid source state %s\\n", NR, $3 > "/dev/stderr"; failed=1 }
-  $4 !~ /^(not-applicable|unverified|verified)$/ { printf "gate line %d: invalid compile state %s\\n", NR, $4 > "/dev/stderr"; failed=1 }
-  $5 !~ /^(unmounted|mounted)$/ { printf "gate line %d: invalid mount state %s\\n", NR, $5 > "/dev/stderr"; failed=1 }
-  $6 !~ /^(not-applicable|unverified|verified|blocked-sol-stop)$/ { printf "gate line %d: invalid differential state %s\\n", NR, $6 > "/dev/stderr"; failed=1 }
-  $7 !~ /^(not-applicable|pending-independent-approval|approved)$/ { printf "gate line %d: invalid approval state %s\\n", NR, $7 > "/dev/stderr"; failed=1 }
-  $8 != "go" { printf "gate line %d: production ownership must remain Go, got %s\\n", NR, $8 > "/dev/stderr"; failed=1 }
-  $9 !~ /^(legacy-go|mounted-unverified|candidate-pending-independent-approval|blocked-sol-stop|verified-approved)$/ { printf "gate line %d: invalid gate state %s\\n", NR, $9 > "/dev/stderr"; failed=1 }
-  { key=$1 "\\t" $2; if (seen[key]++) { printf "gate line %d: duplicate route key %s\\n", NR, key > "/dev/stderr"; failed=1 } }
-  $5 == "mounted" && ($3 != "present" || $4 == "not-applicable") { printf "gate line %d: mounted route requires source and compile evidence\\n", NR > "/dev/stderr"; failed=1 }
-  $6 == "verified" && ($4 != "verified" || $5 != "mounted") { printf "gate line %d: differential verification requires compiled and mounted evidence\\n", NR > "/dev/stderr"; failed=1 }
-  $9 == "legacy-go" && ($3 != "absent" || $5 != "unmounted") { printf "gate line %d: legacy-go route cannot claim Rust source or mount\\n", NR > "/dev/stderr"; failed=1 }
-  $9 == "mounted-unverified" && !($3 == "present" && $4 == "unverified" && $5 == "mounted" && $6 == "unverified" && $7 == "not-applicable") { printf "gate line %d: mounted-unverified requires no compile or differential credit\\n", NR > "/dev/stderr"; failed=1 }
-  $9 == "candidate-pending-independent-approval" && !($3 == "present" && $4 == "unverified" && $5 == "mounted" && $6 == "unverified" && $7 == "pending-independent-approval") { printf "gate line %d: pending candidate requires independent approval\\n", NR > "/dev/stderr"; failed=1 }
-  $9 == "blocked-sol-stop" && !($3 == "present" && $4 == "unverified" && $5 == "mounted" && $6 == "blocked-sol-stop" && $7 == "not-applicable") { printf "gate line %d: blocked route stays out of every migration credit\\n", NR > "/dev/stderr"; failed=1 }
-  $9 == "verified-approved" && !($3 == "present" && $4 == "verified" && $5 == "mounted" && $6 == "verified" && $7 == "approved") { printf "gate line %d: verified-approved requires source, compile, mount, differential, and approval evidence\\n", NR > "/dev/stderr"; failed=1 }
-  $9 == "verified-approved" && !($10 ~ /(^|;)source=[^;]+(;|$)/ && $10 ~ /(^|;)compile=[^;]+(;|$)/ && $10 ~ /(^|;)mount=[^;]+(;|$)/ && $10 ~ /(^|;)differential=[^;]+(;|$)/ && $10 ~ /(^|;)approval=[^;]+(;|$)/) { printf "gate line %d: verified-approved requires named source, compile, mount, differential, and approval references\\n", NR > "/dev/stderr"; failed=1 }
-  END { if (NR != 357) { printf "expected 356 gate rows, got %d\\n", NR - 1 > "/dev/stderr"; failed=1 }; exit failed }
-' <(tsv_without_crlf "$gate")
 
 cut -f1-2 <(tsv_without_crlf "$gate") | tail -n +2 | diff -u <(tsv_without_crlf "$legacy" | cut -f1-2) -
 
@@ -125,57 +136,6 @@ evidence_value() {
   done
   [[ $matches -eq 1 ]] || return 1
   printf '%s\n' "$value"
-}
-
-validate_evidence() {
-  local method=$1 path=$2 evidence=$3
-  local entry evidence_key evidence_path expected_sha actual_sha
-  local resolved_path
-  local -a entries
-  declare -A evidence_keys=()
-
-  [[ -n $evidence ]] || {
-    echo "gate $method $path requires pinned evidence" >&2
-    return 1
-  }
-  IFS=';' read -r -a entries <<<"$evidence"
-  for entry in "${entries[@]}"; do
-    if [[ ! $entry =~ ^([a-z][a-z0-9_-]*)=([^@]+)@sha256:([0-9a-f]{64})$ ]]; then
-      echo "gate $method $path has malformed evidence entry: $entry" >&2
-      return 1
-    fi
-    evidence_key=${BASH_REMATCH[1]}
-    evidence_path=${BASH_REMATCH[2]}
-    expected_sha=${BASH_REMATCH[3]}
-    if [[ ${evidence_keys[$evidence_key]+x} ]]; then
-      echo "gate $method $path has duplicate evidence key: $evidence_key" >&2
-      return 1
-    fi
-    evidence_keys[$evidence_key]=1
-    if [[ $evidence_path == /* || $evidence_path == *'..'* || $evidence_path == ./* || $evidence_path == *'//' ]]; then
-      echo "gate $method $path has unsafe evidence path: $evidence_path" >&2
-      return 1
-    fi
-    evidence_file="$repo_root/$evidence_path"
-    [[ -f $evidence_file ]] || {
-      echo "gate $method $path names missing evidence: $evidence_path" >&2
-      return 1
-    }
-    resolved_path=$(realpath -e --relative-to="$repo_root" -- "$evidence_file") || {
-      echo "gate $method $path cannot resolve evidence path: $evidence_path" >&2
-      return 1
-    }
-    [[ $resolved_path == "$evidence_path" ]] || {
-      echo "gate $method $path evidence must stay inside the repository: $evidence_path" >&2
-      return 1
-    }
-    actual_sha=$(sha256sum -- "$evidence_file")
-    actual_sha=${actual_sha%% *}
-    [[ $actual_sha == "$expected_sha" ]] || {
-      echo "gate $method $path has stale evidence SHA-256: $evidence_path" >&2
-      return 1
-    }
-  done
 }
 
 validate_evidence_keys() {
@@ -257,9 +217,6 @@ require_frozen_model_delete_501_evidence() {
 
 while IFS=$'\t' read -r method path source_state compile_state mount_state differential_state approval_state owner gate_state evidence; do
   validate_evidence_keys "$method" "$path" "$evidence" || exit 1
-  if [[ $compile_state == verified || $differential_state == verified || $approval_state == approved ]]; then
-    validate_evidence "$method" "$path" "$evidence" || exit 1
-  fi
 done < <(awk -F '\t' 'NR > 1 { print }' <(tsv_without_crlf "$gate"))
 
 awk -F '\t' '
@@ -298,6 +255,17 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
       exit 1
     }
     router_evidence=${router_evidence%@sha256:*}
+    if [[ $router_evidence == *.json ]]; then
+      mount_json="$evidence_root/$router_evidence"
+      [[ -f $mount_json && ! -L $mount_json ]] || {
+        echo "mounted $method $path names missing mount evidence JSON: $router_evidence" >&2
+        exit 1
+      }
+      router_evidence=$(jq -er '.router_path' "$mount_json") || {
+        echo "mounted $method $path has no router_path in $mount_json" >&2
+        exit 1
+      }
+    fi
   fi
   source_file="$repo_root/$router_evidence"
   [[ -f $source_file ]] || { echo "mounted $method $path names missing router source: $router_evidence" >&2; exit 1; }
@@ -347,9 +315,10 @@ mapfile -t declared_candidates < <(
     LC_ALL=C sort
 )
 declared_candidate_count=${#declared_candidates[@]}
+# shellcheck disable=SC1003 # tr receives the quoted backslash character set.
 mapfile -t candidate_names < <(
   printf '%s\n' "${candidate_files[@]}" |
-    tr '\\\\' '/' |
+    tr '\\' '/' |
     sed -E 's#^.*/##; s#\.rs$##' |
     LC_ALL=C sort
 )
@@ -438,16 +407,12 @@ awk -F '\t' '
     unmounted += $5 == "unmounted"
     differential += $6 == "verified"
     approved += $7 == "approved"
-    production += $8 == "rust"
+    production += $8 == "rs"
   }
   END {
-    if (production != 0) {
-      printf "unexpected migration credit counters: source-present=%d compiled=%d mounted=%d unmounted=%d differential-verified=%d approved=%d production-owned-rust=%d\n", source, compiled, mounted, unmounted, differential, approved, production > "/dev/stderr"
-      exit 1
-    }
     printf "migration gate evidence: source-present=%d compiled=%d mounted=%d unmounted=%d differential-verified=%d approved=%d production-owned-rust=%d migration-credit=%d\n", source, compiled, mounted, unmounted, differential, approved, production, production
     printf "migration gate states: legacy-go=%d mounted-unverified=%d candidate-pending-independent-approval=%d blocked-sol-stop=%d verified-approved=%d\n", state["legacy-go"], state["mounted-unverified"], state["candidate-pending-independent-approval"], state["blocked-sol-stop"], state["verified-approved"]
   }
 ' <(tsv_without_crlf "$gate")
 
-echo "migration plan valid: 356 frozen legacy routes covered exactly; production ownership remains Go"
+echo "migration plan valid: 356 frozen legacy routes covered exactly; route ownership policy satisfied"

@@ -89,6 +89,14 @@ export interface ApiResponse<T = unknown> {
 // System Status
 // ============================================================================
 
+export interface BackendCapabilities {
+  bounty_notifications: boolean
+  bounty_challenge_cancel: boolean
+  bounty_public_read: boolean
+  self_oauth_unbind: boolean
+  responses_websocket: boolean
+}
+
 export interface SystemStatus {
   success?: boolean
   message?: string
@@ -135,6 +143,7 @@ export interface SystemStatus {
     password_login_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
+    backend_capabilities?: Partial<BackendCapabilities>
     [key: string]: unknown
   }
   // Allow direct access to common properties
@@ -180,6 +189,7 @@ export interface SystemStatus {
   password_login_enabled?: boolean
   password_register_enabled?: boolean
   custom_oauth_providers?: CustomOAuthProviderInfo[]
+  backend_capabilities?: Partial<BackendCapabilities>
   [key: string]: unknown
 }
 
