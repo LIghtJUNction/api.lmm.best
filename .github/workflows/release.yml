@@ -122,14 +122,27 @@ jobs:
           artifact="lmm-api-core-${RELEASE_VERSION}"
           bundle="release-core/${artifact}"
           mkdir -p "$bundle/frontend-dist"
+          mkdir -p "$bundle/deploy/route-evidence" "$bundle/deploy/migration-evidence"
           tar -xzf "release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz" \
             -C "$bundle/frontend-dist" --strip-components=1
           cp packaging/common/lmm-api/lmm-api-launcher "$bundle/"
-          cp packaging/common/lmm-api/lmm-api-select "$bundle/"
           cp packaging/common/lmm-api/lmm-api.service "$bundle/"
           cp packaging/common/lmm-api/backend.conf "$bundle/"
           cp packaging/common/lmm-api/lmm-api.env "$bundle/"
           cp packaging/common/lmm-api/lmm-api-rs.env.example "$bundle/"
+          cp apps/web/scripts/production-acceptance.mjs "$bundle/deploy/"
+          cp apps/web/scripts/production-acceptance-lib.mjs "$bundle/deploy/"
+          cp apps/api-rust/tests/fixtures/routes/migration-gate.tsv "$bundle/deploy/"
+          cp apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv "$bundle/deploy/"
+          cp packaging/common/lmm-api/{validate-route-gate,migration-compatibility.env} "$bundle/deploy/"
+          if [[ -d apps/api-rust/tests/fixtures/routes/evidence ]]; then
+            cp -R apps/api-rust/tests/fixtures/routes/evidence/. "$bundle/deploy/route-evidence/"
+          fi
+          if [[ -d packaging/common/lmm-api/evidence ]]; then
+            cp -R packaging/common/lmm-api/evidence/. "$bundle/deploy/migration-evidence/"
+          fi
+          (cd "$bundle/deploy" && \
+            sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env frozen-route-auth.tsv > route-gate-assets.sha256)
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
           printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"
           tar -czf "release-core/${artifact}.tar.gz" -C release-core "$artifact"

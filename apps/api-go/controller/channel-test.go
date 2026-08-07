@@ -56,6 +56,43 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	return normalized
 }
 
+func isChannelTestImageGenerationModel(channel *model.Channel, modelName string) bool {
+	return common.IsImageGenerationModel(modelName) ||
+		(channel != nil && channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(strings.ToLower(modelName), "seedream"))
+}
+
+func resolveChannelTestRequestPath(channel *model.Channel, modelName, endpointType string) string {
+	requestPath := "/v1/chat/completions"
+	if endpointType != "" {
+		if endpointInfo, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType)); ok {
+			return endpointInfo.Path
+		}
+		return requestPath
+	}
+
+	lowerModelName := strings.ToLower(modelName)
+	if strings.Contains(lowerModelName, "rerank") {
+		requestPath = "/v1/rerank"
+	}
+	if strings.Contains(lowerModelName, "embedding") ||
+		strings.HasPrefix(modelName, "m3e") ||
+		strings.Contains(modelName, "bge-") ||
+		strings.Contains(modelName, "embed") ||
+		(channel != nil && channel.Type == constant.ChannelTypeMokaAI) {
+		requestPath = "/v1/embeddings"
+	}
+	if isChannelTestImageGenerationModel(channel, modelName) {
+		requestPath = "/v1/images/generations"
+	}
+	if strings.Contains(lowerModelName, "codex") {
+		requestPath = "/v1/responses"
+	}
+	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
+		requestPath = "/v1/responses/compact"
+	}
+	return requestPath
+}
+
 func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	if c != nil {
 		if userID := c.GetInt("id"); userID > 0 {
@@ -113,44 +150,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
 
-	requestPath := "/v1/chat/completions"
-
-	// 如果指定了端点类型，使用指定的端点类型
-	if endpointType != "" {
-		if endpointInfo, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType)); ok {
-			requestPath = endpointInfo.Path
-		}
-	} else {
-		// 如果没有指定端点类型，使用原有的自动检测逻辑
-
-		if strings.Contains(strings.ToLower(testModel), "rerank") {
-			requestPath = "/v1/rerank"
-		}
-
-		// 先判断是否为 Embedding 模型
-		if strings.Contains(strings.ToLower(testModel), "embedding") ||
-			strings.HasPrefix(testModel, "m3e") || // m3e 系列模型
-			strings.Contains(testModel, "bge-") || // bge 系列模型
-			strings.Contains(testModel, "embed") ||
-			channel.Type == constant.ChannelTypeMokaAI { // 其他 embedding 模型
-			requestPath = "/v1/embeddings" // 修改请求路径
-		}
-
-		// VolcEngine 图像生成模型
-		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
-			requestPath = "/v1/images/generations"
-		}
-
-		// responses-only models
-		if strings.Contains(strings.ToLower(testModel), "codex") {
-			requestPath = "/v1/responses"
-		}
-
-		// responses compaction models (must use /v1/responses/compact)
-		if strings.HasSuffix(testModel, ratio_setting.CompactModelSuffix) {
-			requestPath = "/v1/responses/compact"
-		}
-	}
+	requestPath := resolveChannelTestRequestPath(channel, testModel, endpointType)
 	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
 		testModel = ratio_setting.WithCompactModelSuffix(testModel)
 	}
@@ -775,6 +775,15 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		return &dto.EmbeddingRequest{
 			Model: model,
 			Input: []any{"hello world"},
+		}
+	}
+
+	if isChannelTestImageGenerationModel(channel, model) {
+		return &dto.ImageRequest{
+			Model:  model,
+			Prompt: "a cute cat",
+			N:      lo.ToPtr(uint(1)),
+			Size:   "1024x1024",
 		}
 	}
 

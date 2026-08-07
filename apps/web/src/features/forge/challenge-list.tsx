@@ -28,8 +28,11 @@ import { useTranslation } from 'react-i18next'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { listBounties } from '@/features/open-source-bounties/api'
+import { useStatus } from '@/hooks/use-status'
+import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 type ChallengeListProps = {
   limit?: number
@@ -51,9 +54,14 @@ function repositoryName(url: string): string {
 export function ChallengeList(props: ChallengeListProps) {
   const { t } = useTranslation()
   const limit = props.limit ?? 50
+  const user = useAuthStore((state) => state.auth.user)
+  const { status, capabilitiesReady } = useStatus()
+  const canReadPublicBounties =
+    getBackendCapabilities(status).bounty_public_read
   const query = useQuery({
     queryKey: ['forge-challenges'],
     queryFn: listBounties,
+    enabled: Boolean(user) || (capabilitiesReady && canReadPublicBounties),
   })
   const items = (query.data?.items ?? []).slice(0, limit)
 

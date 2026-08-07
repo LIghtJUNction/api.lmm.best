@@ -25,6 +25,7 @@ use crate::{
     },
     inspect::inspect_sqlite,
     manifest::{Column, Converter, Manifest, Table},
+    postgres_catalog::acquire_shared_migration_lock,
     release::ReleaseBinding,
 };
 
@@ -88,10 +89,8 @@ pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, Migrat
     source.connection.execute_batch("BEGIN")?;
     let mut client = Client::connect(options.database_url, NoTls)?;
     let mut transaction = client.transaction()?;
-    transaction.query_one(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-        &[&options.schema],
-    )?;
+    acquire_shared_migration_lock(&mut transaction)
+        .map_err(|error| MigrationError::Manifest(error.to_string()))?;
     if schema_exists(&mut transaction, options.schema)? {
         return Err(MigrationError::Manifest(
             "target schema must not already exist".into(),
@@ -158,6 +157,8 @@ pub fn verify(options: &VerifyOptions<'_>) -> Result<MigrationReport, MigrationE
     let mut client = Client::connect(options.database_url, NoTls)?;
     let mut transaction = client.transaction()?;
     transaction.batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")?;
+    acquire_shared_migration_lock(&mut transaction)
+        .map_err(|error| MigrationError::Manifest(error.to_string()))?;
     let report = verify_connections(
         &source.connection,
         &mut transaction,

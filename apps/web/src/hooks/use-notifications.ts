@@ -23,13 +23,14 @@ import { toast } from 'sonner'
 
 import type { NotificationTab } from '@/components/notification-popover'
 import {
-  listBountyNotifications,
-  markBountyNotificationsRead,
+  listCompatibleBountyNotifications,
+  markCompatibleBountyNotificationsRead,
   thankBountyTip,
 } from '@/features/open-source-bounties/api'
 import type { BountyNotification } from '@/features/open-source-bounties/types'
 import { useStatus } from '@/hooks/use-status'
 import { getNotice } from '@/lib/api'
+import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { useAuthStore } from '@/stores/auth-store'
 import { useNotificationStore } from '@/stores/notification-store'
 
@@ -92,7 +93,8 @@ export function useNotifications() {
   })
 
   // Fetch Announcements from status
-  const { status, loading: statusLoading } = useStatus()
+  const { status, loading: statusLoading, capabilitiesReady } = useStatus()
+  const backendCapabilities = getBackendCapabilities(status)
   const announcementsEnabled = status?.announcements_enabled ?? false
   const statusAnnouncements = status?.announcements
   const announcements = useMemo<Record<string, unknown>[]>(
@@ -105,13 +107,25 @@ export function useNotifications() {
         : [],
     [announcementsEnabled, statusAnnouncements]
   )
+  const bountyNotificationsMode = backendCapabilities.bounty_notifications
+    ? 'unified'
+    : 'legacy-tips'
+  const bountyNotificationsQueryKey = [
+    'open-source-bounties',
+    'notifications',
+    bountyNotificationsMode,
+    userId,
+  ] as const
   const { data: bountyNotifications = [], isLoading: bountyLoading } = useQuery(
     {
-      queryKey: ['open-source-bounties', 'notifications', userId],
-      queryFn: listBountyNotifications,
-      enabled: userId > 0,
+      queryKey: bountyNotificationsQueryKey,
+      queryFn: () =>
+        listCompatibleBountyNotifications(
+          backendCapabilities.bounty_notifications
+        ),
+      enabled: userId > 0 && capabilitiesReady,
       staleTime: 30_000,
-      refetchInterval: 30_000,
+      refetchInterval: userId > 0 && capabilitiesReady ? 30_000 : false,
     }
   )
 
@@ -171,7 +185,7 @@ export function useNotifications() {
     if (userId <= 0 || unreadCounts.bountyNotifications === 0) return
     const readAt = Math.floor(Date.now() / 1000)
     queryClient.setQueryData<BountyNotification[]>(
-      ['open-source-bounties', 'notifications', userId],
+      bountyNotificationsQueryKey,
       (items = []) =>
         items.map((item) =>
           item.recipient_read_at > 0
@@ -179,9 +193,11 @@ export function useNotifications() {
             : { ...item, recipient_read_at: readAt }
         )
     )
-    void markBountyNotificationsRead().catch(() => {
+    void markCompatibleBountyNotificationsRead(
+      backendCapabilities.bounty_notifications
+    ).catch(() => {
       void queryClient.invalidateQueries({
-        queryKey: ['open-source-bounties', 'notifications', userId],
+        queryKey: bountyNotificationsQueryKey,
       })
     })
   }
@@ -230,7 +246,7 @@ export function useNotifications() {
     try {
       const updated = await thankBountyTip(tipId)
       queryClient.setQueryData<BountyNotification[]>(
-        ['open-source-bounties', 'notifications', userId],
+        bountyNotificationsQueryKey,
         (items = []) =>
           items.map((item) =>
             item.id === tipId ? { ...item, ...updated } : item

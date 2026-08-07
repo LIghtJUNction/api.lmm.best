@@ -283,9 +283,7 @@ export function RechargeFormCard({
       description={t('Choose an amount and payment method')}
       icon={<HugeiconsIcon icon={WalletCardsIcon} strokeWidth={2} />}
       iconTone='success'
-      cardProps={{
-        'data-card-hover': 'false',
-      }}
+      disableHoverEffect
       action={
         onOpenBilling && !neutralMode ? (
           <Button

@@ -222,6 +222,23 @@ export function markReceivedBountyTipsRead() {
   return unwrap<null>(api.post('/api/open-source-bounties/tips/received/read'))
 }
 
+export async function listCompatibleBountyNotifications(
+  supportsUnifiedNotifications: boolean
+): Promise<BountyNotification[]> {
+  if (supportsUnifiedNotifications) return listBountyNotifications()
+
+  const tips = await listReceivedBountyTips()
+  return tips.map((tip) => ({ ...tip, kind: 'tip_transfer' }))
+}
+
+export function markCompatibleBountyNotificationsRead(
+  supportsUnifiedNotifications: boolean
+) {
+  return supportsUnifiedNotifications
+    ? markBountyNotificationsRead()
+    : markReceivedBountyTipsRead()
+}
+
 export function thankBountyTip(tipId: number) {
   return unwrap<BountyTipNotification>(
     api.post(`/api/open-source-bounties/tips/${tipId}/thank`)
