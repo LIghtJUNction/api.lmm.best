@@ -69,7 +69,9 @@ import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { TitledCard } from '@/components/ui/titled-card'
+import { useStatus } from '@/hooks/use-status'
 import { getSelf } from '@/lib/api'
+import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import {
   formatQuota,
@@ -245,6 +247,9 @@ export function OpenSourceBounties({
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
   const setUser = useAuthStore((state) => state.auth.setUser)
+  const { status } = useStatus()
+  const canCancelChallenge =
+    getBackendCapabilities(status).bounty_challenge_cancel
   const [pending, setPending] = useState('')
   const [draftOpen, setDraftOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<BountyProject | null>(
@@ -467,6 +472,7 @@ export function OpenSourceBounties({
   }, [detailTarget, errorMessage, onDetailTargetConsumed])
 
   const handleCancelChallenge = async (challenge: BountyChallenge) => {
+    if (!canCancelChallenge) return
     if (
       !window.confirm(
         t(
@@ -2023,7 +2029,7 @@ function SubmissionDialog(props: {
   )
 }
 
-function ProjectReviewDialog(props: {
+export function ProjectReviewDialog(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
   detail: BountyProjectDetail | null
@@ -2264,22 +2270,11 @@ function ProjectReviewDialog(props: {
                   </Button>
                 </div>
               )}
-              {challenge.status === 'accepted' && (
-                <Button
-                  variant='destructive'
-                  onClick={() => props.onCancel(challenge)}
-                  disabled={
-                    props.pending !== '' || challenge.dispute?.status === 'open'
-                  }
-                >
-                  <HugeiconsIcon
-                    icon={CancelCircleIcon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                  />
-                  {t('Cancel challenge')}
-                </Button>
-              )}
+              <ChallengeCancelAction
+                challenge={challenge}
+                pending={props.pending}
+                onCancel={props.onCancel}
+              />
             </div>
           ))
         )}
@@ -2311,6 +2306,36 @@ function ProjectReviewDialog(props: {
         )}
       </div>
     </Dialog>
+  )
+}
+
+export function ChallengeCancelAction(props: {
+  challenge: BountyChallenge
+  pending: string
+  onCancel: (challenge: BountyChallenge) => void
+}) {
+  const { t } = useTranslation()
+  const { status } = useStatus()
+  const canCancelChallenge =
+    getBackendCapabilities(status).bounty_challenge_cancel
+
+  if (!canCancelChallenge || props.challenge.status !== 'accepted') return null
+
+  return (
+    <Button
+      variant='destructive'
+      onClick={() => props.onCancel(props.challenge)}
+      disabled={
+        props.pending !== '' || props.challenge.dispute?.status === 'open'
+      }
+    >
+      <HugeiconsIcon
+        icon={CancelCircleIcon}
+        strokeWidth={2}
+        data-icon='inline-start'
+      />
+      {t('Cancel challenge')}
+    </Button>
   )
 }
 

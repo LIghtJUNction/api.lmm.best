@@ -84,8 +84,9 @@ async function validateArtifactWorkspace(workspaceInput, outputInput) {
   const markerText = await readFile(markerPath, 'utf8')
   for (const line of markerText.trimEnd().split('\n')) {
     const separator = line.indexOf('=')
-    if (separator <= 0)
+    if (separator <= 0) {
       throw new Error('deployment workspace marker is malformed')
+    }
     const key = line.slice(0, separator)
     const value = line.slice(separator + 1)
     if (

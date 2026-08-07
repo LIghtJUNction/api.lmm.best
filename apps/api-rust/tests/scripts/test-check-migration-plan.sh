@@ -3,6 +3,9 @@ set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 checker="$repo_root/apps/api-rust/tests/scripts/check-migration-plan.sh"
+# shellcheck source=route-gate-fixture-lib.sh
+# shellcheck disable=SC1091 # Repository root is resolved at runtime.
+source "$repo_root/apps/api-rust/tests/scripts/route-gate-fixture-lib.sh"
 gate="$repo_root/apps/api-rust/tests/fixtures/routes/migration-gate.tsv"
 plan="$repo_root/apps/api-rust/tests/fixtures/routes/migration-plan.tsv"
 runtime=$(mktemp -d /tmp/lmm-migration-gate.XXXXXX)
@@ -18,7 +21,7 @@ printf '%s\n' "$checker_output"
 # The deployed Rust archive intentionally has no .git directory.  The checker
 # must resolve its repository root from the script location instead of Git.
 no_git_output=$(cd "$runtime" && bash "$checker")
-[[ $no_git_output == *"migration plan valid: 356 frozen legacy routes covered exactly; production ownership remains Go"* ]] || {
+[[ $no_git_output == *"migration plan valid: 356 frozen legacy routes covered exactly; route ownership policy satisfied"* ]] || {
   echo "migration plan checker requires Git metadata when launched outside the checkout" >&2
   exit 1
 }
@@ -37,7 +40,7 @@ crlf_output=$(cd "$runtime" && \
   MIGRATION_GATE_PATH="$crlf_gate" \
   MIGRATION_INTEGRATION_REVIEW_PATH="$crlf_review" \
   bash "$checker")
-[[ $crlf_output == *"migration plan valid: 356 frozen legacy routes covered exactly; production ownership remains Go"* ]] || {
+[[ $crlf_output == *"migration plan valid: 356 frozen legacy routes covered exactly; route ownership policy satisfied"* ]] || {
   echo "migration plan checker did not normalize CRLF across all ledgers" >&2
   exit 1
 }
@@ -53,16 +56,22 @@ expected_states='migration gate states: legacy-go=336 mounted-unverified=12 cand
   exit 1
 }
 
-api_token_evidence_file='apps/api-rust/src/migration_routes/api_token.rs'
-api_token_sha=$(sha256sum -- "$repo_root/$api_token_evidence_file")
+mkdir -p "$runtime/evidence"
+revision=$(git -C "$repo_root" rev-parse HEAD)
+export ROUTE_GATE_FIXTURE_REVISION=$revision
+export ROUTE_GATE_FIXTURE_ROUTER_PATH='apps/api-rust/src/migration_routes/api_token.rs'
+route_gate_fixture_write_route "$runtime" 1 GET /api/token/
+fully_verified_evidence=$ROUTE_GATE_FIXTURE_EVIDENCE
+api_token_sha=$(sha256sum -- "$repo_root/apps/api-rust/src/migration_routes/api_token.rs")
 api_token_sha=${api_token_sha%% *}
-fully_verified_evidence="source=$api_token_evidence_file@sha256:$api_token_sha;compile=$api_token_evidence_file@sha256:$api_token_sha;mount=$api_token_evidence_file@sha256:$api_token_sha;differential=$api_token_evidence_file@sha256:$api_token_sha;approval=$api_token_evidence_file@sha256:$api_token_sha"
+export MIGRATION_EVIDENCE_ROOT="$runtime"
+export MIGRATION_RELEASE_REVISION="$revision"
 
 approved_gate="$runtime/approved-api-token.tsv"
 awk -F '\t' -v evidence="$fully_verified_evidence" 'BEGIN { OFS=FS }
   NR == 1 { print; next }
   !changed && $1 == "GET" && $2 == "/api/token/" {
-    $3="present"; $4="verified"; $5="mounted"; $6="verified"; $7="approved"; $9="verified-approved"; $10=evidence
+    $3="present"; $4="verified"; $5="mounted"; $6="verified"; $7="approved"; $8="rs"; $9="verified-approved"; $10=evidence
     changed=1
   }
   { print }
@@ -75,7 +84,28 @@ approved_review="$runtime/approved-api-token-review.tsv"
   printf 'GET\t/api/token/\tlmm_api_rs::migration_routes::api_token\taccepted listener differential\taccepted PostgreSQL evidence\taccepted Valkey evidence\tapproved\tfixture only; does not change the checked-in ledger\n'
 } >"$approved_review"
 if ! MIGRATION_GATE_PATH="$approved_gate" MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" bash "$checker" >/dev/null; then
-  echo "migration gate checker rejected a fully evidenced independently approved route" >&2
+  echo "migration gate checker rejected a fully evidenced independently approved Rust-owned route" >&2
+  exit 1
+fi
+
+owner_mismatch_gate="$runtime/owner-mismatch.tsv"
+awk -F '\t' 'BEGIN { OFS=FS }
+  NR == 1 { print; next }
+  !changed && $8 == "rs" { $4="unverified"; changed=1 }
+  { print }
+  END { if (!changed) exit 1 }
+' "$approved_gate" >"$owner_mismatch_gate"
+if MIGRATION_GATE_PATH="$owner_mismatch_gate" MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" \
+    bash "$checker" >/dev/null 2>&1; then
+  echo "migration gate checker accepted Rust ownership without independent eligibility" >&2
+  exit 1
+fi
+
+missing_approval_evidence_gate="$runtime/missing-approval-evidence.tsv"
+sed 's/;approval=[^;]*$//' "$approved_gate" >"$missing_approval_evidence_gate"
+if MIGRATION_GATE_PATH="$missing_approval_evidence_gate" \
+    MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" bash "$checker" >/dev/null 2>&1; then
+  echo "migration gate checker accepted Rust ownership with missing approval evidence" >&2
   exit 1
 fi
 

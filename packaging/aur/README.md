@@ -14,7 +14,9 @@ packages provide the virtual `lmm-api` dependency. Backend variants provide
 component conflict with one another.
 
 The default backend selection is `auto`: Go is preferred when installed,
-otherwise Rust is used. Use `lmm-api-select` to persist an explicit choice.
+otherwise Rust is used. Use `lmm-api select auto|go|rs|status` to inspect or
+persist the backend choice. Deployment and serving are subcommands of the
+single `/usr/bin/lmm-api` CLI (`lmm-api deploy ...` and `lmm-api serve`).
 
 Run `bash packaging/aur/test-matrix.sh` after changing any `PKGBUILD`, and
 regenerate each `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.

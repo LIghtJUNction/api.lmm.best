@@ -40,6 +40,8 @@ import {
   acceptBounty,
   getBountyDetail,
 } from '@/features/open-source-bounties/api'
+import { useStatus } from '@/hooks/use-status'
+import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { formatQuota } from '@/lib/format'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -64,13 +66,18 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
   const { i18n, t } = useTranslation()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
+  const { status, capabilitiesReady } = useStatus()
+  const canReadPublicBounties =
+    getBackendCapabilities(status).bounty_public_read
   const [acceptOpen, setAcceptOpen] = useState(false)
   const [githubHandle, setGithubHandle] = useState('')
   const queryKey = ['open-source-bounties', 'detail', props.challengeId]
   const query = useQuery({
     queryKey,
     queryFn: () => getBountyDetail(props.challengeId),
-    enabled: props.challengeId > 0,
+    enabled:
+      props.challengeId > 0 &&
+      (Boolean(user) || (capabilitiesReady && canReadPublicBounties)),
   })
   const mutation = useMutation({
     mutationFn: () => acceptBounty(props.challengeId, githubHandle.trim()),

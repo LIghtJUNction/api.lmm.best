@@ -280,7 +280,7 @@ func isExactLoopbackHost(host string) bool {
 	return address == netip.MustParseAddr("127.0.0.1") || address == netip.IPv6Loopback()
 }
 
-func InitResources() error {
+func InitResources() (returnErr error) {
 	// Initialize resources here if needed
 	// This is a placeholder function for future resource initialization
 	err := godotenv.Load(".env")
@@ -303,20 +303,23 @@ func InitResources() error {
 	service.InitTokenEncoders()
 
 	// Initialize SQL Database
-	err = model.InitDB()
+	migrationSession, err := model.InitDBWithMigrationSession()
 	if err != nil {
-		common.FatalLog("failed to initialize database: " + err.Error())
-		return err
+		return fmt.Errorf("failed to initialize database: %w", err)
 	}
-	if err = authz.Init(model.DB); err != nil {
-		common.FatalLog("failed to initialize authorization: " + err.Error())
-		return err
+	defer func() {
+		returnErr = errors.Join(returnErr, migrationSession.Close())
+	}()
+	if err = authz.InitForStartup(model.DB, migrationSession.Applies()); err != nil {
+		return fmt.Errorf("failed to initialize authorization: %w", err)
 	}
 
-	model.CheckSetup()
+	if err = model.CheckSetupForStartup(migrationSession.Applies()); err != nil {
+		return fmt.Errorf("verify setup state: %w", err)
+	}
 
 	// Initialize options, should after model.InitDB()
-	if common.IsMasterNode {
+	if common.IsMasterNode && migrationSession.Applies() {
 		if err := model.MigrateRetiredFrontendOptions(); err != nil {
 			common.SysError("failed to migrate retired frontend options: " + err.Error())
 		}
@@ -327,7 +330,7 @@ func InitResources() error {
 	common.CleanupOldCacheFiles()
 
 	// Initialize SQL Database
-	err = model.InitLogDB()
+	err = model.InitLogDB(migrationSession)
 	if err != nil {
 		return err
 	}

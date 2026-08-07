@@ -23,10 +23,12 @@ import { api } from '@/lib/api'
 
 import {
   cancelChallenge,
+  listCompatibleBountyNotifications,
   listBountyNotifications,
   listBounties,
   listReceivedBountyTips,
   markBountyNotificationsRead,
+  markCompatibleBountyNotificationsRead,
   markReceivedBountyTipsRead,
   openBountyDispute,
   thankBountyTip,
@@ -142,6 +144,64 @@ describe('open-source bounty notifications', () => {
 
     await listBountyNotifications()
     await markBountyNotificationsRead()
+
+    assert.deepEqual(gets, ['/api/open-source-bounties/notifications'])
+    assert.deepEqual(posts, ['/api/open-source-bounties/notifications/read'])
+  })
+
+  test('uses legacy tip endpoints when unified notifications are not advertised', async () => {
+    const gets: string[] = []
+    const posts: string[] = []
+    api.get = (async (url) => {
+      gets.push(url)
+      return {
+        data: {
+          success: true,
+          data: [
+            {
+              id: 7,
+              project_id: 2,
+              challenge_id: 3,
+              sender_user_id: 4,
+              sender_username: 'legacy-sender',
+              project_title: 'Legacy project',
+              quota: 100,
+              note: '',
+              recipient_read_at: 0,
+              thanked_at: 0,
+              created_at: 1,
+            },
+          ],
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url) => {
+      posts.push(url)
+      return { data: { success: true, data: null } }
+    }) as typeof api.post
+
+    const notifications = await listCompatibleBountyNotifications(false)
+    await markCompatibleBountyNotificationsRead(false)
+
+    assert.deepEqual(gets, ['/api/open-source-bounties/tips/received'])
+    assert.deepEqual(posts, ['/api/open-source-bounties/tips/received/read'])
+    assert.equal(notifications[0]?.kind, 'tip_transfer')
+  })
+
+  test('uses unified endpoints only when the backend advertises them', async () => {
+    const gets: string[] = []
+    const posts: string[] = []
+    api.get = (async (url) => {
+      gets.push(url)
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+    api.post = (async (url) => {
+      posts.push(url)
+      return { data: { success: true, data: null } }
+    }) as typeof api.post
+
+    await listCompatibleBountyNotifications(true)
+    await markCompatibleBountyNotificationsRead(true)
 
     assert.deepEqual(gets, ['/api/open-source-bounties/notifications'])
     assert.deepEqual(posts, ['/api/open-source-bounties/notifications/read'])

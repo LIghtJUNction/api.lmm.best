@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
+REPO_ROOT=$(cd -- "$HERE/../.." && pwd -P)
+readonly REPO_ROOT
 readonly SHARED="$HERE/../common/lmm-api"
 readonly PACKAGES=(
   lmm-api-bin
@@ -78,6 +80,8 @@ contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 grep -Fqx 'LMM_API_BACKEND=auto' "$SHARED/backend.conf" || die 'default backend is not auto'
 grep -Fq 'Environment=LMM_API_BACKEND=auto' "$SHARED/lmm-api.service" || \
   die 'systemd default backend is not auto'
+grep -Fqx 'ExecStart=/usr/bin/lmm-api serve' "$SHARED/lmm-api.service" || \
+  die 'systemd must invoke the canonical serve command'
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/lmm-aur-matrix.XXXXXXXX")
 cleanup() { rm -rf -- "$tmp"; }
@@ -89,15 +93,20 @@ printf '%s\n' '#!/usr/bin/env bash' 'printf "rs:%s\n" "$LMM_DATABASE_SCHEMA"' \
   > "$tmp/backends/rs/lmm-api-rs"
 chmod 0755 "$tmp/backends/go/lmm-api" "$tmp/backends/rs/lmm-api-rs"
 output=$(LMM_API_BACKEND_ROOT="$tmp/backends" LMM_API_BACKEND=auto \
-  "$SHARED/lmm-api-launcher" marker)
+  "$SHARED/lmm-api-launcher" serve marker)
 [[ $output == go:marker ]] || die 'auto selection did not prefer Go'
 rm -f "$tmp/backends/go/lmm-api"
 output=$(LMM_API_BACKEND_ROOT="$tmp/backends" LMM_API_BACKEND=auto \
-  LMM_DATABASE_SCHEMA=lmm_preview_fixture "$SHARED/lmm-api-launcher")
+  LMM_DATABASE_SCHEMA=lmm_preview_fixture "$SHARED/lmm-api-launcher" serve)
 [[ $output == rs:lmm_preview_fixture ]] || die 'auto selection did not fall back to Rust'
 
-grep -Fq '/usr/bin/lmm-api' "$HERE/lmm-api-bin/PKGBUILD" || die 'core bin lacks launcher'
-grep -Fq '/usr/bin/lmm-api' "$HERE/lmm-api-git/PKGBUILD" || die 'core git lacks launcher'
+for package in lmm-api-bin lmm-api-git; do
+  pkgbuild="$HERE/$package/PKGBUILD"
+  grep -Fq '/usr/bin/lmm-api' "$pkgbuild" || die "$package lacks the canonical launcher"
+  if grep -Eq '/usr/bin/lmm-api-(select|deploy)' "$pkgbuild"; then
+    die "$package installs a retired public command"
+  fi
+done
 grep -Fq '/usr/lib/lmm-api/backends/go/lmm-api' "$HERE/lmm-api-go-bin/PKGBUILD" || \
   die 'Go bin backend layout is wrong'
 grep -Fq '/usr/lib/lmm-api/backends/go/lmm-api' "$HERE/lmm-api-go-git/PKGBUILD" || \
@@ -110,11 +119,25 @@ for package in lmm-api-rs-bin lmm-api-rs-git; do
 done
 
 stage="$tmp/stage"
-mkdir -p "$stage/core/lmm-api-core-0.1.2/frontend-dist" \
-  "$stage/go/lmm-api-go-0.1.2-linux-amd64" \
+core_bundle="$stage/core/lmm-api-core-0.1.2"
+deploy_bundle="$core_bundle/deploy"
+mkdir -p "$core_bundle/frontend-dist" "$deploy_bundle/route-evidence" \
+  "$deploy_bundle/migration-evidence" "$stage/go/lmm-api-go-0.1.2-linux-amd64" \
   "$stage/rs/lmm-api-rs-0.1.2-linux-amd64"
-cp "$SHARED"/* "$stage/core/lmm-api-core-0.1.2/"
-printf '<!doctype html>\n' > "$stage/core/lmm-api-core-0.1.2/frontend-dist/index.html"
+cp "$SHARED"/* "$core_bundle/"
+cp "$REPO_ROOT/apps/web/scripts/production-acceptance.mjs" \
+  "$REPO_ROOT/apps/web/scripts/production-acceptance-lib.mjs" "$deploy_bundle/"
+cp "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/migration-gate.tsv" \
+  "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv" "$deploy_bundle/"
+cp "$SHARED/validate-route-gate" "$SHARED/migration-compatibility.env" "$deploy_bundle/"
+printf 'route evidence fixture\n' > "$deploy_bundle/route-evidence/fixture.txt"
+printf 'migration evidence fixture\n' > "$deploy_bundle/migration-evidence/fixture.txt"
+(
+  cd -- "$deploy_bundle"
+  sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env \
+    frozen-route-auth.tsv > route-gate-assets.sha256
+)
+printf '<!doctype html>\n' > "$core_bundle/frontend-dist/index.html"
 printf '#!/bin/sh\n' > "$stage/go/lmm-api-go-0.1.2-linux-amd64/lmm-api"
 printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-api-rs"
 printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-db-migrate"
@@ -159,13 +182,28 @@ done
 )
 for path in \
   pkg-core/usr/bin/lmm-api \
-  pkg-core/usr/bin/lmm-api-select \
   pkg-core/usr/lib/systemd/system/lmm-api.service \
+  pkg-core/usr/lib/lmm-api/deploy/production-acceptance.mjs \
+  pkg-core/usr/lib/lmm-api/deploy/production-acceptance-lib.mjs \
+  pkg-core/usr/lib/lmm-api/deploy/migration-gate.tsv \
+  pkg-core/usr/lib/lmm-api/deploy/validate-route-gate \
+  pkg-core/usr/lib/lmm-api/deploy/migration-compatibility.env \
+  pkg-core/usr/lib/lmm-api/deploy/frozen-route-auth.tsv \
+  pkg-core/usr/lib/lmm-api/deploy/route-gate-assets.sha256 \
+  pkg-core/usr/lib/lmm-api/deploy/route-evidence/fixture.txt \
+  pkg-core/usr/lib/lmm-api/deploy/migration-evidence/fixture.txt \
   pkg-core/usr/share/lmm-api/frontend-dist/index.html \
   pkg-go/usr/lib/lmm-api/backends/go/lmm-api \
   pkg-rs/usr/lib/lmm-api/backends/rs/lmm-api-rs \
   pkg-rs/usr/lib/lmm-api/backends/rs/lmm-db-migrate; do
   [[ -f $tmp/$path ]] || die "mock package layout is missing $path"
 done
+for path in pkg-core/usr/bin/lmm-api-select pkg-core/usr/bin/lmm-api-deploy; do
+  [[ ! -e $tmp/$path && ! -L $tmp/$path ]] || die "mock package exposes retired command $path"
+done
+(
+  cd -- "$tmp/pkg-core/usr/lib/lmm-api/deploy"
+  sha256sum -c route-gate-assets.sha256 >/dev/null
+)
 
 printf '%s\n' 'six-package AUR matrix contract verified'

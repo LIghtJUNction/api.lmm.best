@@ -1,13 +1,14 @@
 # Maintainer: LIghtJUNction
 
 pkgname=lmm-api-git
-pkgver=0.1.1.r7.g24093b139
+pkgver=0.1.1.r11.g1048d2d4e
 pkgrel=1
 pkgdesc='LMM API shared launcher, service, configuration, and web frontend (git)'
 arch=('any')
 url='https://github.com/LIghtJUNction/api.lmm.best'
 license=('AGPL-3.0-only')
-depends=('bash' 'ca-certificates' 'coreutils' 'sed' 'systemd' 'tzdata')
+depends=('bash' 'ca-certificates' 'coreutils' 'diffutils' 'jq' 'nodejs' 'gawk' 'grep' \
+  'libarchive' 'openssh' 'sed' 'systemd' 'tzdata')
 makedepends=('bun' 'git')
 optdepends=(
   'lmm-api-go: Go backend provider'
@@ -39,7 +40,36 @@ package() {
   local shared="${root}/packaging/common/lmm-api"
 
   install -Dm0755 "${shared}/lmm-api-launcher" "${pkgdir}/usr/bin/lmm-api"
-  install -Dm0755 "${shared}/lmm-api-select" "${pkgdir}/usr/bin/lmm-api-select"
+  install -Dm0644 "${root}/apps/api-rust/tests/fixtures/routes/migration-gate.tsv" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/migration-gate.tsv"
+  install -Dm0755 "${shared}/validate-route-gate" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/validate-route-gate"
+  install -Dm0644 "${shared}/migration-compatibility.env" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/migration-compatibility.env"
+  install -Dm0644 "${root}/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/frozen-route-auth.tsv"
+  install -d -m0755 "${pkgdir}/usr/lib/lmm-api/deploy/route-evidence" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/migration-evidence"
+  if [[ -d ${root}/apps/api-rust/tests/fixtures/routes/evidence ]]; then
+    cp -R --no-preserve=ownership,mode,timestamps -- \
+      "${root}/apps/api-rust/tests/fixtures/routes/evidence/." \
+      "${pkgdir}/usr/lib/lmm-api/deploy/route-evidence/"
+  fi
+  if [[ -d ${shared}/evidence ]]; then
+    cp -R --no-preserve=ownership,mode,timestamps -- "${shared}/evidence/." \
+      "${pkgdir}/usr/lib/lmm-api/deploy/migration-evidence/"
+  fi
+  (
+    cd "${pkgdir}/usr/lib/lmm-api/deploy" || return
+    sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env frozen-route-auth.tsv \
+      >"${srcdir}/route-gate-assets.sha256"
+  )
+  install -Dm0644 "${srcdir}/route-gate-assets.sha256" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/route-gate-assets.sha256"
+  install -Dm0755 "${root}/apps/web/scripts/production-acceptance.mjs" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/production-acceptance.mjs"
+  install -Dm0644 "${root}/apps/web/scripts/production-acceptance-lib.mjs" \
+    "${pkgdir}/usr/lib/lmm-api/deploy/production-acceptance-lib.mjs"
   install -Dm0644 "${shared}/lmm-api.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
   install -Dm0644 "${shared}/backend.conf" "${pkgdir}/etc/lmm-api/backend.conf"

@@ -5,6 +5,8 @@ pub mod contract;
 pub mod inspect;
 pub mod manifest;
 pub mod migrate;
+pub mod postgres_adopt;
+pub mod postgres_catalog;
 pub mod release;
 pub mod report;
 
@@ -34,6 +36,9 @@ pub enum MigrationError {
     /// The application schema contract or release ledger was unsafe or inconsistent.
     #[error("schema contract failed: {0}")]
     Contract(#[from] contract::ContractError),
+    /// PostgreSQL existing-schema adoption was unsafe or inconsistent.
+    #[error("PostgreSQL adoption failed: {0}")]
+    PostgresAdoption(#[from] postgres_adopt::AdoptionError),
     /// Required release metadata was absent, malformed, or ambiguous.
     #[error("release binding failed: {0}")]
     ReleaseBinding(#[from] release::ReleaseBindingError),
@@ -51,6 +56,7 @@ impl MigrationError {
             Self::Canonical(_) => "conversion",
             Self::Postgres(_) => "postgresql",
             Self::Contract(_) => "schema_contract",
+            Self::PostgresAdoption(_) => "postgres_adoption",
             Self::ReleaseBinding(_) => "release_binding",
         }
     }

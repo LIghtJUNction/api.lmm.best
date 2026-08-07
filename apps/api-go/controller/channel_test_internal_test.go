@@ -116,6 +116,21 @@ func TestResponsesCompactAPITypeSupport(t *testing.T) {
 	}
 }
 
+func TestAutomaticChannelTestUsesImageGenerationForGPTImage2(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	requestPath := resolveChannelTestRequestPath(channel, "gpt-image-2", "")
+	request := buildTestRequest("gpt-image-2", "", channel, false)
+
+	assert.Equal(t, "/v1/images/generations", requestPath)
+	imageRequest, ok := request.(*dto.ImageRequest)
+	require.True(t, ok)
+	assert.Equal(t, "gpt-image-2", imageRequest.Model)
+	assert.Equal(t, "a cute cat", imageRequest.Prompt)
+	require.NotNil(t, imageRequest.N)
+	assert.Equal(t, uint(1), *imageRequest.N)
+}
+
 func TestMultiprotocolGatewayEndpointTypes(t *testing.T) {
 	want := []constant.EndpointType{
 		constant.EndpointTypeOpenAI,

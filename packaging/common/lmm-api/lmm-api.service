@@ -13,7 +13,7 @@ Environment=PORT=3000
 Environment=LMM_API_BACKEND=auto
 EnvironmentFile=-/etc/lmm-api/lmm-api.env
 EnvironmentFile=-/etc/lmm-api/backend.conf
-ExecStart=/usr/bin/lmm-api
+ExecStart=/usr/bin/lmm-api serve
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=45s
