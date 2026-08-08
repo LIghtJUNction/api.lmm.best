@@ -606,7 +606,7 @@ validate_staged_artifacts() {
 }
 
 frontend_tree_digest() {
-  local root=$1 path relative
+  local root=$1 path relative hash_record hash
   [[ -d $root && ! -L $root && -f $root/index.html && ! -L $root/index.html ]] || \
     die 'frontend-dist must be a regular directory containing index.html'
   if find "$root" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
@@ -616,8 +616,11 @@ frontend_tree_digest() {
   {
     while IFS= read -r -d '' path; do
       relative=${path#"$root"/}
-      printf '%s\0' "$relative"
-      sha256sum -- "$path"
+      IFS= read -r -d '' hash_record < <(sha256sum --zero -- "$path") || \
+        die 'frontend file hashing failed'
+      hash=${hash_record%% *}
+      [[ $hash =~ ^[0-9a-f]{64}$ ]] || die 'frontend file hash is invalid'
+      printf '%s\0%s\0' "$relative" "$hash"
     done < <(find "$root" -type f -print0 | LC_ALL=C sort -z)
   } | sha256sum | awk '{print $1}'
 }
@@ -1054,6 +1057,16 @@ umask 077
 die(){ printf 'lmm-api frontend activator: %s\n' "$*" >&2; exit 1; }
 safe_id(){ [[ ${1:-} =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; }
 is_sha(){ [[ ${1:-} =~ ^[0-9a-f]{64}$ ]]; }
+validate_test_installed_cli(){
+  local path=$1 mode
+  [[ $path =~ ^/[A-Za-z0-9._/+:-]+$ && $path != *'//'* && -f $path && -x $path && ! -L $path ]] ||
+    die 'test installed CLI path is unsafe'
+  [[ $(realpath -e -- "$path") == "$path" && $(stat -c '%u' -- "$path") == "$EUID" ]] ||
+    die 'test installed CLI path is not canonical or owner-controlled'
+  mode=$(stat -c '%a' -- "$path")
+  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) ||
+    die 'test installed CLI path is group/world writable'
+}
 ROOT=/srv/lmm-api-frontend
 DEPLOY_PROTOCOL_MIN=1
 DEPLOY_PROTOCOL_MAX=1
@@ -1061,6 +1074,7 @@ BACKEND_CONFIG=/etc/lmm-api/backend.conf
 ENV_CONFIG=/etc/lmm-api/lmm-api.env
 BACKEND_PATH=/usr/lib/lmm-api/backends/go/lmm-api
 CORE_LAUNCHER=/usr/bin/lmm-api
+FRONTEND_SOURCE=/usr/share/lmm-api/frontend-dist
 PACMAN_CACHE=/var/cache/pacman/pkg
 WORK_ROOT=/var/lib/lmm-api/deploy-work
 BACKUP_ROOT=/var/lib/lmm-api/deploy-backups
@@ -1069,10 +1083,12 @@ UNIT_ROOT=/etc/systemd/system
 if (( ${LMM_DEPLOY_TEST_MODE:-0} == 1 )); then
   ROOT=${LMM_DEPLOY_TEST_FRONTEND_ROOT:-$ROOT}; BACKEND_CONFIG=${LMM_DEPLOY_TEST_BACKEND_CONFIG:-$BACKEND_CONFIG}
   ENV_CONFIG=${LMM_DEPLOY_TEST_ENV_CONFIG:-$ENV_CONFIG}; BACKEND_PATH=${LMM_DEPLOY_TEST_GO_BACKEND_PATH:-$BACKEND_PATH}
-  CORE_LAUNCHER=${LMM_DEPLOY_TEST_CORE_LAUNCHER:-$CORE_LAUNCHER}; PACMAN_CACHE=${LMM_DEPLOY_TEST_PACMAN_CACHE:-$PACMAN_CACHE}
+  CORE_LAUNCHER=${LMM_DEPLOY_TEST_INSTALLED_CLI:-$CORE_LAUNCHER}; FRONTEND_SOURCE=${LMM_DEPLOY_TEST_FRONTEND_SOURCE:-$FRONTEND_SOURCE}
+  PACMAN_CACHE=${LMM_DEPLOY_TEST_PACMAN_CACHE:-$PACMAN_CACHE}
   WORK_ROOT=${LMM_DEPLOY_TEST_STAGING_ROOT:-$WORK_ROOT}; BACKUP_ROOT=${LMM_DEPLOY_TEST_BACKUP_ROOT:-$BACKUP_ROOT}
   LOCK=${LMM_DEPLOY_TEST_TRANSACTION_LOCK:-$LOCK}; UNIT_ROOT=${LMM_DEPLOY_TEST_SYSTEMD_UNIT_DIR:-$UNIT_ROOT}
 fi
+if [[ $CORE_LAUNCHER != /usr/bin/lmm-api ]]; then validate_test_installed_cli "$CORE_LAUNCHER"; fi
 mode=${1:-}; shift || true
 workspace=''; guard=''; backup=''; core=''; core_sha=''; release=''; revision=''; digest=''; status=''
 old_core=''; old_core_source=''; old_core_name=''; old_core_package=''; old_core_sha=''; config_file=''; config_snapshot=''
@@ -1104,7 +1120,7 @@ cas(){ local f=$1 old=$2 new=$3 t="$guard.$$.tmp"; awk -F= -v f="$f" -v o="$old"
 lock(){ if mkdir -m0700 "$LOCK" 2>/dev/null; then printf 'deployment_id=%s\nstatus=ACTIVE\n' "$id" >"$lock_marker"; elif ! grep -Fqx "deployment_id=$id" "$lock_marker" || ! grep -Fqx 'status=ACTIVE' "$lock_marker"; then die 'another deployment is active'; fi; }
 check_lock(){ if ! grep -Fqx "deployment_id=$id" "$lock_marker" || ! grep -Fqx 'status=ACTIVE' "$lock_marker"; then die 'deployment lock mismatch'; fi; }
 unlock(){ check_lock; rm -f "$lock_marker"; rmdir "$LOCK"; }
-tree_digest(){ local root=$1 p rel; [[ -f $root/index.html && ! -L $root/index.html ]] || die 'frontend index missing'; ! find "$root" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q . || die 'unsafe frontend tree'; { while IFS= read -r -d '' p; do rel=${p#"$root"/}; printf '%s\0' "$rel"; sha256sum "$p"; done < <(find "$root" -type f -print0 | LC_ALL=C sort -z); } | sha256sum | awk '{print $1}'; }
+tree_digest(){ local root=$1 p rel hash_record hash; [[ -f $root/index.html && ! -L $root/index.html ]] || die 'frontend index missing'; ! find "$root" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q . || die 'unsafe frontend tree'; { while IFS= read -r -d '' p; do rel=${p#"$root"/}; IFS= read -r -d '' hash_record < <(sha256sum --zero -- "$p") || die 'frontend file hashing failed'; hash=${hash_record%% *}; [[ $hash =~ ^[0-9a-f]{64}$ ]] || die 'frontend file hash is invalid'; printf '%s\0%s\0' "$rel" "$hash"; done < <(find "$root" -type f -print0 | LC_ALL=C sort -z); } | sha256sum | awk '{print $1}'; }
 backend_identity(){ local owner record pid; grep -Fqx 'LMM_API_BACKEND=go' "$BACKEND_CONFIG" || die 'target backend is not Go'; [[ -f $BACKEND_PATH && ! -L $BACKEND_PATH ]] || die 'Go backend missing'; owner=$(pacman -Qqo -- "$BACKEND_PATH"); case $owner in lmm-api-go|lmm-api-go-bin|lmm-api-go-git);;*) die 'unsafe Go provider identity';;esac; record=$(pacman -Q "$owner"); pacman -Qkk "$owner" >/dev/null || die 'Go provider integrity failed'; systemctl is-active --quiet lmm-api.service || die 'Go service inactive'; pid=$(systemctl show --property=MainPID --value lmm-api.service); [[ $pid =~ ^[1-9][0-9]*$ ]] || die 'Go process identity invalid'; printf 'backend_package=%s\nbackend_sha256=%s\nbackend_config_sha256=%s\nenv_config_sha256=%s\nbackend_pid=%s\n' "$record" "$(sha256sum "$BACKEND_PATH"|awk '{print $1}')" "$(sha256sum "$BACKEND_CONFIG"|awk '{print $1}')" "$(sha256sum "$ENV_CONFIG"|awk '{print $1}')" "$pid"; }
 backend_unchanged(){ local key expected actual; for key in backend_package backend_sha256 backend_config_sha256 env_config_sha256 backend_pid; do expected=$(guard_value "$key"); actual=$(backend_identity|sed -n "s/^$key=//p"); [[ -n $expected && $actual == "$expected" ]] || die "Go backend changed: $key"; done; }
 front_identity(){ local link; link=$(readlink "$ROOT/current"); [[ $link =~ ^releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]] || die 'unsafe frontend link'; printf '%s %s\n' "$link" "$(tree_digest "$ROOT/$link")"; }
@@ -1126,7 +1142,7 @@ Description=Rollback unconfirmed frontend deployment $id
 [Service]
 Type=oneshot
 ExecCondition=/usr/bin/grep -Eq ^status=(ARMED|ROLLING_BACK)$ $guard
-ExecStart=/usr/bin/lmm-api deploy internal watchdog --deployment-id $id
+ExecStart=$CORE_LAUNCHER deploy internal watchdog --deployment-id $id
 EOF
 cat >"$UNIT_ROOT/$timer" <<EOF
 [Unit]
@@ -1141,7 +1157,7 @@ WantedBy=timers.target
 EOF
 chmod 0644 "$UNIT_ROOT/$service" "$UNIT_ROOT/$timer"; }
 disable_timer(){ systemctl disable --now "$timer" >/dev/null 2>&1 || true; systemctl disable "$service" >/dev/null 2>&1 || true; }
-mutex_fd=''; take_mutex(){ exec {mutex_fd}<>"$workspace/state/terminal.mutex"; flock -x "$mutex_fd"; }
+mutex_fd=''; take_mutex(){ exec {mutex_fd}<>"$workspace/state/terminal.mutex"; if (( ${LMM_DEPLOY_TEST_MODE:-0} == 1 )) && [[ -n ${LMM_DEPLOY_TEST_MUTEX_WAITING_FILE:-} ]]; then : >"$LMM_DEPLOY_TEST_MUTEX_WAITING_FILE"; fi; flock -x "$mutex_fd"; }
 drop_mutex(){ flock -u "$mutex_fd"; exec {mutex_fd}>&-; mutex_fd=''; }
 restore_config(){ local snapshot=$1 restore_dir; restore_dir=$(mktemp -d "$workspace/staging/config-restore.XXXXXXXX"); tar -xf "$snapshot" -C "$restore_dir"; [[ -f $restore_dir/lmm-api/backend.conf && -f $restore_dir/lmm-api/lmm-api.env ]] || die 'configuration snapshot is incomplete'; install -m0644 "$restore_dir/lmm-api/backend.conf" "$BACKEND_CONFIG"; install -m0600 "$restore_dir/lmm-api/lmm-api.env" "$ENV_CONFIG"; rm -rf "$restore_dir"; }
 cleanup_prepare(){ local rc=$?; (( prepare_cleanup_active == 1 )) || return 0; prepare_cleanup_active=0; set +e; [[ -f $guard && ! -L $guard ]] && rm -f -- "$guard"; [[ -f $status && ! -L $status ]] && rm -f -- "$status"; rm -f -- "$workspace/staging/rollback-core.pkg"; [[ -d $workspace/state && -f $workspace/state/terminal.mutex ]] && rm -f -- "$workspace/state/terminal.mutex"; [[ -d $LOCK && -f $lock_marker ]] && { rm -f -- "$lock_marker"; rmdir -- "$LOCK"; }; return "$rc"; }
@@ -1153,7 +1169,7 @@ prepare)
   switch)
   check_lock; [[ $(guard_value status) == PREPARED ]] || die 'guard not prepared'; core_name=$(guard_value new_core_name); core_record=$(guard_value new_core_package); switch_cleanup_active=1; trap cleanup_prepared_switch ERR EXIT; deadline=$(( $(date +%s)+600 )); cas deadline_epoch "$(guard_value deadline_epoch)" "$deadline"; render_units "$deadline"; systemctl daemon-reload; systemctl enable --now "$timer" >/dev/null; if ! systemctl is-enabled --quiet "$timer" || ! systemctl is-active --quiet "$timer"; then die 'rollback timer not active'; fi; cas status PREPARED ARMED; switch_cleanup_active=0; trap - ERR EXIT; trap 'rollback unexpected-error' ERR; backend_unchanged; pacman -U --noconfirm "$core" || rollback core-package-install-failed; [[ $(pacman -Q "$core_name") == "$core_record" ]] || rollback core-package-identity-failed; pacman -Qkk "$core_name" >/dev/null || rollback core-package-integrity-failed; publish "$FRONTEND_SOURCE"; verify_front "$release" "$digest"; backend_unchanged; write_status "AWAITING_CONFIRMATION release=$release frontend_digest=$digest backend=go-unchanged core=$core_record"; trap - ERR;;
   confirm)
-  take_mutex; [[ $(guard_value status) == ARMED ]] || { drop_mutex; die 'confirmation requires ARMED'; }; check_lock; core_name=$(guard_value new_core_name); core_record=$(guard_value new_core_package); [[ $(pacman -Q "$core_name") == "$core_record" ]] || { drop_mutex; die 'installed core package identity mismatch'; }; pacman -Qkk "$core_name" >/dev/null || { drop_mutex; die 'installed core package integrity mismatch'; }; verify_front "$release" "$digest"; backend_unchanged; cas status ARMED CONFIRMED; write_status "CONFIRMED deployment=$id"; disable_timer; unlock; drop_mutex;;
+  take_mutex; if (( ${LMM_DEPLOY_TEST_MODE:-0} == 1 )) && [[ -n ${LMM_DEPLOY_TEST_CONFIRM_HOLD_FILE:-} ]]; then [[ -n ${LMM_DEPLOY_TEST_CONFIRM_READY_FILE:-} ]] || die 'confirmation race ready file is missing'; : >"$LMM_DEPLOY_TEST_CONFIRM_READY_FILE"; while [[ -e $LMM_DEPLOY_TEST_CONFIRM_HOLD_FILE ]]; do sleep 0.01; done; fi; [[ $(guard_value status) == ARMED ]] || { drop_mutex; die 'confirmation requires ARMED'; }; check_lock; core_name=$(guard_value new_core_name); core_record=$(guard_value new_core_package); [[ $(pacman -Q "$core_name") == "$core_record" ]] || { drop_mutex; die 'installed core package identity mismatch'; }; pacman -Qkk "$core_name" >/dev/null || { drop_mutex; die 'installed core package integrity mismatch'; }; verify_front "$release" "$digest"; backend_unchanged; cas status ARMED CONFIRMED; write_status "CONFIRMED deployment=$id"; disable_timer; unlock; drop_mutex;;
 rollback) rollback watchdog;;
 *) die 'invalid activator mode';;
 esac
@@ -1882,7 +1898,7 @@ After=network-online.target
 Type=oneshot
 Environment=LMM_API_DEPLOY_TRANSACTION=$transaction_id
 ExecCondition=/usr/bin/grep -Eq ^status=(ARMED|ROLLING_BACK)$ __LMM_GUARD__
-ExecStart=/usr/bin/lmm-api deploy internal watchdog --deployment-id __LMM_DEPLOYMENT_ID__
+ExecStart=__LMM_CLI__ deploy internal watchdog --deployment-id __LMM_DEPLOYMENT_ID__
 EOF
     cat >"$transaction_dir/lmm-api-rollback.timer" <<'EOF'
 [Unit]
@@ -1963,6 +1979,7 @@ EXPECTED_HOST=arch-dmit
 DEPLOY_PROTOCOL_MIN=1
 DEPLOY_PROTOCOL_MAX=1
 SERVICE=lmm-api.service
+CORE_LAUNCHER=/usr/bin/lmm-api
 BACKEND_CONFIG=/etc/lmm-api/backend.conf
 ENV_CONFIG=/etc/lmm-api/lmm-api.env
 FRONTEND_ROOT=/srv/lmm-api-frontend
@@ -1992,14 +2009,26 @@ if (( ${LMM_DEPLOY_TEST_MODE:-0} == 1 )); then
   ACCEPTANCE_RUNNER=${LMM_DEPLOY_TEST_ACCEPTANCE_RUNNER:-$ACCEPTANCE_RUNNER}
   ACCEPTANCE_LIB=${LMM_DEPLOY_TEST_ACCEPTANCE_LIB:-$ACCEPTANCE_LIB}
   DEPLOY_LIBDIR=${LMM_DEPLOY_TEST_DEPLOY_LIBDIR:-$DEPLOY_LIBDIR}
+  CORE_LAUNCHER=${LMM_DEPLOY_TEST_INSTALLED_CLI:-$CORE_LAUNCHER}
 fi
 readonly EXPECTED_HOST SERVICE BACKEND_CONFIG ENV_CONFIG FRONTEND_ROOT FRONTEND_SOURCE BACKEND_ROOT
 readonly STAGING_ROOT BACKUP_ROOT TRANSACTION_LOCK SYSTEMD_UNIT_DIR PACMAN_CACHE HEALTH_URL
-readonly ACCEPTANCE_RUNNER ACCEPTANCE_LIB DEPLOY_LIBDIR
+readonly ACCEPTANCE_RUNNER ACCEPTANCE_LIB DEPLOY_LIBDIR CORE_LAUNCHER
 
 die() { printf 'activate-rust-release: %s\n' "$*" >&2; exit 1; }
 is_sha256() { [[ ${1:-} =~ ^[0-9a-f]{64}$ ]]; }
 safe_identity() { [[ ${1:-} =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$ ]]; }
+validate_test_installed_cli() {
+  local path=$1 mode
+  [[ $path =~ ^/[A-Za-z0-9._/+:-]+$ && $path != *'//'* && -f $path && -x $path && ! -L $path ]] ||
+    die 'test installed CLI path is unsafe'
+  [[ $(realpath -e -- "$path") == "$path" && $(stat -c '%u' -- "$path") == "$EUID" ]] ||
+    die 'test installed CLI path is not canonical or owner-controlled'
+  mode=$(stat -c '%a' -- "$path")
+  [[ $mode =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) ||
+    die 'test installed CLI path is group/world writable'
+}
+if [[ $CORE_LAUNCHER != /usr/bin/lmm-api ]]; then validate_test_installed_cli "$CORE_LAUNCHER"; fi
 
 CORE_PACKAGE=''
 CORE_SHA256=''
@@ -2151,7 +2180,7 @@ protocol_bounds_from_package() {
 }
 validate_deploy_protocol() {
   local installed_min installed_max new_min new_max selected lower upper
-  read -r installed_min installed_max < <(protocol_bounds_from_file /usr/bin/lmm-api) || \
+  read -r installed_min installed_max < <(protocol_bounds_from_file "$CORE_LAUNCHER") || \
     die 'installed canonical CLI has no valid deployment protocol; bootstrap upgrade is required'
   read -r new_min new_max < <(protocol_bounds_from_package "$CORE_PACKAGE") || \
     die 'new core package has no valid deployment protocol'
@@ -2503,12 +2532,13 @@ render_and_enable_units() {
   [[ -f $service_template && ! -L $service_template && -f $timer_template && ! -L $timer_template ]] || \
     die 'rollback unit templates are missing or unsafe'
   sed -e "s|__LMM_GUARD__|$GUARD|g" \
+    -e "s|__LMM_CLI__|$CORE_LAUNCHER|g" \
     -e "s|__LMM_DEPLOYMENT_ID__|$deployment_id|g" "$service_template" >"$service_rendered"
   sed "s/@__LMM_ROLLBACK_DEADLINE_EPOCH__$/@$deadline_epoch/" "$timer_template" >"$timer_rendered"
   grep -Fqx "OnCalendar=@$deadline_epoch" "$timer_rendered" || die 'rollback timer deadline rendering failed'
   grep -Fqx "ExecCondition=/usr/bin/grep -Eq ^status=(ARMED|ROLLING_BACK)\$ $GUARD" "$service_rendered" || \
     die 'rollback service guard rendering failed'
-  grep -Fqx "ExecStart=/usr/bin/lmm-api deploy internal watchdog --deployment-id $deployment_id" "$service_rendered" || \
+  grep -Fqx "ExecStart=$CORE_LAUNCHER deploy internal watchdog --deployment-id $deployment_id" "$service_rendered" || \
     die 'rollback service canonical CLI rendering failed'
   install -Dm0644 "$service_rendered" "$SYSTEMD_UNIT_DIR/lmm-api-rollback.service"
   install -Dm0644 "$timer_rendered" "$SYSTEMD_UNIT_DIR/lmm-api-rollback.timer"
@@ -2566,7 +2596,7 @@ prepare_transaction() {
   trap cleanup_failed_prepare ERR EXIT
   old_selection=$(sed -nE 's/^LMM_API_BACKEND=(go|rs)$/\1/p' "$BACKEND_CONFIG")
   [[ $old_selection == go || $old_selection == rs ]] || die 'current backend selection is invalid'
-  old_core_name=$(pacman -Qqo /usr/bin/lmm-api)
+  old_core_name=$(pacman -Qqo "$CORE_LAUNCHER")
   case $old_selection in
     go) old_backend_path="$BACKEND_ROOT/go/lmm-api" ;;
     rs) old_backend_path="$BACKEND_ROOT/rs/lmm-api-rs" ;;

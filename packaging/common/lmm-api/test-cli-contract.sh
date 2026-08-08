@@ -164,7 +164,10 @@ done
 if grep -Eq 'command -v lmm-api-(deploy|select)|deploy/production/lmm-api-deploy' "$cli"; then
   fail 'canonical CLI retains a public or source-tree fallback'
 fi
-grep -Fq 'ExecStart=/usr/bin/lmm-api deploy internal watchdog --deployment-id' "$cli" || \
-  fail 'rollback watchdog does not invoke the canonical CLI'
+grep -Fqx 'CORE_LAUNCHER=/usr/bin/lmm-api' "$cli" || fail 'embedded activation default is not the canonical CLI'
+grep -Fq 'ExecStart=$CORE_LAUNCHER deploy internal watchdog --deployment-id' "$cli" || \
+  fail 'embedded frontend watchdog does not use the authenticated CLI path'
+grep -Fq 'ExecStart=__LMM_CLI__ deploy internal watchdog --deployment-id' "$cli" || \
+  fail 'embedded backend watchdog template lacks the authenticated CLI placeholder'
 
 printf 'canonical CLI contract verified\n'
