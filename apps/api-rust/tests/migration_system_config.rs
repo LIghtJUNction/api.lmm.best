@@ -13,7 +13,8 @@ use lmm_api_rs::{
     },
     migration_routes::system_config::{
         DashboardRootAuthorizer, ProjectUpdateClient, SystemConfigAuthorizer,
-        SystemConfigHttpState, SystemConfigIdentity, WaffoPancakeGateway, system_config_router,
+        SystemConfigHttpState, SystemConfigIdentity, SystemConfigRuntimeWriter,
+        WaffoPancakeGateway, system_config_router,
     },
 };
 use redis::AsyncCommands;
@@ -62,6 +63,22 @@ impl ProjectUpdateClient for Update {
 }
 
 struct Pancake;
+
+struct OracleProbeRuntimeWriter;
+
+#[async_trait]
+impl SystemConfigRuntimeWriter for OracleProbeRuntimeWriter {
+    async fn preflight(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        match changes {
+            [(key, value)] if key == "SystemConfigOracleProbe" && value == "after" => Ok(()),
+            _ => Err(()),
+        }
+    }
+
+    async fn apply_committed(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        self.preflight(changes).await
+    }
+}
 
 #[async_trait]
 impl WaffoPancakeGateway for Pancake {
@@ -400,13 +417,16 @@ async fn option_write_invalidates_valkey_then_recovers_from_authoritative_postgr
         .await
         .expect("stale cache fixture");
 
-    let app = system_config_router(SystemConfigHttpState::new(
-        pool.clone(),
-        valkey.clone(),
-        Arc::new(Root),
-        Arc::new(Update),
-        Arc::new(Pancake),
-    ));
+    let app = system_config_router(
+        SystemConfigHttpState::new(
+            pool.clone(),
+            valkey.clone(),
+            Arc::new(Root),
+            Arc::new(Update),
+            Arc::new(Pancake),
+        )
+        .with_runtime_writer(Arc::new(OracleProbeRuntimeWriter)),
+    );
     let update = app
         .clone()
         .oneshot(
