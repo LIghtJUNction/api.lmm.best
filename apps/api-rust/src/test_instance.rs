@@ -137,7 +137,8 @@ use lmm_api_rs::{
         },
         system_config::{
             DashboardRootAuthorizer, ProjectUpdateClient, SystemConfigHttpState,
-            TestInstanceDisabledWaffoPancakeGateway, system_config_router,
+            SystemConfigRuntimeWriter, TestInstanceDisabledWaffoPancakeGateway,
+            system_config_router,
         },
     },
 };
@@ -145,6 +146,51 @@ use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+
+#[derive(Clone, Copy, Debug)]
+struct TestInstanceSetupRuntimeWriter;
+
+impl TestInstanceSetupRuntimeWriter {
+    fn validate(changes: &[(String, String)]) -> Result<(), ()> {
+        if changes.len() != 2 {
+            return Err(());
+        }
+
+        let mut self_use_mode_enabled = false;
+        let mut demo_site_enabled = false;
+        for (key, value) in changes {
+            if !matches!(value.as_str(), "true" | "false") {
+                return Err(());
+            }
+            match key.as_str() {
+                "SelfUseModeEnabled" if !self_use_mode_enabled => {
+                    self_use_mode_enabled = true;
+                }
+                "DemoSiteEnabled" if !demo_site_enabled => {
+                    demo_site_enabled = true;
+                }
+                _ => return Err(()),
+            }
+        }
+
+        if self_use_mode_enabled && demo_site_enabled {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
+
+#[async_trait]
+impl SystemConfigRuntimeWriter for TestInstanceSetupRuntimeWriter {
+    async fn preflight(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        Self::validate(changes)
+    }
+
+    async fn apply_committed(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        Self::validate(changes)
+    }
+}
 
 /// Builds the intentionally small, concrete candidate set approved for the
 /// test instance.  It has no provider-capable HTTP client.
@@ -349,7 +395,8 @@ pub fn safe_candidate_surface(
             Arc::new(DashboardRootAuthorizer::new(Arc::clone(&auth))),
             Arc::new(DenyProjectUpdate),
             Arc::new(TestInstanceDisabledWaffoPancakeGateway),
-        )))
+        )
+        .with_runtime_writer(Arc::new(TestInstanceSetupRuntimeWriter))))
         // Media tasks retain their real PostgreSQL token authentication.  The
         // test adapter denies every provider protocol after authentication, so
         // an imported snapshot can exercise route/auth compatibility without
@@ -2291,7 +2338,7 @@ mod tests {
         },
         media_tasks::{MediaTaskHttpState, MidjourneyMediaTaskService, media_task_router},
         relay_anthropic_gemini::{RelayHttpState, router as relay_anthropic_gemini_router},
-        system_config::ProjectUpdateClient,
+        system_config::{ProjectUpdateClient, SystemConfigRuntimeWriter},
     };
     use secrecy::SecretString;
     use serde_json::json;
@@ -2304,10 +2351,71 @@ mod tests {
         DenyCatalogUpstream, DenyProjectUpdate, DenyUptimeKuma, LEGACY_PRICING_FIRST_MODEL_VERSION,
         LEGACY_PRICING_RESPONSE_VERSION, PgMissingControlStore, PricingAbility,
         PricingModelMetadata, PricingVendor, TestInstanceMidjourneyBackend,
-        TestInstanceRelayBackend, build_pricing_snapshot, frozen_dashboard_models,
-        relay_misc_candidate_router, safe_candidate_surface,
+        TestInstanceRelayBackend, TestInstanceSetupRuntimeWriter, build_pricing_snapshot,
+        frozen_dashboard_models, relay_misc_candidate_router, safe_candidate_surface,
     };
     use lmm_api_rs::migration_routes::missing_control_public::MissingControlStore;
+
+    fn config_change(key: &str, value: &str) -> (String, String) {
+        (key.to_owned(), value.to_owned())
+    }
+
+    #[tokio::test]
+    async fn setup_runtime_writer_accepts_exact_boolean_pair_in_either_order() {
+        let writer = TestInstanceSetupRuntimeWriter;
+        for self_use_mode in ["true", "false"] {
+            for demo_site in ["true", "false"] {
+                for changes in [
+                    vec![
+                        config_change("SelfUseModeEnabled", self_use_mode),
+                        config_change("DemoSiteEnabled", demo_site),
+                    ],
+                    vec![
+                        config_change("DemoSiteEnabled", demo_site),
+                        config_change("SelfUseModeEnabled", self_use_mode),
+                    ],
+                ] {
+                    assert_eq!(writer.preflight(&changes).await, Ok(()));
+                    assert_eq!(writer.apply_committed(&changes).await, Ok(()));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_runtime_writer_rejects_every_other_batch_shape() {
+        let writer = TestInstanceSetupRuntimeWriter;
+        let rejected = [
+            vec![],
+            vec![config_change("SelfUseModeEnabled", "true")],
+            vec![
+                config_change("SelfUseModeEnabled", "true"),
+                config_change("SelfUseModeEnabled", "false"),
+            ],
+            vec![
+                config_change("SelfUseModeEnabled", "true"),
+                config_change("UnknownOption", "false"),
+            ],
+            vec![
+                config_change("SelfUseModeEnabled", "true"),
+                config_change("DemoSiteEnabled", "false"),
+                config_change("UnknownOption", "true"),
+            ],
+            vec![
+                config_change("SelfUseModeEnabled", " true"),
+                config_change("DemoSiteEnabled", "false"),
+            ],
+            vec![
+                config_change("SelfUseModeEnabled", "true"),
+                config_change("DemoSiteEnabled", "1"),
+            ],
+        ];
+
+        for changes in rejected {
+            assert_eq!(writer.preflight(&changes).await, Err(()));
+            assert_eq!(writer.apply_committed(&changes).await, Err(()));
+        }
+    }
 
     #[test]
     fn dashboard_models_use_the_frozen_go_catalogue_shape() {
