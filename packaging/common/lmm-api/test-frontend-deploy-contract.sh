@@ -285,6 +285,229 @@ if grep -Eq '/deploy-backups/|backup-target' "$FRONTEND_CONTRACT_SCP_LOG"; then
   fail 'target plaintext backup was transferred through scp'
 fi
 
+# Execute the embedded canonical runtime through its rendered watchdog command.
+# This keeps lifecycle coverage attached to the shipped CLI rather than a
+# source-tree activation helper.
+runtime_bin="$tmp/runtime-bin"
+runtime_root="$tmp/runtime-work"
+runtime_frontend="$tmp/runtime-frontend"
+runtime_backups="$tmp/runtime-backups"
+runtime_systemd="$tmp/runtime-systemd"
+runtime_cache="$tmp/runtime-cache"
+runtime_lock="$tmp/runtime-transaction.lock"
+runtime_cli="$tmp/runtime-installed-lmm-api"
+mkdir -p "$runtime_bin" "$runtime_root" "$runtime_frontend/releases/old" \
+  "$runtime_backups" "$runtime_systemd" "$runtime_cache"
+cp -- "$cli" "$runtime_cli"
+chmod 0700 "$runtime_cli"
+printf '<!doctype html><p>old</p>\n' >"$runtime_frontend/releases/old/index.html"
+ln -s releases/old "$runtime_frontend/current"
+printf 'old-backend\n' >"$tmp/runtime-go-backend"
+printf 'LMM_API_BACKEND=go\n' >"$tmp/runtime-backend.conf"
+printf 'SQL_DSN=postgresql://runtime-fixture\n' >"$tmp/runtime-lmm-api.env"
+printf 'old-core\n' >"$runtime_cache/lmm-api-bin-0.1.1-1-any.pkg.tar.zst"
+
+cat >"$runtime_bin/pacman" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+state=${FRONTEND_RUNTIME_STATE:?}
+record_for_archive() {
+  case ${1##*/} in
+    core.pkg) printf 'lmm-api-git 0.1.2.r1.gcontract-1\n' ;;
+    lmm-api-bin-0.1.1-1-any.pkg.tar.zst|rollback-core.pkg) printf 'lmm-api-bin 0.1.1-1\n' ;;
+    *) exit 1 ;;
+  esac
+}
+case $1 in
+  -Qp) record_for_archive "$2" ;;
+  -Qip) printf 'Architecture : any\n' ;;
+  -Qqo)
+    path=$2; [[ $path == -- ]] && path=$3
+    case $path in
+      "$FRONTEND_RUNTIME_CLI") printf 'lmm-api-bin\n' ;;
+      "$FRONTEND_RUNTIME_BACKEND") printf 'lmm-api-go-bin\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  -Q)
+    case $2 in
+      lmm-api-bin|lmm-api-git) cat "$state.core" ;;
+      lmm-api-go-bin) printf 'lmm-api-go-bin 0.1.1-1\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  -Qi) printf 'Name : %s\nArchitecture : any\n' "$2" ;;
+  -Qkk) [[ ${FRONTEND_RUNTIME_QKK_FAIL:-0} == 0 ]] ;;
+  -U)
+    if [[ -f $state.fail-next ]]; then rm -f -- "$state.fail-next"; exit 93; fi
+    archive=${*: -1}
+    record_for_archive "$archive" >"$state.core"
+    printf '%s\n' "$archive" >>"$state.installs"
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+cat >"$runtime_bin/bsdtar" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ $1 == -xOf ]] || exit 2
+case ${3:-} in
+  usr/bin/lmm-api)
+    printf 'readonly LMM_API_DEPLOY_PROTOCOL_MIN=%s\nreadonly LMM_API_DEPLOY_PROTOCOL_MAX=%s\n' \
+      "${FRONTEND_RUNTIME_PROTOCOL_MIN:-1}" "${FRONTEND_RUNTIME_PROTOCOL_MAX:-1}"
+    ;;
+  usr/share/doc/lmm-api-git/REVISION) printf '%s\n' "${FRONTEND_RUNTIME_REVISION:?}" ;;
+  *) exit 2 ;;
+esac
+EOF
+cat >"$runtime_bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+state=${FRONTEND_RUNTIME_SYSTEMCTL_STATE:?}
+printf '%s\n' "$*" >>"$state.log"
+case $1 in
+  enable) : >"$state.enabled"; : >"$state.active" ;;
+  disable) rm -f -- "$state.enabled" "$state.active" ;;
+  is-enabled) [[ ${FRONTEND_RUNTIME_TIMER_FAIL:-0} == 0 && -f $state.enabled ]] ;;
+  is-active)
+    if [[ $* == *rollback-* ]]; then [[ -f $state.active ]]; else exit 0; fi
+    ;;
+  show) printf '4242\n' ;;
+  daemon-reload) exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod 0700 "$runtime_bin"/*
+printf 'lmm-api-bin 0.1.1-1\n' >"$tmp/runtime-pacman.core"
+: >"$tmp/runtime-pacman.installs"
+
+runtime_env=(env PATH="$runtime_bin:$PATH" LMM_DEPLOY_TEST_MODE=1 LMM_DEPLOY_OBSERVED_HOST=arch-dmit \
+  LMM_DEPLOY_TEST_INSTALLED_CLI="$runtime_cli" LMM_API_DEPLOY_WORKSPACE_ROOT="$runtime_root" \
+  LMM_DEPLOY_TEST_FRONTEND_ROOT="$runtime_frontend" LMM_DEPLOY_TEST_FRONTEND_SOURCE="$tmp/frontend/index" \
+  LMM_DEPLOY_TEST_BACKEND_CONFIG="$tmp/runtime-backend.conf" LMM_DEPLOY_TEST_ENV_CONFIG="$tmp/runtime-lmm-api.env" \
+  LMM_DEPLOY_TEST_GO_BACKEND_PATH="$tmp/runtime-go-backend" LMM_DEPLOY_TEST_PACMAN_CACHE="$runtime_cache" \
+  LMM_DEPLOY_TEST_STAGING_ROOT="$runtime_root" LMM_DEPLOY_TEST_BACKUP_ROOT="$runtime_backups" \
+  LMM_DEPLOY_TEST_TRANSACTION_LOCK="$runtime_lock" LMM_DEPLOY_TEST_SYSTEMD_UNIT_DIR="$runtime_systemd" \
+  FRONTEND_RUNTIME_STATE="$tmp/runtime-pacman" FRONTEND_RUNTIME_CLI="$runtime_cli" \
+  FRONTEND_RUNTIME_BACKEND="$tmp/runtime-go-backend" FRONTEND_RUNTIME_REVISION="$revision" \
+  FRONTEND_RUNTIME_SYSTEMCTL_STATE="$tmp/runtime-systemctl")
+
+unsafe_cli="$tmp/runtime unsafe cli"
+cp -- "$runtime_cli" "$unsafe_cli"
+chmod 0700 "$unsafe_cli"
+expect_fail env LMM_DEPLOY_TEST_MODE=1 LMM_DEPLOY_TEST_INSTALLED_CLI="$unsafe_cli" "$embedded" prepare
+grep -Fq 'test installed CLI path is unsafe' "$tmp/err" || fail 'unsafe test CLI path was not rejected'
+ln -s "$runtime_cli" "$tmp/runtime-cli-link"
+expect_fail env LMM_DEPLOY_TEST_MODE=1 LMM_DEPLOY_TEST_INSTALLED_CLI="$tmp/runtime-cli-link" "$embedded" prepare
+grep -Fq 'test installed CLI path is unsafe' "$tmp/err" || fail 'symlinked test CLI path was not rejected'
+writable_cli="$tmp/runtime-writable-cli"
+cp -- "$runtime_cli" "$writable_cli"
+chmod 0722 "$writable_cli"
+expect_fail env LMM_DEPLOY_TEST_MODE=1 LMM_DEPLOY_TEST_INSTALLED_CLI="$writable_cli" "$embedded" prepare
+grep -Fq 'test installed CLI path is group/world writable' "$tmp/err" || \
+  fail 'group/world-writable test CLI was not rejected'
+
+setup_runtime_transaction() {
+  runtime_id=$1
+  runtime_release=$2
+  runtime_workspace="$runtime_root/$runtime_id"
+  runtime_backup="$runtime_backups/$runtime_id"
+  mkdir -p "$runtime_workspace/state" "$runtime_workspace/staging" "$runtime_backup" "$tmp/runtime-config/lmm-api"
+  chmod 0700 "$runtime_root" "$runtime_workspace" "$runtime_workspace/state" "$runtime_workspace/staging"
+  cp -- "$embedded" "$runtime_workspace/staging/frontend-activator"
+  chmod 0700 "$runtime_workspace/staging/frontend-activator"
+  printf 'runtime-core\n' >"$runtime_workspace/staging/core.pkg"
+  runtime_core_sha=$(sha256sum "$runtime_workspace/staging/core.pkg" | awk '{print $1}')
+  printf 'format=1\ndeployment_id=%s\nrole=target\nworkspace=%s\n' "$runtime_id" "$runtime_workspace" \
+    >"$runtime_workspace/.lmm-deploy-workspace"
+  chmod 0600 "$runtime_workspace/.lmm-deploy-workspace"
+  cp -- "$tmp/runtime-backend.conf" "$tmp/runtime-config/lmm-api/backend.conf"
+  cp -- "$tmp/runtime-lmm-api.env" "$tmp/runtime-config/lmm-api/lmm-api.env"
+  tar -cf "$runtime_backup/configuration.tar" -C "$tmp/runtime-config" lmm-api
+  printf 'application\n' >"$runtime_backup/application.archive"
+  {
+    printf 'copy_role=target\ndatabase_engine=postgres\nconfiguration_file=configuration.tar\n'
+    printf 'artifact_sha256=%s\ncore_sha256=%s\nbackend_sha256=%s\n' \
+      "$digest" "$runtime_core_sha" "$(sha256sum "$tmp/runtime-go-backend" | awk '{print $1}')"
+  } >"$runtime_backup/manifest.env"
+  (cd "$runtime_backup" && sha256sum configuration.tar application.archive >SHA256SUMS)
+  runtime_guard="$runtime_workspace/state/rollback.guard"
+  runtime_status="$runtime_workspace/staging/status"
+  runtime_args=(--workspace "$runtime_workspace" --guard "$runtime_guard" --target-backup "$runtime_backup" \
+    --core-package "$runtime_workspace/staging/core.pkg" --core-sha256 "$runtime_core_sha" \
+    --expected-release "$runtime_release" --expected-revision "$revision" --frontend-digest "$digest" \
+    --status-file "$runtime_status")
+}
+
+setup_runtime_transaction protocol-fail protocol-fail
+expect_fail "${runtime_env[@]}" FRONTEND_RUNTIME_PROTOCOL_MIN=2 FRONTEND_RUNTIME_PROTOCOL_MAX=2 \
+  "$runtime_workspace/staging/frontend-activator" prepare "${runtime_args[@]}"
+grep -Fq 'deployment protocols are incompatible' "$tmp/err" || fail 'incompatible deploy protocols were accepted'
+[[ ! -e $runtime_lock && ! -e $runtime_guard ]] || fail 'protocol failure retained deployment ownership'
+
+setup_runtime_transaction prepare-cleanup prepare-cleanup
+expect_fail "${runtime_env[@]}" FRONTEND_RUNTIME_QKK_FAIL=1 \
+  "$runtime_workspace/staging/frontend-activator" prepare "${runtime_args[@]}"
+[[ ! -e $runtime_lock && ! -e $runtime_guard && ! -e $runtime_status ]] || \
+  fail 'failed prepare retained ownership or state'
+
+"${runtime_env[@]}" "$runtime_workspace/staging/frontend-activator" prepare "${runtime_args[@]}"
+[[ $(sed -n 's/^status=//p' "$runtime_guard") == PREPARED ]] || fail 'prepare did not persist PREPARED'
+runtime_sha=$(sha256sum "$runtime_workspace/staging/frontend-activator" | awk '{print $1}')
+grep -Fqx "watchdog_runtime_sha256=$runtime_sha" "$runtime_guard" || fail 'guard omitted exact watchdog checksum'
+expect_fail "${runtime_env[@]}" FRONTEND_RUNTIME_TIMER_FAIL=1 \
+  "$runtime_workspace/staging/frontend-activator" switch "${runtime_args[@]}"
+[[ ! -e $runtime_lock && ! -e $runtime_guard && ! -e $runtime_status ]] || \
+  fail 'failed PREPARED switch did not clean transaction state'
+
+"${runtime_env[@]}" "$runtime_workspace/staging/frontend-activator" prepare "${runtime_args[@]}"
+"${runtime_env[@]}" "$runtime_workspace/staging/frontend-activator" switch "${runtime_args[@]}"
+[[ $(<"$runtime_status") == AWAITING_CONFIRMATION\ * ]] || fail 'switch did not await confirmation'
+start=$(sed -n 's/^ExecStart=//p' "$runtime_systemd/lmm-api-frontend-rollback-$runtime_id.service")
+[[ $start == "$runtime_cli deploy internal watchdog --deployment-id $runtime_id" ]] || \
+  fail 'watchdog ExecStart did not use the validated installed CLI'
+cp -- "$runtime_workspace/staging/frontend-activator" "$tmp/runtime-activator-clean"
+printf '# tampered\n' >>"$runtime_workspace/staging/frontend-activator"
+expect_fail "${runtime_env[@]}" "$runtime_cli" deploy internal watchdog --deployment-id "$runtime_id"
+grep -Fq 'watchdog runtime checksum mismatch' "$tmp/err" || fail 'watchdog accepted a changed runtime'
+cp -- "$tmp/runtime-activator-clean" "$runtime_workspace/staging/frontend-activator"
+chmod 0700 "$runtime_workspace/staging/frontend-activator"
+
+: >"$tmp/runtime-pacman.fail-next"
+expect_fail "${runtime_env[@]}" "$runtime_cli" deploy internal watchdog --deployment-id "$runtime_id"
+[[ $(sed -n 's/^status=//p' "$runtime_guard") == ROLLING_BACK && -d $runtime_lock ]] || \
+  fail 'failed rollback did not retain retryable ownership'
+"${runtime_env[@]}" "$runtime_cli" deploy internal watchdog --deployment-id "$runtime_id"
+[[ $(sed -n 's/^status=//p' "$runtime_guard") == ROLLED_BACK && ! -e $runtime_lock ]] || \
+  fail 'watchdog retry did not finish rollback'
+[[ $(readlink "$runtime_frontend/current") == releases/old ]] || fail 'rollback did not restore frontend identity'
+
+setup_runtime_transaction confirmation-race confirmed-release
+"${runtime_env[@]}" "$runtime_workspace/staging/frontend-activator" prepare "${runtime_args[@]}"
+"${runtime_env[@]}" "$runtime_workspace/staging/frontend-activator" switch "${runtime_args[@]}"
+hold="$tmp/runtime-confirm.hold"; ready="$tmp/runtime-confirm.ready"; waiting="$tmp/runtime-rollback.waiting"
+: >"$hold"
+"${runtime_env[@]}" LMM_DEPLOY_TEST_CONFIRM_HOLD_FILE="$hold" LMM_DEPLOY_TEST_CONFIRM_READY_FILE="$ready" \
+  "$runtime_workspace/staging/frontend-activator" confirm "${runtime_args[@]}" >"$tmp/runtime-confirm.out" 2>"$tmp/runtime-confirm.err" &
+confirm_pid=$!
+for _ in {1..200}; do [[ -e $ready ]] && break; sleep 0.01; done
+[[ -e $ready ]] || fail 'confirmation did not hold the shared mutex'
+"${runtime_env[@]}" LMM_DEPLOY_TEST_MUTEX_WAITING_FILE="$waiting" \
+  "$runtime_cli" deploy internal watchdog --deployment-id "$runtime_id" >"$tmp/runtime-race.out" 2>"$tmp/runtime-race.err" &
+rollback_pid=$!
+for _ in {1..200}; do [[ -e $waiting ]] && break; sleep 0.01; done
+[[ -e $waiting ]] || fail 'watchdog did not queue on the shared mutex'
+installs_before=$(wc -l <"$tmp/runtime-pacman.installs")
+rm -f -- "$hold"
+wait "$confirm_pid" || fail 'confirmation lost the deterministic race'
+wait "$rollback_pid" || fail 'queued watchdog did not no-op after confirmation'
+[[ $(sed -n 's/^status=//p' "$runtime_guard") == CONFIRMED && ! -e $runtime_lock ]] || \
+  fail 'confirmation race did not finish in CONFIRMED without ownership'
+[[ $(wc -l <"$tmp/runtime-pacman.installs") == "$installs_before" ]] || \
+  fail 'queued watchdog changed packages after confirmation'
+[[ $(readlink "$runtime_frontend/current") == releases/confirmed-release ]] || \
+  fail 'queued watchdog changed the confirmed frontend'
+
 # A pre-existing controller destination is never claimed or cleaned.
 existing_id=frontend-existing
 existing_work="$tmp/work-existing"
