@@ -305,10 +305,6 @@ async fn refresh(State(state): State<AuthHttpState>, request: Request) -> Respon
     if let Err(kind) = require_cookie_origin(&state, &request) {
         return origin_forbidden_response(kind);
     }
-    let metadata = request_metadata(&request);
-    if let Some(response) = critical_rate_limit(&state, &metadata.ip).await {
-        return response;
-    }
     let expected_sid = header_text(request.headers(), "x-auth-session");
     let refresh_token = cookie(request.headers(), REFRESH_COOKIE_NAME);
     let Some(refresh_token) = refresh_token else {
@@ -317,6 +313,10 @@ async fn refresh(State(state): State<AuthHttpState>, request: Request) -> Respon
             state.cookie_secure,
         );
     };
+    let metadata = request_metadata(&request);
+    if let Some(response) = critical_rate_limit(&state, &metadata.ip).await {
+        return response;
+    }
     match state
         .auth
         .refresh(SecretString::from(refresh_token), expected_sid, metadata)
@@ -906,12 +906,19 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::extract::ConnectInfo;
     use serde_json::Value;
-    use std::{net::SocketAddr, sync::Mutex};
+    use std::{
+        net::SocketAddr,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
     use tower::ServiceExt;
 
     struct MockAuth {
         next: Mutex<Option<Result<LoginOutcome, AuthErrorKind>>>,
         rate_limit: Mutex<Result<CriticalRateLimitOutcome, AuthErrorKind>>,
+        rate_limit_checks: AtomicUsize,
         metadata: Mutex<Vec<RequestMetadata>>,
         self_user: Mutex<Result<DashboardUser, AuthErrorKind>>,
         self_user_credentials: Mutex<Vec<String>>,
@@ -926,6 +933,7 @@ mod tests {
                     sample_bundle(),
                 ))))),
                 rate_limit: Mutex::new(Ok(CriticalRateLimitOutcome::Allowed)),
+                rate_limit_checks: AtomicUsize::new(0),
                 metadata: Mutex::new(Vec::new()),
                 self_user: Mutex::new(Ok(sample_user())),
                 self_user_credentials: Mutex::new(Vec::new()),
@@ -947,6 +955,7 @@ mod tests {
                     },
                 )))),
                 rate_limit: Mutex::new(Ok(CriticalRateLimitOutcome::Allowed)),
+                rate_limit_checks: AtomicUsize::new(0),
                 metadata: Mutex::new(Vec::new()),
                 self_user: Mutex::new(Ok(sample_user())),
                 self_user_credentials: Mutex::new(Vec::new()),
@@ -977,6 +986,7 @@ mod tests {
             &self,
             _: &str,
         ) -> Result<CriticalRateLimitOutcome, AuthError> {
+            self.rate_limit_checks.fetch_add(1, Ordering::Relaxed);
             (*self.rate_limit.lock().expect("rate limit lock")).map_err(AuthError::new)
         }
 
@@ -1423,25 +1433,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_refresh_cookie_clears_browser_cookie() {
-        let router = auth_router(AuthHttpState::new(Arc::new(MockAuth::success()), false));
+    async fn refresh_limits_only_cookie_bearing_same_origin_attempts() {
+        let auth = Arc::new(MockAuth::success());
+        *auth.rate_limit.lock().expect("rate limit lock") =
+            Ok(CriticalRateLimitOutcome::Rejected {
+                retry_after_seconds: 37,
+            });
+        let router = auth_router(
+            AuthHttpState::new(auth.clone(), true)
+                .with_trusted_origins(["https://dashboard.example"]),
+        );
+
         let response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/user/auth/refresh")
+                    .header(header::ORIGIN, "https://evil.example")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 0);
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/auth/refresh")
+                    .header(header::ORIGIN, "https://dashboard.example")
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(
-            response.headers()[header::SET_COOKIE]
-                .to_str()
-                .expect("cookie")
-                .contains("Max-Age=0")
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            response.headers()[header::SET_COOKIE],
+            "new_api_refresh=; Path=/api/user/auth; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
         );
+        assert_eq!(
+            response_json(response).await,
+            json!({
+                "success": false,
+                "code": "AUTH_UNAUTHORIZED",
+                "message": "Unauthorized"
+            })
+        );
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/auth/refresh")
+                    .header(header::ORIGIN, "https://dashboard.example")
+                    .header(header::COOKIE, "new_api_refresh=attacker.invalid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "37");
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 1);
+        assert!(auth.next.lock().expect("next lock").is_some());
     }
 
     #[tokio::test]
@@ -1536,6 +1596,7 @@ mod tests {
             Arc::new(MockAuth {
                 next: Mutex::new(Some(Err(AuthErrorKind::InvalidCredentials))),
                 rate_limit: Mutex::new(Ok(CriticalRateLimitOutcome::Allowed)),
+                rate_limit_checks: AtomicUsize::new(0),
                 metadata: Mutex::new(Vec::new()),
                 self_user: Mutex::new(Ok(sample_user())),
                 self_user_credentials: Mutex::new(Vec::new()),
