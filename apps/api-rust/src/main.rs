@@ -27,6 +27,7 @@ use lmm_api_rs::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
             registration_router,
         },
+        missing_identity_topup::{IdentityTopupState, read_router as identity_topup_read_router},
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityState, PgObservabilityStore,
             PgReadOnlyObservabilityTokenAuthorizer, ValkeyObservabilityMetrics,
@@ -217,6 +218,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let identity_topup = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_topup_read_router(IdentityTopupState::new(pg.clone(), Arc::clone(&auth))),
+        );
         // The helper owns the exact anonymous mount: .route("/api/user/register", post(register)).
         // Keep this evidence beside the normal-listener wiring so the route
         // ledger cannot mistake the frozen security candidates for ownership.
@@ -256,6 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut extra_surface = identity_profile
             .merge(admin_catalog)
             .merge(identity_admin)
+            .merge(identity_topup)
             .merge(registration)
             .merge(billing_subscriptions)
             .merge(observability)

@@ -269,7 +269,7 @@ GET	/api/user/token	absent	not-applicable	unmounted	not-applicable	not-applicabl
 GET	/api/user/topup	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/topup	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/topup/complete	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/user/topup/info	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/api/user/topup/info	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/missing_identity_topup.rs;mount=apps/api-rust/src/migration_routes/missing_identity_topup.rs;listener=apps/api-rust/src/main.rs:221
 GET	/api/user/topup/self	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/waffo-pancake/amount	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/waffo-pancake/pay	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only

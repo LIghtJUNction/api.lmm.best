@@ -26,8 +26,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::RequestContext;
 use crate::auth::{
-    AuthErrorKind, DashboardAuth, DashboardUser, UserAuthPolicyError, enforce_user_auth,
-    user_auth_message,
+    AuthErrorKind, DashboardAuth, DashboardUser, DashboardUserView, UserAuthPolicyError,
+    enforce_user_auth, enforce_user_auth_view, user_auth_message,
 };
 
 const ROLE_ADMIN: i64 = 10;
@@ -57,10 +57,20 @@ impl IdentityTopupState {
 pub fn router(state: IdentityTopupState) -> Router {
     Router::new()
         .route("/api/user/topup", get(all_topups).post(redeem))
-        .route("/api/user/topup/info", get(topup_info))
         .route("/api/user/topup/self", get(user_topups))
         .route("/api/user/topup/complete", post(complete_topup))
+        .merge(topup_info_route())
         .with_state(state)
+}
+
+/// Normal-listener read-only mount. Redemption and manual completion remain
+/// isolated until their Go write-side transaction differential is complete.
+pub fn read_router(state: IdentityTopupState) -> Router {
+    topup_info_route().with_state(state)
+}
+
+fn topup_info_route() -> Router<IdentityTopupState> {
+    Router::new().route("/api/user/topup/info", get(topup_info))
 }
 
 #[derive(Serialize)]
@@ -167,6 +177,30 @@ async fn actor(state: &IdentityTopupState, headers: &HeaderMap) -> Result<Dashbo
         })?;
     enforce_user_auth(&user).map_err(|error| user_auth_error(headers, error))?;
     Ok(user)
+}
+
+async fn actor_view(
+    state: &IdentityTopupState,
+    headers: &HeaderMap,
+) -> Result<DashboardUserView, Response> {
+    let Some(token) = bearer(headers) else {
+        return Err(unauthorized());
+    };
+    let view = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+        .map_err(|error| match error.kind {
+            AuthErrorKind::UserDisabled => {
+                user_auth_error(headers, UserAuthPolicyError::UserDisabled)
+            }
+            AuthErrorKind::Unauthorized
+            | AuthErrorKind::TokenExpired
+            | AuthErrorKind::SessionRevoked => unauthorized(),
+            _ => unauthorized(),
+        })?;
+    enforce_user_auth_view(&view).map_err(|error| user_auth_error(headers, error))?;
+    Ok(view)
 }
 
 async fn administrator(
@@ -859,17 +893,31 @@ fn completed_quota(amount: i64, money: &str, provider: &str, quota_per_unit: f64
 }
 
 async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap) -> Response {
-    if let Err(response) = actor(&state, &headers).await {
-        return response;
-    }
+    let actor = match actor_view(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
     let options = match read_options(&state.pool).await {
         Ok(options) => options,
         Err(_) => return fail("系统错误"),
     };
-    ok(topup_info_data(&options))
+    ok(topup_info_data_for_user(
+        &options,
+        actor.developer_access_granted,
+        &actor.group,
+    ))
 }
 
+#[cfg(test)]
 fn topup_info_data(options: &HashMap<String, String>) -> Value {
+    topup_info_data_for_user(options, true, "default")
+}
+
+fn topup_info_data_for_user(
+    options: &HashMap<String, String>,
+    developer_access_granted: bool,
+    group: &str,
+) -> Value {
     let compliant = payment_compliance_values(options);
     let stripe = compliant
         && nonempty(options, "StripeApiSecret")
@@ -940,8 +988,40 @@ fn topup_info_data(options: &HashMap<String, String>) -> Value {
         "#3B82F6",
         integer(options, "WaffoMinTopUp", 1),
     );
+    let (payment_available, min_payment) =
+        neutral_topup_availability(options, epay || fastpay, stripe, creem, waffo, pancake);
+    let amount_options = payment_field(
+        options,
+        "amount_options",
+        Value::Array(vec![
+            json!(10),
+            json!(20),
+            json!(50),
+            json!(100),
+            json!(200),
+            json!(500),
+        ]),
+    );
+    let discount = payment_field(
+        options,
+        "amount_discount",
+        Value::Object(Default::default()),
+    );
+    if !developer_access_granted {
+        return json!({
+            "developer_access_granted": false,
+            "activation_required": true,
+            "payment_available": payment_available,
+            "min_payment": min_payment,
+            "amount_options": amount_options,
+            "discount": discount,
+            "payment_compliance_confirmed": compliant,
+            "payment_compliance_terms_version": "v1",
+        });
+    }
     json!({
         "enable_online_topup": epay || fastpay,
+        "developer_access_granted": true,
         "enable_stripe_topup": stripe,
         "enable_creem_topup": creem,
         "enable_waffo_topup": waffo,
@@ -952,14 +1032,63 @@ fn topup_info_data(options: &HashMap<String, String>) -> Value {
         "waffo_pay_methods": if waffo { json_value(options, "WaffoPayMethods", Value::Null) } else { Value::Null },
         "creem_products": creem_products,
         "pay_methods": pay_methods,
+        "topup_group_ratio": topup_group_ratio(options, group),
         "min_topup": integer(options, "MinTopUp", 1),
         "stripe_min_topup": integer(options, "StripeMinTopUp", 1),
         "waffo_min_topup": integer(options, "WaffoMinTopUp", 1),
         "waffo_pancake_min_topup": integer(options, "WaffoPancakeMinTopUp", 1),
-        "amount_options": payment_field(options, "amount_options", Value::Array(vec![json!(10), json!(20), json!(50), json!(100), json!(200), json!(500)])),
-        "discount": payment_field(options, "amount_discount", Value::Object(Default::default())),
+        "amount_options": amount_options,
+        "discount": discount,
         "topup_link": options.get("TopUpLink").cloned().unwrap_or_default(),
     })
+}
+
+fn neutral_topup_availability(
+    options: &HashMap<String, String>,
+    online: bool,
+    stripe: bool,
+    creem: bool,
+    waffo: bool,
+    pancake: bool,
+) -> (bool, f64) {
+    let mut minimums = Vec::new();
+    let mut add_minimum = |enabled: bool, value: i64| {
+        if enabled && value > 0 {
+            minimums.push(value as f64);
+        }
+    };
+    add_minimum(online, integer(options, "MinTopUp", 1));
+    add_minimum(stripe, integer(options, "StripeMinTopUp", 1));
+    add_minimum(waffo, integer(options, "WaffoMinTopUp", 1));
+    add_minimum(pancake, integer(options, "WaffoPancakeMinTopUp", 1));
+    if creem {
+        if let Ok(Value::Array(products)) = serde_json::from_str::<Value>(
+            options
+                .get("CreemProducts")
+                .map(String::as_str)
+                .unwrap_or("[]"),
+        ) {
+            for product in products {
+                if let Some(price) = product.get("price").and_then(Value::as_f64)
+                    && price > 0.0
+                {
+                    minimums.push(price);
+                }
+            }
+        }
+    }
+    let available = online || stripe || creem || waffo || pancake;
+    let minimum = minimums.into_iter().reduce(f64::min).unwrap_or(0.0);
+    (available, minimum)
+}
+
+fn topup_group_ratio(options: &HashMap<String, String>, group: &str) -> f64 {
+    let ratio = options
+        .get("TopupGroupRatio")
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| value.get(group).and_then(Value::as_f64))
+        .unwrap_or(1.0);
+    if ratio == 0.0 { 1.0 } else { ratio }
 }
 
 fn append_payment_method(
@@ -1414,6 +1543,7 @@ mod tests {
             ("WaffoPancakeProductID".into(), "product".into()),
         ]);
         let enabled = topup_info_data(&options);
+        assert_eq!(enabled["developer_access_granted"], true);
         assert!(enabled["enable_online_topup"].as_bool().unwrap());
         assert!(enabled["enable_stripe_topup"].as_bool().unwrap());
         assert!(enabled["enable_creem_topup"].as_bool().unwrap());
@@ -1423,6 +1553,19 @@ mod tests {
         assert_eq!(
             enabled["creem_products"],
             Value::String(r#"[{"productId":"prod"}]"#.into())
+        );
+
+        let neutral = topup_info_data_for_user(&options, false, "default");
+        assert_eq!(neutral["developer_access_granted"], false);
+        assert_eq!(neutral["activation_required"], true);
+        assert_eq!(neutral["payment_available"], true);
+        assert_eq!(neutral["min_payment"], 1.0);
+        assert!(neutral.get("enable_stripe_topup").is_none());
+
+        options.insert("TopupGroupRatio".into(), r#"{"vip":1.5}"#.into());
+        assert_eq!(
+            topup_info_data_for_user(&options, true, "vip")["topup_group_ratio"],
+            1.5
         );
 
         options.insert(
