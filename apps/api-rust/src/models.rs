@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::RequestContext;
+use crate::auth::DashboardUser;
 use async_trait::async_trait;
 use axum::{
     Json, Router,
@@ -58,6 +59,12 @@ pub struct ModelsRequest {
 pub enum ModelsErrorKind {
     MissingToken,
     InvalidToken,
+    /// A valid credential whose discovery decision must remain concealed.
+    ///
+    /// This covers both an explicit trust denial and a failure to resolve the
+    /// current trust/payment facts. Model inventory and billing failures use
+    /// [`Self::Database`] and remain observable as internal errors.
+    DiscoveryHidden,
     AccessDenied,
     UserBanned,
     Database,
@@ -83,6 +90,23 @@ impl ModelsError {
 #[async_trait]
 pub trait ModelsService: Send + Sync {
     async fn list(&self, request: ModelsRequest) -> Result<Vec<ModelView>, ModelsError>;
+
+    /// Apply the current model-list developer gate before returning the
+    /// inventory. The frozen Go 5418ce6 listener deliberately uses the
+    /// legacy [`Self::list`] path and remains pure TokenAuth.
+    async fn list_with_discovery_policy(
+        &self,
+        request: ModelsRequest,
+    ) -> Result<Vec<ModelView>, ModelsError> {
+        self.list(request).await
+    }
+
+    /// Authorize dashboard API-token discovery independently of
+    /// [`ModelsService::list`]. Legacy model-list TokenAuth does not apply the
+    /// dashboard developer/trust gate.
+    async fn dashboard_discovery_access(&self, user: &DashboardUser) -> Result<bool, ModelsError> {
+        Ok(crate::models::dashboard_discovery_access(user))
+    }
 }
 
 /// PostgreSQL is authoritative. This slice deliberately treats Valkey as an
@@ -92,6 +116,7 @@ pub struct PgModelsService {
     valkey: Option<redis::Client>,
     crypto_secret: Arc<str>,
     cache_ttl: Duration,
+    local_acceptance: bool,
 }
 
 impl PgModelsService {
@@ -102,6 +127,7 @@ impl PgModelsService {
             valkey: None,
             crypto_secret: Arc::from(""),
             cache_ttl: Duration::from_secs(60),
+            local_acceptance: false,
         }
     }
 
@@ -117,7 +143,18 @@ impl PgModelsService {
             valkey: Some(valkey),
             crypto_secret: crypto_secret.into(),
             cache_ttl,
+            local_acceptance: false,
         }
+    }
+
+    /// Enables the explicitly loopback-scoped local acceptance policy.
+    ///
+    /// The normal listener supplies the validated configuration value.  The
+    /// isolated frozen listener deliberately leaves this disabled.
+    #[must_use]
+    pub fn with_local_acceptance(mut self, enabled: bool) -> Self {
+        self.local_acceptance = enabled;
+        self
     }
 
     /// Applies the legacy token and user checks without deriving model visibility.
@@ -140,6 +177,7 @@ impl PgModelsService {
 
 #[derive(Debug)]
 struct AuthenticatedToken {
+    user: CachedUser,
     user_group: String,
     token_group: String,
     model_limits_enabled: bool,
@@ -151,8 +189,36 @@ struct AuthenticatedToken {
 #[async_trait]
 impl ModelsService for PgModelsService {
     async fn list(&self, request: ModelsRequest) -> Result<Vec<ModelView>, ModelsError> {
+        self.list_with_policy(request, false).await
+    }
+
+    async fn list_with_discovery_policy(
+        &self,
+        request: ModelsRequest,
+    ) -> Result<Vec<ModelView>, ModelsError> {
+        self.list_with_policy(request, true).await
+    }
+
+    async fn dashboard_discovery_access(&self, user: &DashboardUser) -> Result<bool, ModelsError> {
+        self.developer_access_allowed(&CachedUser::from_dashboard_user(user))
+            .await
+    }
+}
+
+impl PgModelsService {
+    async fn list_with_policy(
+        &self,
+        request: ModelsRequest,
+        enforce_discovery_policy: bool,
+    ) -> Result<Vec<ModelView>, ModelsError> {
         let (key, has_channel_suffix) = legacy_token_parts(&request).ok_or_else(invalid_token)?;
         let token = authenticate(self, &key, request.client_ip).await?;
+        if enforce_discovery_policy && !self.developer_access_allowed(&token.user).await? {
+            return Err(ModelsError::new(
+                ModelsErrorKind::DiscoveryHidden,
+                "Not Found",
+            ));
+        }
         if has_channel_suffix && token.role < 10 {
             return Err(ModelsError::new(
                 ModelsErrorKind::AccessDenied,
@@ -225,6 +291,7 @@ async fn authenticate(
         .and_then(|value| value.get("accept_unset_model_ratio_model")?.as_bool())
         .unwrap_or(false);
     Ok(AuthenticatedToken {
+        user: user.clone(),
         user_group: user.group,
         token_group: token.group,
         model_limits_enabled: token.model_limits_enabled,
@@ -232,6 +299,64 @@ async fn authenticate(
         accept_unset_ratio_model: accept_unset_ratio_model || service.self_use_mode().await?,
         role: user.role,
     })
+}
+
+/// Apply the dashboard discovery predicate to a resolved model owner. Legacy
+/// model-list authentication deliberately does not call this gate.
+#[must_use]
+pub fn discovery_access_granted(
+    user_id: i64,
+    username: &str,
+    status: i64,
+    role: i64,
+    trust_granted: Option<bool>,
+) -> bool {
+    discovery_access_granted_with_local_acceptance(
+        user_id,
+        username,
+        status,
+        role,
+        trust_granted,
+        false,
+    )
+}
+
+/// Applies the ordinary-user fallback after role and trust-override checks.
+///
+/// A present trust decision is decisive, including an explicit denial. Local
+/// acceptance is considered only when no override exists; administrators are
+/// always granted by role after the principal validity checks.
+#[must_use]
+pub fn discovery_access_granted_with_local_acceptance(
+    user_id: i64,
+    username: &str,
+    status: i64,
+    role: i64,
+    trust_granted: Option<bool>,
+    local_acceptance: bool,
+) -> bool {
+    // Only the canonical common-user role may use the ordinary trust path.
+    // Unknown low roles must not inherit access from a forged trust decision;
+    // administrator and custom administrator roles are handled explicitly.
+    if user_id <= 0 || username.trim().is_empty() || status != 1 || (role < 10 && role != 1) {
+        return false;
+    }
+    if role >= 10 {
+        return true;
+    }
+    trust_granted.unwrap_or(local_acceptance)
+}
+
+/// Applies the dashboard-side representation of the shared developer gate.
+///
+/// The dashboard adapter does not carry the Go trust override or the
+/// normalized external-payment aggregate.  Do not treat its
+/// `permissions.console_activated_at` convenience field as trust evidence.
+/// Administrators are an explicit role-based allow; ordinary users remain
+/// fail-closed until the authoritative trust aggregate is available here.
+#[must_use]
+pub fn dashboard_discovery_access(user: &DashboardUser) -> bool {
+    discovery_access_granted(user.id, &user.username, user.status, user.role, None)
 }
 
 #[derive(Debug)]
@@ -247,7 +372,7 @@ struct CachedToken {
     group: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CachedUser {
     id: i64,
     group: String,
@@ -258,6 +383,22 @@ struct CachedUser {
     username: String,
     setting: String,
     auth_version: i64,
+}
+
+impl CachedUser {
+    fn from_dashboard_user(user: &DashboardUser) -> Self {
+        Self {
+            id: user.id,
+            group: user.group.clone(),
+            email: user.email.clone(),
+            quota: user.quota,
+            status: i32::try_from(user.status).unwrap_or_default(),
+            role: user.role,
+            username: user.username.clone(),
+            setting: user.setting.clone(),
+            auth_version: 0,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -311,7 +452,123 @@ fn legacy_pricing_model_name(model: &str) -> &str {
     }
 }
 
+/// Returns the Go-compatible decisive result for a persisted trust override.
+/// A present override, including zero, an out-of-range value, or malformed
+/// text at this compatibility boundary, suppresses paid fallback and denies.
+#[must_use]
+fn trust_override_decision(raw: Option<&str>) -> Option<bool> {
+    raw.map(|value| {
+        value
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .is_some_and(|level| (1..=4).contains(&level))
+    })
+}
+
+const BASELINE_PAID_TOPUP_SQL: &str = r#"
+    SELECT EXISTS (
+        SELECT 1
+        FROM top_ups
+        WHERE user_id = $1
+          AND status = 'success'
+          AND COALESCE(money, 0) > 0
+          AND COALESCE(amount, 0) > 0
+          AND COALESCE(payment_provider, '') <> 'balance'
+          AND COALESCE(payment_method, '') <> 'balance'
+          AND (
+              COALESCE(payment_provider, '') IN
+                  ('epay', 'stripe', 'creem', 'fastpay', 'waffo', 'waffo_pancake')
+              OR (
+                  COALESCE(payment_provider, '') = ''
+                  AND COALESCE(payment_method, '') IN
+                      ('stripe', 'creem', 'waffo', 'waffo_pancake', 'alipay', 'wxpay')
+              )
+          )
+    )
+"#;
+
+/// Conservative paid-activation predicate for the baseline `top_ups` schema.
+///
+/// The baseline schema has no normalized settlement/quota columns. Requiring
+/// both positive legacy amount fields avoids treating a quota grant or an
+/// incomplete payment row as proof of paid activation. This intentionally
+/// produces false negatives for modern rows whose only authoritative positive
+/// fact is a normalized settlement/credited-quota field; those rows remain
+/// hidden until the schema-aware path is available.
+#[must_use]
+fn baseline_paid_topup_row_qualifies(
+    status: &str,
+    money: f64,
+    amount: i64,
+    payment_method: Option<&str>,
+    payment_provider: Option<&str>,
+) -> bool {
+    if status != "success" || money <= 0.0 || amount <= 0 {
+        return false;
+    }
+    let method = payment_method.unwrap_or_default();
+    let provider = payment_provider.unwrap_or_default();
+    if provider == "balance" || method == "balance" {
+        return false;
+    }
+    matches!(
+        provider,
+        "epay" | "stripe" | "creem" | "fastpay" | "waffo" | "waffo_pancake"
+    ) || (provider.is_empty()
+        && matches!(
+            method,
+            "stripe" | "creem" | "waffo" | "waffo_pancake" | "alipay" | "wxpay"
+        ))
+}
+
 impl PgModelsService {
+    async fn developer_access_allowed(&self, user: &CachedUser) -> Result<bool, ModelsError> {
+        if user.role >= 10 {
+            return Ok(discovery_access_granted(
+                user.id,
+                &user.username,
+                i64::from(user.status),
+                user.role,
+                Some(true),
+            ));
+        }
+
+        // Newer Go schemas may carry an explicit trust override while older
+        // installations do not.  Reading through the row JSON keeps this
+        // compatibility boundary schema-tolerant without treating a lookup
+        // or malformed override as an allow.
+        let override_value = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT to_jsonb(users) ->> 'trust_level_override' FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user.id)
+        .fetch_one(&self.pg)
+        .await
+        // Trust lookup is an authorization fact. A dependency failure must
+        // remain fail-closed, while a NULL JSON value means no override.
+        .map_err(|_| discovery_hidden())?;
+        if let Some(trust_granted) = trust_override_decision(override_value.as_deref()) {
+            return Ok(trust_granted);
+        }
+
+        // Use only columns present in the baseline schema. A query error (for
+        // example, a missing table during a partial migration) is an
+        // authorization denial, never a discovery grant or an observable 500.
+        let paid = sqlx::query_scalar::<_, bool>(BASELINE_PAID_TOPUP_SQL)
+            .bind(user.id)
+            .fetch_one(&self.pg)
+            .await
+            .map_err(|_| discovery_hidden())?;
+        Ok(discovery_access_granted_with_local_acceptance(
+            user.id,
+            &user.username,
+            i64::from(user.status),
+            user.role,
+            Some(paid),
+            self.local_acceptance,
+        ))
+    }
+
     async fn option(&self, key: &str) -> Result<Option<String>, ModelsError> {
         sqlx::query_scalar("SELECT value FROM options WHERE key = $1")
             .bind(key)
@@ -995,6 +1252,10 @@ fn invalid_token() -> ModelsError {
     ModelsError::new(ModelsErrorKind::InvalidToken, "Invalid token")
 }
 
+fn discovery_hidden() -> ModelsError {
+    ModelsError::new(ModelsErrorKind::DiscoveryHidden, "Not Found")
+}
+
 fn database_error() -> ModelsError {
     ModelsError::new(ModelsErrorKind::Database, "Database error")
 }
@@ -1003,6 +1264,24 @@ fn database_error() -> ModelsError {
 pub struct ModelsHttpState {
     service: Arc<dyn ModelsService>,
     version: Arc<str>,
+    mode: ModelsListenerMode,
+}
+
+/// Selects the authorization contract for the model listener. The frozen
+/// 5418ce6 mode is retained for its exact Go TokenAuth oracle; the normal
+/// Rust listener opts into the current developer-trust policy explicitly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelsListenerMode {
+    CurrentTrustPolicy,
+    FrozenGo5418ce6,
+}
+
+impl ModelsListenerMode {
+    pub const FROZEN_GO_REVISION: &'static str = "5418ce6";
+
+    const fn applies_discovery_policy(self) -> bool {
+        matches!(self, Self::CurrentTrustPolicy)
+    }
 }
 
 impl ModelsHttpState {
@@ -1011,7 +1290,21 @@ impl ModelsHttpState {
         Self {
             service,
             version: version.into(),
+            // Unit and isolated oracle callers retain the historical pure
+            // TokenAuth contract unless they opt into a named mode.
+            mode: ModelsListenerMode::FrozenGo5418ce6,
         }
+    }
+
+    #[must_use]
+    pub fn with_listener_mode(mut self, mode: ModelsListenerMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub fn listener_mode(&self) -> ModelsListenerMode {
+        self.mode
     }
 }
 
@@ -1126,23 +1419,34 @@ async fn list_models_with_format(
         })
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
-    let mut response = match state
-        .service
-        .list(ModelsRequest {
-            authorization,
-            api_key,
-            gemini_key,
-            mj_api_secret,
-            client_ip,
-        })
-        .await
-    {
+    let request = ModelsRequest {
+        authorization,
+        api_key,
+        gemini_key,
+        mj_api_secret,
+        client_ip,
+    };
+    let result = if state.mode.applies_discovery_policy() {
+        state.service.list_with_discovery_policy(request).await
+    } else {
+        state.service.list(request).await
+    };
+    let mut response = match result {
         Ok(models) => success_response(models, format),
+        Err(error) if error.kind == ModelsErrorKind::DiscoveryHidden => {
+            discovery_not_found_response()
+        }
         Err(error) => {
             let status = match error.kind {
+                ModelsErrorKind::MissingToken | ModelsErrorKind::InvalidToken
+                    if state.mode.applies_discovery_policy() =>
+                {
+                    StatusCode::NOT_FOUND
+                }
                 ModelsErrorKind::MissingToken | ModelsErrorKind::InvalidToken => {
                     StatusCode::UNAUTHORIZED
                 }
+                ModelsErrorKind::DiscoveryHidden => unreachable!("handled above"),
                 ModelsErrorKind::AccessDenied | ModelsErrorKind::UserBanned => {
                     StatusCode::FORBIDDEN
                 }
@@ -1152,7 +1456,14 @@ async fn list_models_with_format(
                 status,
                 Json(ErrorEnvelope {
                     error: ErrorBody {
-                        message: format!("{} (request id: {request_id})", error.message),
+                        message: format!(
+                            "{} (request id: {request_id})",
+                            if error.kind == ModelsErrorKind::Database {
+                                "Database error, please contact the administrator"
+                            } else {
+                                error.message.as_ref()
+                            }
+                        ),
                         kind: "new_api_error",
                         code: if error.message == "您的 IP 不在令牌允许访问的列表中" {
                             "access_denied"
@@ -1178,6 +1489,14 @@ async fn list_models_with_format(
             .insert("x-oneapi-request-id", request_id);
     }
     response
+}
+
+fn discovery_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"message": "Not Found"})),
+    )
+        .into_response()
 }
 
 fn query_key(query: &str) -> Option<String> {
@@ -1406,9 +1725,30 @@ mod tests {
             let message = match self.0 {
                 ModelsErrorKind::Database => "Database error",
                 ModelsErrorKind::AccessDenied => "denied",
+                ModelsErrorKind::UserBanned => "User has been banned",
+                ModelsErrorKind::DiscoveryHidden => "Not Found",
                 _ => "Invalid token",
             };
             Err(ModelsError::new(self.0, message))
+        }
+    }
+
+    struct ListenerModeService;
+
+    #[async_trait]
+    impl ModelsService for ListenerModeService {
+        async fn list(&self, _request: ModelsRequest) -> Result<Vec<ModelView>, ModelsError> {
+            Err(ModelsError::new(
+                ModelsErrorKind::InvalidToken,
+                "Invalid token",
+            ))
+        }
+
+        async fn list_with_discovery_policy(
+            &self,
+            _request: ModelsRequest,
+        ) -> Result<Vec<ModelView>, ModelsError> {
+            Err(discovery_hidden())
         }
     }
 
@@ -1715,6 +2055,56 @@ mod tests {
     }
 
     #[test]
+    fn trust_override_is_the_only_ordinary_discovery_grant() {
+        for (raw, expected) in [
+            (None, None),
+            (Some(""), Some(false)),
+            (Some("0"), Some(false)),
+            (Some("5"), Some(false)),
+            (Some("unknown"), Some(false)),
+            (Some(" 2 "), Some(true)),
+            (Some("4"), Some(true)),
+        ] {
+            assert_eq!(trust_override_decision(raw), expected, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn baseline_paid_topup_requires_external_success_and_both_legacy_amounts() {
+        assert!(baseline_paid_topup_row_qualifies(
+            "success",
+            10.0,
+            1,
+            Some("alipay"),
+            None,
+        ));
+        assert!(baseline_paid_topup_row_qualifies(
+            "success",
+            10.0,
+            1,
+            None,
+            Some("stripe"),
+        ));
+
+        for (status, money, amount, method, provider) in [
+            ("pending", 10.0, 1, Some("alipay"), None),
+            ("success", 0.0, 1, Some("alipay"), None),
+            ("success", 10.0, 0, Some("alipay"), None),
+            ("success", 10.0, 1, Some("manual"), None),
+            ("success", 10.0, 1, Some("balance"), Some("balance")),
+            ("success", 10.0, 1, Some("stripe"), Some("unknown")),
+        ] {
+            assert!(!baseline_paid_topup_row_qualifies(
+                status, money, amount, method, provider
+            ));
+        }
+
+        // Modern rows whose only positive fact is normalized settlement or
+        // credited quota are intentionally false negatives in this baseline
+        // adapter: those columns are absent here, so discovery stays hidden.
+    }
+
+    #[test]
     fn parses_legacy_group_special_usable_group_setting() {
         let special = group_special_groups_from_setting(Some(
             r#"{"group_special_usable_group":{"default":{"+:vip":"VIP","-:unavailable":""}}}"#
@@ -1739,8 +2129,11 @@ mod tests {
     #[tokio::test]
     async fn emits_legacy_error_envelope_and_statuses() {
         for (kind, expected) in [
+            (ModelsErrorKind::MissingToken, StatusCode::UNAUTHORIZED),
             (ModelsErrorKind::InvalidToken, StatusCode::UNAUTHORIZED),
+            (ModelsErrorKind::DiscoveryHidden, StatusCode::NOT_FOUND),
             (ModelsErrorKind::AccessDenied, StatusCode::FORBIDDEN),
+            (ModelsErrorKind::UserBanned, StatusCode::FORBIDDEN),
             (ModelsErrorKind::Database, StatusCode::INTERNAL_SERVER_ERROR),
         ] {
             let response =
@@ -1755,13 +2148,79 @@ mod tests {
                     .expect("response");
             assert_eq!(response.status(), expected);
             let body = json_body(response).await;
-            assert_eq!(body["error"]["type"], "new_api_error");
-            assert!(
-                body["error"]["message"]
-                    .as_str()
-                    .is_some_and(|message| message.contains("request id:"))
-            );
+            if kind == ModelsErrorKind::DiscoveryHidden {
+                assert_eq!(body, json!({"message":"Not Found"}));
+            } else {
+                assert_eq!(body["error"]["type"], "new_api_error");
+                assert!(
+                    body["error"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("request id:"))
+                );
+            }
+            if matches!(
+                kind,
+                ModelsErrorKind::MissingToken | ModelsErrorKind::InvalidToken
+            ) {
+                assert_eq!(body["error"]["code"], "");
+            }
+            if kind == ModelsErrorKind::Database {
+                assert!(body["error"]["message"].as_str().is_some_and(|message| {
+                    message.starts_with("Database error, please contact the administrator")
+                }));
+            }
         }
+    }
+
+    #[tokio::test]
+    async fn frozen_5418ce6_mode_keeps_tokenauth_separate_from_current_policy() {
+        let frozen = models_router(ModelsHttpState::new(
+            Arc::new(ListenerModeService),
+            "v0.0.0",
+        ));
+        let frozen_response = frozen
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(frozen_response.status(), StatusCode::UNAUTHORIZED);
+
+        let current = models_router(
+            ModelsHttpState::new(Arc::new(ListenerModeService), "v0.0.0")
+                .with_listener_mode(ModelsListenerMode::CurrentTrustPolicy),
+        );
+        let current_response = current
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(current_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn current_policy_keeps_model_backend_database_failure_visible() {
+        let response = models_router(
+            ModelsHttpState::new(Arc::new(ErrorService(ModelsErrorKind::Database)), "v0.0.0")
+                .with_listener_mode(ModelsListenerMode::CurrentTrustPolicy),
+        )
+        .oneshot(
+            Request::builder()
+                .uri("/v1/models")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     async fn json_body(response: Response) -> Value {

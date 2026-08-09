@@ -19,10 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   PAYMENT_TYPES,
   DEFAULT_PRESET_MULTIPLIERS,
-  DEFAULT_PAYMENT_TYPE,
   DEFAULT_MIN_TOPUP,
 } from '../constants'
-import type { PaymentMethod, PresetAmount, TopupInfo } from '../types'
+import type {
+  CreemProduct,
+  PaymentMethod,
+  PresetAmount,
+  TopupInfo,
+  WaffoPayMethod,
+} from '../types'
 import { getPaymentCurrencyLabel } from './format'
 
 // ============================================================================
@@ -248,32 +253,79 @@ export async function dispatchSelectedPayment(
   return processors.regular(topupAmount, paymentMethod.type)
 }
 
+export interface TopupAvailability {
+  standardMethods: PaymentMethod[]
+  waffoMethods: WaffoPayMethod[]
+  creemProducts: CreemProduct[]
+  defaultQuotedType: string | null
+  hasPaymentMethod: boolean
+}
+
+/**
+ * Normalize the advertised top-up configuration into payment methods that can
+ * actually be used. Provider flags alone are not sufficient: every flow also
+ * needs its corresponding method or product configuration.
+ */
+export function getTopupAvailability(
+  topupInfo: TopupInfo | null
+): TopupAvailability {
+  if (!topupInfo) {
+    return {
+      standardMethods: [],
+      waffoMethods: [],
+      creemProducts: [],
+      defaultQuotedType: null,
+      hasPaymentMethod: false,
+    }
+  }
+
+  const standardMethods = (topupInfo.pay_methods ?? []).filter((method) => {
+    if (!method?.name || !method.type) return false
+    if (!isPaymentMethodCurrencySupported(method.type)) return false
+
+    if (isStripePayment(method.type)) {
+      return topupInfo.enable_stripe_topup === true
+    }
+    if (isWaffoPancakePayment(method.type)) {
+      return topupInfo.enable_waffo_pancake_topup === true
+    }
+    if (isCreemPayment(method.type) || isWaffoPayment(method.type)) {
+      return false
+    }
+
+    return topupInfo.enable_online_topup === true
+  })
+  const waffoMethods = topupInfo.enable_waffo_topup
+    ? (topupInfo.waffo_pay_methods ?? []).filter((method) => method?.name)
+    : []
+  const creemProducts = topupInfo.enable_creem_topup
+    ? (topupInfo.creem_products ?? []).filter(
+        (product) => product?.name && product.productId
+      )
+    : []
+  const defaultQuotedType =
+    standardMethods[0]?.type ??
+    (waffoMethods.length > 0 ? PAYMENT_TYPES.WAFFO : null)
+
+  return {
+    standardMethods,
+    waffoMethods,
+    creemProducts,
+    defaultQuotedType,
+    hasPaymentMethod:
+      standardMethods.length > 0 ||
+      waffoMethods.length > 0 ||
+      creemProducts.length > 0,
+  }
+}
+
 /**
  * Get default payment type from topup info
  */
-export function getDefaultPaymentType(topupInfo: TopupInfo | null): string {
-  if (!topupInfo) {
-    return DEFAULT_PAYMENT_TYPE
-  }
-
-  // Return first available payment method or default
-  if (topupInfo.pay_methods?.length > 0) {
-    return topupInfo.pay_methods[0].type
-  }
-
-  if (topupInfo.enable_stripe_topup) {
-    return PAYMENT_TYPES.STRIPE
-  }
-
-  if (topupInfo.enable_waffo_topup) {
-    return PAYMENT_TYPES.WAFFO
-  }
-
-  if (topupInfo.enable_waffo_pancake_topup) {
-    return PAYMENT_TYPES.WAFFO_PANCAKE
-  }
-
-  return DEFAULT_PAYMENT_TYPE
+export function getDefaultPaymentType(
+  topupInfo: TopupInfo | null
+): string | null {
+  return getTopupAvailability(topupInfo).defaultQuotedType
 }
 
 /**
@@ -284,21 +336,21 @@ export function getMinTopupAmount(topupInfo: TopupInfo | null): number {
     return DEFAULT_MIN_TOPUP
   }
 
-  if (topupInfo.enable_online_topup) {
-    return topupInfo.min_topup
-  }
+  const paymentType = getTopupAvailability(topupInfo).defaultQuotedType
 
-  if (topupInfo.enable_stripe_topup) {
+  if (paymentType === PAYMENT_TYPES.STRIPE) {
     return topupInfo.stripe_min_topup
   }
 
-  if (topupInfo.enable_waffo_topup) {
+  if (paymentType === PAYMENT_TYPES.WAFFO) {
     return topupInfo.waffo_min_topup || DEFAULT_MIN_TOPUP
   }
 
-  if (topupInfo.enable_waffo_pancake_topup) {
+  if (paymentType === PAYMENT_TYPES.WAFFO_PANCAKE) {
     return topupInfo.waffo_pancake_min_topup || DEFAULT_MIN_TOPUP
   }
+
+  if (paymentType) return topupInfo.min_topup
 
   return DEFAULT_MIN_TOPUP
 }

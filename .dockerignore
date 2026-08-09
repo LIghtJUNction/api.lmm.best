@@ -9,6 +9,5 @@ docs
 .gocache
 /web/node_modules
 /web/dist
-/legacy-go-backup/
 /.codegraph/
 !THIRD-PARTY-LICENSES.md

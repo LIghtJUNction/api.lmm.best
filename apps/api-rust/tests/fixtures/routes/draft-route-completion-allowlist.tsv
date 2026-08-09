@@ -3,6 +3,9 @@ GET	/_internal/build	internal	apps/api-rust/src/http.rs	listener build metadata 
 GET	/_test/hold	test	apps/api-rust/src/http.rs	cfg(test) request-boundary fixture
 POST	/_test/json	test	apps/api-rust/src/http.rs	cfg(test) JSON extractor fixture
 GET	/api/extra-probe	test	apps/api-rust/src/http.rs	cfg(test) extra-surface listener-boundary fixture
+GET	/api/livez	health	apps/api-rust/src/http.rs	current Go liveness route outside the frozen migration inventory
+GET	/api/task	compatibility	apps/api-rust/src/migration_routes/control_admin.rs	trailing-slash compatibility redirect outside the frozen Go registration
+OPTIONS	/api/usage/token/	test	apps/api-rust/src/http.rs	cfg(test) CORS preflight fixture for the token-usage boundary
 GET	/incomplete-document	fixture	apps/api-rust/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery validation fixture
 GET	/invalid-json-document	fixture	apps/api-rust/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery validation fixture
 GET	/livez	health	apps/api-rust/src/http.rs	production liveness probe outside the frozen Go API inventory
@@ -12,3 +15,5 @@ GET	/loopback-redirect-start	fixture	apps/api-rust/src/migration_routes/control_
 GET	/oversized-document	fixture	apps/api-rust/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery response-limit fixture
 GET	/private-redirect-start	fixture	apps/api-rust/src/migration_routes/control_admin.rs	cfg(test) OAuth discovery SSRF fixture
 GET	/readyz	health	apps/api-rust/src/http.rs	production readiness probe outside the frozen Go API inventory
+POST	/token	fixture	apps/api-rust/src/migration_routes/identity_federation.rs	cfg(test) loopback OAuth token endpoint fixture
+GET	/user	fixture	apps/api-rust/src/migration_routes/identity_federation.rs	cfg(test) loopback OAuth user endpoint fixture

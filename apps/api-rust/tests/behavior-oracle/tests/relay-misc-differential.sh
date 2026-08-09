@@ -7,14 +7,29 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
-legacy_root="$repo_root/legacy-go-backup/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9"
+legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 runtime_base=${LMM_RELAY_MISC_RUNTIME_BASE:-/tmp}
 pg_port=${LMM_RELAY_MISC_PG_PORT:-55483}
 go_port=${LMM_RELAY_MISC_GO_PORT:-13053}
 rust_port=${LMM_RELAY_MISC_RUST_PORT:-33083}
-go_valkey_port=${LMM_RELAY_MISC_GO_VALKEY_PORT:-16433}
-rust_valkey_port=${LMM_RELAY_MISC_RUST_VALKEY_PORT:-6380}
+rust_valkey_requested_port=${LMM_RELAY_MISC_RUST_VALKEY_PORT:-6380}
 provider_port=${LMM_RELAY_MISC_PROVIDER_PORT:-38083}
+go_valkey_requested_port=${LMM_RELAY_MISC_GO_VALKEY_PORT:-16433}
+go_pid=
+rust_pid=
+go_valkey_pid=
+rust_valkey_pid=
+provider_pid=
+go_pid_start=
+rust_pid_start=
+go_valkey_pid_start=
+rust_valkey_pid_start=
+provider_pid_start=
 runtime=$(mktemp -d "$runtime_base/lmm-relay-misc-differential.XXXXXX")
 rust_schema=lmm_test_relay_misc
 rust_role=lmm_test_relay_misc
@@ -29,11 +44,8 @@ fixture_bearer='sk-relaymiscfixture'
 
 # shellcheck disable=SC2329 # invoked through the process-exit trap below
 cleanup() {
-  for pid in "${go_pid:-}" "${rust_pid:-}" "${go_valkey_pid:-}" "${rust_valkey_pid:-}" "${provider_pid:-}"; do
-    [[ -z $pid ]] || kill "$pid" 2>/dev/null || true
-  done
-  for pid in "${go_pid:-}" "${rust_pid:-}" "${go_valkey_pid:-}" "${rust_valkey_pid:-}" "${provider_pid:-}"; do
-    [[ -z $pid ]] || wait "$pid" 2>/dev/null || true
+  for pid_name in go_pid rust_pid go_valkey_pid rust_valkey_pid provider_pid; do
+    stop_owned_process "$pid_name" || true
   done
   [[ ! -d $runtime/pg ]] || pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
@@ -58,11 +70,30 @@ preflight_port() {
     exit 1
   fi
 }
+pid_start_time() { [[ -r /proc/$1/stat ]] || return 1; awk '{print $22}' "/proc/$1/stat"; }
+record_pid() { local pid_name=$1 pid=$2 start; printf -v "$pid_name" '%s' "$pid"; start=$(pid_start_time "$pid") || { echo "failed to record pid $pid" >&2; wait "$pid" 2>/dev/null || true; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; return 1; }; printf -v "${pid_name}_start" '%s' "$start"; }
+owned_pid_is_live() { local pid_name=$1 pid start_name expected; pid=${!pid_name:-}; start_name="${pid_name}_start"; expected=${!start_name:-}; [[ -n $pid && -n $expected ]] && kill -0 "$pid" 2>/dev/null && [[ $(pid_start_time "$pid" 2>/dev/null || true) == "$expected" ]]; }
+stop_owned_process() { local pid_name=$1 pid; pid=${!pid_name:-}; if [[ -n $pid ]]; then if owned_pid_is_live "$pid_name"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; else echo "refusing to signal unowned or recycled PID $pid ($pid_name)" >&2; fi; fi; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; }
+port_free() { [[ -z $(ss -H -ltn "sport = :$1" 2>/dev/null) ]]; }
+random_free_port() { local p; while :; do p=$((20000 + 0x$(od -An -N2 -tx2 /dev/urandom | tr -d ' ') % 35000)); [[ -z $(ss -H -ltn "sport = :$p" 2>/dev/null) ]] && { echo "$p"; return; }; done; }
+select_unused_port() {
+  local requested=$1 label=$2 candidate
+  if port_free "$requested"; then echo "$requested"; return 0; fi
+  echo "requested $label port $requested is occupied, selecting a free port" >&2
+  for _ in {1..200}; do
+    candidate=$(random_free_port)
+    if port_free "$candidate"; then echo "$candidate"; return 0; fi
+  done
+  return 1
+}
 for entry in \
-  "postgres:$pg_port" "go:$go_port" "rust:$rust_port" \
-  "go-valkey:$go_valkey_port" "rust-valkey:$rust_valkey_port" "provider:$provider_port"; do
+  "postgres:$pg_port" "go:$go_port" "rust:$rust_port" "provider:$provider_port"; do
   preflight_port "${entry%%:*}" "${entry##*:}"
 done
+go_valkey_port=$(select_unused_port "$go_valkey_requested_port" go-valkey) || { echo "unable to allocate an unused go valkey port" >&2; exit 1; }
+[[ $go_valkey_port == "$go_valkey_requested_port" ]] || echo "using fallback go valkey port: $go_valkey_port" >&2
+rust_valkey_port=$(select_unused_port "$rust_valkey_requested_port" rust-valkey) || { echo "unable to allocate an unused rust valkey port" >&2; exit 1; }
+[[ $rust_valkey_port == "$rust_valkey_requested_port" ]] || echo "using fallback rust valkey port: $rust_valkey_port" >&2
 
 wait_for_pid_http() {
   local pid=$1 port=$2 path=$3
@@ -90,7 +121,7 @@ start_valkey() {
   chmod 600 "$config"
   env -i PATH="$PATH" valkey-server "$config" &
   local pid=$!
-  printf -v "$pid_var" '%s' "$pid"
+  record_pid "$pid_var" "$pid" || return 1
   for _ in {1..200}; do
     kill -0 "$pid" 2>/dev/null || return 1
     VALKEYCLI_AUTH="$password" valkey-cli --no-auth-warning -h 127.0.0.1 -p "$port" ping >/dev/null 2>&1 && return 0
@@ -154,7 +185,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
 
 http.server.ThreadingHTTPServer(("127.0.0.1", port), Fixture).serve_forever()
 PY
-  provider_pid=$!
+  record_pid provider_pid "$!" || return 1
   wait_for_pid_http "$provider_pid" "$provider_port" /health || {
     sed -n '1,160p' "$runtime/provider-hits.log" 2>/dev/null || true
     return 1
@@ -205,8 +236,7 @@ env -i PATH="$PATH" HOME="$HOME" SQL_DSN=local SQLITE_PATH="$runtime/go.db" PORT
   SESSION_SECRET="$go_session_secret" CRYPTO_SECRET="$go_crypto_secret" \
   GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false \
   MODEL_REQUEST_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none GIN_MODE=release \
-  "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
-go_pid=$!
+  "$runtime/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!" || exit 1
 wait_for_pid_http "$go_pid" "$go_port" /api/status || { sed -n '1,240p' "$runtime/go.log" >&2; exit 1; }
 
 rust_dsn="postgresql://$rust_role@127.0.0.1:$pg_port/$rust_database?options=-csearch_path=$rust_schema"
@@ -216,8 +246,7 @@ env -i PATH="$PATH" HOME="$HOME" LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=blue \
   SESSION_SECRET="$rust_session_secret" CRYPTO_SECRET="$rust_crypto_secret" \
   GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false \
   PASSWORD_LOGIN_ENABLED=false TRUSTED_PROXIES=none VERSION=v0.0.0 \
-  "$runtime/cargo-target/debug/lmm-api-rs" >"$runtime/rust.log" 2>&1 &
-rust_pid=$!
+  "$runtime/cargo-target/debug/lmm-api-rs" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!" || exit 1
 wait_for_pid_http "$rust_pid" "$rust_port" /readyz || { sed -n '1,240p' "$runtime/rust.log" >&2; exit 1; }
 
 call() {

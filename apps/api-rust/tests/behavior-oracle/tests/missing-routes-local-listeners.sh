@@ -5,13 +5,27 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
+legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 pg_port=${LMM_MISSING_ROUTES_PG_PORT:-55477}
 rust_port=${LMM_MISSING_ROUTES_RUST_PORT:-33047}
 oracle_port=${LMM_MISSING_ROUTES_GO_PORT:-13017}
-valkey_port=6380 # Config intentionally permits this port only for test mode.
-oracle_valkey_port=${LMM_MISSING_ROUTES_GO_VALKEY_PORT:-16397}
+requested_valkey_port=${LMM_MISSING_ROUTES_VALKEY_PORT:-6380}
+requested_oracle_valkey_port=${LMM_MISSING_ROUTES_GO_VALKEY_PORT:-16397}
 runtime_base=${LMM_MISSING_ROUTES_RUNTIME_BASE:-/home/lightjunction/.cache}
 include_classes=${MISSING_ROUTES_INCLUDE_CLASSES:-no-side-effect,external-gateway}
+go_pid=
+go_valkey_pid=
+rust_pid=
+valkey_pid=
+go_pid_start=
+go_valkey_pid_start=
+rust_pid_start=
+valkey_pid_start=
 [[ -d $runtime_base ]] || { echo "runtime base does not exist: $runtime_base" >&2; exit 1; }
 runtime=$(mktemp -d "$runtime_base/lmm-missing-routes-listeners.XXXXXX")
 cargo_target="$runtime/cargo-target"
@@ -21,8 +35,9 @@ role=lmm_test_missing_routes
 database=lmm_test_missing_routes
 
 cleanup() {
-  for pid in ${go_pid:-} ${go_valkey_pid:-} ${rust_pid:-} ${valkey_pid:-}; do kill "$pid" 2>/dev/null || true; done
-  wait ${go_pid:-} ${go_valkey_pid:-} ${rust_pid:-} ${valkey_pid:-} 2>/dev/null || true
+  for name in go_pid go_valkey_pid rust_pid valkey_pid; do
+    stop_owned_process "$name" || true
+  done
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
     "$runtime_base"/lmm-missing-routes-listeners.*) rm -rf "$runtime" ;;
@@ -35,6 +50,29 @@ for command in cargo createdb createuser curl go initdb jq pg_ctl postgres psql 
   command -v "$command" >/dev/null || { echo "required command unavailable: $command" >&2; exit 1; }
 done
 [[ $(postgres --version) == *"PostgreSQL) 18."* ]] || { echo "requires PostgreSQL 18" >&2; exit 1; }
+
+pid_start_time() { [[ -r /proc/$1/stat ]] || return 1; awk '{print $22}' "/proc/$1/stat"; }
+record_pid() { local pid_name=$1 pid=$2 start; printf -v "$pid_name" '%s' "$pid"; start=$(pid_start_time "$pid") || { echo "failed to record pid $pid" >&2; wait "$pid" 2>/dev/null || true; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; return 1; }; printf -v "${pid_name}_start" '%s' "$start"; }
+owned_pid_is_live() { local pid_name=$1 pid start_name expected; pid=${!pid_name:-}; start_name="${pid_name}_start"; expected=${!start_name:-}; [[ -n $pid && -n $expected ]] && kill -0 "$pid" 2>/dev/null && [[ $(pid_start_time "$pid" 2>/dev/null || true) == "$expected" ]]; }
+stop_owned_process() { local pid_name=$1 pid; pid=${!pid_name:-}; if [[ -n $pid ]]; then if owned_pid_is_live "$pid_name"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; else echo "refusing to signal unowned or recycled PID $pid ($pid_name)" >&2; fi; fi; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; }
+port_free() { [[ -z $(ss -H -ltn "sport = :$1" 2>/dev/null) ]]; }
+random_free_port() { local p; while :; do p=$((20000 + 0x$(od -An -N2 -tx2 /dev/urandom | tr -d ' ') % 35000)); [[ -z $(ss -H -ltn "sport = :$p" 2>/dev/null) ]] && { echo "$p"; return; }; done; }
+select_unused_port() {
+  local requested=$1 candidate
+  if port_free "$requested"; then echo "$requested"; return 0; fi
+  echo "requested valkey port $requested is occupied, selecting a free port" >&2
+  for _ in {1..200}; do
+    candidate=$(random_free_port)
+    if port_free "$candidate"; then echo "$candidate"; return 0; fi
+  done
+  return 1
+}
+
+valkey_port=$(select_unused_port "$requested_valkey_port") || { echo "unable to allocate local valkey port" >&2; exit 1; }
+oracle_valkey_port=$(select_unused_port "$requested_oracle_valkey_port") || { echo "unable to allocate local go oracle valkey port" >&2; exit 1; }
+[[ $valkey_port == "$requested_valkey_port" ]] || echo "using fallback rust valkey port: $valkey_port" >&2
+[[ $oracle_valkey_port == "$requested_oracle_valkey_port" ]] || echo "using fallback go oracle valkey port: $oracle_valkey_port" >&2
+
 for port in "$pg_port" "$rust_port" "$oracle_port" "$valkey_port" "$oracle_valkey_port"; do
   if ss -ltn "sport = :$port" | grep -q LISTEN; then
     echo "refusing to reuse occupied local port: $port" >&2
@@ -70,7 +108,7 @@ SQL
 
 valkey-server --bind 127.0.0.1 --port "$valkey_port" --save '' --appendonly no \
   --dir "$runtime" --logfile "$runtime/valkey.log" > /dev/null 2>&1 &
-valkey_pid=$!
+record_pid valkey_pid "$!"
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
@@ -78,8 +116,6 @@ valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 # runtime.  The root filesystem may intentionally be too small for PostgreSQL
 # or a Go build; using /tmp here would make that host constraint look like a
 # route failure.
-legacy_root="$repo_root/legacy-go-backup/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9"
-[[ -d $legacy_root ]] || { echo "missing frozen Go oracle source: $legacy_root" >&2; exit 1; }
 cp -a "$legacy_root/." "$runtime/go-source"
 mkdir -p "$runtime/go-source/web/dist"
 : > "$runtime/go-source/web/dist/index.html"
@@ -89,7 +125,7 @@ mkdir -p "$runtime/go-source/web/dist"
 )
 valkey-server --bind 127.0.0.1 --port "$oracle_valkey_port" --save '' --appendonly no \
   --dir "$runtime" --logfile "$runtime/go-valkey.log" > /dev/null 2>&1 &
-go_valkey_pid=$!
+record_pid go_valkey_pid "$!"
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$oracle_valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$oracle_valkey_port" ping >/dev/null
 env \
@@ -101,7 +137,7 @@ env \
   TRUSTED_PROXIES=none \
   GIN_MODE=release \
   "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
-go_pid=$!
+record_pid go_pid "$!"
 for _ in {1..300}; do
   [[ $(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$oracle_port/api/status" || true) == 200 ]] && break
   sleep .05
@@ -127,7 +163,7 @@ env \
   TRUSTED_PROXIES=none \
   VERSION=v0.0.0 \
   "$rust_binary" >"$runtime/rust.log" 2>&1 &
-rust_pid=$!
+record_pid rust_pid "$!"
 for _ in {1..300}; do
   [[ $(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$rust_port/readyz" || true) == 200 ]] && break
   sleep .05

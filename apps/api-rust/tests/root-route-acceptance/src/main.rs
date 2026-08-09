@@ -111,14 +111,6 @@ mod runtime {
         ) -> Result<Option<String>, PublicContentCacheError> {
             Ok(None)
         }
-
-        async fn put(
-            &self,
-            _kind: PublicContentKind,
-            _value: &str,
-        ) -> Result<(), PublicContentCacheError> {
-            Ok(())
-        }
     }
 
     #[async_trait]
@@ -284,15 +276,18 @@ mod runtime {
                 .with_password_login_enabled(true)
                 .with_version("v0.0.0"),
             ModelsHttpState::new(Arc::new(SyntheticModels), "v0.0.0"),
-            Some(ApiTokenMount::new(
-                api_token_state,
-                dashboard_auth,
-                valkey,
-                Duration::from_millis(25),
-                false,
-                10,
-                Duration::from_secs(60),
-            )),
+            Some(
+                ApiTokenMount::new(
+                    api_token_state,
+                    dashboard_auth,
+                    valkey,
+                    Duration::from_millis(25),
+                    false,
+                    10,
+                    Duration::from_secs(60),
+                )
+                .with_historical_frozen_go_parity(),
+            ),
         )
         .layer(middleware::from_fn(expose_matched_path))
     }
@@ -421,9 +416,13 @@ mod runtime {
                     .map_err(|error| {
                         format!("{} {path} error body failed: {error}", method.as_str())
                     })?;
-            serde_json::from_slice::<serde_json::Value>(&bytes)
-                .ok()
-                .and_then(|value| value["error"]["code"].as_str().map(ToOwned::to_owned))
+            serde_json::from_slice::<serde_json::Value>(&bytes).ok().and_then(|value| {
+                if value["message"] == "Not Found" {
+                    Some("not_found".to_owned())
+                } else {
+                    value["error"]["code"].as_str().map(ToOwned::to_owned)
+                }
+            })
         } else {
             None
         };
@@ -683,8 +682,8 @@ mod runtime {
             let invalid_method = wrong_method(&routes, &concrete)?;
             match probe(&app, invalid_method, &concrete, Identity::Anonymous).await {
                 Ok(observed)
-                    if observed.status == StatusCode::METHOD_NOT_ALLOWED
-                        && observed.is_root_error("method_not_allowed")
+                    if observed.status == StatusCode::NOT_FOUND
+                        && observed.is_root_error("not_found")
                         && observed.matched_path.as_deref()
                             == Some(expected_matched_path.as_str()) =>
                 {
@@ -705,37 +704,42 @@ mod runtime {
             }
         }
 
-        let unknown = probe(
-            &app,
-            "GET",
+        let mut unknown_verified = 0usize;
+        for unknown_path in [
             "/__lmm_root_route_acceptance_unknown__",
-            Identity::Anonymous,
-        )
-        .await?;
-        if unknown.status != StatusCode::NOT_FOUND
-            || !unknown.is_root_error("not_found")
-            || unknown.matched_path.is_some()
-        {
-            failures.push(format!(
-                "unknown-path status={} root_code={} matched={} expected=404:not_found",
-                unknown.status,
-                unknown.root_error_code.as_deref().unwrap_or("none"),
-                unknown.matched_path.as_deref().unwrap_or("none")
-            ));
+            "/api/not-a-route",
+            "/v1/not-a-route",
+        ] {
+            let unknown = probe(&app, "GET", unknown_path, Identity::Anonymous).await?;
+            if unknown.status == StatusCode::NOT_FOUND
+                && unknown.is_root_error("not_found")
+                && unknown.matched_path.is_none()
+            {
+                unknown_verified += 1;
+            } else {
+                failures.push(format!(
+                    "unknown-path {unknown_path} status={} root_code={} matched={} expected=404:not_found",
+                    unknown.status,
+                    unknown.root_error_code.as_deref().unwrap_or("none"),
+                    unknown.matched_path.as_deref().unwrap_or("none")
+                ));
+            }
         }
 
         if failures.is_empty()
             && mounted == routes.len()
             && auth_verified == routes.len()
             && wrong_method_verified == routes.len()
+            && unknown_verified == 3
         {
             println!(
-                "root route acceptance passed: routes={} mounted={} auth={}/{} auth-classes=8 wrong-method={} unknown=404",
+                "root route acceptance passed: routes={} mounted={} auth={}/{} auth-classes=8 wrong-method={} unknown={}/3",
                 routes.len(),
                 mounted,
                 auth_verified,
                 routes.len(),
-                wrong_method_verified
+                wrong_method_verified,
+                unknown_verified
             );
             return Ok(());
         }

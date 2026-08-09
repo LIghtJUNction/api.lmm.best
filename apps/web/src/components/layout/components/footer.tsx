@@ -219,6 +219,91 @@ export function Footer(props: FooterProps) {
 
   const displayColumns = props.columns ?? fallbackColumns
 
+  if (isForgeSurface) {
+    return (
+      <footer
+        className={cn(
+          'relative z-10 border-t border-[#141413]/15 bg-[#f7f3eb] text-[#141413] dark:border-[#faf9f5]/15 dark:bg-[#1b1b19] dark:text-[#faf9f5]',
+          props.className
+        )}
+      >
+        <div className='mx-auto max-w-7xl px-5 py-12 sm:px-8 md:py-16'>
+          <div className='grid gap-12 md:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)] md:gap-16'>
+            <div className='max-w-xl'>
+              <Link to='/' className='group inline-flex items-center gap-3'>
+                <LmmBrandMark className='size-10' title={LMM_BRAND_NAME} />
+                <span className='text-lg font-semibold tracking-[-0.03em]'>
+                  {displayName}
+                </span>
+              </Link>
+              <p className='mt-8 max-w-lg font-serif text-3xl leading-[1.08] tracking-[-0.035em] md:text-4xl'>
+                {t('Open-source work, made accountable')}
+              </p>
+              <p className='mt-5 max-w-sm text-sm leading-6 text-[#141413]/60 dark:text-[#faf9f5]/60'>
+                {t('Open-source bounty collaboration')}
+              </p>
+            </div>
+
+            <div className='grid grid-cols-2 gap-8 sm:gap-12 md:justify-self-end'>
+              <div>
+                <p className='mb-4 text-[11px] font-semibold tracking-[0.18em] text-[#141413]/45 uppercase dark:text-[#faf9f5]/45'>
+                  {t('Challenges')}
+                </p>
+                <ul className='space-y-3'>
+                  {[
+                    { text: t('Browse challenges'), href: '/challenges' },
+                    { text: t('How it works'), href: '/#workflow' },
+                    { text: t('Pricing'), href: '/pricing' },
+                  ].map((link) => (
+                    <li key={link.href}>
+                      <FooterLinkItem link={link} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className='mb-4 text-[11px] font-semibold tracking-[0.18em] text-[#141413]/45 uppercase dark:text-[#faf9f5]/45'>
+                  {t('Terms')}
+                </p>
+                <ul className='space-y-3'>
+                  {[
+                    { text: t('Terms of Service'), href: '/user-agreement' },
+                    { text: t('Privacy Policy'), href: '/privacy-policy' },
+                  ].map((link) => (
+                    <li key={link.href}>
+                      <FooterLinkItem link={link} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className='mt-12 flex flex-col gap-5 border-t border-[#141413]/15 pt-5 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-[#faf9f5]/15'>
+            <a
+              href='mailto:support@lmm.best'
+              className='inline-flex w-fit items-center gap-2 font-medium transition-colors hover:text-[#9c5e39] dark:hover:text-[#d8a47d]'
+            >
+              <span
+                className='size-2 rounded-full bg-[#9c5e39] dark:bg-[#d8a47d]'
+                aria-hidden='true'
+              />
+              {t('Customer Support')}: support@lmm.best
+            </a>
+            <div className='flex flex-wrap gap-x-3 gap-y-1 text-xs text-[#141413]/45 sm:justify-end dark:text-[#faf9f5]/45'>
+              <span>
+                &copy; {currentYear} {displayName}.{' '}
+                {props.copyright ?? t('footer.defaultCopyright')}
+              </span>
+              <span aria-hidden='true'>·</span>
+              <span>{t('Open-source bounty collaboration')}</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+    )
+  }
+
   if (footerHtml && !isForgeSurface) {
     return (
       <footer

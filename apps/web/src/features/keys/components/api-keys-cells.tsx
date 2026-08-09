@@ -16,8 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { PopoverRootProps } from '@base-ui/react/popover'
 import { Check, Copy, Loader2 } from 'lucide-react'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { BadgeCell } from '@/components/data-table'
@@ -39,6 +40,10 @@ import { formatQuota } from '@/lib/format'
 import type { ApiKey } from '../types'
 import { useApiKeys } from './api-keys-provider'
 
+type PopoverOpenChangeDetails = Parameters<
+  NonNullable<PopoverRootProps['onOpenChange']>
+>[1]
+
 export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
   const { t } = useTranslation()
   const {
@@ -49,21 +54,95 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     markKeyCopied,
   } = useApiKeys()
   const [popoverOpen, setPopoverOpen] = useState(false)
+  const [revealStatus, setRevealStatus] = useState<
+    'idle' | 'pending' | 'failed'
+  >('idle')
+  const revealRequestedRef = useRef<number | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const revealedInputRef = useRef<HTMLInputElement>(null)
 
   const isLoading = !!loadingKeys[apiKey.id]
   const resolvedFullKey = resolvedKeys[apiKey.id]
   const isCopied = copiedKeyId === apiKey.id
   const maskedKey = `sk-${apiKey.key}`
+  const showRevealLoading =
+    popoverOpen && !resolvedFullKey && revealStatus === 'pending'
+  const showRevealError =
+    popoverOpen && !resolvedFullKey && revealStatus === 'failed'
+  const revealStatusId = `api-key-reveal-status-${apiKey.id}`
 
   const handlePopoverOpen = useCallback(
-    (open: boolean) => {
+    (open: boolean, eventDetails: PopoverOpenChangeDetails) => {
+      if (
+        !open &&
+        !popoverOpen &&
+        eventDetails.reason === 'focus-out' &&
+        revealRequestedRef.current === apiKey.id &&
+        !resolvedFullKey &&
+        revealStatus !== 'failed'
+      ) {
+        eventDetails.cancel()
+        return
+      }
+
       setPopoverOpen(open)
-      if (open && !resolvedFullKey) {
-        resolveRealKey(apiKey.id)
+      if (!open) {
+        revealRequestedRef.current = null
+        setRevealStatus('idle')
       }
     },
-    [resolvedFullKey, resolveRealKey, apiKey.id]
+    [apiKey.id, popoverOpen, resolvedFullKey, revealStatus]
   )
+
+  const handleRevealTriggerClick = useCallback(() => {
+    if (popoverOpen) {
+      return
+    }
+
+    setPopoverOpen(true)
+
+    if (resolvedFullKey || revealRequestedRef.current === apiKey.id) {
+      return
+    }
+
+    revealRequestedRef.current = apiKey.id
+    setRevealStatus('pending')
+    void resolveRealKey(apiKey.id).then((realKey) => {
+      if (revealRequestedRef.current !== apiKey.id || resolvedFullKey) return
+      if (!realKey) {
+        revealRequestedRef.current = null
+        setRevealStatus('failed')
+      }
+    })
+  }, [apiKey.id, popoverOpen, resolveRealKey, resolvedFullKey])
+
+  useEffect(() => {
+    setPopoverOpen(false)
+    setRevealStatus('idle')
+    revealRequestedRef.current = null
+  }, [apiKey.id])
+
+  useEffect(() => {
+    if (!popoverOpen || !resolvedFullKey) return
+    setRevealStatus('idle')
+
+    const activeElement = document.activeElement
+    const input = revealedInputRef.current
+    const trigger = triggerRef.current
+    const content = input?.closest('[data-slot="popover-content"]')
+    const focusWithinTrigger =
+      activeElement instanceof Node &&
+      trigger instanceof Node &&
+      trigger.contains(activeElement)
+    const focusWithinContent =
+      activeElement instanceof Node &&
+      content instanceof Node &&
+      content.contains(activeElement)
+    if (!input || (!focusWithinTrigger && !focusWithinContent)) return
+
+    input.focus({ preventScroll: true })
+    input.select()
+  }, [apiKey.id, popoverOpen, resolvedFullKey])
 
   const handleCopy = useCallback(async () => {
     const realKey = resolvedFullKey || (await resolveRealKey(apiKey.id))
@@ -87,6 +166,8 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     <div className='flex max-w-full min-w-0 items-center'>
       <Popover open={popoverOpen} onOpenChange={handlePopoverOpen}>
         <PopoverTrigger
+          onClick={handleRevealTriggerClick}
+          ref={triggerRef}
           render={
             <Button
               variant='ghost'
@@ -100,25 +181,46 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
         <PopoverContent
           className='w-auto max-w-[min(90vw,28rem)]'
           align='start'
+          initialFocus={false}
         >
           <div className='space-y-2'>
             <p className='text-muted-foreground text-xs'>{t('Full API Key')}</p>
-            {isLoading ? (
-              <div className='flex items-center gap-2 py-2'>
+            <input
+              ref={revealedInputRef}
+              readOnly
+              aria-label={t('Full API Key')}
+              aria-busy={showRevealLoading || undefined}
+              aria-describedby={
+                showRevealLoading || showRevealError
+                  ? revealStatusId
+                  : undefined
+              }
+              aria-invalid={showRevealError || undefined}
+              value={resolvedFullKey ?? ''}
+              onFocus={(e) => {
+                if (resolvedFullKey) e.target.select()
+              }}
+              className='bg-muted/50 w-full min-w-[280px] rounded-md border px-3 py-2 font-mono text-xs outline-none'
+            />
+            {showRevealLoading ? (
+              <div
+                id={revealStatusId}
+                role='status'
+                className='text-muted-foreground flex items-center gap-2 text-xs'
+              >
                 <Loader2 className='size-3.5 animate-spin' />
-                <span className='text-muted-foreground text-xs'>
-                  {t('Loading...')}
-                </span>
+                <span>{t('Loading...')}</span>
               </div>
-            ) : (
-              <input
-                readOnly
-                value={resolvedFullKey || maskedKey}
-                autoFocus
-                onFocus={(e) => e.target.select()}
-                className='bg-muted/50 w-full min-w-[280px] rounded-md border px-3 py-2 font-mono text-xs outline-none'
-              />
-            )}
+            ) : null}
+            {showRevealError ? (
+              <div
+                id={revealStatusId}
+                role='status'
+                className='text-muted-foreground text-xs'
+              >
+                {t('An unexpected error occurred')}
+              </div>
+            ) : null}
           </div>
         </PopoverContent>
       </Popover>

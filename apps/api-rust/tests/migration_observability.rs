@@ -8,7 +8,7 @@ use axum::{
 use lmm_api_rs::migration_routes::observability::{
     InMemoryObservabilityStore, ObservabilityAccess, ObservabilityAuthError,
     ObservabilityAuthorizer, ObservabilityCall, ObservabilityPrincipal, ObservabilityState,
-    ObservabilityStore, ObservabilityStoreError, observability_router,
+    ObservabilityStore, ObservabilityStoreError, observability_read_router, observability_router,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -76,6 +76,27 @@ fn router(role: i64) -> axum::Router {
         Arc::new(SuccessStore),
         Arc::new(Allow { role }),
     ))
+}
+
+fn read_router() -> axum::Router {
+    observability_read_router(ObservabilityState::new(
+        Arc::new(SuccessStore),
+        Arc::new(Allow { role: 100 }),
+    ))
+}
+
+#[tokio::test]
+async fn observability_read_router_mounts_the_storage_only_surface() {
+    let response = read_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/data/")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 async fn body(response: axum::response::Response) -> Value {

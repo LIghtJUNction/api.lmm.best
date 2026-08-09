@@ -1,11 +1,25 @@
 # Autonomous SQLite → PostgreSQL backend cutover
 
-This transaction is the proposed production bridge from the single Go/SQLite
-process to Go on PostgreSQL 18 plus the dedicated Valkey. It is native systemd
-automation; Docker is not used. It is a rehearsable coordinator, not an
-authorization to migrate: production remains Go/SQLite and the 2026-08-01 gate
-snapshot has Go owning 356/356 routes, until a fresh authenticated canary token, target database role, final
-maintenance window, isolated rehearsal evidence, and operator approval exist.
+This transaction is the controlled bridge and reconciliation path from a
+single Go/SQLite process to Go on PostgreSQL 18 plus the dedicated Valkey. It
+is native systemd automation; Docker is not used. It is a rehearsable
+coordinator, not an authorization to migrate or to switch Rust business
+ownership. A target may already run Go with PostgreSQL after a historical
+cutover; that runtime fact is not acceptance until the current schema,
+forward-only boundary, authenticated canaries, final maintenance evidence, and
+operator approval are reverified. The route gate currently keeps production
+ownership on Go.
+
+## Current production-state rule
+
+The 2026-08-09 read-only audit found the production Go process using PostgreSQL
+and the dedicated Valkey listener on port `6380`. Historical cutover logs contain
+a `SUCCESS_POSTGRES` result, but the retained post-cutover verification is
+`failed/contract` and no current `PG_WRITE_BOUNDARY`/journal was present. Treat
+this as an unverified PostgreSQL runtime: do not run a fresh SQLite copy, change
+the backend, or manually edit the environment. First inspect the live process,
+active schema, cutover artifacts, and canaries, then reconcile through the
+coordinator or obtain an explicit reviewed recovery decision.
 
 ## State and rollback law
 
@@ -56,6 +70,12 @@ environment and health. At or after the marker it converges only forward to the
 immutable candidate, service health, public canary, authenticated canary, and a
 durable result. Repeating reconciliation after either `ROLLED_BACK_SQLITE` or
 `COMPLETE` is safe.
+
+If a historical run left PostgreSQL active but no durable boundary or journal,
+reconciliation must first establish which exact candidate environment and
+schema are active from hashes and service evidence. Never recreate a generic
+marker, point the service back to SQLite, or treat a successful historical
+result as permission to continue forward without that identity check.
 
 The installer enables `lmm-api-cutover-reconcile.service` before
 `lmm-api.service` at boot. A second oneshot runs after the API starts to finish
@@ -163,8 +183,10 @@ canary never restores SQLite; boot ordering cannot bypass the gate; loss of the
 initiating connection does not stop progress; Go and Rust share Valkey counters;
 and every audit artifact contains no DSN, token, row value, or financial value.
 Repository fake-systemd tests are necessary but not production authorization.
-Production remains prohibited until this isolated rehearsal passes and the
-operator explicitly approves the maintenance cutover.
+The migration transaction remains prohibited until this isolated rehearsal
+passes and the operator explicitly approves the maintenance or reconciliation
+window. A live PostgreSQL process without current boundary and canary evidence
+is not a completed cutover.
 
 ## Connection-loss and rollback operator checklist
 

@@ -1,12 +1,18 @@
 # SQLite to PostgreSQL migration contract
 
-This document describes the auditable offline rehearsal and verification workflow for the PostgreSQL 18 target. It does not authorize or implement a production cutover; production remains Go/SQLite until the separate coordinator is approved.
+This document describes the auditable offline rehearsal and verification
+workflow for the PostgreSQL 18 target. It does not authorize or implement a
+production cutover. Production may already be running Go with PostgreSQL after
+a historical coordinator run, but that runtime fact does not replace current
+boundary, schema, canary, backup, and operator evidence.
+
+The fresh contract-1 PostgreSQL baseline requires `users.console_activated_at BIGINT NOT NULL DEFAULT 0`. This fresh-schema contract does not upgrade an existing PostgreSQL schema; contract-2 apply remains blocked until a separately reviewed forward migration exists and passes an isolated rehearsal.
 
 ## Evidence and scope
 
 The versioned manifest contains exactly 34 application tables and explicitly lists source and target columns, primary keys, indexes, converters, sequence ownership, and the verifier algorithm. The PostgreSQL 18 baseline was generated from the current Go/GORM models on an empty native cluster. `schema/provenance.json` binds the offline SQLite evidence, model inputs, manifest, baseline, and catalog query with SHA-256 hashes.
 
-CI verifies provenance and hard-runs a native PostgreSQL 18 cluster. It validates all 34 tables, 421 columns, 172 indexes, and 29 owned sequences. Docker is not used.
+CI verifies provenance and hard-runs a native PostgreSQL 18 cluster. It validates all 34 tables, 422 columns, 172 indexes, and 29 owned sequences. Docker is not used.
 
 ## Commands
 
@@ -74,13 +80,16 @@ systemd boot gate. A killed coordinator restores the exact saved SQLite
 environment only before the boundary; marker-, journal-, or candidate-hash
 evidence of possible PostgreSQL activation permits only forward reconciliation.
 
-Production remains on Go/SQLite until that transaction passes a complete isolated
-ArchDmit rehearsal and receives explicit operator approval. PostgreSQL 18 then
-becomes the persistent authority; Valkey remains reconstructable cache,
-session/revocation, and rate-limit state rather than a database of record. The migration CLI
-itself still only creates a fresh isolated/versioned schema or verifies one; it
-does not stop a service, publish configuration, or switch traffic without the
-separate cutover coordinator.
+The migration CLI still only creates a fresh isolated/versioned schema or
+verifies one; it does not stop a service, publish configuration, or switch
+traffic without the separate cutover coordinator. If a live target is already
+PostgreSQL-backed, first verify the active schema, durable `PG_WRITE_BOUNDARY`,
+candidate/environment hashes, and authenticated canaries. A missing boundary or
+failed post-cutover verification is an unverified state that must be reconciled
+before another migration attempt or backend switch. PostgreSQL 18 is the
+persistent authority only after that evidence is accepted; Valkey remains
+reconstructable cache, session/revocation, and rate-limit state rather than a
+database of record.
 
 This one-time offline source freeze is bounded maintenance downtime, not a
 zero-downtime migration. Detaching it into systemd survives loss of the

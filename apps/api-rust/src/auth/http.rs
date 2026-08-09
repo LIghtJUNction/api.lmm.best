@@ -1,12 +1,13 @@
 use super::{
     AuthBundle, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, LoginOutcome,
     LoginRequest, LogoutRequest, REFRESH_COOKIE_NAME, RequestMetadata, TwoFactorLoginRequest,
-    UserAuthPolicyError, enforce_user_auth,
+    UserAuthPolicyError, enforce_user_auth_view,
 };
 use crate::{ClientIpKey, RequestContext, legacy_empty_response};
+use async_trait::async_trait;
 use axum::{
     Json, Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, FromRequest, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
@@ -15,12 +16,73 @@ use axum::{
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
-use serde_json::json;
 use std::{
     sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
+
+const TURNSTILE_SITEVERIFY_ENDPOINT: &str =
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+const TURNSTILE_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[async_trait]
+pub trait TurnstileVerifier: Send + Sync {
+    async fn verify(&self, token: &str, remote_ip: &str) -> bool;
+}
+
+struct CloudflareTurnstileVerifier {
+    client: Option<reqwest::Client>,
+    secret: Option<SecretString>,
+}
+
+impl CloudflareTurnstileVerifier {
+    fn new(secret_key: Option<String>) -> Self {
+        let secret = secret_key
+            .filter(|secret| !secret.trim().is_empty())
+            .map(SecretString::from);
+        let client = crate::outbound_http::client(TURNSTILE_TIMEOUT).ok();
+        Self { client, secret }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct TurnstileCheckResponse {
+    success: bool,
+}
+
+#[async_trait]
+impl TurnstileVerifier for CloudflareTurnstileVerifier {
+    async fn verify(&self, token: &str, remote_ip: &str) -> bool {
+        if token.is_empty() || remote_ip.is_empty() {
+            return false;
+        }
+        let (Some(client), Some(secret)) = (&self.client, &self.secret) else {
+            return false;
+        };
+        let response = client
+            .post(TURNSTILE_SITEVERIFY_ENDPOINT)
+            .form(&[
+                ("secret", secret.expose_secret()),
+                ("response", token),
+                ("remoteip", remote_ip),
+            ])
+            .send()
+            .await;
+        let Ok(response) = response else {
+            return false;
+        };
+        if !response.status().is_success() {
+            return false;
+        }
+        let Ok(body) = response.bytes().await else {
+            return false;
+        };
+        serde_json::from_slice::<TurnstileCheckResponse>(&body)
+            .map(|result| result.success)
+            .unwrap_or(false)
+    }
+}
 
 #[derive(Clone)]
 pub struct AuthHttpState {
@@ -29,6 +91,8 @@ pub struct AuthHttpState {
     password_login_enabled: bool,
     trusted_origins: Arc<[String]>,
     anonymous_body_limit_bytes: usize,
+    turnstile_check_enabled: bool,
+    turnstile_verifier: Option<Arc<dyn TurnstileVerifier>>,
     version: Arc<str>,
 }
 
@@ -40,6 +104,8 @@ impl AuthHttpState {
             password_login_enabled: false,
             trusted_origins: Arc::from([]),
             anonymous_body_limit_bytes: 512 * 1024,
+            turnstile_check_enabled: false,
+            turnstile_verifier: None,
             version: Arc::from(concat!("v", env!("CARGO_PKG_VERSION"))),
         }
     }
@@ -67,6 +133,22 @@ impl AuthHttpState {
     #[must_use]
     pub const fn with_anonymous_body_limit_bytes(mut self, bytes: usize) -> Self {
         self.anonymous_body_limit_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn with_turnstile_check(mut self, enabled: bool, secret_key: Option<String>) -> Self {
+        self.turnstile_check_enabled = enabled;
+        self.turnstile_verifier = enabled.then(|| {
+            Arc::new(CloudflareTurnstileVerifier::new(secret_key)) as Arc<dyn TurnstileVerifier>
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn with_turnstile_verifier(mut self, verifier: Arc<dyn TurnstileVerifier>) -> Self {
+        self.turnstile_check_enabled = true;
+        self.turnstile_verifier = Some(verifier);
         self
     }
 
@@ -221,13 +303,46 @@ struct FailureEnvelope {
 async fn login(State(state): State<AuthHttpState>, request: Request) -> Response {
     let locale = LegacyLocale::from_request(&request);
     let metadata = request_metadata(&request);
+    let turnstile_uri = request.uri().clone();
     if let Some(response) = critical_rate_limit(&state, &metadata.ip).await {
         return response;
+    }
+
+    // Buffer the bounded body before Turnstile, matching the legacy middleware
+    // order without parsing credentials until the challenge has passed. The
+    // route's `DefaultBodyLimit` is carried in the request extensions and is
+    // enforced by the `Bytes` extractor here.
+    let (parts, body) = request.into_parts();
+    let bounded_body =
+        match Bytes::from_request(Request::from_parts(parts.clone(), body), &state).await {
+            Ok(body) => body,
+            Err(error) if error.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+                return response;
+            }
+            Err(_) => return legacy_login_error(locale, LegacyAuthMessage::InvalidParameters),
+        };
+    if state.turnstile_check_enabled {
+        let Some(token) = turnstile_token(&turnstile_uri) else {
+            return turnstile_missing_response();
+        };
+        let verified = match state.turnstile_verifier.as_ref() {
+            Some(verifier) => verifier.verify(&token, &metadata.ip).await,
+            None => false,
+        };
+        if !verified {
+            return turnstile_failure_response();
+        }
     }
     if !state.password_login_enabled {
         return legacy_login_error(locale, LegacyAuthMessage::PasswordLoginDisabled);
     }
-    let payload = Json::<LoginRequest>::from_request(request, &state).await;
+    let payload = Json::<LoginRequest>::from_request(
+        Request::from_parts(parts, Body::from(bounded_body)),
+        &state,
+    )
+    .await;
     let Json(payload) = match payload {
         Ok(payload) => payload,
         Err(error) if error.status() == StatusCode::PAYLOAD_TOO_LARGE => {
@@ -306,6 +421,10 @@ async fn refresh(State(state): State<AuthHttpState>, request: Request) -> Respon
         return origin_forbidden_response(kind);
     }
     let expected_sid = header_text(request.headers(), "x-auth-session");
+    let metadata = request_metadata(&request);
+    if let Some(response) = critical_rate_limit(&state, &metadata.ip).await {
+        return response;
+    }
     let refresh_token = cookie(request.headers(), REFRESH_COOKIE_NAME);
     let Some(refresh_token) = refresh_token else {
         return with_clear_cookie(
@@ -313,10 +432,6 @@ async fn refresh(State(state): State<AuthHttpState>, request: Request) -> Respon
             state.cookie_secure,
         );
     };
-    let metadata = request_metadata(&request);
-    if let Some(response) = critical_rate_limit(&state, &metadata.ip).await {
-        return response;
-    }
     match state
         .auth
         .refresh(SecretString::from(refresh_token), expected_sid, metadata)
@@ -349,17 +464,18 @@ async fn self_user(State(state): State<AuthHttpState>, request: Request) -> Resp
     // auth-version-mismatched sessions before a user reaches this handler.
     match state
         .auth
-        .self_user_for_optional(SecretString::from(token))
+        .self_user_view_for_optional(SecretString::from(token))
         .await
     {
         Ok(user) => {
-            if let Err(error) = enforce_user_auth(&user) {
+            let user_legacy = user.to_legacy_go_shape();
+            if let Err(error) = enforce_user_auth_view(&user) {
                 return self_user_auth_error(locale, error);
             }
             let mut response = Json(SuccessEnvelope {
                 success: true,
                 message: "",
-                data: Some(user),
+                data: Some(user_legacy),
             })
             .into_response();
             response.headers_mut().insert(
@@ -442,7 +558,9 @@ async fn logout(State(state): State<AuthHttpState>, request: Request) -> Respons
         Ok(result) => {
             let data = result
                 .revoked_sid
-                .map(|sid| json!({"revoked_sid": sid, "cookie_cleared": result.cookie_cleared.unwrap_or(false)}));
+                .map(|sid| {
+                    serde_json::json!({"revoked_sid": sid, "cookie_cleared": result.cookie_cleared.unwrap_or(false)})
+                });
             let response = Json(SuccessEnvelope {
                 success: true,
                 message: "",
@@ -499,6 +617,31 @@ fn request_metadata(request: &Request) -> RequestMetadata {
             .unwrap_or_else(|| "unknown".to_owned()),
         user_agent: header_text(request.headers(), "user-agent").unwrap_or_default(),
     }
+}
+
+fn turnstile_token(uri: &Uri) -> Option<String> {
+    form_urlencoded::parse(uri.query()?.as_bytes()).find_map(|(key, value)| {
+        (key == "turnstile" && !value.is_empty()).then(|| value.into_owned())
+    })
+}
+
+fn turnstile_missing_response() -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"success": false, "message": "Turnstile token 为空"})),
+    )
+        .into_response()
+}
+
+fn turnstile_failure_response() -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": false,
+            "message": "Turnstile 校验失败，请刷新重试！"
+        })),
+    )
+        .into_response()
 }
 
 async fn critical_rate_limit(state: &AuthHttpState, client_ip: &str) -> Option<Response> {
@@ -571,6 +714,12 @@ fn header_text(headers: &HeaderMap, name: &'static str) -> Option<String> {
 }
 
 fn bundle_response(bundle: AuthBundle, cookie_secure: bool) -> Response {
+    let mut data = serde_json::to_value(&bundle.data).expect("serialize auth response data");
+    if let Some(body) = data.as_object_mut()
+        && let Some(user) = body.get_mut("user")
+    {
+        *user = bundle.data.user.to_legacy_go_shape();
+    }
     let cookie = refresh_cookie(
         bundle.refresh_token.expose_secret(),
         bundle.data.session.expires_at,
@@ -579,7 +728,7 @@ fn bundle_response(bundle: AuthBundle, cookie_secure: bool) -> Response {
     let mut response = Json(SuccessEnvelope {
         success: true,
         message: "",
-        data: Some(bundle.data),
+        data: Some(data),
     })
     .into_response();
     // The legacy login and refresh handlers use `setAuthNoStore`, whose
@@ -899,8 +1048,8 @@ fn legacy_login_error(locale: LegacyLocale, message: LegacyAuthMessage) -> Respo
 mod tests {
     use super::*;
     use crate::auth::{
-        AuthResponseData, DashboardUser, LoginOutcome, LoginSessionView, LogoutResult,
-        TwoFactorChallenge, TwoFactorLoginRequest,
+        AuthResponseData, DashboardSelfUserFacts, DashboardUser, DashboardUserView, LoginOutcome,
+        LoginSessionView, LogoutResult, TwoFactorChallenge, TwoFactorLoginRequest,
     };
     use async_trait::async_trait;
     use axum::body::{Body, to_bytes};
@@ -919,11 +1068,44 @@ mod tests {
         next: Mutex<Option<Result<LoginOutcome, AuthErrorKind>>>,
         rate_limit: Mutex<Result<CriticalRateLimitOutcome, AuthErrorKind>>,
         rate_limit_checks: AtomicUsize,
+        events: Mutex<Vec<&'static str>>,
         metadata: Mutex<Vec<RequestMetadata>>,
         self_user: Mutex<Result<DashboardUser, AuthErrorKind>>,
         self_user_credentials: Mutex<Vec<String>>,
         logout_result: Mutex<LogoutResult>,
         logout_requests: Mutex<Vec<LogoutRequest>>,
+    }
+
+    struct MockTurnstile {
+        allowed: bool,
+        requests: Mutex<Vec<(String, String)>>,
+    }
+
+    impl MockTurnstile {
+        fn allowing() -> Self {
+            Self {
+                allowed: true,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn rejecting() -> Self {
+            Self {
+                allowed: false,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TurnstileVerifier for MockTurnstile {
+        async fn verify(&self, token: &str, remote_ip: &str) -> bool {
+            self.requests
+                .lock()
+                .expect("turnstile requests lock")
+                .push((token.to_owned(), remote_ip.to_owned()));
+            self.allowed
+        }
     }
 
     impl MockAuth {
@@ -934,6 +1116,7 @@ mod tests {
                 ))))),
                 rate_limit: Mutex::new(Ok(CriticalRateLimitOutcome::Allowed)),
                 rate_limit_checks: AtomicUsize::new(0),
+                events: Mutex::new(Vec::new()),
                 metadata: Mutex::new(Vec::new()),
                 self_user: Mutex::new(Ok(sample_user())),
                 self_user_credentials: Mutex::new(Vec::new()),
@@ -956,6 +1139,7 @@ mod tests {
                 )))),
                 rate_limit: Mutex::new(Ok(CriticalRateLimitOutcome::Allowed)),
                 rate_limit_checks: AtomicUsize::new(0),
+                events: Mutex::new(Vec::new()),
                 metadata: Mutex::new(Vec::new()),
                 self_user: Mutex::new(Ok(sample_user())),
                 self_user_credentials: Mutex::new(Vec::new()),
@@ -987,6 +1171,10 @@ mod tests {
             _: &str,
         ) -> Result<CriticalRateLimitOutcome, AuthError> {
             self.rate_limit_checks.fetch_add(1, Ordering::Relaxed);
+            self.events
+                .lock()
+                .expect("events lock")
+                .push("critical_rate_limit");
             (*self.rate_limit.lock().expect("rate limit lock")).map_err(AuthError::new)
         }
 
@@ -1013,6 +1201,7 @@ mod tests {
             _: Option<String>,
             _: RequestMetadata,
         ) -> Result<AuthBundle, AuthError> {
+            self.events.lock().expect("events lock").push("refresh");
             match take(self)? {
                 LoginOutcome::Authenticated(bundle) => Ok(*bundle),
                 LoginOutcome::TwoFactorRequired(_) => Err(AuthError::new(AuthErrorKind::Internal)),
@@ -1085,8 +1274,8 @@ mod tests {
             linux_do_id: String::new(),
             setting: String::new(),
             stripe_customer: String::new(),
-            sidebar_modules: json!({}),
-            permissions: json!({}),
+            sidebar_modules: serde_json::json!({}),
+            permissions: serde_json::json!({}),
         }
     }
 
@@ -1106,7 +1295,7 @@ mod tests {
                     last_active_at: unix_now(),
                     expires_at: unix_now() + 3600,
                 },
-                user: sample_user(),
+                user: DashboardUserView::build(sample_user(), DashboardSelfUserFacts::default()),
             },
             refresh_token: SecretString::from("sid-1.secret".to_owned()),
         }
@@ -1185,6 +1374,113 @@ mod tests {
                 "{language}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn login_rejects_missing_turnstile_token_when_enabled() {
+        let auth = Arc::new(MockAuth::success());
+        let response = auth_router(
+            AuthHttpState::new(auth.clone(), false)
+                .with_password_login_enabled(true)
+                .with_turnstile_check(true, None),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/user/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"username":"alice","password":"pw"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["success"], false);
+        assert_eq!(body["message"], "Turnstile token 为空");
+        assert!(auth.next.lock().expect("next lock").is_some());
+    }
+
+    #[tokio::test]
+    async fn login_allows_turnstile_token_when_enabled() {
+        let auth = Arc::new(MockAuth::success());
+        let response = auth_router(
+            AuthHttpState::new(auth.clone(), false)
+                .with_password_login_enabled(true)
+                .with_turnstile_verifier(Arc::new(MockTurnstile::allowing())),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/user/login?turnstile=demo%2Dtoken")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"username":"alice","password":"pw"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["data"]["user"]["username"], "alice");
+        assert!(auth.next.lock().expect("next lock").is_none());
+    }
+
+    #[tokio::test]
+    async fn login_rejects_turnstile_when_verifier_fails_closed() {
+        let auth = Arc::new(MockAuth::success());
+        let verifier = Arc::new(MockTurnstile::rejecting());
+        let response = auth_router(
+            AuthHttpState::new(auth.clone(), false)
+                .with_password_login_enabled(true)
+                .with_turnstile_verifier(verifier.clone()),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/user/login?turnstile=demo-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"username":"alice","password":"pw"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["success"], false);
+        assert_eq!(body["message"], "Turnstile 校验失败，请刷新重试！");
+        assert!(auth.next.lock().expect("next lock").is_some());
+        assert_eq!(
+            verifier
+                .requests
+                .lock()
+                .expect("turnstile requests lock")
+                .as_slice(),
+            &[("demo-token".to_owned(), "unknown".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn enabled_turnstile_without_secret_rejects_even_with_token() {
+        let auth = Arc::new(MockAuth::success());
+        let response = auth_router(
+            AuthHttpState::new(auth.clone(), false)
+                .with_password_login_enabled(true)
+                .with_turnstile_check(true, None),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/user/login?turnstile=demo-token")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"username":"alice","password":"pw"}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["success"], false);
+        assert!(auth.next.lock().expect("next lock").is_some());
     }
 
     #[tokio::test]
@@ -1433,7 +1729,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_limits_only_cookie_bearing_same_origin_attempts() {
+    async fn refresh_checks_origin_then_rate_limit_then_cookie() {
         let auth = Arc::new(MockAuth::success());
         *auth.rate_limit.lock().expect("rate limit lock") =
             Ok(CriticalRateLimitOutcome::Rejected {
@@ -1458,6 +1754,7 @@ mod tests {
             .expect("response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 0);
+        assert!(auth.events.lock().expect("events lock").is_empty());
 
         let response = router
             .clone()
@@ -1471,37 +1768,127 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 0);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 1);
         assert_eq!(
-            response.headers()[header::SET_COOKIE],
-            "new_api_refresh=; Path=/api/user/auth; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
+            *auth.events.lock().expect("events lock"),
+            ["critical_rate_limit"]
         );
-        assert_eq!(
-            response_json(response).await,
-            json!({
-                "success": false,
-                "code": "AUTH_UNAUTHORIZED",
-                "message": "Unauthorized"
-            })
-        );
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
 
         let response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/api/user/auth/refresh")
                     .header(header::ORIGIN, "https://dashboard.example")
-                    .header(header::COOKIE, "new_api_refresh=attacker.invalid")
+                    .header(header::COOKIE, "new_api_refresh=attacker.secret")
                     .body(Body::empty())
                     .expect("request"),
             )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(response.headers()[header::RETRY_AFTER], "37");
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            *auth.events.lock().expect("events lock"),
+            ["critical_rate_limit", "critical_rate_limit"]
+        );
+        assert!(!response.headers().contains_key(header::SET_COOKIE));
+
+        *auth.rate_limit.lock().expect("rate limit lock") = Ok(CriticalRateLimitOutcome::Allowed);
+        *auth.next.lock().expect("next lock") = Some(Err(AuthErrorKind::TokenExpired));
+        auth.events.lock().expect("events lock").clear();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/auth/refresh")
+                    .header(header::ORIGIN, "https://dashboard.example")
+                    .header(header::COOKIE, "new_api_refresh=expired.secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            *auth.events.lock().expect("events lock"),
+            ["critical_rate_limit", "refresh"]
+        );
+        assert_eq!(response_json(response).await["code"], "AUTH_TOKEN_EXPIRED");
+
+        *auth.next.lock().expect("next lock") =
+            Some(Ok(LoginOutcome::Authenticated(Box::new(sample_bundle()))));
+        auth.events.lock().expect("events lock").clear();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/auth/refresh")
+                    .header(header::ORIGIN, "https://dashboard.example")
+                    .header(header::COOKIE, "new_api_refresh=valid.secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 4);
+        assert_eq!(
+            *auth.events.lock().expect("events lock"),
+            ["critical_rate_limit", "refresh"]
+        );
+
+        assert_eq!(
+            response.headers()[header::SET_COOKIE]
+                .to_str()
+                .expect("refresh cookie")
+                .split(';')
+                .next(),
+            Some("new_api_refresh=sid-1.secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_missing_cookie_still_passes_rate_limit_before_unauthorized() {
+        let auth = Arc::new(MockAuth::success());
+        let router = auth_router(
+            AuthHttpState::new(auth.clone(), true)
+                .with_trusted_origins(["https://dashboard.example"]),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/auth/refresh")
+                    .header(header::ORIGIN, "https://dashboard.example")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 1);
-        assert!(auth.next.lock().expect("next lock").is_some());
+        assert_eq!(
+            *auth.events.lock().expect("events lock"),
+            ["critical_rate_limit"]
+        );
+        assert_eq!(
+            response.headers()[header::SET_COOKIE],
+            "new_api_refresh=; Path=/api/user/auth; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
+        );
+        assert_eq!(
+            response_json(response).await,
+            serde_json::json!({
+                "success": false,
+                "code": "AUTH_UNAUTHORIZED",
+                "message": "Unauthorized"
+            })
+        );
     }
 
     #[tokio::test]
@@ -1597,6 +1984,7 @@ mod tests {
                 next: Mutex::new(Some(Err(AuthErrorKind::InvalidCredentials))),
                 rate_limit: Mutex::new(Ok(CriticalRateLimitOutcome::Allowed)),
                 rate_limit_checks: AtomicUsize::new(0),
+                events: Mutex::new(Vec::new()),
                 metadata: Mutex::new(Vec::new()),
                 self_user: Mutex::new(Ok(sample_user())),
                 self_user_credentials: Mutex::new(Vec::new()),
@@ -1726,6 +2114,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn anonymous_login_body_limit_rejects_before_turnstile() {
+        let auth = Arc::new(MockAuth::success());
+        let verifier = Arc::new(MockTurnstile::allowing());
+        let router = auth_router(
+            AuthHttpState::new(auth.clone(), false)
+                .with_password_login_enabled(true)
+                .with_anonymous_body_limit_bytes(16)
+                .with_turnstile_verifier(verifier.clone()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/login?turnstile=demo-token")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"username":"alice","password":"a password larger than the limit"}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(auth.next.lock().expect("next lock").is_some());
+        assert!(
+            verifier
+                .requests
+                .lock()
+                .expect("turnstile requests lock")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn critical_rate_limit_returns_empty_429_without_calling_login() {
         let auth = Arc::new(MockAuth::success());
         *auth.rate_limit.lock().expect("rate limit lock") =
@@ -1794,7 +2216,7 @@ mod tests {
         }
         let mut request = builder
             .body(Body::from(
-                json!({"username": username, "password": password}).to_string(),
+                serde_json::json!({"username": username, "password": password}).to_string(),
             ))
             .expect("request");
         if let Some((peer, real_ip)) = peer_and_real_ip {

@@ -164,7 +164,7 @@ export function usePricingColumns(
                 ))}
               </span>
               <div className='text-muted-foreground/50 text-[10px]'>
-                / {tokenUnitLabel} tokens
+                / {tokenUnitLabel} {t('tokens')}
                 {dynamicSummary.tierCount > 1 &&
                   ` · ${t('{{count}} tiers', {
                     count: dynamicSummary.tierCount,
@@ -208,7 +208,7 @@ export function usePricingColumns(
                 {outputPrice}
               </span>
               <div className='text-muted-foreground/50 text-[10px]'>
-                / {tokenUnitLabel} tokens
+                / {tokenUnitLabel} {t('tokens')}
               </div>
             </div>
           )

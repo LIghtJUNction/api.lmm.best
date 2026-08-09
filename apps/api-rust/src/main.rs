@@ -8,9 +8,24 @@ use config::Config;
 use http::{ApiTokenMount, AppState, RuntimeState};
 use lmm_api_rs::{
     auth::{AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth},
-    migration_routes::api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
-    models::{ModelsHttpState, PgModelsService},
-    status::{PgStatusRepository, StatusHttpState},
+    migration_routes::{
+        api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
+        billing_subscriptions::{
+            BillingSubscriptionsState, router as billing_subscriptions_router,
+        },
+        control_public::{
+            ControlPublicHttpState, PgControlPublicRepository, ReqwestUptimeKumaClient,
+            control_public_router,
+        },
+        identity_profile::{ProfileState, router as identity_profile_router},
+        observability::{
+            DashboardObservabilityAuthorizer, ObservabilityState, PgObservabilityStore,
+            PgReadOnlyObservabilityTokenAuthorizer, ValkeyObservabilityMetrics,
+            observability_read_router,
+        },
+    },
+    models::{ModelsHttpState, ModelsListenerMode, PgModelsService},
+    status::{PgStatusRepository, StatusHttpState, StatusRepository},
 };
 use lmm_application::{GlobalApiRateLimiter, ValkeyReadinessPolicy};
 use probes::InfrastructureProbe;
@@ -29,6 +44,9 @@ use tokio::{net::TcpListener, sync::watch};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     lmm_observability::init()?;
     let config = Config::from_env()?;
+    // Local acceptance is an explicit loopback-only development policy. It
+    // must never alter the isolated frozen listener's historical contract.
+    let local_acceptance = config.local_acceptance && !config.test_instance;
     if config.trusted_proxies.uses_compatibility_defaults() {
         tracing::warn!(
             "TRUSTED_PROXIES is unset or blank; trusting loopback, RFC 1918, and IPv6 ULA proxy addresses for compatibility"
@@ -37,6 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let version = std::env::var("VERSION").unwrap_or_else(|_| "v0.0.0".to_owned());
     let start_time = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())?;
     let pg = PgPoolOptions::new().connect_lazy(&config.database_url)?;
+    let status_repository =
+        Arc::new(PgStatusRepository::new(pg.clone()).with_local_acceptance(local_acceptance));
+    let turnstile = config
+        .auth_turnstile
+        .resolve_public(&status_repository.snapshot().await?.options)?;
     let valkey = redis::Client::open(config.valkey_url.as_str())?;
     let probe = InfrastructureProbe::new(
         pg.clone(),
@@ -52,33 +75,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.global_api_rate_limit_window,
             config.dependency_timeout,
         ));
-    let auth: Arc<dyn DashboardAuth> = Arc::new(PgValkeyDashboardAuth::new(
-        pg.clone(),
-        valkey.clone(),
-        AuthConfig {
-            session_secret: config.auth_session_secret.clone(),
-            active_session_limit: config.auth_active_session_limit,
-            issuance_limit: config.auth_issuance_limit,
-            issuance_window: config.auth_issuance_window,
-            session_cache_ttl: config.auth_session_cache_ttl,
-            dependency_timeout: config.dependency_timeout,
-            critical_rate_limit_enabled: config.auth_critical_rate_limit_enabled,
-            critical_rate_limit: config.auth_critical_rate_limit,
-            critical_rate_limit_window: config.auth_critical_rate_limit_window,
-        },
-    )?);
+    let auth: Arc<dyn DashboardAuth> = Arc::new(
+        PgValkeyDashboardAuth::new(
+            pg.clone(),
+            valkey.clone(),
+            AuthConfig {
+                session_secret: config.auth_session_secret.clone(),
+                active_session_limit: config.auth_active_session_limit,
+                issuance_limit: config.auth_issuance_limit,
+                issuance_window: config.auth_issuance_window,
+                session_cache_ttl: config.auth_session_cache_ttl,
+                dependency_timeout: config.dependency_timeout,
+                critical_rate_limit_enabled: config.auth_critical_rate_limit_enabled,
+                critical_rate_limit: config.auth_critical_rate_limit,
+                critical_rate_limit_window: config.auth_critical_rate_limit_window,
+            },
+        )?
+        .with_local_acceptance(local_acceptance),
+    );
     let auth_http = AuthHttpState::new(Arc::clone(&auth), config.auth_cookie_secure)
         .with_password_login_enabled(config.auth_password_login_enabled)
         .with_trusted_origins(&config.auth_trusted_origins)
         .with_anonymous_body_limit_bytes(config.auth_anonymous_body_limit_bytes)
+        .with_turnstile_check(turnstile.enabled, config.auth_turnstile.secret_key())
         .with_version(version.clone());
-    let models_http = ModelsHttpState::new(
-        Arc::new(PgModelsService::with_valkey(
+    let models_service = Arc::new(
+        PgModelsService::with_valkey(
             pg.clone(),
             valkey.clone(),
             config.crypto_secret.expose_secret(),
             config.models_cache_ttl,
-        )),
+        )
+        .with_local_acceptance(local_acceptance),
+    );
+    let models_http = ModelsHttpState::new(
+        Arc::clone(&models_service) as Arc<dyn lmm_api_rs::models::ModelsService>,
         version.clone(),
     );
     let api_token = ApiTokenMount::new(
@@ -102,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         revision = option_env!("LMM_BUILD_REVISION").unwrap_or("unknown"),
         "Rust migration edge listening"
     );
-    if config.local_acceptance {
+    if local_acceptance {
         tracing::warn!(
             "LMM_LOCAL_ACCEPTANCE enabled; developer access granted without paid activation"
         );
@@ -116,22 +147,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         global_api_rate_limiter: Arc::clone(&global_api_rate_limiter),
         public_content: Arc::new(lmm_application::PublicContentService::new(
             Arc::new(PgPublicContentRepository::new(pg.clone())),
-            Arc::new(ValkeyPublicContentCache::new(
-                valkey.clone(),
-                config.public_content_cache_ttl,
-            )),
+            Arc::new(ValkeyPublicContentCache::new(valkey.clone())),
             config.dependency_timeout,
         )),
-        status: StatusHttpState::new(
-            Arc::new(PgStatusRepository::new(pg.clone())),
-            version,
-            start_time,
-        ),
+        status: StatusHttpState::new(status_repository, version, start_time)
+            .with_dashboard_auth(Arc::clone(&auth))
+            .with_turnstile_config(turnstile.enabled, turnstile.site_key),
         slot: config.slot.clone(),
         runtime: runtime.clone(),
         trusted_proxies: config.trusted_proxies.clone(),
     };
     let router = if config.test_instance {
+        // Only the explicitly isolated historical listener may use the frozen
+        // Go 5418ce6 model/API-token contract.
+        let models_http = models_http.with_listener_mode(ModelsListenerMode::FrozenGo5418ce6);
         tracing::warn!(
             "test-instance candidate surface enabled; remote catalog and uptime clients are denied"
         );
@@ -143,13 +172,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app_state,
             auth_http,
             models_http,
-            Some(api_token),
+            Some(api_token.with_historical_frozen_go_parity()),
             Some(candidates),
         )
     } else {
-        // Production route ownership remains with Go. Only the explicit
-        // test-instance candidate listener above may mount API-token routes.
-        http::router_with_api_token(app_state, auth_http, models_http, None)
+        // C1 exercises the current-Go API-token policy on the normal Rust
+        // listener. This does not transfer production ownership from Go.
+        let models_http = models_http.with_listener_mode(ModelsListenerMode::CurrentTrustPolicy);
+        let identity_profile = identity_profile_router(
+            ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
+        );
+        let billing_subscriptions = billing_subscriptions_router(BillingSubscriptionsState::new(
+            pg.clone(),
+            Some(valkey.clone()),
+            Arc::clone(&auth),
+        ));
+        let observability = observability_read_router(ObservabilityState::new(
+            Arc::new(PgObservabilityStore::postgres_read_only(
+                pg.clone(),
+                Arc::new(ValkeyObservabilityMetrics::new(valkey.clone())),
+            )),
+            Arc::new(DashboardObservabilityAuthorizer::new(
+                Arc::clone(&auth),
+                Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
+            )),
+        ));
+        let control_public = if local_acceptance {
+            // Local acceptance must never contact an operator-configured
+            // uptime service; the test adapter fails closed instead.
+            test_instance::safe_control_public_surface(pg.clone())
+        } else {
+            let uptime_kuma = ReqwestUptimeKumaClient::new()
+                .map_err(|_| io::Error::other("failed to initialize uptime status client"))?;
+            control_public_router(ControlPublicHttpState::new(
+                Arc::new(PgControlPublicRepository::new(pg.clone())),
+                Arc::new(uptime_kuma),
+            ))
+        };
+        let mut extra_surface = identity_profile
+            .merge(billing_subscriptions)
+            .merge(observability)
+            .merge(control_public);
+        if local_acceptance {
+            extra_surface = extra_surface.merge(test_instance::safe_system_config_surface(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+            ));
+        }
+        http::router_with_api_token_and_extra(
+            app_state,
+            auth_http,
+            models_http,
+            Some(api_token.with_current_dashboard_discovery_policy(
+                Arc::clone(&models_service) as Arc<dyn lmm_api_rs::models::ModelsService>
+            )),
+            Some(extra_surface),
+        )
     };
     let server = axum::serve(
         listener,

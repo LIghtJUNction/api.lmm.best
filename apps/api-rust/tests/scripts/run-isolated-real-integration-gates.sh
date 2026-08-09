@@ -20,6 +20,7 @@ usage: run-isolated-real-integration-gates.sh \
   --n-binary ABS --n-revision HEX --n-artifact-sha256 SHA256 --n-kind rust|go \
   --n-minus-one-binary ABS --n-minus-one-revision HEX \
   --n-minus-one-artifact-sha256 SHA256 --n-minus-one-kind rust|go \
+  [--valkey-port PORT] \
   --verifier ABS --output ABS [--duration-seconds 600] [--keep-evidence]
 
 The verifier receives fixed LMM_N1_* environment variables and writes one
@@ -41,6 +42,7 @@ require_absolute_file() {
 workspace=''; marker=''; n_binary=''; n_revision=''; n_sha=''; n_kind=''
 n1_binary=''; n1_revision=''; n1_sha=''; n1_kind=''; verifier=''; output=''
 duration=600
+valkey_port=
 while (($#)); do
   case $1 in
     --workspace) (($# >= 2)) || usage; workspace=$2; shift 2 ;;
@@ -55,6 +57,7 @@ while (($#)); do
     --n-minus-one-kind) (($# >= 2)) || usage; n1_kind=$2; shift 2 ;;
     --verifier) (($# >= 2)) || usage; verifier=$2; shift 2 ;;
     --output) (($# >= 2)) || usage; output=$2; shift 2 ;;
+    --valkey-port) (($# >= 2)) || usage; valkey_port=$2; shift 2 ;;
     --duration-seconds) (($# >= 2)) || usage; duration=$2; shift 2 ;;
     --keep-evidence) shift ;;
     -h|--help) usage ;;
@@ -145,7 +148,17 @@ pg_port=$(random_port) || die 'could not reserve PostgreSQL port'
 api_n_port=$(random_port) || die 'could not reserve N listener port'
 api_n1_port=$(random_port) || die 'could not reserve N-1 listener port'
 while [[ $api_n_port == "$pg_port" || $api_n1_port == "$pg_port" || $api_n_port == "$api_n1_port" ]]; do api_n1_port=$(random_port); done
-if ! port_is_unused 6380; then die 'Valkey 6380 is occupied; strict test-instance contract requires dedicated 6380'; fi
+if [[ -z $valkey_port ]]; then
+  while :; do
+    valkey_port=$(random_port) || die 'could not reserve Valkey port'
+    [[ $valkey_port != "$pg_port" && $valkey_port != "$api_n_port" && $valkey_port != "$api_n1_port" ]] && break
+  done
+else
+  [[ $valkey_port =~ ^[0-9]+$ && $valkey_port -ge 2000 && $valkey_port -le 65535 ]] || die 'valkey port must be an integer between 2000 and 65535'
+fi
+if ! port_is_unused "$valkey_port"; then
+  die "Valkey $valkey_port is occupied; isolated harness requires a dedicated free Valkey port"
+fi
 
 pg_user="lmm_test_${nonce:0:16}"
 pg_database="lmm_test_${nonce:0:16}"
@@ -186,13 +199,13 @@ IFS='|' read -r db role schema host superuser <<<"$identity"
 [[ $db == "$pg_database" && $role == "$pg_app" && $schema == "$pg_schema" && $host == 127.0.0.1 && $superuser == f ]] || die 'PostgreSQL identity check failed'
 
 valkey_config="$runtime/valkey.conf"
-printf 'bind 127.0.0.1\nport 6380\nprotected-mode yes\nsave ""\nappendonly no\nrequirepass %s\n' "$valkey_password" >"$valkey_config"
+printf 'bind 127.0.0.1\nport %s\nprotected-mode yes\nsave ""\nappendonly no\nrequirepass %s\n' "$valkey_port" "$valkey_password" >"$valkey_config"
 chmod 0600 "$valkey_config"
 valkey-server "$valkey_config" >"$runtime/valkey.log" 2>&1 & valkey_pid=$!
-for _ in {1..200}; do VALKEYCLI_AUTH="$valkey_password" valkey-cli --no-auth-warning -h 127.0.0.1 -p 6380 ping 2>/dev/null | grep -qx PONG && break; kill -0 "$valkey_pid" 2>/dev/null || die 'Valkey exited during startup'; sleep 0.05; done
-if valkey-cli --no-auth-warning -h 127.0.0.1 -p 6380 ping >/dev/null 2>&1; then die 'Valkey accepted an unauthenticated request'; fi
-VALKEYCLI_AUTH="$valkey_password" valkey-cli --no-auth-warning -h 127.0.0.1 -p 6380 SET lmm:n1:identity "$nonce" EX 600 >/dev/null
-valkey_url="redis://:$valkey_password@127.0.0.1:6380/0"
+for _ in {1..200}; do VALKEYCLI_AUTH="$valkey_password" valkey-cli --no-auth-warning -h 127.0.0.1 -p "$valkey_port" ping 2>/dev/null | grep -qx PONG && break; kill -0 "$valkey_pid" 2>/dev/null || die 'Valkey exited during startup'; sleep 0.05; done
+if valkey-cli --no-auth-warning -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 2>&1; then die 'Valkey accepted an unauthenticated request'; fi
+VALKEYCLI_AUTH="$valkey_password" valkey-cli --no-auth-warning -h 127.0.0.1 -p "$valkey_port" SET lmm:n1:identity "$nonce" EX 600 >/dev/null
+valkey_url="redis://:$valkey_password@127.0.0.1:$valkey_port/0"
 
 fixture_file="$evidence/fixture.json"
 jq -cn --arg id "$nonce" --arg db "$pg_database" --arg schema "$pg_schema" \
@@ -202,14 +215,16 @@ launch() {
   local kind=$1 binary=$2 revision=$3 port=$4 label=$5
   local log="$runtime/$label.log"
   if [[ $kind == rust ]]; then
-    env LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$port" LMM_RS_SLOT=single \
+    # Omitting LMM_RS_TEST_INSTANCE keeps the normal listener on its explicit
+    # CurrentTrustPolicy mode; frozen 5418ce6 is reserved for oracle fixtures.
+    env LMM_RS_LISTEN_ADDR="127.0.0.1:$port" LMM_RS_SLOT=blue \
       DATABASE_URL="$pg_url" VALKEY_URL="$valkey_url" LMM_SCHEMA_CONTRACT=1 \
       SESSION_SECRET="n1-session-$nonce" CRYPTO_SECRET="n1-crypto-$nonce" \
-      PASSWORD_LOGIN_ENABLED=1 LMM_LOCAL_ACCEPTANCE=1 VERSION="$revision" \
+      PASSWORD_LOGIN_ENABLED=1 LMM_LOCAL_ACCEPTANCE=true VERSION="$revision" \
       "$binary" >"$log" 2>&1 &
   else
     env LMM_API_BIND_ADDRESS=127.0.0.1 PORT="$port" SQL_DSN="$pg_url" REDIS_CONN_STRING="$valkey_url" \
-      LMM_DB_MIGRATION_MODE=verify LMM_LOCAL_ACCEPTANCE=1 VERSION="$revision" \
+      LMM_DB_MIGRATION_MODE=verify LMM_LOCAL_ACCEPTANCE=true VERSION="$revision" \
       "$binary" >"$log" 2>&1 &
   fi
   LAUNCHED_PID=$!

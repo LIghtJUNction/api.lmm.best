@@ -8,7 +8,11 @@ set +x
 
 repo_root=$(git rev-parse --show-toplevel)
 legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
-legacy_root="$repo_root/legacy-go-backup/$legacy_revision"
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 runtime_root=${LMM_MODELS_TEST_RUNTIME_ROOT:-/tmp}
 crypto_secret='models-oracle-crypto-secret-2026'
 session_secret='ModelsListener-2026!FixedSyntheticSecret'
@@ -89,10 +93,10 @@ owned_pid_is_live() {
   [[ -n $pid && -n $start ]] && kill -0 "$pid" 2>/dev/null && [[ $(pid_start_time "$pid" 2>/dev/null || true) == "$start" ]]
 }
 stop_owned_process() {
-  local name=$1 pid=${!1:-}
+  local name=$1 port=${2:-} pid=${!1:-}
   if [[ -n $pid ]]; then
     if owned_pid_is_live "$name"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
-    else echo "refusing to signal unowned or recycled PID $pid ($name)" >&2; fi
+    else echo "cleanup: $name: refusing to signal state=$(process_state "$name" "$port") pid=$pid" >&2; fi
   fi
   printf -v "$name" ''
   printf -v "${name}_start" ''
@@ -104,7 +108,7 @@ stop_owned_postgres() {
     if [[ $current_pid == "$pg_pid" ]] && owned_pid_is_live pg_pid && listener_owned_by "$pg_port" "$pg_pid"; then
       pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
     else
-      echo "refusing to stop unowned or recycled PostgreSQL PID ${pg_pid:-<empty>}" >&2
+      echo "cleanup: PostgreSQL: refusing to signal state=$(process_state pg_pid "$pg_port") pid=${pg_pid:-<empty>}" >&2
     fi
   fi
   pg_pid=
@@ -117,6 +121,19 @@ listener_owned_by() {
   mapfile -t pids < <(grep -oE 'pid=[0-9]+' <<<"${lines[0]}" | sort -u || true)
   (( ${#pids[@]} == 1 )) || return 1
   [[ ${pids[0]} == "pid=$expected_pid" ]]
+}
+process_state() {
+  local name=$1 port=${2:-} pid actual want line
+  pid=${!name:-}; want=${name}_start; want=${!want:-}
+  actual=$(pid_start_time "$pid" 2>/dev/null || true)
+  [[ -z $actual ]] && { echo child-exited; return; }
+  [[ $actual != "$want" ]] && { echo pid-start-time-mismatch; return; }
+  if [[ -n $port ]]; then
+    line=$(ss -H -ltnp "sport = :$port" 2>/dev/null || true)
+    if [[ -n $line ]] && ! listener_owned_by "$port" "$pid"; then echo port-owned-by-other; return; fi
+  fi
+  [[ -n $port && -z $line ]] && { echo child-not-listening; return; }
+  echo child-not-owned
 }
 preflight_port() {
   local label=$1 port=$2
@@ -180,16 +197,18 @@ assert_distinct_ports "$pg_port" "$go_port" "$rust_port" "$go_valkey_port" "$rus
 for entry in "PostgreSQL:$pg_port" "Go_HTTP:$go_port" "Rust_HTTP:$rust_port" "Go_Valkey:$go_valkey_port" "Rust_Valkey:$rust_valkey_port"; do preflight_port "${entry%%:*}" "${entry##*:}"; done
 
 cleanup() {
-  [[ $cleanup_started == false ]] || return 0
+  local exit_code=$? preserve=0
+  [[ $cleanup_started == false ]] || return "$exit_code"
   cleanup_started=true
-  stop_owned_process go_pid
-  stop_owned_process rust_pid
-  stop_owned_process go_valkey_pid
-  stop_owned_process rust_valkey_pid
+  [[ $exit_code -ne 0 || ${LMM_KEEP_MODELS_LISTENER_RUNTIME:-0} == 1 ]] && preserve=1
+  stop_owned_process go_pid "$go_port"
+  stop_owned_process rust_pid "$rust_port"
+  stop_owned_process go_valkey_pid "$go_valkey_port"
+  stop_owned_process rust_valkey_pid "$rust_valkey_port"
   [[ -d "$runtime/pg" ]] && stop_owned_postgres
   case "$runtime" in
     "$runtime_root"/lmm-models-listener.*)
-      if [[ ${LMM_KEEP_MODELS_LISTENER_RUNTIME:-0} == 1 ]]; then
+      if [[ $preserve == 1 ]]; then
         echo "preserved models listener runtime: $runtime" >&2
       else
         rm -rf "$runtime"
@@ -197,6 +216,7 @@ cleanup() {
       ;;
     *) echo "refusing unexpected models runtime: $runtime" >&2 ;;
   esac
+  return "$exit_code"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -233,7 +253,7 @@ if ! owned_pid_is_live pg_pid || ! listener_owned_by "$pg_port" "$pg_pid"; then
   echo 'PostgreSQL did not bind as owned child' >&2
   exit 1
 fi
-createdb -h 127.0.0.1 -p "$pg_port" models_rust
+createdb -h 127.0.0.1 -p "$pg_port" lmm_test_models_rust
 start_valkey() {
   local name=$1 port=$2 password=$3 pid_name=$4 config pid
   config="$runtime/$name-valkey.conf"
@@ -264,6 +284,24 @@ valkey_for_port() {
   esac
 }
 flush_valkey() { go_valkey FLUSHDB >/dev/null; rust_valkey FLUSHDB >/dev/null; }
+go_redis_startup_diagnostics() {
+  local ping=failed
+  if VALKEYCLI_AUTH="$go_valkey_password" valkey-cli --no-auth-warning --command-timeout 1 -h 127.0.0.1 -p "$go_valkey_port" ping >/dev/null 2>&1; then ping=ok; fi
+  {
+    echo 'Go listener startup diagnostics (credentials redacted):'
+    echo "go_http_endpoint=127.0.0.1:$go_port"
+    echo "go_redis_endpoint=127.0.0.1:$go_valkey_port"
+    echo "go_redis_authenticated_ping=$ping"
+    echo 'go_redis_listener_state:'
+    ss -H -ltnp "sport = :$go_valkey_port" 2>/dev/null || true
+    echo 'go_redis_connection_state:'
+    ss -H -tnp "sport = :$go_valkey_port or dport = :$go_valkey_port" 2>/dev/null || true
+    echo 'go.log tail:'
+    tail -n 120 "$runtime/go.log" 2>/dev/null || true
+    echo 'go-valkey.log tail:'
+    tail -n 80 "$runtime/go-valkey.log" 2>/dev/null || true
+  } >&2
+}
 start_valkey go "$go_valkey_port" "$go_valkey_password" go_valkey_pid
 start_valkey rust "$rust_valkey_port" "$rust_valkey_password" rust_valkey_pid
 
@@ -273,20 +311,28 @@ start_go_listener() {
     REDIS_CONN_STRING="redis://:$go_valkey_password@127.0.0.1:$go_valkey_port" CRYPTO_SECRET="$crypto_secret" \
     SESSION_SECRET="$session_secret" SYNC_FREQUENCY=60 GLOBAL_API_RATE_LIMIT_ENABLE=false GIN_MODE=release \
     "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
-  record_pid go_pid "$!"
+  local child=$!
+  if ! record_pid go_pid "$child"; then
+    go_redis_startup_diagnostics
+    return 1
+  fi
   for _ in {1..300}; do
     owned_pid_is_live go_pid && listener_owned_by "$go_port" "$go_pid" && break
     sleep .05
   done
   if ! owned_pid_is_live go_pid || ! listener_owned_by "$go_port" "$go_pid"; then
     echo 'Go listener did not bind as owned child' >&2
+    go_redis_startup_diagnostics
     return 1
   fi
-  curl -fsS --connect-timeout "$curl_connect_timeout" --max-time "$curl_max_time" "http://127.0.0.1:$go_port/api/status" >/dev/null
+  if ! curl -fsS --connect-timeout "$curl_connect_timeout" --max-time "$curl_max_time" "http://127.0.0.1:$go_port/api/status" >/dev/null; then
+    go_redis_startup_diagnostics
+    return 1
+  fi
 }
 
 stop_go_listener() {
-  stop_owned_process go_pid
+  stop_owned_process go_pid "$go_port"
 }
 
 # First boot creates Go's native SQLite schema. The full logical fixture must
@@ -320,14 +366,14 @@ SQL
 go_valkey FLUSHDB >/dev/null
 start_go_listener
 
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE ROLE lmm_models_runtime LOGIN;
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE ROLE lmm_test_models_runtime LOGIN;
 CREATE TABLE lmm_schema_contract (singleton BOOLEAN PRIMARY KEY, min_reader_version BIGINT NOT NULL, max_reader_version BIGINT NOT NULL);
 INSERT INTO lmm_schema_contract VALUES (TRUE, 1, 1);
 CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE custom_oauth_providers (id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL, icon TEXT, enabled BOOLEAN, client_id TEXT, authorization_endpoint TEXT, scopes TEXT);
 CREATE TABLE setups (id BIGINT PRIMARY KEY);
-CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status INTEGER DEFAULT 1, email TEXT DEFAULT '', github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" VARCHAR(64) DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, linux_do_id TEXT, setting TEXT, stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, auth_version BIGINT DEFAULT 1, deleted_at TIMESTAMPTZ);
+CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status INTEGER DEFAULT 1, email TEXT DEFAULT '', github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" VARCHAR(64) DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, linux_do_id TEXT, setting TEXT, stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, console_activated_at BIGINT NOT NULL DEFAULT 0, auth_version BIGINT DEFAULT 1, deleted_at TIMESTAMPTZ);
 CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, user_id BIGINT, version BIGINT, user_auth_version BIGINT, status TEXT, refresh_hash CHAR(64), previous_refresh_hash TEXT, previous_valid_until BIGINT, login_method TEXT, ip TEXT, user_agent TEXT, created_at BIGINT, last_active_at BIGINT, expires_at BIGINT, revoked_at BIGINT, revoked_reason TEXT);
 CREATE TABLE two_fas (id BIGINT PRIMARY KEY, user_id BIGINT, is_enabled BOOLEAN, deleted_at TIMESTAMPTZ);
 CREATE TABLE casbin_rule (id BIGINT PRIMARY KEY, ptype TEXT, v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT, v4 TEXT, v5 TEXT);
@@ -337,13 +383,13 @@ CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), use
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 CREATE TABLE channels (id BIGINT PRIMARY KEY, type INTEGER DEFAULT 0, status INTEGER DEFAULT 1);
 CREATE TABLE abilities ("group" VARCHAR(64), model VARCHAR(255), channel_id BIGINT, enabled BOOLEAN, priority INTEGER DEFAULT 0, weight INTEGER DEFAULT 0, PRIMARY KEY ("group", model, channel_id));
-GRANT USAGE ON SCHEMA public TO lmm_models_runtime;
-GRANT SELECT ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, tokens, channels, abilities TO lmm_models_runtime;
-GRANT INSERT, UPDATE ON auth_flows TO lmm_models_runtime;
-GRANT INSERT, UPDATE, DELETE ON tokens TO lmm_models_runtime;
-GRANT USAGE ON SEQUENCE tokens_id_seq TO lmm_models_runtime;
+GRANT USAGE ON SCHEMA public TO lmm_test_models_runtime;
+GRANT SELECT ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, tokens, channels, abilities TO lmm_test_models_runtime;
+GRANT INSERT, UPDATE ON auth_flows TO lmm_test_models_runtime;
+GRANT INSERT, UPDATE, DELETE ON tokens TO lmm_test_models_runtime;
+GRANT USAGE ON SEQUENCE tokens_id_seq TO lmm_test_models_runtime;
 SQL
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO options (key, value) VALUES
   ('SelfUseModeEnabled', 'false'),
   ('ModelRatio', '{"gpt-4o":1,"text-embedding-3-small":1}'),
@@ -365,9 +411,9 @@ VALUES ('vip', 'vip-tiered-model', 101, TRUE, 30, 10), ('default', 'dynamic-tier
 SQL
 
 preflight_port Rust_HTTP "$rust_port"
-DATABASE_URL="postgresql://lmm_models_runtime@127.0.0.1:$pg_port/models_rust" \
+DATABASE_URL="postgresql://lmm_test_models_runtime@127.0.0.1:$pg_port/lmm_test_models_rust" \
   VALKEY_URL="redis://:$rust_valkey_password@127.0.0.1:$rust_valkey_port" LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
-  LMM_RS_SLOT=blue LMM_SCHEMA_CONTRACT=1 CRYPTO_SECRET="$crypto_secret" SESSION_SECRET="$session_secret" \
+  LMM_RS_TEST_INSTANCE=1 LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port" LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 CRYPTO_SECRET="$crypto_secret" SESSION_SECRET="$session_secret" \
   LMM_MODELS_CACHE_TTL_SECONDS=60 PASSWORD_LOGIN_ENABLED=false GLOBAL_API_RATE_LIMIT_ENABLE=false \
   CRITICAL_RATE_LIMIT_ENABLE=false AUTH_COOKIE_SECURE=false VERSION=v0.0.0 \
   "$rust_binary" >"$runtime/rust.log" 2>&1 &
@@ -411,7 +457,7 @@ snapshot_rows() {
   if [[ $engine == go ]]; then
     sqlite3 -json "$runtime/legacy.db" 'SELECT id, username, status, "group", auth_version FROM users ORDER BY id; SELECT id, user_id, key, status, model_limits_enabled, model_limits, allow_ips FROM tokens ORDER BY id; SELECT "group", model, channel_id, enabled FROM abilities ORDER BY "group", model, channel_id' | jq -S .
   else
-    psql -h 127.0.0.1 -p "$pg_port" -d models_rust -qAt -c "SELECT json_build_object('users', (SELECT COALESCE(json_agg(to_jsonb(x) ORDER BY x.id), '[]'::json) FROM (SELECT id, username, status, \"group\", auth_version FROM users) x), 'tokens', (SELECT COALESCE(json_agg(to_jsonb(x) ORDER BY x.id), '[]'::json) FROM (SELECT id, user_id, key, status, model_limits_enabled, model_limits, allow_ips FROM tokens) x), 'abilities', (SELECT COALESCE(json_agg(to_jsonb(x) ORDER BY x.\"group\", x.model, x.channel_id), '[]'::json) FROM (SELECT \"group\", model, channel_id, enabled FROM abilities) x))" | jq -S .
+    psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -qAt -c "SELECT json_build_object('users', (SELECT COALESCE(json_agg(to_jsonb(x) ORDER BY x.id), '[]'::json) FROM (SELECT id, username, status, \"group\", auth_version FROM users) x), 'tokens', (SELECT COALESCE(json_agg(to_jsonb(x) ORDER BY x.id), '[]'::json) FROM (SELECT id, user_id, key, status, model_limits_enabled, model_limits, allow_ips FROM tokens) x), 'abilities', (SELECT COALESCE(json_agg(to_jsonb(x) ORDER BY x.\"group\", x.model, x.channel_id), '[]'::json) FROM (SELECT \"group\", model, channel_id, enabled FROM abilities) x))" | jq -S .
   fi
 }
 
@@ -583,44 +629,44 @@ done
 # Keep state mutations equivalent and flush both non-authoritative caches before
 # each request so the case asserts the authoritative inputs rather than a hot key.
 sqlite3 "$runtime/legacy.db" "UPDATE tokens SET model_limits_enabled = 1, model_limits = 'gpt-4o';"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE tokens SET model_limits_enabled = TRUE, model_limits = 'gpt-4o'" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE tokens SET model_limits_enabled = TRUE, model_limits = 'gpt-4o'" >/dev/null
 flush_valkey
 compare_case restricted 200
 jq -e '.data | length == 1 and .[0].id == "gpt-4o"' "$runtime/go.restricted" >/dev/null
 
 sqlite3 "$runtime/legacy.db" "UPDATE tokens SET allow_ips = '10.0.0.0/8';"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE tokens SET allow_ips = '10.0.0.0/8'" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE tokens SET allow_ips = '10.0.0.0/8'" >/dev/null
 flush_valkey
 compare_case cidr_denied 403
 jq -e '.error.code == "access_denied" and .error.message == "您的 IP 不在令牌允许访问的列表中 (request id: <REQUEST_ID>)"' "$runtime/go.cidr_denied" >/dev/null
 
 sqlite3 "$runtime/legacy.db" "UPDATE tokens SET allow_ips = ''; UPDATE users SET status = 2;"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE tokens SET allow_ips = ''; UPDATE users SET status = 2" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE tokens SET allow_ips = ''; UPDATE users SET status = 2" >/dev/null
 flush_valkey
 compare_case disabled_user 403
 
 # TokenAuth rejects disabled, expired, and exhausted credentials before the
 # handler. Keep both engines on fresh caches so these remain auth assertions.
 sqlite3 "$runtime/legacy.db" "UPDATE users SET status = 1; UPDATE tokens SET status = 0;"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE users SET status = 1; UPDATE tokens SET status = 0" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE users SET status = 1; UPDATE tokens SET status = 0" >/dev/null
 flush_valkey
 compare_case disabled_token 401
 
 sqlite3 "$runtime/legacy.db" "UPDATE tokens SET status = 1, expired_time = 1;"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE tokens SET status = 1, expired_time = 1" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE tokens SET status = 1, expired_time = 1" >/dev/null
 flush_valkey
 compare_case expired_token 401
 
 sqlite3 "$runtime/legacy.db" "UPDATE tokens SET expired_time = -1, unlimited_quota = 0, remain_quota = 0;"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE tokens SET expired_time = -1, unlimited_quota = FALSE, remain_quota = 0" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE tokens SET expired_time = -1, unlimited_quota = FALSE, remain_quota = 0" >/dev/null
 flush_valkey
 compare_case exhausted_token 401
 
 # Cache loss is allowed for this read path: Rust must still authorize against
 # PostgreSQL. The main readiness policy remains independently fail-closed.
 sqlite3 "$runtime/legacy.db" "UPDATE users SET status = 1; UPDATE tokens SET unlimited_quota = 1, remain_quota = 0;"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE users SET status = 1; UPDATE tokens SET unlimited_quota = TRUE, remain_quota = 0" >/dev/null
-stop_owned_process rust_valkey_pid
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE users SET status = 1; UPDATE tokens SET unlimited_quota = TRUE, remain_quota = 0" >/dev/null
+stop_owned_process rust_valkey_pid "$rust_valkey_port"
 [[ $(request rust "http://127.0.0.1:$rust_port") == 200 ]]
 start_valkey rust "$rust_valkey_port" "$rust_valkey_password" rust_valkey_pid
 [[ $(request rust "http://127.0.0.1:$rust_port") == 200 ]]
@@ -629,7 +675,7 @@ start_valkey rust "$rust_valkey_port" "$rust_valkey_password" rust_valkey_pid
 # Anthropic's legacy handler indexes the empty token-model-limit result before
 # writing the response. The recovery middleware returns this stable panic JSON.
 sqlite3 "$runtime/legacy.db" "UPDATE tokens SET model_limits_enabled = 1, model_limits = '';"
-psql -h 127.0.0.1 -p "$pg_port" -d models_rust -c "UPDATE tokens SET model_limits_enabled = TRUE, model_limits = ''" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -c "UPDATE tokens SET model_limits_enabled = TRUE, model_limits = ''" >/dev/null
 flush_valkey
 compare_alias_case empty_anthropic_model_limit 500 /v1/models -H 'x-api-key: sk-oraclemodelstoken' -H 'anthropic-version: 2023-06-01'
 

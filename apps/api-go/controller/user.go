@@ -32,10 +32,32 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type passwordRegistrationRequest struct {
+	model.User
+	AcceptedLegal bool `json:"accepted_legal"`
+}
+
 var (
 	errUserPasswordUnset    = errors.New("user password is not set")
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
+
+const userPasswordValidationPlaceholderLength = 8
+
+// validateUserUpdate keeps password optional for profile edits without using
+// a magic credential-like sentinel.  The placeholder is restored immediately,
+// so a real password equal to the old sentinel can no longer be discarded.
+func validateUserUpdate(user *model.User) error {
+	passwordOmitted := user.Password == ""
+	if passwordOmitted {
+		user.Password = strings.Repeat("x", userPasswordValidationPlaceholderLength)
+	}
+	err := common.Validate.Struct(user)
+	if passwordOmitted {
+		user.Password = ""
+	}
+	return err
+}
 
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
@@ -212,12 +234,16 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
 	}
-	var user model.User
-	err := common.DecodeJson(c.Request.Body, &user)
+	var request passwordRegistrationRequest
+	err := common.DecodeJson(c.Request.Body, &request)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	if !requirePublicRegistrationLegal(c, request.AcceptedLegal) {
+		return
+	}
+	user := request.User
 	user.Username = strings.TrimSpace(user.Username)
 	user.Email = model.NormalizeEmail(user.Email)
 	if user.Username == "" {
@@ -716,10 +742,7 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	if updatedUser.Password == "" {
-		updatedUser.Password = "$I_LOVE_U" // make Validator happy :)
-	}
-	if err := common.Validate.Struct(&updatedUser); err != nil {
+	if err := validateUserUpdate(&updatedUser); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
@@ -748,9 +771,6 @@ func UpdateUser(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
-	}
-	if updatedUser.Password == "$I_LOVE_U" {
-		updatedUser.Password = "" // rollback to what it should be
 	}
 	updatePassword := updatedUser.Password != ""
 	authzTouched := false
@@ -952,10 +972,7 @@ func UpdateSelf(c *gin.Context) {
 		return
 	}
 
-	if user.Password == "" {
-		user.Password = "$I_LOVE_U" // make Validator happy :)
-	}
-	if err := common.Validate.Struct(&user); err != nil {
+	if err := validateUserUpdate(&user); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidInput)
 		return
 	}
@@ -965,10 +982,6 @@ func UpdateSelf(c *gin.Context) {
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
-	}
-	if user.Password == "$I_LOVE_U" {
-		user.Password = "" // rollback to what it should be
-		cleanUser.Password = ""
 	}
 	updatePassword, err := checkUpdatePassword(user.OriginalPassword, user.Password, cleanUser.Id)
 	if err != nil {

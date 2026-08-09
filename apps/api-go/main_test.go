@@ -180,6 +180,61 @@ func TestBuildListenAddress(t *testing.T) {
 	}
 }
 
+func TestResolvePort(t *testing.T) {
+	tests := []struct {
+		name          string
+		primary       string
+		compatibility string
+		fallback      int
+		want          string
+	}{
+		{name: "PORT wins", primary: "3100", compatibility: "3200", fallback: 3000, want: "3100"},
+		{name: "legacy compose name is supported", compatibility: "3200", fallback: 3000, want: "3200"},
+		{name: "blank values use flag default", primary: " \t", compatibility: "", fallback: 3000, want: "3000"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := resolvePort(test.primary, test.compatibility, test.fallback); got != test.want {
+				t.Fatalf("resolvePort() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPprofListenAddress(t *testing.T) {
+	tests := []struct {
+		name        string
+		bindAddress string
+		port        string
+		want        string
+		wantErr     bool
+	}{
+		{name: "secure loopback default", want: "127.0.0.1:8005"},
+		{name: "explicit IPv6 and port", bindAddress: "::1", port: "18005", want: "[::1]:18005"},
+		{name: "invalid port", bindAddress: "127.0.0.1", port: "65536", wantErr: true},
+		{name: "hostname is rejected", bindAddress: "localhost", port: "18005", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := pprofListenAddress(test.bindAddress, test.port)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("pprofListenAddress() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("pprofListenAddress() unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("pprofListenAddress() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLocalAcceptancePolicy(t *testing.T) {
 	tests := []struct {
 		name           string

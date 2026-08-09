@@ -1,6 +1,8 @@
 # Rust 后端蓝绿部署
 
-这套原生 Arch Linux 部署骨架将 `lmm-api-rs` 的进程升级与数据库迁移拆开，并且默认只接管内部探针。生产 ownership 的实时结论必须读取 `apps/api-rust/tests/fixtures/routes/migration-gate.tsv`；本次审计快照仍是 **Go 356/356**。Rust 的候选实现绝不能被表述为已切流或已替代 Go。
+这套原生 Arch Linux 部署骨架将 `lmm-api-rs` 的进程升级与数据库迁移拆开，并且默认只接管内部探针。生产 ownership 的实时结论必须读取 `apps/api-rust/tests/fixtures/routes/migration-gate.tsv`。截至 2026-08-09，工作树中的 356 条路由仍全部标记为 Go owner；其中候选挂载、未验证差分和 blocked 行不能算作生产批准，而且当前 gate 校验本身仍有 `legacy-go` 状态不一致。Rust 的候选实现绝不能被表述为已切流或已替代 Go。
+
+同日 ArchDmit 只读核对显示：生产进程仍由 Go 提供业务流量并使用 PostgreSQL/专用 Valkey 6380；Rust slot 没有运行，Nginx 的 Rust upstream 只代表内部探针配置。运行中的 slot、`active-slot` 符号链接、`/readyz` 通过或历史演练记录，都不能证明 Rust 已接管生产业务。
 
 ## 边界与不变量
 
@@ -78,9 +80,9 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 
 ## 生产启用门
 
-目前不存在开启业务流量的配置选项；创建 `/etc/lmm-api-rs/production-routing.enabled` 反而会让部署器拒绝运行。只有在以下条件全部具备并经过独立评审后，才应新增生产 route ownership：
+目前不存在开启业务流量的配置选项；创建 `/etc/lmm-api-rs/production-routing.enabled` 反而会让部署器拒绝运行。生产目标即使已经运行 PostgreSQL，也必须先证明当前 schema contract、forward-only boundary 和 canaries；只有在以下条件全部具备并经过独立评审后，才应新增生产 route ownership：
 
-1. SQLite 数据完整迁移到 PostgreSQL，且有已验证的回滚/前滚策略。
+1. 活跃数据库身份、PostgreSQL schema contract 和 forward-only boundary 已重新验证；如果仍存在 SQLite 源，则其数据完整迁移并有已验证的前滚策略。
 2. Rust 与 Go 的路由、鉴权、配额、计费、流式响应和错误契约通过差分测试。
 3. schema 使用 expand/contract，N 与 N-1 均兼容，后台任务具有单例租约。
 4. WebSocket/SSE 具备明确的 drain/reconnect 行为，非幂等请求不会被代理重试。
@@ -90,19 +92,19 @@ staging 中可设置 `LMM_DEPLOY_FAIL_AT=install|ready|kill-before-reload|nginx-
 
 2026-08-01 在 ArchDmit 完成了不接管业务流量的原生 systemd 演练：
 
-- 使用隔离的 `lmm_api_rs_rehearsal` PostgreSQL 数据库和专用 Valkey `127.0.0.1:6380`；生产 SQLite 仍是 Go 服务的权威数据库。
+- 使用隔离的 `lmm_api_rs_rehearsal` PostgreSQL 数据库和专用 Valkey `127.0.0.1:6380`；该演练与生产数据库身份完全分离。
 - 从 port 9 bootstrap 首次发布 blue，再以同一 artifact revision 切换到 green，TLS build canary 分别确认 slot 身份。
 - 真实 nginx reload 首次 canary 命中了尚未退出的旧 worker 并返回 502。部署器现会在有界窗口内重试 readiness + revision + slot，确认新 worker 收敛后才提交。
 - 在 reload 后对部署进程执行 SIGKILL，后续独立 systemd reconcile 依据真实 TLS worker 完成 PREPARED → COMMITTED，对账 journal 保留原 artifact revision，并停止旧 slot。
 - `/api/status` 继续返回 200，`/v1/models` 继续由 Go 鉴权并返回 401；公网访问 Rust 内部探针返回 403。Go 服务在整场演练中 PID 未变化且 `NRestarts=0`。
 
-这份记录只证明内部探针蓝绿事务和崩溃恢复可用，不代表 PostgreSQL 生产迁移、Rust 业务路由兼容或完整后端切换已经完成。
+这份记录只证明内部探针蓝绿事务和崩溃恢复可用，不代表 PostgreSQL 生产迁移验收、Rust 业务路由兼容或完整后端切换已经完成。若当前生产配置已经指向 PostgreSQL，仍需以新一轮 live process、boundary、schema 和 canary 证据为准，不能把这次历史演练当作当前验收。
 
 ## 当前 Rust 业务迁移状态
 
 `apps/api-rust/tests/fixtures/routes/migration-gate.tsv` 是唯一的迁移记分牌，更新文档或新增候选代码不能改变其结论。路由数量、挂载状态、差分验证和独立审批会随本地迁移工作更新；不得把本文或任一历史演练记录当作当前迁移进度。后续审批或 gate 更新必须以 TSV 与下面命令重新生成的结果为准。生产 owner 的实时结论也只能由 TSV 给出；在得到明确的生产切换授权前，业务路由仍由 Go 承担。
 
-`migration_routes` 候选模块是否已经挂到根 router，完全由 `apps/api-rust/tests/fixtures/routes/migration-gate.tsv` 判定。候选 source、甚至其局部挂载本身都不等于 production route ownership，也不能计入迁移完成数；只有 TSV 记录的独立差分、审批与 owner 状态才能得出该结论。冻结的原始 Go 实现保存在被 Git 忽略的 `legacy-go-backup/`，只供行为 oracle 与差分测试读取，不能作为运行时回退路径。
+`migration_routes` 候选模块是否已经挂到根 router，完全由 `apps/api-rust/tests/fixtures/routes/migration-gate.tsv` 判定。候选 source、甚至其局部挂载本身都不等于 production route ownership，也不能计入迁移完成数；只有 TSV 记录的独立差分、审批与 owner 状态才能得出该结论。仓库内不再保留冻结的原始 Go oracle；历史差分测试必须显式传入仓库外的 immutable revision tree，例如 `LMM_GO_ORACLE_ROOT=/absolute/path/to/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9`。当前可能含未提交改动的 `apps/api-go` 不能作为冻结证据或运行时回退路径。
 
 目标架构中，PostgreSQL 18 是唯一持久化权威；Valkey 仅承载可重建的缓存、会话/撤销传播与限流状态。候选公共内容路径采用 cache-aside：Valkey miss、失败或超时必须回源 PostgreSQL，缓存写失败不得伪造成功。启用 fail-closed 全局限流时，Go 与 Rust 必须使用同一 dedicated Valkey URL 和相同 key contract；否则不得把任何业务 ownership 从 Go 分给 Rust。
 
@@ -118,4 +120,4 @@ bash apps/api-rust/tests/scripts/check-migration-plan.sh
 bash apps/api-rust/tests/scripts/check-real-integration-gates.sh
 ```
 
-上述命令不会启动服务、修改 upstream 或泄露凭据；只有每个 route 完成独立 TCP differential、集成门禁和审查后，才可由单独的变更更新 gate。
+上述命令不会启动服务、修改 upstream 或泄露凭据；如果 gate validator 失败（包括不一致的 `legacy-go`/mounted 状态），必须先修复 gate，而不能把候选行改写成通过。只有每个 route 完成独立 TCP differential、集成门禁和审查后，才可由单独的变更更新 gate。

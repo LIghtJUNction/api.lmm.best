@@ -22,10 +22,12 @@ import { describe, test } from 'node:test'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
 import { PAYMENT_TYPES } from '../constants'
+import type { TopupInfo } from '../types'
 import {
   cancelPaymentCheckout,
   dispatchSelectedPayment,
   getEpayMethods,
+  getTopupAvailability,
   isSafeHttpCheckoutUrl,
   isPaymentMethodCurrencySupported,
   isStripePayment,
@@ -36,7 +38,148 @@ import {
   submitPaymentForm,
 } from './payment'
 
+function topupInfo(overrides: Partial<TopupInfo> = {}): TopupInfo {
+  return {
+    enable_online_topup: false,
+    enable_stripe_topup: false,
+    pay_methods: [],
+    min_topup: 1,
+    stripe_min_topup: 1,
+    amount_options: [],
+    discount: {},
+    ...overrides,
+  }
+}
+
 describe('payment type classification', () => {
+  test('normalizes provider flags and concrete methods into usable payment availability', () => {
+    const originalConfig = useSystemConfigStore.getState().config
+    try {
+      useSystemConfigStore.setState((state) => ({
+        config: {
+          ...state.config,
+          currency: { ...state.config.currency, quotaDisplayType: 'USD' },
+        },
+      }))
+
+      assert.deepEqual(
+        getTopupAvailability(
+          topupInfo({
+            enable_online_topup: true,
+            enable_redemption: true,
+          })
+        ),
+        {
+          standardMethods: [],
+          waffoMethods: [],
+          creemProducts: [],
+          defaultQuotedType: null,
+          hasPaymentMethod: false,
+        }
+      )
+
+      const epay = getTopupAvailability(
+        topupInfo({
+          enable_online_topup: true,
+          pay_methods: [{ name: 'Alipay', type: 'alipay' }],
+        })
+      )
+      assert.deepEqual(
+        epay.standardMethods.map((method) => method.type),
+        ['alipay']
+      )
+      assert.equal(epay.defaultQuotedType, 'alipay')
+
+      assert.equal(
+        getTopupAvailability(
+          topupInfo({
+            enable_stripe_topup: true,
+            pay_methods: [{ name: 'Alipay', type: 'alipay' }],
+          })
+        ).hasPaymentMethod,
+        false
+      )
+      assert.equal(
+        getTopupAvailability(
+          topupInfo({
+            enable_stripe_topup: true,
+            pay_methods: [{ name: 'Stripe', type: PAYMENT_TYPES.STRIPE }],
+          })
+        ).defaultQuotedType,
+        PAYMENT_TYPES.STRIPE
+      )
+
+      const pancake = getTopupAvailability(
+        topupInfo({
+          enable_waffo_pancake_topup: true,
+          pay_methods: [
+            { name: 'Waffo Pancake', type: PAYMENT_TYPES.WAFFO_PANCAKE },
+          ],
+        })
+      )
+      assert.equal(pancake.defaultQuotedType, PAYMENT_TYPES.WAFFO_PANCAKE)
+
+      const waffo = getTopupAvailability(
+        topupInfo({
+          enable_waffo_topup: true,
+          waffo_pay_methods: [{ name: 'Card' }],
+        })
+      )
+      assert.equal(waffo.defaultQuotedType, PAYMENT_TYPES.WAFFO)
+      assert.equal(waffo.waffoMethods.length, 1)
+
+      const creem = getTopupAvailability(
+        topupInfo({
+          enable_creem_topup: true,
+          creem_products: [
+            {
+              name: 'Starter',
+              productId: 'starter',
+              price: 5,
+              quota: 10,
+              currency: 'USD',
+            },
+          ],
+        })
+      )
+      assert.equal(creem.hasPaymentMethod, true)
+      assert.equal(creem.defaultQuotedType, null)
+      assert.equal(creem.creemProducts.length, 1)
+    } finally {
+      useSystemConfigStore.setState((state) => ({
+        ...state,
+        config: originalConfig,
+      }))
+    }
+  })
+
+  test('rejects a configured Waffo Pancake method under an unsupported currency', () => {
+    const originalConfig = useSystemConfigStore.getState().config
+    try {
+      useSystemConfigStore.setState((state) => ({
+        config: {
+          ...state.config,
+          currency: { ...state.config.currency, quotaDisplayType: 'CNY' },
+        },
+      }))
+      const availability = getTopupAvailability(
+        topupInfo({
+          enable_waffo_pancake_topup: true,
+          pay_methods: [
+            { name: 'Waffo Pancake', type: PAYMENT_TYPES.WAFFO_PANCAKE },
+          ],
+        })
+      )
+      assert.equal(availability.hasPaymentMethod, false)
+      assert.equal(availability.defaultQuotedType, null)
+    } finally {
+      useSystemConfigStore.setState((state) => ({
+        ...state,
+        config: originalConfig,
+      }))
+    }
+  })
+
   test('keeps Waffo and Waffo Pancake on their dedicated flows', () => {
     assert.equal(isWaffoPayment(PAYMENT_TYPES.WAFFO), true)
     assert.equal(isWaffoPayment(PAYMENT_TYPES.WAFFO_PANCAKE), false)

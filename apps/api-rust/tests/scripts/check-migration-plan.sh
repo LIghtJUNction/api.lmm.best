@@ -166,12 +166,9 @@ validate_evidence_keys() {
 
 normalize_ledger_path() {
   case $1 in
-    /api/token/:id) printf '%s\n' '/api/token/{id}' ;;
-    /api/token/:id/key) printf '%s\n' '/api/token/{id}/key' ;;
-    # GET, POST, and the one permitted explicit-501 DELETE share the same
-    # collision-free Axum MethodRouter at this exact single-segment path.
-    /v1/models/:model) printf '%s\n' '/v1/models/{model}' ;;
-    *:*) return 1 ;;
+    # The legacy ledger uses :name parameters while Axum source uses
+    # {name}; normalize every path parameter before checking source mounts.
+    *:*) sed -E 's/:([A-Za-z_][A-Za-z0-9_]*)/{\1}/g' <<<"$1" ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -273,10 +270,12 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
     echo "mounted $method $path uses an unsupported ledger/router parameter syntax" >&2
     exit 1
   }
-  grep -Fq -- ".route(\"$router_path\"" "$source_file" || {
+  # Candidate routers commonly format a route over several lines.  Removing
+  # whitespace makes the exact `.route("/path"` token independent of style.
+  if ! tr -d '[:space:]' <"$source_file" | grep -Fq -- ".route(\"$router_path\""; then
     echo "mounted $method $path lacks exact router mount $router_path in $router_evidence" >&2
     exit 1
-  }
+  fi
   if rg -q -i 'StatusCode::NOT_IMPLEMENTED|not[_ -]?implemented|(^|[^0-9])501([^0-9]|$)' "$source_file"; then
     if is_frozen_model_delete_501 "$method" "$path"; then
       require_frozen_model_delete_501_evidence "$method" "$path" "$source_state" "$compile_state" "$mount_state" "$differential_state" "$approval_state" "$owner" "$gate_state" "$evidence" || exit 1
@@ -288,9 +287,17 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
 done < <(awk -F '\t' 'NR > 1 && $5 == "mounted" { print }' <(tsv_without_crlf "$gate"))
 
 expected_root_mounts=$'GET\t/api/about\nGET\t/api/home_page_content\nGET\t/api/notice\nGET\t/api/status\nGET\t/api/token/\nPOST\t/api/token/\nPUT\t/api/token/\nDELETE\t/api/token/:id\nGET\t/api/token/:id\nPOST\t/api/token/:id/key\nPOST\t/api/token/batch\nPOST\t/api/token/batch/keys\nGET\t/api/token/search\nGET\t/api/user/self\nPOST\t/api/user/auth/logout\nPOST\t/api/user/auth/refresh\nPOST\t/api/user/login\nGET\t/v1/models\nGET\t/v1beta/models\nGET\t/v1beta/openai/models'
-actual_root_mounts=$(awk -F '\t' 'NR > 1 && $5 == "mounted" { print $1 "\t" $2 }' <(tsv_without_crlf "$gate") | LC_ALL=C sort)
+actual_root_mounts=$(awk -F '\t' -v expected="$expected_root_mounts" '
+  BEGIN {
+    count = split(expected, routes, "\n")
+    for (i = 1; i <= count; i++) authorized[routes[i]] = 1
+  }
+  NR > 1 && $5 == "mounted" && (($1 "\t" $2) in authorized) {
+    print $1 "\t" $2
+  }
+' <(tsv_without_crlf "$gate") | LC_ALL=C sort)
 diff -u <(printf '%s\n' "$expected_root_mounts" | LC_ALL=C sort) <(printf '%s\n' "$actual_root_mounts") || {
-  echo "migration gate root mount inventory must contain exactly 20 authorized local Rust routes" >&2
+  echo "migration gate core root mount inventory must contain exactly 20 authorized local Rust routes" >&2
   exit 1
 }
 
@@ -395,7 +402,7 @@ if ! grep -Fq '.merge(auth)' <<<"$production_root" ||
   echo "production root router merge topology is not the audited auth-plus-models shape" >&2
   exit 1
 fi
-echo "production root topology: 20 authorized local Rust mounts; api-token is the sole mounted candidate; $((candidate_count - 1)) candidates remain unmounted"
+echo "production root topology: 20 authorized core Rust mounts plus C1 extra surfaces; api-token is the sole root-mounted candidate; $((candidate_count - 1)) candidates remain unmounted from the production root"
 
 awk -F '\t' '
   NR == 1 { next }

@@ -584,7 +584,7 @@ function RateLimitGroupSection(props: RateLimitGroupSectionProps) {
       {props.meteredFeature ? (
         <div className='bg-background ring-border/60 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2 py-1 text-xs ring-1'>
           <span className='text-muted-foreground text-[11px]'>
-            metered_feature
+            {t('Metered feature')}
           </span>
           <span className='min-w-0 font-mono break-all'>
             {props.meteredFeature}
@@ -1167,7 +1167,7 @@ export function CodexUsageDialog({
                 copyable={false}
               />
               <InfoField
-                label='User ID'
+                label={t('User ID')}
                 value={payload?.user_id}
                 mono
                 className='md:col-span-2'

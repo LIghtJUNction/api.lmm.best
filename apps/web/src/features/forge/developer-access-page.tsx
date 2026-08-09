@@ -120,8 +120,8 @@ export function DeveloperAccessPage() {
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('Developer access')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='mx-auto grid max-w-5xl overflow-hidden border border-[#141413] bg-[#FAF9F5] text-[#141413] md:grid-cols-[1fr_0.8fr]'>
-          <section className='bg-[#D97757] p-7 md:p-12'>
+        <div className='bg-card text-card-foreground border-border mx-auto grid max-w-5xl overflow-hidden border md:grid-cols-[1fr_0.8fr]'>
+          <section className='bg-primary text-primary-foreground p-7 md:p-12'>
             <HugeiconsIcon
               icon={Key01Icon}
               className='mb-10 size-9'
@@ -141,7 +141,7 @@ export function DeveloperAccessPage() {
             </p>
           </section>
           <section className='p-7 md:p-12'>
-            <div className='mb-9 flex items-start gap-3 border-b border-[#141413]/30 pb-6'>
+            <div className='border-border mb-9 flex items-start gap-3 border-b pb-6'>
               <HugeiconsIcon
                 icon={ShieldKeyIcon}
                 className='mt-0.5 size-5 shrink-0'
@@ -166,7 +166,7 @@ export function DeveloperAccessPage() {
               />
             </div>
             <Button
-              className='mt-7 w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+              className='mt-7 w-full rounded-sm'
               disabled={!name.trim() || submitting}
               onClick={handleCreate}
             >

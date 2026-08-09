@@ -135,6 +135,8 @@ function SectionTitle(props: {
   onReset?: () => void
   className?: string
 }) {
+  const { t } = useTranslation()
+
   return (
     <div
       className={cn(
@@ -149,7 +151,7 @@ function SectionTitle(props: {
           variant='secondary'
           className='size-4'
           onClick={props.onReset}
-          aria-label='Reset'
+          aria-label={t('Reset')}
         >
           <RotateCcw className='size-3' aria-hidden='true' />
         </Button>
@@ -166,12 +168,15 @@ function RadioGroupItem(props: {
   }
   isTheme?: boolean
 }) {
+  const { t } = useTranslation()
   const isTheme = props.isTheme ?? false
   return (
     <Item
       value={props.item.value}
       className={cn('group outline-none', 'transition duration-200 ease-in')}
-      aria-label={`Select ${props.item.label.toLowerCase()}`}
+      aria-label={t('Select {{label}}', {
+        label: props.item.label.toLowerCase(),
+      })}
       aria-describedby={`${props.item.value}-description`}
     >
       <div
@@ -182,7 +187,9 @@ function RadioGroupItem(props: {
         )}
         role='img'
         aria-hidden='false'
-        aria-label={`${props.item.label} option preview`}
+        aria-label={t('{{label}} option preview', {
+          label: props.item.label,
+        })}
       >
         <CircleCheck
           className={cn(

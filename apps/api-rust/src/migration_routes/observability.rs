@@ -358,8 +358,8 @@ impl ObservabilityMaintenance for UnavailableObservabilityMaintenance {
 #[derive(Clone)]
 pub struct PgObservabilityStore {
     pg: PgPool,
-    metrics: Arc<dyn ObservabilityMetrics>,
-    maintenance: Arc<dyn ObservabilityMaintenance>,
+    metrics: Option<Arc<dyn ObservabilityMetrics>>,
+    maintenance: Option<Arc<dyn ObservabilityMaintenance>>,
 }
 
 impl PgObservabilityStore {
@@ -373,8 +373,21 @@ impl PgObservabilityStore {
     ) -> Self {
         Self {
             pg,
-            metrics,
-            maintenance,
+            metrics: Some(metrics),
+            maintenance: Some(maintenance),
+        }
+    }
+
+    /// Builds the normal-listener read store. Only the PostgreSQL-backed
+    /// usage/log queries and the concrete Valkey affinity-cache reader are
+    /// available; process metrics and filesystem maintenance are absent by
+    /// construction and therefore cannot be mounted accidentally.
+    #[must_use]
+    pub fn postgres_read_only(pg: PgPool, metrics: Arc<dyn ObservabilityMetrics>) -> Self {
+        Self {
+            pg,
+            metrics: Some(metrics),
+            maintenance: None,
         }
     }
 }
@@ -386,18 +399,82 @@ impl ObservabilityStore for PgObservabilityStore {
             ObservabilityOperation::PerfMetrics
             | ObservabilityOperation::PerfMetricsSummary
             | ObservabilityOperation::ChannelAffinityUsageCacheStats => {
-                self.metrics.query(call.operation, &call.query).await
+                match self.metrics.as_ref() {
+                    Some(metrics) => metrics.query(call.operation, &call.query).await,
+                    None => Err(ObservabilityStoreError::Unavailable),
+                }
             }
             ObservabilityOperation::ClearDiskCache
             | ObservabilityOperation::ForceGc
             | ObservabilityOperation::CleanupLogFiles
             | ObservabilityOperation::LogFiles
             | ObservabilityOperation::ResetPerformanceStats
-            | ObservabilityOperation::PerformanceStats => {
-                self.maintenance.execute(call.operation, &call.query).await
-            }
+            | ObservabilityOperation::PerformanceStats => match self.maintenance.as_ref() {
+                Some(maintenance) => maintenance.execute(call.operation, &call.query).await,
+                None => Err(ObservabilityStoreError::Unavailable),
+            },
             _ => self.query_postgres(call).await,
         }
+    }
+}
+
+/// Valkey-backed reader for the legacy channel-affinity usage counters.
+///
+/// The Go route stores this JSON value in the process-wide hybrid cache. This
+/// adapter reads that same namespaced key and never mutates the cache.
+#[derive(Clone)]
+pub struct ValkeyObservabilityMetrics {
+    valkey: redis::Client,
+}
+
+impl ValkeyObservabilityMetrics {
+    const NAMESPACE: &'static str = "new-api:channel_affinity_usage_cache_stats:v1:";
+
+    #[must_use]
+    pub fn new(valkey: redis::Client) -> Self {
+        Self { valkey }
+    }
+}
+
+#[async_trait]
+impl ObservabilityMetrics for ValkeyObservabilityMetrics {
+    async fn query(
+        &self,
+        operation: ObservabilityOperation,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        if operation != ObservabilityOperation::ChannelAffinityUsageCacheStats {
+            return Err(ObservabilityStoreError::Unavailable);
+        }
+        let rule_name = query.get("rule_name").map_or("", String::as_str).trim();
+        let using_group = query.get("using_group").map_or("", String::as_str).trim();
+        let key_fp = query.get("key_fp").map_or("", String::as_str).trim();
+        let key = format!("{}{rule_name}\n{using_group}\n{key_fp}", Self::NAMESPACE);
+        let mut connection = self
+            .valkey
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        let raw: Option<String> = redis::cmd("GET")
+            .arg(key)
+            .query_async(&mut connection)
+            .await
+            .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        let mut data = match raw {
+            Some(raw) => serde_json::from_str::<Value>(&raw)
+                .map_err(|_| ObservabilityStoreError::Unavailable)?,
+            None => json!({}),
+        };
+        let Some(object) = data.as_object_mut() else {
+            return Err(ObservabilityStoreError::Unavailable);
+        };
+        object.insert("rule_name".to_owned(), Value::String(rule_name.to_owned()));
+        object.insert(
+            "using_group".to_owned(),
+            Value::String(using_group.to_owned()),
+        );
+        object.insert("key_fp".to_owned(), Value::String(key_fp.to_owned()));
+        Ok(data)
     }
 }
 
@@ -563,11 +640,7 @@ impl ObservabilityState {
     }
 }
 
-/// Builds the unmounted observability and maintenance routes.
-///
-/// `/api/system-info` and `/api/system-task` are intentionally absent: their
-/// PostgreSQL-backed ownership is already established in `control_admin`.
-pub fn observability_router(state: ObservabilityState) -> Router {
+fn observability_read_routes() -> Router<ObservabilityState> {
     Router::new()
         .route("/api/data/", get(all_quota_dates))
         .route("/api/data/users", get(quota_dates_by_user))
@@ -585,6 +658,23 @@ pub fn observability_router(state: ObservabilityState) -> Router {
         .route("/api/log/self/stat", get(self_log_stats))
         .route("/api/log/stat", get(log_stats))
         .route("/api/log/token", get(logs_by_token))
+}
+
+/// Builds the explicitly mounted storage-only observability read routes.
+///
+/// This is deliberately limited to the PostgreSQL-backed quota/log reads and
+/// the concrete Valkey affinity-cache read. Performance metrics and all
+/// process/filesystem maintenance routes remain outside this surface.
+pub fn observability_read_router(state: ObservabilityState) -> Router {
+    observability_read_routes().with_state(state)
+}
+
+/// Builds the unmounted observability and maintenance candidate routes.
+///
+/// `/api/system-info` and `/api/system-task` are intentionally absent: their
+/// PostgreSQL-backed ownership is already established in `control_admin`.
+pub fn observability_router(state: ObservabilityState) -> Router {
+    observability_read_routes()
         .route("/api/perf-metrics", get(perf_metrics))
         .route("/api/perf-metrics/summary", get(perf_metrics_summary))
         .route("/api/performance/disk_cache", delete(clear_disk_cache))

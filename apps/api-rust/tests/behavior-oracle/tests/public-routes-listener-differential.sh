@@ -7,12 +7,17 @@ set +x
 
 repo_root=$(git rev-parse --show-toplevel)
 legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
-legacy_root="$repo_root/legacy-go-backup/$legacy_revision"
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 approval_mode=${LMM_PUBLIC_ROUTES_APPROVAL:-0}
 probe_only=${LMM_PUBLIC_ROUTES_PROBE_ONLY:-0}
+hold_on_fail=${LMM_PUBLIC_HOLD_ON_FAIL:-0}
 curl_connect_timeout=2
 curl_max_time=12
-go_pid=''; rust_pid=''; go_valkey_pid=''; rust_valkey_pid=''; pg_pid=''
+go_pid=''; rust_pid=''; go_valkey_pid=''; rust_valkey_pid=''; pg_pid=''; cleanup_started=false
 
 case "$approval_mode:$probe_only" in 0:0|1:0|0:1) ;; *) echo 'approval mode refuses probe-only' >&2; exit 2;; esac
 for command in cargo curl flock git go initdb jq pg_ctl postgres psql sqlite3 ss valkey-cli valkey-server od sha256sum; do command -v "$command" >/dev/null || { echo "required command unavailable: $command" >&2; exit 1; }; done
@@ -29,7 +34,7 @@ build_input_hash() {
 }
 rust_source_sha256=$(build_input_hash)
 [[ $frozen_go_manifest_sha256 =~ ^[[:xdigit:]]{64}$ && $rust_source_sha256 =~ ^[[:xdigit:]]{64}$ ]] || exit 1
-stop_pg() { if [[ -n ${pg_pid:-} ]] && owned pg_pid && listener_owned "$pg_port" "$pg_pid"; then pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true; else [[ -z ${pg_pid:-} ]] || echo "refusing unowned PostgreSQL cleanup" >&2; fi; pg_pid=''; }
+stop_pg() { if [[ -n ${pg_pid:-} ]] && owned pg_pid && listener_owned "$pg_port" "$pg_pid"; then pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true; elif [[ -n ${pg_pid:-} ]]; then echo "cleanup: PostgreSQL: refusing to signal state=$(process_state pg_pid "$pg_port") pid=$pg_pid" >&2; fi; pg_pid=''; }
 if [[ $probe_only == 1 ]]; then
   jq -cn --arg go "$frozen_go_manifest_sha256" --arg rust "$rust_source_sha256" '{test:"public-routes-listener-differential",mode:"probe",approval_eligible:false,frozen_go_manifest_sha256:$go,rust_source_sha256:$rust,result:"passed"}'
   exit 0
@@ -42,9 +47,60 @@ flock -n 9 || { echo 'another listener differential owns the heavy lock' >&2; ex
 pid_start() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null; }
 # shellcheck disable=SC2034 # start times are accessed through deliberate indirection.
 record_pid() { local n=$1 p=$2 s; s=$(pid_start "$p") || return 1; printf -v "$n" %s "$p"; printf -v "${n}_start" %s "$s"; }
-owned() { local n=$1 p s want; p=${!n:-}; s=${n}_start; want=${!s:-}; [[ -n $p && -n $want && $(pid_start "$p") == "$want" ]]; }
-stop_owned() { local n=$1 p; p=${!n:-}; if [[ -n $p ]] && owned "$n"; then kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; elif [[ -n $p ]]; then echo "refusing recycled PID $p" >&2; fi; printf -v "$n" ''; printf -v "${n}_start" ''; }
-cleanup() { stop_owned go_pid; stop_owned rust_pid; stop_owned go_valkey_pid; stop_owned rust_valkey_pid; stop_pg; case "$runtime" in /tmp/lmm-public-listener.*) rm -rf "$runtime";; esac; case "$go_build" in "${TMPDIR:-/tmp}"/lmm-public-go.*) rm -rf "$go_build";; esac; }
+owned() { local n=$1 p s want; p=${!n:-}; s=${n}_start; want=${!s:-}; [[ -n $p && -n $want && $(pid_start "$p") == "$want" ]] && kill -0 "$p" 2>/dev/null; }
+process_state() {
+  local n=$1 port=${2:-} p actual want line
+  p=${!n:-}; want=${n}_start; want=${!want:-}
+  actual=$(pid_start "$p" 2>/dev/null || true)
+  [[ -z $actual ]] && { echo child-exited; return; }
+  [[ $actual != "$want" ]] && { echo pid-start-time-mismatch; return; }
+  if [[ -n $port ]]; then
+    line=$(ss -H -ltnp "sport = :$port" 2>/dev/null || true)
+    if [[ -n $line ]] && ! listener_owned "$port" "$p"; then echo port-owned-by-other; return; fi
+  fi
+  [[ -n $port && -z $line ]] && { echo child-not-listening; return; }
+  echo child-not-owned
+}
+stop_owned() {
+  local n=$1 port=${2:-} p
+  p=${!n:-}
+  if [[ -n $p ]] && owned "$n"; then kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true
+  elif [[ -n $p ]]; then echo "cleanup: $n: refusing to signal state=$(process_state "$n" "$port") pid=$p" >&2; fi
+  printf -v "$n" ''; printf -v "${n}_start" ''
+}
+go_redis_startup_diagnostics() {
+  local ping=failed
+  if VALKEYCLI_AUTH="$go_password" valkey-cli --no-auth-warning --command-timeout 1 -h 127.0.0.1 -p "$go_valkey_port" ping >/dev/null 2>&1; then ping=ok; fi
+  {
+    echo "Go listener startup diagnostics (credentials redacted):"
+    echo "go_http_endpoint=127.0.0.1:$go_port"
+    echo "go_redis_endpoint=127.0.0.1:$go_valkey_port"
+    echo "go_redis_authenticated_ping=$ping"
+    echo 'go_redis_listener_state:'
+    ss -H -ltnp "sport = :$go_valkey_port" 2>/dev/null || true
+    echo 'go_redis_connection_state:'
+    ss -H -tnp "sport = :$go_valkey_port or dport = :$go_valkey_port" 2>/dev/null || true
+    echo 'go.log tail:'
+    tail -n 120 "$runtime/go.log" 2>/dev/null || true
+    echo 'go-valkey.log tail:'
+    tail -n 80 "$runtime/go-valkey.log" 2>/dev/null || true
+  } >&2
+}
+cleanup() {
+  local exit_code=$? preserve=0
+  [[ $cleanup_started == false ]] || return "$exit_code"
+  cleanup_started=true
+  [[ $exit_code -ne 0 || $hold_on_fail == 1 ]] && preserve=1
+  stop_owned go_pid "$go_port"; stop_owned rust_pid "$rust_port"; stop_owned go_valkey_pid "$go_valkey_port"; stop_owned rust_valkey_pid "$rust_valkey_port"; stop_pg
+  case "$runtime" in
+    /tmp/lmm-public-listener.*)
+      if [[ $preserve == 1 ]]; then echo "preserved public listener runtime: $runtime" >&2; else rm -rf "$runtime"; fi
+      ;;
+    *) echo "refusing unexpected public runtime: $runtime" >&2;;
+  esac
+  case "$go_build" in "${TMPDIR:-/tmp}"/lmm-public-go.*) rm -rf "$go_build";; esac
+  return "$exit_code"
+}
 trap cleanup EXIT INT TERM
 random_port() { local p; while :; do p=$((20000 + 0x$(od -An -N2 -tx2 /dev/urandom | tr -d ' ') % 35000)); [[ -z $(ss -H -ltn "sport = :$p") ]] && { echo "$p"; return; }; done; }
 pg_port=$(random_port); go_port=$(random_port); rust_port=$(random_port); go_valkey_port=$(random_port); rust_valkey_port=$(random_port)
@@ -59,16 +115,25 @@ printf 'bind 127.0.0.1\nport %s\nrequirepass %s\nsave \nappendonly no\ndir %s\n'
 printf 'bind 127.0.0.1\nport %s\nrequirepass %s\nsave \nappendonly no\ndir %s\n' "$rust_valkey_port" "$rust_password" "$runtime" >"$rust_valkey_config"
 start_valkey_go() { port_free "$go_valkey_port" || return 1; valkey-server "$go_valkey_config" >"$runtime/go-valkey.log" 2>&1 & record_pid go_valkey_pid "$!"; for _ in {1..120}; do listener_owned "$go_valkey_port" "$go_valkey_pid" && valkey-cli --no-auth-warning -h 127.0.0.1 -p "$go_valkey_port" -a "$go_password" ping >/dev/null && return; sleep .05; done; return 1; }
 start_valkey_rust() { port_free "$rust_valkey_port" || return 1; valkey-server "$rust_valkey_config" >"$runtime/rust-valkey.log" 2>&1 & record_pid rust_valkey_pid "$!"; for _ in {1..120}; do listener_owned "$rust_valkey_port" "$rust_valkey_pid" && valkey-cli --no-auth-warning -h 127.0.0.1 -p "$rust_valkey_port" -a "$rust_password" ping >/dev/null && return; sleep .05; done; return 1; }
+start_go_listener() {
+  port_free "$go_port" || return 1
+  SQLITE_PATH="$runtime/go.db?_busy_timeout=30000" PORT="$go_port" REDIS_CONN_STRING="redis://:$(printf %s "$go_password")@127.0.0.1:$go_valkey_port" SESSION_SECRET='public-differential-synthetic' GLOBAL_API_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none GIN_MODE=release "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
+  local child=$!
+  if ! record_pid go_pid "$child" || ! wait_http "$go_port" /api/status "$go_pid"; then
+    go_redis_startup_diagnostics
+    return 1
+  fi
+}
 
 cargo build --manifest-path "$repo_root/apps/api-rust/Cargo.toml" -p lmm-api-rs --locked
 [[ $(build_input_hash) == "$rust_source_sha256" ]] || { echo 'Rust build inputs changed during differential' >&2; exit 1; }
 rust_binary_sha256=$(sha256sum "$repo_root/apps/api-rust/target/debug/lmm-api-rs" | awk '{print $1}')
 cp -a "$legacy_root/." "$go_build/source"; mkdir -p "$go_build/source/web/dist"; : >"$go_build/source/web/dist/index.html"; (cd "$go_build/source" && GOTOOLCHAIN=local CGO_ENABLED=1 go build -buildvcs=false -o "$runtime/legacy-go" .)
 start_valkey_go; start_valkey_rust
-port_free "$go_port" || exit 1; SQLITE_PATH="$runtime/go.db?_busy_timeout=30000" PORT="$go_port" REDIS_CONN_STRING="redis://:$(printf %s "$go_password")@127.0.0.1:$go_valkey_port" SESSION_SECRET='public-differential-synthetic' GLOBAL_API_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none GIN_MODE=release "$runtime/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"; wait_http "$go_port" /api/status "$go_pid"
+start_go_listener
 sqlite3 "$runtime/go.db" "INSERT OR REPLACE INTO options(key,value) VALUES ('Notice','notice value'),('About','about value'),('HomePageContent','home value');"
 stop_owned go_pid
-port_free "$go_port" || exit 1; SQLITE_PATH="$runtime/go.db?_busy_timeout=30000" PORT="$go_port" REDIS_CONN_STRING="redis://:$(printf %s "$go_password")@127.0.0.1:$go_valkey_port" SESSION_SECRET='public-differential-synthetic' GLOBAL_API_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none GIN_MODE=release "$runtime/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"; wait_http "$go_port" /api/status "$go_pid"
+start_go_listener
 port_free "$pg_port" || exit 1; initdb --no-locale --encoding=UTF8 --auth=trust -D "$runtime/pg" >/dev/null; pg_ctl -D "$runtime/pg" -l "$runtime/pg.log" -o "-h 127.0.0.1 -p $pg_port -k $runtime" -w start >/dev/null; record_pid pg_pid "$(head -n 1 "$runtime/pg/postmaster.pid")"; listener_owned "$pg_port" "$pg_pid" || { echo 'PostgreSQL listener ownership failed' >&2; exit 1; }; createdb -h 127.0.0.1 -p "$pg_port" public_diff
 psql -h 127.0.0.1 -p "$pg_port" -d public_diff -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
 CREATE ROLE lmm_public_runtime LOGIN; CREATE TABLE lmm_schema_contract(singleton BOOLEAN PRIMARY KEY,min_reader_version BIGINT NOT NULL,max_reader_version BIGINT NOT NULL); INSERT INTO lmm_schema_contract VALUES(true,1,1); CREATE TABLE options(key TEXT PRIMARY KEY,value TEXT); INSERT INTO options VALUES('Notice','notice value'),('About','about value'),('HomePageContent','home value'); CREATE TABLE custom_oauth_providers(id BIGINT PRIMARY KEY,name TEXT NOT NULL,slug TEXT NOT NULL,icon TEXT,enabled BOOLEAN,client_id TEXT,authorization_endpoint TEXT,scopes TEXT); CREATE TABLE setups(id BIGINT PRIMARY KEY); CREATE TABLE users(id BIGINT PRIMARY KEY,username TEXT,password TEXT NOT NULL,display_name TEXT,role BIGINT,status BIGINT,email TEXT,github_id TEXT,discord_id TEXT,oidc_id TEXT,wechat_id TEXT,telegram_id TEXT,"group" TEXT,quota BIGINT,used_quota BIGINT,request_count BIGINT,aff_code TEXT,aff_count BIGINT,aff_quota BIGINT,aff_history BIGINT,inviter_id BIGINT,linux_do_id TEXT,setting TEXT,stripe_customer TEXT,auth_version BIGINT,access_token TEXT,deleted_at TIMESTAMPTZ); CREATE TABLE user_sessions(sid TEXT PRIMARY KEY,user_id BIGINT,version BIGINT,user_auth_version BIGINT,status TEXT,refresh_hash CHAR(64),previous_refresh_hash TEXT,previous_valid_until BIGINT,login_method TEXT,ip TEXT,user_agent TEXT,created_at BIGINT,last_active_at BIGINT,expires_at BIGINT,revoked_at BIGINT,revoked_reason TEXT); CREATE TABLE two_fas(id BIGINT PRIMARY KEY,user_id BIGINT,is_enabled BOOLEAN,deleted_at TIMESTAMPTZ); CREATE TABLE casbin_rule(id BIGINT PRIMARY KEY,ptype TEXT,v0 TEXT,v1 TEXT,v2 TEXT,v3 TEXT); CREATE TABLE auth_flows(token_hash CHAR(64),purpose TEXT,user_id BIGINT,payload TEXT,created_at TIMESTAMPTZ,expires_at TIMESTAMPTZ,consumed_at TIMESTAMPTZ); CREATE SEQUENCE tokens_id_seq; CREATE TABLE tokens(id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'),user_id BIGINT NOT NULL,key VARCHAR(128) UNIQUE,status INTEGER DEFAULT 1,name TEXT DEFAULT '',created_time BIGINT DEFAULT 0,accessed_time BIGINT DEFAULT 0,expired_time BIGINT DEFAULT -1,remain_quota BIGINT DEFAULT 0,unlimited_quota BOOLEAN DEFAULT false,model_limits_enabled BOOLEAN DEFAULT false,model_limits TEXT,allow_ips TEXT DEFAULT '',used_quota BIGINT DEFAULT 0,"group" TEXT DEFAULT '',cross_group_retry BOOLEAN DEFAULT false,deleted_at TIMESTAMPTZ); GRANT USAGE ON SCHEMA public TO lmm_public_runtime; GRANT SELECT ON ALL TABLES IN SCHEMA public TO lmm_public_runtime; GRANT INSERT,UPDATE ON auth_flows TO lmm_public_runtime; GRANT SELECT,INSERT,UPDATE,DELETE ON tokens TO lmm_public_runtime; GRANT USAGE ON SEQUENCE tokens_id_seq TO lmm_public_runtime;

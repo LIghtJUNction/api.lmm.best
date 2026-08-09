@@ -1,6 +1,8 @@
+use lmm_api_rs::status::TurnstilePublicConfig;
 use lmm_application::ValkeyReadinessPolicy;
 use secrecy::{ExposeSecret, SecretString};
 use std::{
+    collections::BTreeMap,
     env,
     net::{IpAddr, SocketAddr},
     time::Duration,
@@ -58,6 +60,7 @@ pub struct Config {
     pub models_cache_ttl: Duration,
     pub auth_session_secret: SecretString,
     pub auth_password_login_enabled: bool,
+    pub auth_turnstile: TurnstileConfig,
     pub auth_cookie_secure: bool,
     pub auth_trusted_origins: Vec<String>,
     pub auth_anonymous_body_limit_bytes: usize,
@@ -80,6 +83,74 @@ pub struct Config {
     /// IPv6 loopback address (127.0.0.1 or ::1).  Mirrors Go's
     /// `LMM_LOCAL_ACCEPTANCE` startup policy.
     pub local_acceptance: bool,
+}
+
+/// The startup-owned Turnstile policy. The verification secret is never part
+/// of the public status representation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnstileConfig {
+    enabled: bool,
+    secret_key: Option<String>,
+}
+
+impl TurnstileConfig {
+    fn from_env() -> Result<Self, ConfigError> {
+        let enabled = boolean("TURNSTILE_CHECK_ENABLED", false)?;
+        turnstile_from_values(enabled, env::var("TURNSTILE_SECRET_KEY").ok().as_deref())
+    }
+
+    pub fn secret_key(&self) -> Option<String> {
+        self.secret_key.clone()
+    }
+
+    pub fn resolve_public(
+        &self,
+        options: &BTreeMap<String, String>,
+    ) -> Result<TurnstilePublicConfig, ConfigError> {
+        let database_enabled = match options
+            .get("TurnstileCheckEnabled")
+            .map(|value: &String| value.trim())
+        {
+            None | Some("") | Some("false" | "0") => false,
+            Some("true" | "1") => true,
+            Some(_) => return Err(ConfigError::Invalid("TurnstileCheckEnabled")),
+        };
+        if self.enabled != database_enabled {
+            return Err(ConfigError::Invalid("TurnstileCheckEnabled"));
+        }
+        let site_key = if self.enabled {
+            options
+                .get("TurnstileSiteKey")
+                .map(|value: &String| value.trim())
+                .filter(|site_key| !site_key.is_empty())
+                .map(str::to_owned)
+                .ok_or(ConfigError::Invalid("TurnstileSiteKey"))?
+        } else {
+            String::new()
+        };
+        Ok(TurnstilePublicConfig {
+            enabled: self.enabled,
+            site_key,
+        })
+    }
+}
+
+fn turnstile_from_values(
+    enabled: bool,
+    secret_key: Option<&str>,
+) -> Result<TurnstileConfig, ConfigError> {
+    let secret_key = match (enabled, secret_key) {
+        (true, None) => return Err(ConfigError::Missing("TURNSTILE_SECRET_KEY")),
+        (true, Some(secret)) if secret.trim().is_empty() => {
+            return Err(ConfigError::Invalid("TURNSTILE_SECRET_KEY"));
+        }
+        (_, Some(secret)) if !secret.trim().is_empty() => Some(secret.to_owned()),
+        _ => None,
+    };
+    Ok(TurnstileConfig {
+        enabled,
+        secret_key,
+    })
 }
 
 impl std::fmt::Debug for Config {
@@ -106,6 +177,15 @@ impl std::fmt::Debug for Config {
             .field(
                 "auth_password_login_enabled",
                 &self.auth_password_login_enabled,
+            )
+            .field("auth_turnstile_enabled", &self.auth_turnstile.enabled)
+            .field(
+                "auth_turnstile_secret_key",
+                &self
+                    .auth_turnstile
+                    .secret_key
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
             )
             .field("auth_cookie_secure", &self.auth_cookie_secure)
             .field("auth_trusted_origins", &self.auth_trusted_origins)
@@ -154,6 +234,14 @@ pub enum ConfigError {
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let test_instance = test_instance_enabled()?;
+        // This override belongs exclusively to the isolated test listener.
+        // Production deliberately never reads it, so a stray test variable
+        // cannot alter the deployed Valkey contract.
+        let test_valkey_port_override = if test_instance {
+            Some(test_valkey_port()?)
+        } else {
+            None
+        };
         let auth_cookie_secure =
             boolean_with_legacy("AUTH_COOKIE_SECURE", "SESSION_COOKIE_SECURE", false)?;
         let auth_trusted_origins = auth_trusted_origins(auth_cookie_secure)?;
@@ -184,6 +272,7 @@ impl Config {
             models_cache_ttl: models_cache_ttl()?,
             auth_session_secret: validated_secret(read("SESSION_SECRET")?, "SESSION_SECRET")?,
             auth_password_login_enabled: boolean("PASSWORD_LOGIN_ENABLED", false)?,
+            auth_turnstile: TurnstileConfig::from_env()?,
             auth_cookie_secure,
             auth_trusted_origins,
             auth_anonymous_body_limit_bytes: usize::try_from(positive_integer(
@@ -211,8 +300,8 @@ impl Config {
             test_instance,
             local_acceptance,
         };
-        if config.test_instance {
-            validate_test_instance_isolation(&config)?;
+        if let Some(test_valkey_port) = test_valkey_port_override {
+            validate_test_instance_isolation(&config, test_valkey_port)?;
         }
         Ok(config)
     }
@@ -222,11 +311,14 @@ impl Config {
 /// Do not permit a copied environment file to bridge that boundary: its database,
 /// database role, schema, and Valkey endpoint are all independently checked before
 /// a listener can bind.
-fn validate_test_instance_isolation(config: &Config) -> Result<(), ConfigError> {
+fn validate_test_instance_isolation(
+    config: &Config,
+    test_valkey_port: u16,
+) -> Result<(), ConfigError> {
     validate_test_listener(config.listen_addr)?;
     validate_test_slot(&config.slot)?;
     validate_test_database_url(&config.database_url)?;
-    validate_test_valkey_url(&config.valkey_url)?;
+    validate_test_valkey_url_with_port(&config.valkey_url, test_valkey_port)?;
     validate_test_secret(config.auth_session_secret.expose_secret(), "SESSION_SECRET")?;
     validate_test_secret(config.crypto_secret.expose_secret(), "CRYPTO_SECRET")?;
     Ok(())
@@ -308,6 +400,10 @@ fn test_namespace(value: &str) -> bool {
 }
 
 fn validate_test_valkey_url(raw: &str) -> Result<(), ConfigError> {
+    validate_test_valkey_url_with_port(raw, 6380)
+}
+
+fn validate_test_valkey_url_with_port(raw: &str, expected_port: u16) -> Result<(), ConfigError> {
     let url = reqwest::Url::parse(raw).map_err(|_| ConfigError::Invalid("VALKEY_URL"))?;
     let Some(host) = url.host_str() else {
         return Err(ConfigError::Invalid("VALKEY_URL"));
@@ -316,11 +412,31 @@ fn validate_test_valkey_url(raw: &str) -> Result<(), ConfigError> {
         || !host
             .parse::<IpAddr>()
             .is_ok_and(|address| address.is_loopback())
-        || url.port_or_known_default() != Some(6380)
+        || url.port_or_known_default() != Some(expected_port)
     {
         return Err(ConfigError::Invalid("VALKEY_URL"));
     }
     Ok(())
+}
+
+fn test_valkey_port() -> Result<u16, ConfigError> {
+    match env::var("LMM_RS_TEST_VALKEY_PORT") {
+        Ok(raw) => parse_test_valkey_port(Some(&raw)),
+        Err(env::VarError::NotPresent) => parse_test_valkey_port(None),
+        Err(env::VarError::NotUnicode(_)) => Err(ConfigError::Invalid("LMM_RS_TEST_VALKEY_PORT")),
+    }
+}
+
+fn parse_test_valkey_port(raw: Option<&str>) -> Result<u16, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(6380);
+    };
+    let port = raw
+        .parse::<u16>()
+        .map_err(|_| ConfigError::Invalid("LMM_RS_TEST_VALKEY_PORT"))?;
+    (port != 0)
+        .then_some(port)
+        .ok_or(ConfigError::Invalid("LMM_RS_TEST_VALKEY_PORT"))
 }
 
 fn validate_test_secret(secret: &str, name: &'static str) -> Result<(), ConfigError> {
@@ -643,7 +759,8 @@ fn boolean_with_legacy(
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, TrustedProxyPolicy};
+    use super::{Config, TrustedProxyPolicy, TurnstileConfig};
+    use lmm_api_rs::status::TurnstilePublicConfig;
     use lmm_application::ValkeyReadinessPolicy;
     use secrecy::SecretString;
     use std::{net::SocketAddr, time::Duration};
@@ -668,6 +785,10 @@ mod tests {
             models_cache_ttl: Duration::from_secs(60),
             auth_session_secret: SecretString::from("must-never-appear-in-debug".to_owned()),
             auth_password_login_enabled: false,
+            auth_turnstile: TurnstileConfig {
+                enabled: false,
+                secret_key: None,
+            },
             auth_cookie_secure: true,
             auth_trusted_origins: Vec::new(),
             auth_anonymous_body_limit_bytes: 512 * 1024,
@@ -704,6 +825,69 @@ mod tests {
                 "CRYPTO_SECRET"
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn enabled_turnstile_requires_a_nonblank_secret() {
+        assert!(matches!(
+            TurnstileConfig {
+                enabled: true,
+                secret_key: None,
+            }
+            .resolve_public(&std::collections::BTreeMap::from([(
+                "TurnstileCheckEnabled".to_owned(),
+                "true".to_owned(),
+            )])),
+            Err(super::ConfigError::Invalid("TurnstileSiteKey"))
+        ));
+        assert!(matches!(
+            super::turnstile_from_values(true, None),
+            Err(super::ConfigError::Missing("TURNSTILE_SECRET_KEY"))
+        ));
+        assert!(matches!(
+            super::turnstile_from_values(true, Some("  ")),
+            Err(super::ConfigError::Invalid("TURNSTILE_SECRET_KEY"))
+        ));
+    }
+
+    #[test]
+    fn turnstile_rejects_database_enable_mismatch_and_blank_site_key() {
+        let enabled = super::turnstile_from_values(true, Some("secret"))
+            .expect("nonblank secret is accepted");
+        assert!(matches!(
+            enabled.resolve_public(&std::collections::BTreeMap::new()),
+            Err(super::ConfigError::Invalid("TurnstileCheckEnabled"))
+        ));
+        assert!(matches!(
+            enabled.resolve_public(&std::collections::BTreeMap::from([(
+                "TurnstileCheckEnabled".to_owned(),
+                "true".to_owned(),
+            )])),
+            Err(super::ConfigError::Invalid("TurnstileSiteKey"))
+        ));
+    }
+
+    #[test]
+    fn turnstile_resolves_only_consistent_public_state() {
+        let config = super::turnstile_from_values(true, Some("secret"))
+            .expect("nonblank secret is accepted");
+        let public = config
+            .resolve_public(&std::collections::BTreeMap::from([
+                ("TurnstileCheckEnabled".to_owned(), "true".to_owned()),
+                ("TurnstileSiteKey".to_owned(), "site-key".to_owned()),
+            ]))
+            .expect("matching configuration is accepted");
+        assert_eq!(public.enabled, true);
+        assert_eq!(public.site_key, "site-key");
+
+        let disabled = super::turnstile_from_values(false, None)
+            .expect("disabled Turnstile does not require a secret");
+        assert_eq!(
+            disabled
+                .resolve_public(&std::collections::BTreeMap::new())
+                .expect("matching disabled configuration is accepted"),
+            TurnstilePublicConfig::disabled()
         );
     }
 
@@ -747,6 +931,14 @@ mod tests {
     #[test]
     fn test_instance_valkey_must_be_loopback_and_dedicated_port() {
         assert!(super::validate_test_valkey_url("redis://:secret@127.0.0.1:6380/0").is_ok());
+        assert!(
+            super::validate_test_valkey_url_with_port("redis://:secret@127.0.0.1:23456/0", 23456)
+                .is_ok()
+        );
+        assert!(
+            super::validate_test_valkey_url_with_port("redis://:secret@127.0.0.1:23456/0", 6380)
+                .is_err()
+        );
         for invalid in [
             "redis://:secret@127.0.0.1:6379/0",
             "redis://:secret@10.0.0.12:6380/0",
@@ -755,6 +947,18 @@ mod tests {
             assert!(
                 super::validate_test_valkey_url(invalid).is_err(),
                 "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_instance_valkey_port_override_is_nonzero_and_defaults_safely() {
+        assert_eq!(super::parse_test_valkey_port(None).unwrap(), 6380);
+        assert_eq!(super::parse_test_valkey_port(Some("23456")).unwrap(), 23456);
+        for invalid in ["", "0", "65536", "23456 "] {
+            assert!(
+                super::parse_test_valkey_port(Some(invalid)).is_err(),
+                "{invalid:?}"
             );
         }
     }

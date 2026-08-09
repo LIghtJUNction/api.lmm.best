@@ -30,6 +30,7 @@ import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ChallengeList } from './challenge-list'
+import { ForgeBountyHeroArt } from './forge-bounty-hero-art'
 import { ForgePublicShell } from './forge-public-shell'
 
 export function ForgeHome() {
@@ -42,23 +43,10 @@ export function ForgeHome() {
   return (
     <ForgePublicShell>
       <main>
-        <section className='relative overflow-hidden border-b border-[#141413] bg-[#FAF9F5] pt-16'>
-          <img
-            src='/forge-collaboration.webp'
-            alt=''
-            width={1200}
-            height={800}
-            fetchPriority='high'
-            className='absolute inset-0 size-full object-cover object-[64%_center] opacity-35 sm:opacity-60 md:opacity-100'
-            aria-hidden='true'
-          />
-          <div
-            className='absolute inset-0 bg-[#FAF9F5]/25 md:hidden'
-            aria-hidden='true'
-          />
-          <div className='relative z-10 mx-auto flex min-h-[calc(100svh-9rem)] max-w-7xl items-center px-5 py-10 md:px-10 md:py-12'>
-            <div className='max-w-xl md:max-w-[32rem]'>
-              <p className='mb-5 flex items-center gap-2 text-xs font-bold uppercase before:block before:size-2 before:rounded-full before:bg-[#141413]'>
+        <section className='border-border bg-background border-b pt-16'>
+          <div className='mx-auto grid min-h-[calc(100svh-9rem)] max-w-7xl items-center gap-10 px-5 py-10 md:px-10 md:py-12 lg:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)] lg:gap-6'>
+            <div className='relative z-10 max-w-xl'>
+              <p className='before:bg-foreground mb-5 flex items-center gap-2 text-xs font-bold uppercase before:block before:size-2 before:rounded-full'>
                 {t('Open-source work, made accountable')}
               </p>
               <h1 className='mb-7 max-w-3xl font-serif text-5xl leading-[1.02] font-normal md:text-7xl'>
@@ -72,7 +60,7 @@ export function ForgeHome() {
               <div className='flex flex-col gap-3 sm:flex-row'>
                 <Button
                   size='lg'
-                  className='rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+                  className='rounded-sm'
                   render={<Link to='/challenges' />}
                 >
                   {t('Browse challenges')}
@@ -86,7 +74,7 @@ export function ForgeHome() {
                 <Button
                   size='lg'
                   variant='outline'
-                  className='rounded-sm border-[#141413] bg-[#FAF9F5]/70 hover:bg-[#FAF9F5]'
+                  className='rounded-sm'
                   render={
                     user ? (
                       <Link to={workspaceTarget} />
@@ -99,12 +87,13 @@ export function ForgeHome() {
                 </Button>
               </div>
             </div>
+            <ForgeBountyHeroArt />
           </div>
         </section>
 
-        <section className='border-b border-[#141413] bg-[#FAF9F5]'>
+        <section className='border-border bg-background border-b'>
           <div className='mx-auto grid max-w-7xl md:grid-cols-[250px_1fr] md:px-10'>
-            <div className='border-b border-[#141413]/30 px-5 py-8 md:border-r md:border-b-0 md:px-0 md:pr-8'>
+            <div className='border-border border-b px-5 py-8 md:border-r md:border-b-0 md:px-0 md:pr-8'>
               <p className='mb-3 text-xs font-bold uppercase'>
                 {t('Live board')}
               </p>
@@ -118,7 +107,7 @@ export function ForgeHome() {
               </p>
               <Link
                 to='/challenges'
-                className='inline-flex items-center gap-2 border-b border-[#141413] pb-1 text-sm font-bold'
+                className='border-foreground inline-flex items-center gap-2 border-b pb-1 text-sm font-bold'
               >
                 {t('View all')}
                 <HugeiconsIcon
@@ -137,7 +126,7 @@ export function ForgeHome() {
 
         <section
           id='workflow'
-          className='border-b border-[#141413] py-20 md:py-28'
+          className='border-border border-b py-20 md:py-28'
         >
           <div className='mx-auto max-w-7xl px-5 md:px-10'>
             <div className='mb-14 grid gap-8 md:grid-cols-2 md:items-end'>
@@ -150,7 +139,7 @@ export function ForgeHome() {
                 )}
               </p>
             </div>
-            <div className='grid border-t-2 border-[#141413] sm:grid-cols-2 lg:grid-cols-4'>
+            <div className='border-foreground grid border-t-2 sm:grid-cols-2 lg:grid-cols-4'>
               {[
                 [
                   '01',
@@ -175,9 +164,9 @@ export function ForgeHome() {
               ].map(([index, title, description]) => (
                 <article
                   key={index}
-                  className='relative min-h-64 border-b border-[#141413]/25 py-7 sm:odd:border-r sm:odd:pr-6 sm:even:pl-6 lg:border-r lg:border-b-0 lg:px-6 lg:first:pl-0 lg:last:border-r-0'
+                  className='border-border relative min-h-64 border-b py-7 sm:odd:border-r sm:odd:pr-6 sm:even:pl-6 lg:border-r lg:border-b-0 lg:px-6 lg:first:pl-0 lg:last:border-r-0'
                 >
-                  <span className='absolute -top-2 left-0 size-4 rounded-full bg-[#141413] lg:left-6 lg:first:left-0' />
+                  <span className='bg-foreground absolute -top-2 left-0 size-4 rounded-full lg:left-6 lg:first:left-0' />
                   <span className='mb-12 block text-xs font-bold'>{index}</span>
                   <h3 className='mb-4 font-serif text-2xl font-medium'>
                     {t(title)}
@@ -191,7 +180,7 @@ export function ForgeHome() {
           </div>
         </section>
 
-        <section className='border-b border-[#141413] bg-[#E4DED0] py-16 md:py-20'>
+        <section className='border-border bg-muted/60 border-b py-16 md:py-20'>
           <div className='mx-auto grid max-w-7xl gap-8 px-5 md:grid-cols-[auto_1fr_auto] md:items-center md:px-10'>
             <HugeiconsIcon
               icon={WalletCardsIcon}
@@ -211,7 +200,7 @@ export function ForgeHome() {
             </div>
             <Button
               variant='outline'
-              className='rounded-sm border-[#141413] bg-[#FAF9F5] hover:bg-[#FAF9F5]/80'
+              className='rounded-sm'
               render={<Link to='/pricing' />}
             >
               {t('View access options')}
@@ -225,7 +214,7 @@ export function ForgeHome() {
           </div>
         </section>
 
-        <section className='border-b border-[#141413] bg-[#BCD1CA] py-20 md:py-28'>
+        <section className='border-border bg-accent/60 border-b py-20 md:py-28'>
           <div className='mx-auto grid max-w-7xl gap-12 px-5 md:grid-cols-[0.9fr_1.1fr] md:px-10'>
             <div>
               <HugeiconsIcon
@@ -243,7 +232,7 @@ export function ForgeHome() {
                 )}
               </p>
             </div>
-            <dl className='border-t-2 border-[#141413]'>
+            <dl className='border-foreground border-t-2'>
               {[
                 [
                   'Challenge',
@@ -260,7 +249,7 @@ export function ForgeHome() {
               ].map(([term, description]) => (
                 <div
                   key={term}
-                  className='grid gap-2 border-b border-[#141413]/35 py-6 sm:grid-cols-[130px_1fr] sm:gap-6'
+                  className='border-border grid gap-2 border-b py-6 sm:grid-cols-[130px_1fr] sm:gap-6'
                 >
                   <dt className='text-xs font-bold uppercase'>{t(term)}</dt>
                   <dd className='font-serif text-lg'>{t(description)}</dd>

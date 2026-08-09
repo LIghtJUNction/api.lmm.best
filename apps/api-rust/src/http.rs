@@ -12,14 +12,15 @@ use axum::{
     routing::get,
 };
 use lmm_api_rs::auth::{
-    AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, UserAuthPolicyError, enforce_user_auth,
+    AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, UserAuthPolicyError,
+    enforce_user_auth,
 };
 use lmm_api_rs::{
     ClientIpKey, PreserveLegacyEmptyError, RequestContext,
     auth::{AuthHttpState, auth_router},
     legacy_empty_response,
     migration_routes::api_token::{ApiTokenHttpState, ApiTokenPrincipal, api_token_router},
-    models::{ModelsHttpState, models_router},
+    models::{ModelsHttpState, ModelsService, models_router},
     status::StatusHttpState,
 };
 use lmm_application::{
@@ -62,13 +63,22 @@ struct AuthLegacyHeaderState {
     version: String,
 }
 
-/// Isolated dependencies for the nine API-token routes. Only an explicit
-/// `test_instance` candidate listener supplies this mount; the normal listener
-/// passes `None` because Go owns the production route surface.
+/// Isolated dependencies for the nine API-token routes. The normal C1
+/// listener uses current-Go policy; the explicit `test_instance` candidate
+/// listener selects historical frozen-ledger parity.
+#[derive(Clone)]
+enum ApiTokenDiscoveryPolicy {
+    /// Current-Go-compatible policy used by the explicitly wired C1 listener.
+    CurrentGo(Arc<dyn ModelsService>),
+    /// Historical frozen-ledger parity: UserAuth plus token ownership only.
+    HistoricalFrozenGoParity,
+}
+
 #[derive(Clone)]
 pub struct ApiTokenMount {
     state: ApiTokenHttpState,
     auth: Arc<dyn DashboardAuth>,
+    discovery_policy: ApiTokenDiscoveryPolicy,
     valkey: redis::Client,
     dependency_timeout: std::time::Duration,
     search_rate_limit_enabled: bool,
@@ -90,12 +100,33 @@ impl ApiTokenMount {
         Self {
             state,
             auth,
+            discovery_policy: ApiTokenDiscoveryPolicy::HistoricalFrozenGoParity,
             valkey,
             dependency_timeout,
             search_rate_limit_enabled,
             search_rate_limit,
             search_rate_limit_window,
         }
+    }
+
+    /// Opts a non-parity API-token mount into the model service's current
+    /// dashboard discovery policy. Frozen Go parity mounts omit this builder
+    /// and therefore use only `UserAuth` plus token ownership.
+    #[must_use]
+    pub fn with_current_dashboard_discovery_policy(
+        mut self,
+        service: Arc<dyn ModelsService>,
+    ) -> Self {
+        self.discovery_policy = ApiTokenDiscoveryPolicy::CurrentGo(service);
+        self
+    }
+
+    /// Names the historical frozen-ledger behavior explicitly for candidate
+    /// and differential test mounts.
+    #[must_use]
+    pub fn with_historical_frozen_go_parity(mut self) -> Self {
+        self.discovery_policy = ApiTokenDiscoveryPolicy::HistoricalFrozenGoParity;
+        self
     }
 }
 
@@ -145,8 +176,9 @@ pub fn router(state: AppState, auth: AuthHttpState, models: ModelsHttpState) -> 
     router_with_api_token(state, auth, models, None)
 }
 
-/// Builds a listener route surface. Only an explicit `test_instance` candidate
-/// listener may pass an API-token mount; the normal listener must pass `None`.
+/// Builds a listener route surface with an optional explicitly policy-bound
+/// API-token mount. The normal C1 listener selects current-Go policy; the
+/// `test_instance` candidate selects historical frozen-ledger parity.
 pub fn router_with_api_token(
     state: AppState,
     auth: AuthHttpState,
@@ -156,15 +188,15 @@ pub fn router_with_api_token(
     router_with_api_token_and_extra(state, auth, models, api_token, None)
 }
 
-/// Builds the Go-owned production route surface and, when supplied, a
-/// candidate-only API-token and caller-owned extra surface under one listener
-/// boundary.
+/// Builds the listener route surface and, when supplied, an API-token mount
+/// plus caller-owned extra surface under one listener boundary. Mounting the
+/// C1 routes does not transfer production ownership from Go.
 ///
 /// `extra_surface` must already contain every authorization, rate-limit, and
 /// provider boundary it requires. This function deliberately only merges it
 /// before applying the listener-wide fallback, 405, CORS, and request-boundary
-/// middleware once. The normal listener passes `None` for both optional
-/// surfaces; only the explicit `test_instance` candidate listener mounts them.
+/// middleware once. The caller remains responsible for choosing the
+/// historical parity or current-Go API-token policy before mounting it.
 pub fn router_with_api_token_and_extra(
     state: AppState,
     auth: AuthHttpState,
@@ -188,6 +220,7 @@ fn production_surface(
 ) -> Router {
     let router = Router::new()
         .route("/livez", get(livez))
+        .route("/api/livez", get(livez))
         .route("/readyz", get(readyz))
         .route("/_internal/build", get(build))
         .route("/api/status", get(status))
@@ -238,8 +271,8 @@ fn finalize_listener(router: Router, state: AppState) -> Router {
         version: state.status.version().to_owned(),
     };
     router
-        .fallback(not_found)
-        .method_not_allowed_fallback(not_found)
+        .fallback(root_not_found)
+        .method_not_allowed_fallback(root_not_found)
         .layer(middleware::from_fn(legacy_models_cors))
         .layer(middleware::from_fn_with_state(boundary, request_boundary))
 }
@@ -367,74 +400,52 @@ async fn authenticate_api_token_dashboard_user(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let locale = ApiTokenLocale::from_request(&request);
+    let current_go_policy = matches!(
+        &mount.discovery_policy,
+        ApiTokenDiscoveryPolicy::CurrentGo(_)
+    );
     let Some(credential) = dashboard_credential(request.headers()) else {
-        return api_token_auth_error(
-            locale,
-            StatusCode::UNAUTHORIZED,
-            "AUTH_UNAUTHORIZED",
-            ApiTokenAuthMessage::InvalidAccessToken,
-        );
+        return if current_go_policy {
+            discovery_not_found()
+        } else {
+            discovery_unauthorized()
+        };
     };
     let user = match mount.auth.self_user(SecretString::from(credential)).await {
         Ok(user) => user,
-        Err(error) => {
-            let (status, code, message) = match error.kind {
-                AuthErrorKind::TokenExpired => (
-                    StatusCode::UNAUTHORIZED,
-                    "AUTH_TOKEN_EXPIRED",
-                    ApiTokenAuthMessage::NotLoggedIn,
-                ),
-                AuthErrorKind::SessionRevoked => (
-                    StatusCode::UNAUTHORIZED,
-                    "AUTH_SESSION_REVOKED",
-                    ApiTokenAuthMessage::NotLoggedIn,
-                ),
-                AuthErrorKind::UserDisabled => (
-                    StatusCode::UNAUTHORIZED,
-                    "AUTH_USER_DISABLED",
-                    ApiTokenAuthMessage::UserBanned,
-                ),
-                AuthErrorKind::Unauthorized => (
-                    StatusCode::UNAUTHORIZED,
-                    "AUTH_UNAUTHORIZED",
-                    ApiTokenAuthMessage::InvalidAccessToken,
-                ),
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "AUTH_INTERNAL_ERROR",
-                    ApiTokenAuthMessage::DatabaseError,
-                ),
-            };
-            return api_token_auth_error(locale, status, code, message);
-        }
+        Err(error) => return discovery_auth_error(error, current_go_policy),
     };
-    match enforce_user_auth(&user) {
-        Ok(()) => {}
-        Err(UserAuthPolicyError::UserDisabled) => {
-            return api_token_auth_error(
-                locale,
-                StatusCode::UNAUTHORIZED,
-                "AUTH_USER_DISABLED",
-                ApiTokenAuthMessage::UserBanned,
-            );
+    if current_go_policy {
+        let discovery_allowed = match &mount.discovery_policy {
+            ApiTokenDiscoveryPolicy::CurrentGo(service) => {
+                service.dashboard_discovery_access(&user).await
+            }
+            ApiTokenDiscoveryPolicy::HistoricalFrozenGoParity => {
+                unreachable!("current-Go policy flag must match the API-token discovery policy")
+            }
+        };
+        match discovery_allowed {
+            Ok(true) => {}
+            // ConsoleAccessGate conceals trust failures and its own lookup
+            // errors before UserAuth gets a chance to expose a credential
+            // classification.
+            Ok(false) | Err(_) => return discovery_not_found(),
         }
-        Err(UserAuthPolicyError::InsufficientPrivilege) => {
-            return api_token_auth_error(
-                locale,
-                StatusCode::FORBIDDEN,
+    }
+    if let Err(error) = enforce_user_auth(&user) {
+        return match error {
+            UserAuthPolicyError::UserDisabled => {
+                discovery_unauthorized_with_code("AUTH_USER_DISABLED", "User has been banned")
+            }
+            UserAuthPolicyError::InsufficientPrivilege => discovery_forbidden_with_code(
                 "AUTH_INSUFFICIENT_PRIVILEGE",
-                ApiTokenAuthMessage::InsufficientPrivilege,
-            );
-        }
-        Err(UserAuthPolicyError::InvalidUserInfo) => {
-            return api_token_auth_error(
-                locale,
-                StatusCode::UNAUTHORIZED,
+                "Unauthorized, insufficient privileges",
+            ),
+            UserAuthPolicyError::InvalidUserInfo => discovery_unauthorized_with_code(
                 "AUTH_USER_INVALID",
-                ApiTokenAuthMessage::InvalidUserInfo,
-            );
-        }
+                "Unauthorized, invalid user info",
+            ),
+        };
     }
     request.extensions_mut().insert(ApiTokenPrincipal {
         user_id: user.id,
@@ -499,12 +510,7 @@ async fn enforce_api_token_search_rate_limit(
         return next.run(request).await;
     }
     let Some(principal) = request.extensions().get::<ApiTokenPrincipal>() else {
-        return api_token_auth_error(
-            ApiTokenLocale::from_request(&request),
-            StatusCode::UNAUTHORIZED,
-            "AUTH_UNAUTHORIZED",
-            ApiTokenAuthMessage::InvalidAccessToken,
-        );
+        return discovery_unauthorized();
     };
     const SCRIPT: &str = r#"
 local count = redis.call('INCR', KEYS[1])
@@ -533,6 +539,90 @@ return {0, ttl}
     }
 }
 
+fn discovery_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"message": "Not Found"})),
+    )
+        .into_response()
+}
+
+fn discovery_unauthorized() -> Response {
+    discovery_unauthorized_with_code("AUTH_UNAUTHORIZED", "Unauthorized, invalid access token")
+}
+
+fn discovery_unauthorized_with_code(code: &'static str, message: &'static str) -> Response {
+    let mut response = (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "success": false,
+            "code": code,
+            "message": message,
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+}
+
+fn discovery_forbidden_with_code(code: &'static str, message: &'static str) -> Response {
+    let mut response = (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({
+            "success": false,
+            "code": code,
+            "message": message,
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+}
+
+fn discovery_internal_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"message": "Internal Server Error"})),
+    )
+        .into_response()
+}
+
+fn discovery_auth_error(error: AuthError, current_go_policy: bool) -> Response {
+    if current_go_policy {
+        // ConsoleAccessGate hides every failed credential classification on a
+        // discovery route, including expired/revoked credentials and lookup
+        // errors. Only a user that passes this gate reaches UserAuth below.
+        return discovery_not_found();
+    }
+    match error.kind {
+        AuthErrorKind::UserDisabled => {
+            discovery_unauthorized_with_code("AUTH_USER_DISABLED", "User has been banned")
+        }
+        AuthErrorKind::Internal => discovery_internal_error(),
+        AuthErrorKind::TokenExpired => discovery_unauthorized_with_code(
+            "AUTH_TOKEN_EXPIRED",
+            "Unauthorized, not logged in and no access token provided",
+        ),
+        AuthErrorKind::SessionRevoked => discovery_unauthorized_with_code(
+            "AUTH_SESSION_REVOKED",
+            "Unauthorized, not logged in and no access token provided",
+        ),
+        AuthErrorKind::InvalidCredentials
+        | AuthErrorKind::InvalidRequest
+        | AuthErrorKind::Unauthorized => discovery_unauthorized(),
+        _ => discovery_unauthorized_with_code(
+            "AUTH_UNAUTHORIZED",
+            "Unauthorized, invalid access token",
+        ),
+    }
+}
+
 fn dashboard_credential(headers: &axum::http::HeaderMap) -> Option<String> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
     let mut fields = value.split_whitespace();
@@ -548,97 +638,6 @@ fn dashboard_credential(headers: &axum::http::HeaderMap) -> Option<String> {
         None if !first.is_empty() => Some(first.to_owned()),
         _ => None,
     }
-}
-
-#[derive(Clone, Copy)]
-enum ApiTokenLocale {
-    En,
-    ZhCn,
-    ZhTw,
-}
-
-#[derive(Clone, Copy)]
-enum ApiTokenAuthMessage {
-    InvalidAccessToken,
-    NotLoggedIn,
-    DatabaseError,
-    UserBanned,
-    InsufficientPrivilege,
-    InvalidUserInfo,
-}
-
-impl ApiTokenLocale {
-    fn from_request(request: &Request) -> Self {
-        let language = request
-            .headers()
-            .get(header::ACCEPT_LANGUAGE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if language.starts_with("zh-tw") {
-            Self::ZhTw
-        } else if language.starts_with("zh") {
-            Self::ZhCn
-        } else {
-            Self::En
-        }
-    }
-
-    const fn message(self, message: ApiTokenAuthMessage) -> &'static str {
-        match (self, message) {
-            (Self::En, ApiTokenAuthMessage::InvalidAccessToken) => {
-                "Unauthorized, invalid access token"
-            }
-            (Self::ZhCn, ApiTokenAuthMessage::InvalidAccessToken) => {
-                "无权进行此操作，access token 无效"
-            }
-            (Self::ZhTw, ApiTokenAuthMessage::InvalidAccessToken) => {
-                "無權進行此操作，access token 無效"
-            }
-            (Self::En, ApiTokenAuthMessage::NotLoggedIn) => {
-                "Unauthorized, not logged in and no access token provided"
-            }
-            (Self::ZhCn, ApiTokenAuthMessage::NotLoggedIn) => {
-                "无权进行此操作，未登录且未提供 access token"
-            }
-            (Self::ZhTw, ApiTokenAuthMessage::NotLoggedIn) => {
-                "無權進行此操作，未登入且未提供 access token"
-            }
-            (Self::En, ApiTokenAuthMessage::DatabaseError) => {
-                "Database error, please contact the administrator"
-            }
-            (Self::ZhCn, ApiTokenAuthMessage::DatabaseError) => "数据库出错，请联系管理员",
-            (Self::ZhTw, ApiTokenAuthMessage::DatabaseError) => "資料庫出錯，請聯繫管理員",
-            (Self::En, ApiTokenAuthMessage::UserBanned) => "User has been banned",
-            (Self::ZhCn, ApiTokenAuthMessage::UserBanned) => "用户已被封禁",
-            (Self::ZhTw, ApiTokenAuthMessage::UserBanned) => "使用者已被封禁",
-            (Self::En, ApiTokenAuthMessage::InsufficientPrivilege) => {
-                "Unauthorized, insufficient privileges"
-            }
-            (Self::ZhCn, ApiTokenAuthMessage::InsufficientPrivilege) => "无权进行此操作，权限不足",
-            (Self::ZhTw, ApiTokenAuthMessage::InsufficientPrivilege) => "無權進行此操作，權限不足",
-            (Self::En, ApiTokenAuthMessage::InvalidUserInfo) => "Unauthorized, invalid user info",
-            (Self::ZhCn, ApiTokenAuthMessage::InvalidUserInfo) => "无权进行此操作，用户信息无效",
-            (Self::ZhTw, ApiTokenAuthMessage::InvalidUserInfo) => "無權進行此操作，使用者資訊無效",
-        }
-    }
-}
-
-fn api_token_auth_error(
-    locale: ApiTokenLocale,
-    status: StatusCode,
-    code: &'static str,
-    message: ApiTokenAuthMessage,
-) -> Response {
-    (
-        status,
-        Json(serde_json::json!({
-            "success": false,
-            "code": code,
-            "message": locale.message(message),
-        })),
-    )
-        .into_response()
 }
 
 #[cfg(test)]
@@ -846,10 +845,16 @@ async fn home_page_content(State(state): State<AppState>, request: Request) -> R
 }
 
 async fn status(State(state): State<AppState>, request: Request) -> Response {
+    let credential = dashboard_credential(request.headers());
     let mut response = match request_client_ip_key(&request) {
         Some(client_ip) => match enforce_global_api_rate_limit(&state, &client_ip).await {
             Some(response) => response,
-            None => state.status.response().await,
+            None => {
+                state
+                    .status
+                    .response_with_authorization(credential.as_deref())
+                    .await
+            }
         },
         None => {
             tracing::error!("request peer address is unavailable for global API rate limiting");
@@ -1037,6 +1042,18 @@ async fn not_found(request: Request) -> Response {
     )
 }
 
+/// Gin's root `NoRoute`/method-mismatch response is deliberately smaller than
+/// the OpenAI-compatible relay error envelope. Keep this listener fallback
+/// separate from `not_found`, which is also used by route-local concealment
+/// paths and must retain its legacy error shape.
+async fn root_not_found(_request: Request) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"message": "Not Found"})),
+    )
+        .into_response()
+}
+
 fn relay_error_response(
     status: StatusCode,
     message: String,
@@ -1105,7 +1122,8 @@ mod tests {
     use super::{
         ApiTokenMount, AppState, LEGACY_REQUEST_ID_HEADER, LEGACY_VERSION_HEADER,
         REQUEST_ID_HEADER, RuntimeState, TrustedProxyPolicy, canonical_client_ip,
-        finalize_listener, migration_candidate_test_surface, preserves_legacy_non_json_error,
+        discovery_auth_error, discovery_unauthorized, finalize_listener,
+        migration_candidate_test_surface, preserves_legacy_non_json_error,
         router as production_router, router_with_api_token, router_with_api_token_and_extra,
     };
 
@@ -1170,6 +1188,101 @@ mod tests {
     };
     use tower::ServiceExt;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn anonymous_api_token_auth_uses_the_go_unauthorized_envelope() {
+        let response = discovery_unauthorized();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/json; charset=utf-8"
+        );
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("response body is readable"),
+        )
+        .expect("response body is JSON");
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "code": "AUTH_UNAUTHORIZED",
+                "message": "Unauthorized, invalid access token",
+                "success": false
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn dashboard_auth_error_codes_match_the_go_envelopes() {
+        for (kind, code, message) in [
+            (
+                AuthErrorKind::Unauthorized,
+                "AUTH_UNAUTHORIZED",
+                "Unauthorized, invalid access token",
+            ),
+            (
+                AuthErrorKind::TokenExpired,
+                "AUTH_TOKEN_EXPIRED",
+                "Unauthorized, not logged in and no access token provided",
+            ),
+            (
+                AuthErrorKind::SessionRevoked,
+                "AUTH_SESSION_REVOKED",
+                "Unauthorized, not logged in and no access token provided",
+            ),
+            (
+                AuthErrorKind::UserDisabled,
+                "AUTH_USER_DISABLED",
+                "User has been banned",
+            ),
+        ] {
+            let response = discovery_auth_error(AuthError::new(kind), false);
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{code}");
+            assert_eq!(
+                response.headers()[header::CONTENT_TYPE],
+                "application/json; charset=utf-8",
+                "{code}"
+            );
+            let body: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("response body is readable"),
+            )
+            .expect("response body is JSON");
+            assert_eq!(
+                body,
+                serde_json::json!({"code": code, "message": message, "success": false}),
+                "{code}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn current_go_discovery_auth_classification_failures_are_hidden() {
+        for kind in [
+            AuthErrorKind::InvalidCredentials,
+            AuthErrorKind::Unauthorized,
+            AuthErrorKind::TokenExpired,
+            AuthErrorKind::SessionRevoked,
+            AuthErrorKind::UserDisabled,
+            AuthErrorKind::Internal,
+        ] {
+            let response = discovery_auth_error(AuthError::new(kind), true);
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{kind:?}");
+            let body: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("response body is readable"),
+            )
+            .expect("response body is JSON");
+            assert_eq!(
+                body,
+                serde_json::json!({"message": "Not Found"}),
+                "{kind:?}"
+            );
+        }
+    }
 
     struct RootRelayBackend {
         request_ids: Arc<Mutex<Vec<String>>>,
@@ -1239,6 +1352,13 @@ mod tests {
     struct UnavailableAuth;
 
     struct UnavailableModels;
+
+    struct DiscoveryGateModels {
+        allow: bool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct FailingDiscoveryModels;
 
     #[derive(Clone)]
     struct TokenRouteAuth {
@@ -1362,6 +1482,38 @@ mod tests {
     }
 
     #[async_trait]
+    impl ModelsService for DiscoveryGateModels {
+        async fn list(&self, _request: ModelsRequest) -> Result<Vec<ModelView>, ModelsError> {
+            Ok(Vec::new())
+        }
+
+        async fn dashboard_discovery_access(
+            &self,
+            _user: &DashboardUser,
+        ) -> Result<bool, ModelsError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.allow)
+        }
+    }
+
+    #[async_trait]
+    impl ModelsService for FailingDiscoveryModels {
+        async fn list(&self, _request: ModelsRequest) -> Result<Vec<ModelView>, ModelsError> {
+            Ok(Vec::new())
+        }
+
+        async fn dashboard_discovery_access(
+            &self,
+            _user: &DashboardUser,
+        ) -> Result<bool, ModelsError> {
+            Err(ModelsError::new(
+                ModelsErrorKind::Database,
+                "discovery lookup failed",
+            ))
+        }
+    }
+
+    #[async_trait]
     impl StatusRepository for MockStatusRepository {
         async fn snapshot(&self) -> Result<StatusSnapshot, StatusRepositoryError> {
             Ok(StatusSnapshot {
@@ -1415,6 +1567,25 @@ mod tests {
     }
 
     fn mounted_api_token_router_for(user: DashboardUser) -> axum::Router {
+        mounted_api_token_router_for_with_discovery(user, None)
+    }
+
+    fn mounted_api_token_router_for_with_discovery(
+        user: DashboardUser,
+        discovery_service: Option<Arc<dyn ModelsService>>,
+    ) -> axum::Router {
+        mounted_api_token_router_for_with_services(
+            user,
+            discovery_service,
+            Arc::new(UnavailableModels),
+        )
+    }
+
+    fn mounted_api_token_router_for_with_services(
+        user: DashboardUser,
+        discovery_service: Option<Arc<dyn ModelsService>>,
+        models_service: Arc<dyn ModelsService>,
+    ) -> axum::Router {
         let auth: Arc<dyn DashboardAuth> = Arc::new(TokenRouteAuth { user });
         let pool = PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_millis(10))
@@ -1424,19 +1595,25 @@ mod tests {
             redis::Client::open("redis://127.0.0.1:1").expect("a lazy test Valkey client is valid");
         let token_state =
             ApiTokenHttpState::new(Arc::new(PgValkeyApiTokenService::new(pool, valkey.clone())));
+        let mount = ApiTokenMount::new(
+            token_state,
+            Arc::clone(&auth),
+            valkey,
+            std::time::Duration::from_millis(10),
+            false,
+            10,
+            std::time::Duration::from_secs(60),
+        )
+        .with_historical_frozen_go_parity();
+        let mount = match discovery_service {
+            Some(service) => mount.with_current_dashboard_discovery_policy(service),
+            None => mount,
+        };
         router_with_api_token(
             state(None),
             AuthHttpState::new(Arc::clone(&auth), false),
-            models_state(),
-            Some(ApiTokenMount::new(
-                token_state,
-                auth,
-                valkey,
-                std::time::Duration::from_millis(10),
-                false,
-                10,
-                std::time::Duration::from_secs(60),
-            )),
+            ModelsHttpState::new(models_service, "v0.0.0"),
+            Some(mount),
         )
     }
 
@@ -1486,6 +1663,22 @@ mod tests {
         router.oneshot(request).await.expect("router is infallible")
     }
 
+    async fn mounted_api_token_call_without_credential(
+        router: axum::Router,
+    ) -> axum::response::Response {
+        let mut request = Request::builder()
+            .method("GET")
+            .uri("/api/token/")
+            .body(Body::empty())
+            .expect("anonymous token request is valid");
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345"
+                .parse::<SocketAddr>()
+                .expect("test socket address is valid"),
+        ));
+        router.oneshot(request).await.expect("router is infallible")
+    }
+
     #[tokio::test]
     async fn mounted_api_token_routes_reject_disabled_dashboard_users_before_token_access() {
         let response = mounted_api_token_call(
@@ -1504,6 +1697,167 @@ mod tests {
         )
         .expect("auth error is JSON");
         assert_eq!(body["code"], "AUTH_USER_DISABLED");
+        assert_eq!(body["success"], false);
+    }
+
+    #[tokio::test]
+    async fn mounted_api_token_routes_share_the_models_discovery_gate() {
+        for (allow, expected_status) in [(true, StatusCode::OK), (false, StatusCode::NOT_FOUND)] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let service: Arc<dyn ModelsService> = Arc::new(DiscoveryGateModels {
+                allow,
+                calls: Arc::clone(&calls),
+            });
+            let response = mounted_api_token_call(
+                mounted_api_token_router_for_with_discovery(dashboard_user(7, 1, 1), Some(service)),
+                "POST",
+                "/api/token/",
+                Some("{"),
+                false,
+            )
+            .await;
+            assert_eq!(response.status(), expected_status, "allow={allow}");
+            assert_eq!(calls.load(Ordering::Relaxed), 1, "allow={allow}");
+        }
+    }
+
+    #[tokio::test]
+    async fn current_go_api_token_policy_hides_anonymous_and_unactivated_users() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service: Arc<dyn ModelsService> = Arc::new(DiscoveryGateModels {
+            allow: false,
+            calls: Arc::clone(&calls),
+        });
+        let anonymous =
+            mounted_api_token_call_without_credential(mounted_api_token_router_for_with_discovery(
+                dashboard_user(7, 1, 1),
+                Some(Arc::clone(&service)),
+            ))
+            .await;
+        assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        let unactivated = mounted_api_token_call(
+            mounted_api_token_router_for_with_discovery(dashboard_user(7, 1, 1), Some(service)),
+            "GET",
+            "/api/token/",
+            None,
+            false,
+        )
+        .await;
+        assert_eq!(unactivated.status(), StatusCode::NOT_FOUND);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn current_go_api_token_policy_hides_discovery_lookup_failure() {
+        let response = mounted_api_token_call(
+            mounted_api_token_router_for_with_discovery(
+                dashboard_user(7, 1, 1),
+                Some(Arc::new(FailingDiscoveryModels)),
+            ),
+            "GET",
+            "/api/token/",
+            None,
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body is readable"),
+        )
+        .expect("auth error is JSON");
+        assert_eq!(body, serde_json::json!({"message": "Not Found"}));
+    }
+
+    #[tokio::test]
+    async fn current_go_api_token_policy_preserves_disabled_credential_401() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let response = mounted_api_token_call(
+            mounted_api_token_router_for_with_discovery(
+                dashboard_user(7, 1, 2),
+                Some(Arc::new(DiscoveryGateModels { allow: true, calls })),
+            ),
+            "GET",
+            "/api/token/",
+            None,
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body is readable"),
+        )
+        .expect("auth error is JSON");
+        assert_eq!(body["code"], "AUTH_USER_DISABLED");
+    }
+
+    #[tokio::test]
+    async fn current_go_api_token_policy_exposes_user_auth_only_after_discovery() {
+        for (user, expected_status, expected_code) in [
+            (
+                dashboard_user(7, 0, 1),
+                StatusCode::FORBIDDEN,
+                "AUTH_INSUFFICIENT_PRIVILEGE",
+            ),
+            (
+                dashboard_user(7, 9, 1),
+                StatusCode::UNAUTHORIZED,
+                "AUTH_USER_INVALID",
+            ),
+            (
+                dashboard_user(0, 1, 1),
+                StatusCode::UNAUTHORIZED,
+                "AUTH_USER_INVALID",
+            ),
+        ] {
+            let response = mounted_api_token_call(
+                mounted_api_token_router_for_with_discovery(
+                    user,
+                    Some(Arc::new(DiscoveryGateModels {
+                        allow: true,
+                        calls: Arc::new(AtomicUsize::new(0)),
+                    })),
+                ),
+                "GET",
+                "/api/token/",
+                None,
+                false,
+            )
+            .await;
+            assert_eq!(response.status(), expected_status, "{expected_code}");
+            let body: Value = serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body is readable"),
+            )
+            .expect("auth error is JSON");
+            assert_eq!(body["code"], expected_code);
+            assert_eq!(body["success"], false);
+        }
+    }
+
+    #[tokio::test]
+    async fn frozen_api_token_parity_path_does_not_query_model_discovery_policy() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service: Arc<dyn ModelsService> = Arc::new(DiscoveryGateModels {
+            allow: false,
+            calls: Arc::clone(&calls),
+        });
+        let response = mounted_api_token_call(
+            mounted_api_token_router_for_with_services(dashboard_user(7, 1, 1), None, service),
+            "POST",
+            "/api/token/",
+            Some("{"),
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
@@ -1543,6 +1897,7 @@ mod tests {
             )
             .expect("auth error is JSON");
             assert_eq!(body["code"], expected_code);
+            assert_eq!(body["success"], false);
         }
     }
 
@@ -1581,6 +1936,7 @@ mod tests {
             )
             .expect("auth error is JSON");
             assert_eq!(body["code"], expected_code);
+            assert_eq!(body["success"], false);
         }
     }
 
@@ -1603,6 +1959,7 @@ mod tests {
             )
             .expect("auth error is JSON");
             assert_eq!(body["code"], "AUTH_USER_INVALID", "role {role}");
+            assert_eq!(body["success"], false, "role {role}");
         }
     }
 
@@ -1628,12 +1985,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mounted_api_token_routes_localize_invalid_dashboard_role_errors() {
-        for (accept_language, expected_message) in [
-            ("en-US", "Unauthorized, invalid user info"),
-            ("zh-CN", "无权进行此操作，用户信息无效"),
-            ("zh-TW", "無權進行此操作，使用者資訊無效"),
-        ] {
+    async fn mounted_api_token_routes_preserve_invalid_dashboard_role_errors() {
+        for accept_language in ["en-US", "zh-CN", "zh-TW"] {
             let response = mounted_api_token_call_with_locale(
                 mounted_api_token_router_for(dashboard_user(7, 9, 1)),
                 "GET",
@@ -1655,13 +2008,13 @@ mod tests {
             )
             .expect("auth error is JSON");
             assert_eq!(body["code"], "AUTH_USER_INVALID", "{accept_language}");
-            assert_eq!(body["message"], expected_message, "{accept_language}");
+            assert_eq!(body["success"], false, "{accept_language}");
         }
     }
 
     #[tokio::test]
     async fn mounted_api_token_routes_do_not_trust_a_forged_principal_extension() {
-        let router = mounted_api_token_router_for(dashboard_user(7, 1, 1));
+        let router = mounted_api_token_router_for(dashboard_user(7, 100, 1));
         let mut request = Request::builder()
             .method("GET")
             .uri("/api/token/")
@@ -1686,6 +2039,7 @@ mod tests {
         )
         .expect("auth error is JSON");
         assert_eq!(body["code"], "AUTH_UNAUTHORIZED");
+        assert_eq!(body["success"], false);
     }
 
     #[tokio::test]
@@ -1777,14 +2131,6 @@ mod tests {
             _kind: PublicContentKind,
         ) -> Result<Option<String>, PublicContentCacheError> {
             Ok(None)
-        }
-
-        async fn put(
-            &self,
-            _kind: PublicContentKind,
-            _value: &str,
-        ) -> Result<(), PublicContentCacheError> {
-            Ok(())
         }
     }
 
@@ -2127,7 +2473,7 @@ mod tests {
             .expect("backend 404 body is readable");
         let backend_miss: Value =
             serde_json::from_slice(&backend_miss_body).expect("fallback body is JSON");
-        assert_eq!(backend_miss["error"]["code"], "");
+        assert_eq!(backend_miss, serde_json::json!({"message": "Not Found"}));
     }
 
     #[tokio::test]
@@ -2203,7 +2549,7 @@ mod tests {
                 .expect("body is readable"),
         )
         .expect("fallback body is JSON");
-        assert_eq!(body["error"]["message"], "Invalid URL (GET /missing)");
+        assert_eq!(body, serde_json::json!({"message": "Not Found"}));
         assert!(body.get("request_id").is_none());
     }
 
@@ -2271,7 +2617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fallback_and_wrong_method_share_the_legacy_not_found_contract() {
+    async fn fallback_and_wrong_method_share_the_go_not_found_contract() {
         for (method, uri) in [
             ("GET", "/missing"),
             ("POST", "/livez"),
@@ -2281,14 +2627,7 @@ mod tests {
             assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
             assert_eq!(
                 body,
-                serde_json::json!({
-                    "error": {
-                        "message": format!("Invalid URL ({method} {uri})"),
-                        "type": "invalid_request_error",
-                        "param": "",
-                        "code": "",
-                    },
-                }),
+                serde_json::json!({"message": "Not Found"}),
                 "{method} {uri}"
             );
         }
@@ -2305,26 +2644,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_method_on_a_mounted_auth_route_uses_the_legacy_404_envelope() {
+    async fn wrong_method_on_a_mounted_auth_route_uses_the_go_404_envelope() {
         let response = auth_call("GET", "/api/user/login", None).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("method-not-allowed body is readable");
         let body: Value = serde_json::from_slice(&body).expect("method-not-allowed body is JSON");
-        assert_eq!(body["error"]["code"], "");
-        assert_eq!(
-            body["error"]["message"],
-            "Invalid URL (GET /api/user/login)"
-        );
+        assert_eq!(body, serde_json::json!({"message": "Not Found"}));
     }
 
     #[tokio::test]
-    async fn wrong_method_on_a_mounted_models_route_uses_the_legacy_404_envelope() {
+    async fn wrong_method_on_a_mounted_models_route_uses_the_go_404_envelope() {
         let (status, _, body) = call("POST", "/v1/models", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(body["error"]["code"], "");
-        assert_eq!(body["error"]["message"], "Invalid URL (POST /v1/models)");
+        assert_eq!(body, serde_json::json!({"message": "Not Found"}));
     }
 
     #[tokio::test]
@@ -2723,7 +3057,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_should_match_the_normalized_go_oracle_through_the_real_router() {
+    async fn status_should_match_the_current_go_shape_through_the_real_router() {
         let mut request = Request::builder()
             .method("GET")
             .uri("/api/status")
@@ -2752,13 +3086,27 @@ mod tests {
             .await
             .expect("status body is readable");
         let actual: Value = serde_json::from_slice(&body).expect("status response is JSON");
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../tests/behavior-oracle/fixtures/api-status.json"
-        ))
-        .expect("status oracle fixture is JSON");
-        let mut expected = fixture["response"]["body"].clone();
-        expected["data"]["start_time"] = serde_json::json!(1_700_000_000_i64);
-        assert_eq!(actual, expected);
+        assert_eq!(actual["success"], true);
+        assert_eq!(actual["ready"], true);
+        assert_eq!(actual["message"], "");
+        assert_eq!(actual["data"]["version"], "v0.0.0");
+        assert_eq!(actual["data"]["start_time"], 1_700_000_000_i64);
+        assert_eq!(actual["data"]["docs_access"], false);
+        assert_eq!(actual["data"]["docs_link"], "");
+        assert_eq!(actual["data"]["api_info_enabled"], false);
+        assert!(actual["data"].get("api_info").is_none());
+        assert_eq!(
+            actual["data"]["backend_capabilities"],
+            serde_json::json!({
+                "bounty_notifications": true,
+                "bounty_challenge_cancel": true,
+                "bounty_public_read": true,
+                "self_oauth_unbind": true,
+                "responses_websocket": true,
+            })
+        );
+        assert!(actual["data"].get("turnstile_secret_key").is_none());
+        assert!(actual["data"].get("client_secret").is_none());
     }
 
     async fn limited_response(

@@ -46,7 +46,7 @@ use lmm_api_rs::{
         },
         control_public::{
             ControlPublicError, ControlPublicHttpState, PgControlPublicRepository,
-            UptimeHeartbeatPage, UptimeKumaClient, UptimeStatusPage,
+            UptimeHeartbeatPage, UptimeKumaClient, UptimeStatusPage, control_public_router,
         },
         deployment::{
             DeploymentState, DisabledDeploymentJobRunner, PgValkeyDeploymentProvider,
@@ -194,6 +194,35 @@ impl SystemConfigRuntimeWriter for TestInstanceSetupRuntimeWriter {
 
 /// Builds the intentionally small, concrete candidate set approved for the
 /// test instance.  It has no provider-capable HTTP client.
+pub fn safe_control_public_surface(pg: PgPool) -> Router {
+    control_public_router(ControlPublicHttpState::new(
+        Arc::new(PgControlPublicRepository::new(pg)),
+        Arc::new(DenyUptimeKuma),
+    ))
+}
+
+/// Builds the loopback-only system-config slice used by local acceptance.
+/// Every outbound dependency is denied and setup writes are restricted to the
+/// two local acceptance flags validated by `TestInstanceSetupRuntimeWriter`.
+pub fn safe_system_config_surface(
+    pg: PgPool,
+    valkey: redis::Client,
+    auth: Arc<dyn DashboardAuth>,
+) -> Router {
+    system_config_router(
+        SystemConfigHttpState::new(
+            pg,
+            valkey,
+            Arc::new(DashboardRootAuthorizer::new(auth)),
+            Arc::new(DenyProjectUpdate),
+            Arc::new(TestInstanceDisabledWaffoPancakeGateway),
+        )
+        .with_runtime_writer(Arc::new(TestInstanceSetupRuntimeWriter)),
+    )
+}
+
+/// Builds the intentionally small, concrete candidate set approved for the
+/// test instance.  It has no provider-capable HTTP client.
 pub fn safe_candidate_surface(
     pg: PgPool,
     valkey: redis::Client,
@@ -302,14 +331,7 @@ pub fn safe_candidate_surface(
         .merge(lmm_api_rs::migration_routes::identity_profile::router(
             ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
         ))
-        .merge(
-            lmm_api_rs::migration_routes::control_public::control_public_router(
-                ControlPublicHttpState::new(
-                    Arc::new(PgControlPublicRepository::new(pg.clone())),
-                    Arc::new(DenyUptimeKuma),
-                ),
-            ),
-        )
+        .merge(safe_control_public_surface(pg.clone()))
         // The remainder of the candidate surface uses the same PostgreSQL and
         // dashboard-session authorities. Provider and relay boundaries remain
         // deliberately fail-closed on the isolated test instance.
@@ -389,14 +411,11 @@ pub fn safe_candidate_surface(
         // Setup must be reachable before a test-only root account exists.
         // Privileged routes retain the shared root-session guard and every
         // optional remote dependency is explicitly fail-closed.
-        .merge(system_config_router(SystemConfigHttpState::new(
+        .merge(safe_system_config_surface(
             pg.clone(),
             valkey.clone(),
-            Arc::new(DashboardRootAuthorizer::new(Arc::clone(&auth))),
-            Arc::new(DenyProjectUpdate),
-            Arc::new(TestInstanceDisabledWaffoPancakeGateway),
-        )
-        .with_runtime_writer(Arc::new(TestInstanceSetupRuntimeWriter))))
+            Arc::clone(&auth),
+        ))
         // Media tasks retain their real PostgreSQL token authentication.  The
         // test adapter denies every provider protocol after authentication, so
         // an imported snapshot can exercise route/auth compatibility without

@@ -106,7 +106,7 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('backend capability query safety', () => {
-  test('does not let cached new-backend state call unified endpoints after a legacy rollback', async () => {
+  test('does not call unified or legacy bounty notifications without a live capability', async () => {
     useAuthStore.getState().auth.setUser({
       id: 7,
       username: 'compat-user',
@@ -159,6 +159,16 @@ describe('backend capability query safety', () => {
       ['status', 'user:7:docs:0'],
       cachedNewBackendStatus()
     )
+    queryClient.setQueryData(
+      ['open-source-bounties', 'notifications', 'unified', 7],
+      [
+        {
+          id: 1,
+          kind: 'tip_transfer',
+          recipient_read_at: 0,
+        },
+      ]
+    )
     const container = document.createElement('div')
     const root = createRoot(container)
 
@@ -185,7 +195,10 @@ describe('backend capability query safety', () => {
       await flushQueries()
     })
 
-    assert.equal(gets.includes('/api/open-source-bounties/tips/received'), true)
+    assert.equal(
+      gets.includes('/api/open-source-bounties/tips/received'),
+      false
+    )
     assert.equal(
       gets.includes('/api/open-source-bounties/notifications'),
       false
@@ -193,14 +206,19 @@ describe('backend capability query safety', () => {
 
     await act(async () => {
       latestNotifications?.openPopover('bounty-tips')
+      await latestNotifications?.thankTip(1)
       await flushQueries()
     })
     assert.equal(
       posts.includes('/api/open-source-bounties/tips/received/read'),
-      true
+      false
     )
     assert.equal(
       posts.includes('/api/open-source-bounties/notifications/read'),
+      false
+    )
+    assert.equal(
+      posts.some((url) => url.includes('/tips/1/thank')),
       false
     )
 
@@ -208,7 +226,12 @@ describe('backend capability query safety', () => {
     queryClient.clear()
   })
 
-  test('does not issue an anonymous public bounty request from cached capabilities', async () => {
+  test('does not issue a public bounty request for signed-in users from cached capabilities', async () => {
+    useAuthStore.getState().auth.setUser({
+      id: 9,
+      username: 'cached-user',
+      role: 1,
+    })
     const statusResponse = deferred<{
       data: { success: boolean; data: { version: string } }
     }>()
@@ -222,7 +245,10 @@ describe('backend capability query safety', () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
-    queryClient.setQueryData(['status', 'anonymous'], cachedNewBackendStatus())
+    queryClient.setQueryData(
+      ['status', 'user:9:docs:0'],
+      cachedNewBackendStatus()
+    )
     const container = document.createElement('div')
     const root = createRoot(container)
 

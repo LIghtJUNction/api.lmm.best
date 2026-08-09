@@ -617,7 +617,9 @@ async fn static_model_lookup_contract_holds_over_a_real_tcp_listener() {
         .send()
         .await
         .expect("denied TCP response");
-    assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+    // Discovery routes deliberately conceal missing/invalid credentials as a
+    // not-found response, matching the production model-listing policy.
+    assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
     server.abort();
 }
 

@@ -2591,31 +2591,6 @@
         ]
       }
     },
-    "/api/verify/status": {
-      "get": {
-        "summary": "获取验证状态",
-        "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
-        "tags": [
-          "安全验证"
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "headers": {}
-          }
-        },
-        "security": [
-          {
-            "Combination343": []
-          },
-          {
-            "Combination1243": []
-          }
-        ]
-      }
-    },
     "/api/channel/": {
       "get": {
         "summary": "获取所有渠道",

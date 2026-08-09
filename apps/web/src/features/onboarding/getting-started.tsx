@@ -23,6 +23,7 @@ import {
   Circle,
   KeyRound,
   LayoutDashboard,
+  LifeBuoy,
   Send,
   Wallet,
 } from 'lucide-react'
@@ -32,6 +33,9 @@ import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { ChallengeList } from '@/features/forge/challenge-list'
+import { useTopupInfo } from '@/features/wallet/hooks/use-topup-info'
+import { getTopupAvailability } from '@/features/wallet/lib/payment'
 import { getOnboardingState } from '@/lib/console-activation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
@@ -44,14 +48,36 @@ export function GettingStarted() {
   const user = useAuthStore((state) => state.auth.user)
   const onboarding = getOnboardingState(user)
   const trustLevel = user?.trust_level_info?.level ?? 0
-
-  const primaryCommand =
-    onboarding.stage === 'activate'
+  const { topupInfo, loading: topupLoading, error: topupError } = useTopupInfo()
+  const topupAvailability = getTopupAvailability(topupInfo)
+  const activationMessage = topupLoading
+    ? t('Checking payment availability...')
+    : topupError
+      ? t(
+          'Payment availability could not be verified. Contact support before attempting to add funds.'
+        )
+      : !topupAvailability.hasPaymentMethod
+        ? t(
+            'Online payment is temporarily unavailable. Contact support before attempting to add funds.'
+          )
+        : t('Any successful external top-up activates access.')
+  const activationCommand = topupLoading
+    ? null
+    : topupError || !topupAvailability.hasPaymentMethod
       ? {
+          to: '/support' as const,
+          label: t('Contact support'),
+          icon: LifeBuoy,
+        }
+      : {
           to: '/wallet' as const,
           label: t('Add funds'),
           icon: Wallet,
         }
+
+  const primaryCommand =
+    onboarding.stage === 'activate'
+      ? activationCommand
       : onboarding.stage === 'credential'
         ? {
             to: '/keys' as const,
@@ -69,7 +95,7 @@ export function GettingStarted() {
               label: t('Open dashboard'),
               icon: LayoutDashboard,
             }
-  const PrimaryIcon = primaryCommand.icon
+  const PrimaryIcon = primaryCommand?.icon
   const steps = [
     {
       id: 'account',
@@ -81,7 +107,7 @@ export function GettingStarted() {
     {
       id: 'activate',
       title: t('Activate access'),
-      description: t('Any successful external top-up activates access.'),
+      description: activationMessage,
       complete: onboarding.activationComplete,
       icon: Wallet,
     },
@@ -118,9 +144,7 @@ export function GettingStarted() {
                     : t('Complete your account setup')}
                 </h3>
                 <p className='text-muted-foreground mt-3 max-w-xl text-sm leading-6'>
-                  {t(
-                    'Access becomes available after a successful external payment.'
-                  )}
+                  {activationMessage}
                 </p>
               </div>
               <div className='flex shrink-0 flex-wrap items-center gap-2'>
@@ -218,7 +242,7 @@ export function GettingStarted() {
               <p className='text-sm font-semibold'>{t('Next step')}</p>
               <p className='text-muted-foreground mt-1 text-sm leading-6'>
                 {onboarding.stage === 'activate'
-                  ? t('Activate access with any successful external top-up.')
+                  ? activationMessage
                   : onboarding.stage === 'credential'
                     ? t('Create a credential to continue setup.')
                     : onboarding.stage === 'first_request'
@@ -226,16 +250,27 @@ export function GettingStarted() {
                       : t('Go to your dashboard to continue.')}
               </p>
             </div>
-            <Button
-              className='w-full sm:w-auto'
-              size='lg'
-              render={<Link to={primaryCommand.to} />}
-            >
-              <PrimaryIcon data-icon='inline-start' aria-hidden='true' />
-              {primaryCommand.label}
-              <ArrowRight data-icon='inline-end' aria-hidden='true' />
-            </Button>
+            {primaryCommand && PrimaryIcon ? (
+              <Button
+                className='w-full sm:w-auto'
+                size='lg'
+                render={<Link to={primaryCommand.to} />}
+              >
+                <PrimaryIcon data-icon='inline-start' aria-hidden='true' />
+                {primaryCommand.label}
+                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+              </Button>
+            ) : null}
           </section>
+
+          <ChallengeList
+            limit={3}
+            hideWhenUnavailable
+            heading={t('Optional open-source challenges')}
+            description={t(
+              'Contributions can earn account credit, but they do not activate access.'
+            )}
+          />
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

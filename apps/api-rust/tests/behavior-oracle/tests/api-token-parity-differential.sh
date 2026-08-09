@@ -9,15 +9,19 @@ set +x
 
 repo_root=$(git rev-parse --show-toplevel)
 legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
-legacy_root="$repo_root/legacy-go-backup/$legacy_revision"
-# Each invocation owns fresh loopback ports.  The Rust test-instance safety
-# validator deliberately pins its Valkey endpoint to loopback :6380; every
-# other listener is randomized and all five retain two pre-bind checks.
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
+# Each invocation owns fresh loopback ports. Every listener is randomized and
+# all five retain two pre-bind checks. The Rust test instance receives its
+# allocated Valkey port through LMM_RS_TEST_VALKEY_PORT.
 pg_port=${LMM_API_TOKEN_PARITY_PG_PORT:-}
 go_port=${LMM_API_TOKEN_PARITY_GO_PORT:-}
 rust_port=${LMM_API_TOKEN_PARITY_RUST_PORT:-}
 go_valkey_port=${LMM_API_TOKEN_PARITY_GO_VALKEY_PORT:-}
-rust_valkey_port=6380
+rust_valkey_port=${LMM_API_TOKEN_PARITY_RUST_VALKEY_PORT:-}
 curl_connect_timeout=2
 curl_max_time=15
 approval_mode=${LMM_API_TOKEN_PARITY_APPROVAL:-0}
@@ -255,6 +259,7 @@ random_free_port() {
 [[ -n $go_port ]] || go_port=$(random_free_port Go_HTTP)
 [[ -n $rust_port ]] || rust_port=$(random_free_port Rust_HTTP)
 [[ -n $go_valkey_port ]] || go_valkey_port=$(random_free_port Go_Valkey)
+[[ -n $rust_valkey_port ]] || rust_valkey_port=$(random_free_port Rust_Valkey)
 assert_distinct_ports "PostgreSQL:$pg_port" "Go_HTTP:$go_port" "Rust_HTTP:$rust_port" "Go_Valkey:$go_valkey_port" "Rust_Valkey:$rust_valkey_port"
 # First occupancy audit occurs at allocation time.  Repeat it for every port
 # before long builds; each start helper performs the second adjacent-to-bind
@@ -1160,7 +1165,9 @@ start_rust() {
     export DATABASE_URL VALKEY_URL SESSION_SECRET CRYPTO_SECRET PASSWORD_LOGIN_ENABLED \
       GLOBAL_API_RATE_LIMIT_ENABLE GLOBAL_API_RATE_LIMIT GLOBAL_API_RATE_LIMIT_DURATION \
       CRITICAL_RATE_LIMIT_ENABLE CRITICAL_RATE_LIMIT CRITICAL_RATE_LIMIT_DURATION \
-      SEARCH_RATE_LIMIT_ENABLE SEARCH_RATE_LIMIT SEARCH_RATE_LIMIT_DURATION
+      SEARCH_RATE_LIMIT_ENABLE SEARCH_RATE_LIMIT SEARCH_RATE_LIMIT_DURATION \
+      LMM_RS_TEST_VALKEY_PORT
+    LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port"
     LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 VERSION=v0.0.0 exec "$repo_root/apps/api-rust/target/debug/lmm-api-rs"
   ) >"$runtime/rust.log" 2>&1 &
   record_pid rust_pid "$!"
@@ -1198,6 +1205,30 @@ start_valkey rust-valkey "$rust_valkey_port" "$rust_valkey_password" "$rust_valk
 start_go
 assert_go_schema_ready
 
+# Keep the Go disposable database on the frozen baseline payment shape even
+# when the listener's migration path has not materialized this legacy table.
+# The current database user is the same identity used by SQL_DSN below.
+# This frozen parity mount bypasses the current dashboard discovery gate; the
+# table and grant are reserved for explicit current-policy opt-in tests and
+# are not evidence of frozen UserAuth coverage.
+psql -h 127.0.0.1 -p "$pg_port" -d "$go_database" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE TABLE IF NOT EXISTS top_ups (
+  id BIGINT PRIMARY KEY,
+  user_id BIGINT,
+  amount BIGINT,
+  money NUMERIC,
+  trade_no VARCHAR(255),
+  payment_method VARCHAR(50),
+  payment_provider VARCHAR(50) DEFAULT '',
+  create_time BIGINT,
+  complete_time BIGINT,
+  status TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_top_ups_trade_no ON top_ups (trade_no);
+CREATE INDEX IF NOT EXISTS idx_top_ups_user_id ON top_ups (user_id);
+GRANT SELECT ON top_ups TO CURRENT_USER;
+SQL
+
 psql -h 127.0.0.1 -p "$pg_port" -d "$rust_database" -v ON_ERROR_STOP=1 \
   -v rust_database="$rust_database" -v rust_role="$rust_role" -v rust_schema="$rust_schema" <<'SQL' >/dev/null
 CREATE ROLE :"rust_role" LOGIN;
@@ -1209,7 +1240,7 @@ INSERT INTO lmm_schema_contract VALUES (TRUE,1,1);
 CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE custom_oauth_providers (id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL, icon TEXT, enabled BOOLEAN, client_id TEXT, authorization_endpoint TEXT, scopes TEXT);
 CREATE TABLE setups (id BIGINT PRIMARY KEY);
-CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status BIGINT DEFAULT 1, email TEXT, github_id TEXT, discord_id TEXT, wechat_id TEXT, oidc_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" TEXT DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ, linux_do_id TEXT, setting TEXT DEFAULT '{}', stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1);
+CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status BIGINT DEFAULT 1, email TEXT, github_id TEXT, discord_id TEXT, wechat_id TEXT, oidc_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" TEXT DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ, linux_do_id TEXT, setting TEXT DEFAULT '{}', stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, console_activated_at BIGINT NOT NULL DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1);
 CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, user_id BIGINT NOT NULL, version BIGINT NOT NULL, user_auth_version BIGINT NOT NULL, status TEXT NOT NULL, refresh_hash CHAR(64) NOT NULL, previous_refresh_hash TEXT, previous_valid_until BIGINT NOT NULL DEFAULT 0, login_method TEXT NOT NULL, ip TEXT, user_agent TEXT, created_at BIGINT NOT NULL, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason TEXT);
 CREATE TABLE two_fas (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id BIGINT NOT NULL, secret TEXT NOT NULL, is_enabled BOOLEAN NOT NULL DEFAULT FALSE, failed_attempts BIGINT DEFAULT 0, locked_until TIMESTAMPTZ, last_used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
 CREATE TABLE casbin_rule (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, ptype TEXT, v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT, v4 TEXT, v5 TEXT);
@@ -1218,8 +1249,14 @@ CREATE TABLE two_fa_backup_codes (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY
 CREATE SEQUENCE tokens_id_seq;
 CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), user_id BIGINT NOT NULL, key VARCHAR(128) UNIQUE, status INTEGER DEFAULT 1, name TEXT DEFAULT '', created_time BIGINT DEFAULT 0, accessed_time BIGINT DEFAULT 0, expired_time BIGINT DEFAULT -1, remain_quota BIGINT DEFAULT 0, unlimited_quota BOOLEAN DEFAULT FALSE, model_limits_enabled BOOLEAN DEFAULT FALSE, model_limits TEXT, allow_ips TEXT DEFAULT '', used_quota BIGINT DEFAULT 0, "group" TEXT DEFAULT '', cross_group_retry BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMPTZ);
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
+-- This baseline table/grant is retained only for explicit current-policy
+-- discovery opt-in tests; the frozen parity mount bypasses dashboard discovery
+-- and this fixture is not frozen UserAuth coverage evidence.
+CREATE TABLE top_ups (id BIGINT PRIMARY KEY, user_id BIGINT, amount BIGINT, money NUMERIC, trade_no VARCHAR(255), payment_method VARCHAR(50), payment_provider VARCHAR(50) DEFAULT '', create_time BIGINT, complete_time BIGINT, status TEXT);
+CREATE INDEX idx_top_ups_trade_no ON top_ups (trade_no);
+CREATE INDEX idx_top_ups_user_id ON top_ups (user_id);
 GRANT USAGE ON SCHEMA :"rust_schema" TO :"rust_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, tokens TO :"rust_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, tokens, top_ups TO :"rust_role";
 GRANT USAGE ON SEQUENCE auth_flows_id_seq, tokens_id_seq TO :"rust_role";
 SQL
 
@@ -1230,6 +1267,10 @@ sql "$go_database" "INSERT INTO users (username,password,display_name,role,statu
 sql "$rust_database" "INSERT INTO users (id,username,password,display_name,role,status,email,\"group\",setting,auth_version,quota) VALUES (1,'root','$root_hash','root',10,1,'','default','{}',1,100000000)" >/dev/null
 sql "$go_database" "INSERT INTO users (username,password,display_name,role,status,\"group\",setting,auth_version,quota) VALUES ('other','$root_hash','other',1,1,'default','{}',1,100000000)" >/dev/null
 sql "$rust_database" "INSERT INTO users (id,username,password,display_name,role,status,email,\"group\",setting,auth_version,quota) VALUES (2,'other','$root_hash','other',1,1,'','default','{}',1,100000000)" >/dev/null
+# This positive paid row is for explicit current-policy discovery opt-in only.
+# The frozen parity mount bypasses dashboard discovery, so it is not evidence
+# that the frozen UserAuth surface covers paid discovery access.
+sql_both "INSERT INTO top_ups (id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status) VALUES (1,2,100,100,'api-token-parity-stripe-2','stripe','stripe',0,0,'success')"
 sql_both "INSERT INTO options (key,value) VALUES ('token_setting','{\"max_user_tokens\":100}'),('QuotaPerUnit','2')"
 
 if ! start_rust; then

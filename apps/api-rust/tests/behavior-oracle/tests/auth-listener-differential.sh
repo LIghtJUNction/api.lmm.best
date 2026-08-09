@@ -5,7 +5,11 @@ set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
-legacy_root="$repo_root/legacy-go-backup/$legacy_revision"
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 curl_connect_timeout=2
 curl_max_time=15
 approval_mode=${LMM_AUTH_LISTENER_APPROVAL:-0}
@@ -451,8 +455,13 @@ snapshot_auth_session_valkey() {
 }
 invalidate_fixture_user_cache() {
   local port=$1 label=$2 before after deleted
-  before="$runtime/$label.before-non-user-keys"
-  after="$runtime/$label.after-non-user-keys"
+  if [[ $label == /* ]]; then
+    before="$label.before-non-user-keys"
+    after="$label.after-non-user-keys"
+  else
+    before="$runtime/$label.before-non-user-keys"
+    after="$runtime/$label.after-non-user-keys"
+  fi
   # Direct SQL fixtures bypass each implementation's application invalidator.
   # Delete only the authoritative per-user cache entry, then prove no other
   # Valkey key was touched before taking the request-side-effect baseline.
@@ -555,7 +564,7 @@ CREATE TABLE custom_oauth_providers (
   enabled BOOLEAN, client_id TEXT, authorization_endpoint TEXT, scopes TEXT
 );
 CREATE TABLE setups (id BIGINT PRIMARY KEY);
-CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status BIGINT DEFAULT 1, email TEXT, github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" TEXT DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ, linux_do_id TEXT, setting TEXT DEFAULT '{}', stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1);
+CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status BIGINT DEFAULT 1, email TEXT, github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" TEXT DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ, linux_do_id TEXT, setting TEXT DEFAULT '{}', stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1, console_activated_at BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, user_id BIGINT NOT NULL, version BIGINT NOT NULL, user_auth_version BIGINT NOT NULL, status TEXT NOT NULL, refresh_hash CHAR(64) NOT NULL, previous_refresh_hash TEXT, previous_valid_until BIGINT NOT NULL DEFAULT 0, login_method TEXT NOT NULL, ip TEXT, user_agent TEXT, created_at BIGINT NOT NULL, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason TEXT);
 CREATE TABLE two_fas (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id BIGINT NOT NULL, secret TEXT NOT NULL, is_enabled BOOLEAN NOT NULL DEFAULT FALSE, failed_attempts BIGINT DEFAULT 0, locked_until TIMESTAMPTZ, last_used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
 CREATE TABLE casbin_rule (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, ptype TEXT, v0 TEXT, v1 TEXT, v2 TEXT, v3 TEXT, v4 TEXT, v5 TEXT);
@@ -660,18 +669,14 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
         # Frozen Go sends its pre-rotation/login snapshot for a CAS loser.
         [[ $response_ua == login-agent ]] || { echo "unexpected loser user-agent: $response_ua" >&2; exit 1; }
       fi
-    done
-    [[ -n $winner ]] || { echo "no refresh winner" >&2; exit 1; }
-    winner_ua=$([[ $winner == a ]] && echo curl || echo race-b)
-    if [[ $base == *":$go_port" ]]; then
-      database=auth_go; valkey_port=$go_valkey_port
-      # Frozen Go rotates hashes before assigning request metadata to the
-      # winner response, so its durable row/cache retain login metadata.
-      persisted_user_agent=login-agent
-    else
-      database=auth_rust; valkey_port=$rust_valkey_port
-      persisted_user_agent=$winner_ua
-    fi
+  done
+  [[ -n $winner ]] || { echo "no refresh winner" >&2; exit 1; }
+  # Both listeners preserve login-row metadata on refresh CAS; only the winner
+  # response reflects request metadata.  Keep this invariant explicit for
+  # durability checks.
+  if [[ $base == *":$go_port" ]]; then database=auth_go; valkey_port=$go_valkey_port
+  else database=auth_rust; valkey_port=$rust_valkey_port; fi
+  persisted_user_agent=login-agent
     psql -h 127.0.0.1 -p "$pg_port" -d "$database" -Atc "SELECT status || ':' || user_agent FROM user_sessions WHERE sid = '$sid'" | grep -qx "active:$persisted_user_agent"
     active_cache_key=""
     while IFS= read -r cache_key; do
@@ -776,6 +781,20 @@ diff -u "$runtime/go.before-2fa-auth-session-valkey" "$runtime/go.after-2fa-auth
 diff -u "$runtime/rust.before-2fa-auth-session-valkey" "$runtime/rust.after-2fa-auth-session-valkey"
 jq -e '.all_pending_2fa == true and .count == 3' "$runtime/auth_go.2fa-flow-contract.json" >/dev/null
 assert_named_file_match two-factor-durable-flow-contract "$runtime/auth_go.2fa-flow-contract.json" "$runtime/auth_rust.2fa-flow-contract.json"
+
+# Remove the synthetic factor before the following self-policy login probes.
+# The fixture is disposable and must not affect later authentication behavior.
+for database in auth_go auth_rust; do
+  psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
+    -c "DELETE FROM two_fas WHERE user_id = 1 AND secret = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'" >/dev/null
+  psql -h 127.0.0.1 -p "$pg_port" -d "$database" -At -v ON_ERROR_STOP=1 \
+    -c "SELECT COUNT(*) FROM two_fas WHERE user_id = 1 AND secret = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'" | grep -qx 0
+  if [[ $database == auth_go ]]; then
+    invalidate_fixture_user_cache "$go_valkey_port" "go.after-2fa-fixture-cleanup"
+  else
+    invalidate_fixture_user_cache "$rust_valkey_port" "rust.after-2fa-fixture-cleanup"
+  fi
+done
 
 # Compare production-observable row mutations without comparing random SIDs,
 # refresh hashes, or timestamps. Both backends must leave three revoked,
