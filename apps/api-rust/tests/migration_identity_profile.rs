@@ -147,6 +147,31 @@ async fn profile_setting_rejects_an_invalid_notification_type_before_postgres() 
 }
 
 #[tokio::test]
+async fn self_oauth_binding_rejects_non_oauth_fields_before_postgres() {
+    let response = app()
+        .oneshot(
+            Request::delete("/api/user/bindings/email")
+                .header("authorization", "Bearer listener-verified")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON failure envelope"),
+        serde_json::json!({
+            "success": false,
+            "message": "invalid parameters"
+        })
+    );
+}
+
+#[tokio::test]
 async fn self_profile_password_rotation_requires_session_owner_before_postgres() {
     let response = app()
         .oneshot(

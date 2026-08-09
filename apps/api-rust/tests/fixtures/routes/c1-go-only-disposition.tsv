@@ -1,5 +1,5 @@
 category	method	path	production_owner	rust_status	disposition	differential_verified	notes
-new	DELETE	/api/user/bindings/:binding_type	go	unimplemented	keep-go-owner	false	Go-only OAuth unlink registration at apps/api-go/router/api-router.go:134; no Rust production route.
+new	DELETE	/api/user/bindings/:binding_type	go	candidate	keep-go-owner	false	Rust self-service built-in OAuth unlink candidate is mounted on the normal/test listener; production ownership remains Go pending differential and auth-cache evidence.
 new	GET	/v1/responses	go	unimplemented	keep-go-owner	false	Go Responses WebSocket registration at apps/api-go/router/relay-router.go:76; Rust has no production GET route.
 bounty	GET	/api/open-source-bounties	go	candidate	keep-go-owner	false	Rust public-list candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 bounty	GET	/api/open-source-bounties/projects/:id	go	unimplemented	keep-go-owner	false	Go bounty public detail; Rust candidate absent and route is not production-mounted.
