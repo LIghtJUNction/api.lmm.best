@@ -91,7 +91,7 @@ func TestMigrationAdvisoryLockKeyIsCrossLanguageContract(t *testing.T) {
 	require.Equal(t, int64(0x4c4d4d4150490001), MigrationAdvisoryLockKey)
 }
 
-func TestVerifyPostgresRuntimeIdentityRequiresPublicCanonicalSearchPath(t *testing.T) {
+func TestVerifyPostgresRuntimeIdentityRequiresOneCanonicalApplicationSchema(t *testing.T) {
 	valid := postgresRuntimeIdentity{
 		DatabaseName: "lmm", SchemaName: "public", DatabaseUser: "lmm",
 		ServerVersion: 180000, ConfiguredSearchPath: "public",
@@ -101,6 +101,11 @@ func TestVerifyPostgresRuntimeIdentityRequiresPublicCanonicalSearchPath(t *testi
 	quotedPublic := valid
 	quotedPublic.ConfiguredSearchPath = `"public"`
 	require.NoError(t, verifyPostgresRuntimeIdentity(quotedPublic))
+	versioned := valid
+	versioned.SchemaName = "lmm_prod_20260802"
+	versioned.ConfiguredSearchPath = `"lmm_prod_20260802"`
+	versioned.EffectiveSearchPath = "pg_catalog,lmm_prod_20260802"
+	require.NoError(t, verifyPostgresRuntimeIdentity(versioned))
 
 	tests := []struct {
 		name      string
@@ -108,14 +113,22 @@ func TestVerifyPostgresRuntimeIdentityRequiresPublicCanonicalSearchPath(t *testi
 		errorText string
 	}{
 		{
-			name: "wrong application schema",
+			name: "application schema and configured path disagree",
 			mutate: func(identity postgresRuntimeIdentity) postgresRuntimeIdentity {
-				identity.SchemaName = "lmm_meta"
-				identity.ConfiguredSearchPath = "lmm_meta,public"
-				identity.EffectiveSearchPath = "pg_catalog,lmm_meta,public"
+				identity.SchemaName = "lmm_prod_20260802"
 				return identity
 			},
-			errorText: "expected public",
+			errorText: "configured PostgreSQL search_path",
+		},
+		{
+			name: "reserved temporary schema",
+			mutate: func(identity postgresRuntimeIdentity) postgresRuntimeIdentity {
+				identity.SchemaName = "pg_temp_3"
+				identity.ConfiguredSearchPath = "pg_temp_3"
+				identity.EffectiveSearchPath = "pg_catalog,pg_temp_3"
+				return identity
+			},
+			errorText: "not a safe unquoted identifier",
 		},
 		{
 			name: "configured user schema token",

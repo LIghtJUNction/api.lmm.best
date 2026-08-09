@@ -9,9 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestPostgresCatalogQueriesPinPublicNamespace(t *testing.T) {
+func TestPostgresCatalogQueriesBindExplicitApplicationNamespace(t *testing.T) {
 	for _, query := range []string{postgresIndexesCatalogQuery, postgresConstraintsCatalogQuery} {
-		require.Contains(t, query, "table_namespace.nspname OPERATOR(pg_catalog.=) 'public'")
+		require.Contains(t, query, "table_namespace.nspname OPERATOR(pg_catalog.=) $1")
+		require.NotContains(t, query, "'public'")
 		require.NotContains(t, strings.ToLower(query), "current_schema()")
 	}
 }
@@ -20,7 +21,7 @@ func TestPostgresCatalogQueriesQualifySystemObjectsAndOperators(t *testing.T) {
 	queries := []string{postgresIndexesCatalogQuery, postgresConstraintsCatalogQuery}
 	for _, query := range queries {
 		for _, required := range []string{
-			"pg_catalog.pg_", "pg_catalog.coalesce(", "pg_catalog.json_agg(",
+			"pg_catalog.pg_", "COALESCE(", "pg_catalog.json_agg(",
 			"pg_catalog.unnest(", "OPERATOR(pg_catalog.=)",
 		} {
 			require.Contains(t, query, required)
@@ -28,7 +29,7 @@ func TestPostgresCatalogQueriesQualifySystemObjectsAndOperators(t *testing.T) {
 		for _, forbidden := range []string{
 			"FROM pg_index", "FROM pg_constraint", "JOIN pg_class", "JOIN pg_namespace",
 			"JOIN pg_attribute", "JOIN pg_am", "FROM unnest(", " THEN pg_get_",
-			"SELECT json_agg(", " COALESCE(",
+			"SELECT json_agg(", "pg_catalog.coalesce(",
 		} {
 			require.NotContains(t, query, forbidden)
 		}
@@ -38,7 +39,7 @@ func TestPostgresCatalogQueriesQualifySystemObjectsAndOperators(t *testing.T) {
 func TestPostgresCatalogVerificationMatchesAuthoritativeSemantics(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	inventory, err := buildPostgresSchemaInventory(db, []interface{}{
+	inventory, err := buildPostgresSchemaInventory(db, "public", []interface{}{
 		&ExternalIdentityClaim{}, &CasbinRule{}, &migrationCapabilityModel{},
 	})
 	require.NoError(t, err)
@@ -58,10 +59,21 @@ func TestPostgresCatalogVerificationMatchesAuthoritativeSemantics(t *testing.T) 
 	require.NoError(t, verifyPostgresCatalogSnapshot(inventory, snapshot))
 }
 
+func TestPostgresCatalogInventoryCarriesVersionedApplicationSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	inventory, err := buildPostgresSchemaInventory(db, "lmm_prod_20260802", []interface{}{
+		&migrationCapabilityModel{},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "lmm_prod_20260802", inventory.Schema)
+	require.Equal(t, "lmm_prod_20260802", findPostgresConstraint(t, inventory, postgresForeignConstraint).ReferenceSchema)
+}
+
 func TestPostgresCatalogVerificationRejectsWrongIndexVariants(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	inventory, err := buildPostgresSchemaInventory(db, []interface{}{
+	inventory, err := buildPostgresSchemaInventory(db, "public", []interface{}{
 		&ExternalIdentityClaim{}, &CasbinRule{}, &migrationCapabilityModel{},
 	})
 	require.NoError(t, err)
@@ -132,7 +144,7 @@ func TestPostgresCatalogVerificationRejectsWrongIndexVariants(t *testing.T) {
 func TestPostgresCatalogVerificationRejectsMissingAndDuplicateCriticalObjects(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	inventory, err := buildPostgresSchemaInventory(db, []interface{}{&migrationCapabilityModel{}})
+	inventory, err := buildPostgresSchemaInventory(db, "public", []interface{}{&migrationCapabilityModel{}})
 	require.NoError(t, err)
 
 	snapshot := catalogSnapshotForInventory(inventory)
@@ -155,7 +167,7 @@ func TestPostgresCatalogVerificationRejectsMissingAndDuplicateCriticalObjects(t 
 func TestPostgresCatalogVerificationRejectsWrongConstraintVariants(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	inventory, err := buildPostgresSchemaInventory(db, []interface{}{&migrationCapabilityModel{}})
+	inventory, err := buildPostgresSchemaInventory(db, "public", []interface{}{&migrationCapabilityModel{}})
 	require.NoError(t, err)
 
 	tests := []struct {
