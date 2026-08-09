@@ -12,8 +12,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use chrono::Duration as ChronoDuration;
+use chrono::{DateTime, Datelike, Local, LocalResult, NaiveDateTime, TimeZone};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{
@@ -268,6 +270,7 @@ struct Plan {
     id: i64,
     title: String,
     subtitle: String,
+    #[serde(serialize_with = "serialize_legacy_number")]
     price_amount: f64,
     currency: String,
     duration_unit: String,
@@ -288,6 +291,23 @@ struct Plan {
     quota_reset_custom_seconds: i64,
     created_at: i64,
     updated_at: i64,
+}
+
+/// Match Go's `encoding/json` spelling for integral `float64` values while
+/// preserving fractional subscription prices exactly.
+fn serialize_legacy_number<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if value.is_finite()
+        && value.fract() == 0.0
+        && *value >= i64::MIN as f64
+        && *value <= i64::MAX as f64
+    {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
 }
 
 #[derive(Serialize)]
@@ -614,6 +634,53 @@ async fn admin_update_plan_status(
 struct PreferenceRequest {
     billing_preference: String,
 }
+
+#[derive(Default, Deserialize, Serialize)]
+struct LegacyUserSetting {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notify_type: String,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    quota_warning_threshold: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    webhook_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    webhook_secret: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notification_email: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    bark_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    gotify_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    gotify_token: String,
+    #[serde(default)]
+    gotify_priority: i64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    upstream_model_update_notify_enabled: bool,
+    #[serde(
+        default,
+        rename = "accept_unset_model_ratio_model",
+        skip_serializing_if = "is_false"
+    )]
+    accept_unset_ratio_model: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    record_ip_log: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    sidebar_modules: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    billing_preference: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    language: String,
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 async fn update_preference(
     State(state): State<BillingSubscriptionsState>,
     headers: HeaderMap,
@@ -624,7 +691,19 @@ async fn update_preference(
         Err(response) => return response,
     };
     let preference = normalize_preference(&input.billing_preference);
-    let updated = sqlx::query("UPDATE users SET setting = jsonb_set(COALESCE(NULLIF(setting, '')::jsonb, '{}'::jsonb), '{billing_preference}', to_jsonb($2::text), TRUE) WHERE id = $1 AND deleted_at IS NULL").bind(user.id).bind(preference).execute(&state.pg).await;
+    let mut setting = serde_json::from_str::<LegacyUserSetting>(&user.setting).unwrap_or_default();
+    setting.billing_preference = preference.to_owned();
+    let setting = match serde_json::to_string(&setting) {
+        Ok(setting) => setting,
+        Err(_) => {
+            return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误"));
+        }
+    };
+    let updated = sqlx::query("UPDATE users SET setting = $2 WHERE id = $1 AND deleted_at IS NULL")
+        .bind(user.id)
+        .bind(setting)
+        .execute(&state.pg)
+        .await;
     match updated {
         Ok(result) if result.rows_affected() == 0 => {
             with_auth_version(failure(StatusCode::NOT_FOUND, "用户不存在"))
@@ -635,8 +714,11 @@ async fn update_preference(
 }
 fn normalize_preference(value: &str) -> &'static str {
     match value.trim() {
-        "subscription" => "subscription",
-        _ => "quota",
+        "subscription_first" => "subscription_first",
+        "wallet_first" => "wallet_first",
+        "subscription_only" => "subscription_only",
+        "wallet_only" => "wallet_only",
+        _ => "subscription_first",
     }
 }
 
@@ -656,7 +738,7 @@ async fn subscription_self(
                 .and_then(Value::as_str)
                 .map(normalize_preference)
         })
-        .unwrap_or("quota");
+        .unwrap_or("subscription_first");
     let all = match subscriptions(&state.pg, user.id, false).await {
         Ok(subscriptions) => subscriptions,
         Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
@@ -873,27 +955,91 @@ async fn create_subscription(
     Ok(changed.then(|| format!("用户分组将升级到 {}", plan.upgrade_group)))
 }
 fn end_time(start: i64, plan: &Plan) -> Result<i64, &'static str> {
-    let seconds = match plan.duration_unit.as_str() {
-        "year" => plan.duration_value.checked_mul(365 * 86_400),
-        "month" => plan.duration_value.checked_mul(30 * 86_400),
-        "day" => plan.duration_value.checked_mul(86_400),
-        "hour" => plan.duration_value.checked_mul(3_600),
-        "custom" => Some(plan.custom_seconds),
+    let start = local_timestamp(start).ok_or("无效的订阅周期")?;
+    let end = match plan.duration_unit.as_str() {
+        // Go's time.Time.AddDate is calendar based (and deliberately carries
+        // an end-of-month overflow into the following month), rather than a
+        // fixed 365/30-day approximation.
+        "year" => {
+            let months = plan
+                .duration_value
+                .checked_mul(12)
+                .ok_or("无效的订阅周期")?;
+            add_calendar_months(start, months)
+        }
+        "month" => add_calendar_months(start, plan.duration_value),
+        "day" => start.checked_add_signed(ChronoDuration::days(plan.duration_value)),
+        "hour" => start.checked_add_signed(ChronoDuration::hours(plan.duration_value)),
+        "custom" => start.checked_add_signed(ChronoDuration::seconds(plan.custom_seconds)),
         _ => None,
     }
     .ok_or("无效的订阅周期")?;
-    start.checked_add(seconds).ok_or("无效的订阅周期")
+    Ok(end.timestamp())
 }
 fn next_reset(start: i64, end: i64, plan: &Plan) -> i64 {
-    let seconds = match plan.quota_reset_period.as_str() {
-        "daily" => 86_400,
-        "weekly" => 7 * 86_400,
-        "monthly" => 30 * 86_400,
-        "custom" => plan.quota_reset_custom_seconds,
-        _ => 0,
+    let Some(base) = local_timestamp(start) else {
+        return 0;
     };
-    let next = start.saturating_add(seconds);
-    if seconds > 0 && next <= end { next } else { 0 }
+    let next = match plan.quota_reset_period.as_str() {
+        "daily" => local_midnight(base)
+            .and_then(|midnight| midnight.checked_add_signed(ChronoDuration::days(1))),
+        "weekly" => {
+            // Go aligns weekly resets to the next Monday at local midnight.
+            let days_until_monday = 8 - i64::from(base.weekday().number_from_monday());
+            local_midnight(base).and_then(|midnight| {
+                midnight.checked_add_signed(ChronoDuration::days(days_until_monday))
+            })
+        }
+        "monthly" => first_of_month(base).and_then(|first| add_calendar_months(first, 1)),
+        "custom" => {
+            base.checked_add_signed(ChronoDuration::seconds(plan.quota_reset_custom_seconds))
+        }
+        _ => None,
+    };
+    let Some(next) = next else {
+        return 0;
+    };
+    let next = next.timestamp();
+    if next > 0 && next <= end { next } else { 0 }
+}
+
+/// Convert a Unix timestamp using the process-local timezone, matching Go's
+/// `time.Unix`/`time.Date` behaviour used by subscription calculations.
+fn local_timestamp(timestamp: i64) -> Option<DateTime<Local>> {
+    match Local.timestamp_opt(timestamp, 0) {
+        LocalResult::Single(value) | LocalResult::Ambiguous(value, _) => Some(value),
+        LocalResult::None => None,
+    }
+}
+
+fn local_from_naive(value: NaiveDateTime) -> Option<DateTime<Local>> {
+    match Local.from_local_datetime(&value) {
+        LocalResult::Single(value) | LocalResult::Ambiguous(value, _) => Some(value),
+        LocalResult::None => None,
+    }
+}
+
+fn local_midnight(value: DateTime<Local>) -> Option<DateTime<Local>> {
+    local_from_naive(value.date_naive().and_hms_opt(0, 0, 0)?)
+}
+
+fn first_of_month(value: DateTime<Local>) -> Option<DateTime<Local>> {
+    local_from_naive(value.date_naive().with_day(1)?.and_hms_opt(0, 0, 0)?)
+}
+
+/// Match Go's AddDate for year/month arithmetic. Go normalizes an invalid
+/// target day forward (for example 2025-01-31 + 1 month = 2025-03-03), while
+/// chrono's month helper clamps to the last day of the target month.
+fn add_calendar_months(value: DateTime<Local>, months: i64) -> Option<DateTime<Local>> {
+    let total_months = i64::from(value.year())
+        .checked_mul(12)?
+        .checked_add(i64::from(value.month0()))?
+        .checked_add(months)?;
+    let year = total_months.div_euclid(12);
+    let month0 = total_months.rem_euclid(12);
+    let date = chrono::NaiveDate::from_ymd_opt(year.try_into().ok()?, month0 as u32 + 1, 1)?
+        .checked_add_signed(ChronoDuration::days(i64::from(value.day()) - 1))?;
+    local_from_naive(date.and_time(value.time()))
 }
 
 #[derive(Deserialize)]
@@ -1223,7 +1369,18 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Plan, end_time, next_reset, normalize_preference};
+    use chrono::{Local, TimeZone};
+
+    use super::{LegacyUserSetting, Plan, end_time, next_reset, normalize_preference};
+
+    fn local_timestamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
+        Local
+            .with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .single()
+            .expect("test timestamp should be unambiguous")
+            .timestamp()
+    }
+
     fn plan() -> Plan {
         Plan {
             id: 1,
@@ -1252,15 +1409,98 @@ mod tests {
         }
     }
     #[test]
-    fn preference_is_idempotently_normalized() {
-        assert_eq!(normalize_preference("unexpected"), "quota");
+    fn preference_matches_go_enum_and_default() {
+        for preference in [
+            "subscription_first",
+            "wallet_first",
+            "subscription_only",
+            "wallet_only",
+        ] {
+            assert_eq!(normalize_preference(preference), preference);
+        }
+        assert_eq!(normalize_preference("unexpected"), "subscription_first");
+        assert_eq!(normalize_preference("quota"), "subscription_first");
+    }
+
+    #[test]
+    fn preference_persistence_matches_go_user_setting_json() {
+        let mut setting = serde_json::from_str::<LegacyUserSetting>("{}").expect("empty setting");
+        setting.billing_preference = "subscription_first".to_owned();
+        assert_eq!(
+            serde_json::to_string(&setting).expect("setting serializes"),
+            r#"{"gotify_priority":0,"billing_preference":"subscription_first"}"#
+        );
     }
     #[test]
     fn subscription_end_time_uses_plan_duration() {
         assert_eq!(end_time(100, &plan()), Ok(86_500));
     }
+
+    #[test]
+    fn plan_price_wire_number_matches_go_encoding() {
+        let mut integral = plan();
+        integral.price_amount = 10.0;
+        assert_eq!(
+            serde_json::to_value(&integral).expect("plan serializes")["price_amount"],
+            serde_json::json!(10)
+        );
+
+        let mut fractional = plan();
+        fractional.price_amount = 0.97;
+        assert_eq!(
+            serde_json::to_value(&fractional).expect("plan serializes")["price_amount"],
+            serde_json::json!(0.97)
+        );
+    }
+
+    #[test]
+    fn subscription_month_and_year_use_go_calendar_overflow() {
+        let month_start = local_timestamp(2025, 1, 31, 12, 0);
+        let mut month_plan = plan();
+        month_plan.duration_unit = "month".into();
+        assert_eq!(
+            end_time(month_start, &month_plan),
+            Ok(local_timestamp(2025, 3, 3, 12, 0))
+        );
+
+        let year_start = local_timestamp(2024, 2, 29, 12, 0);
+        let mut year_plan = plan();
+        year_plan.duration_unit = "year".into();
+        assert_eq!(
+            end_time(year_start, &year_plan),
+            Ok(local_timestamp(2025, 3, 1, 12, 0))
+        );
+    }
+
+    #[test]
+    fn subscription_resets_use_local_calendar_boundaries() {
+        let start = local_timestamp(2025, 1, 31, 12, 0);
+        let end = local_timestamp(2025, 3, 4, 0, 0);
+        let mut reset_plan = plan();
+
+        reset_plan.quota_reset_period = "daily".into();
+        assert_eq!(
+            next_reset(start, end, &reset_plan),
+            local_timestamp(2025, 2, 1, 0, 0)
+        );
+
+        reset_plan.quota_reset_period = "weekly".into();
+        assert_eq!(
+            next_reset(start, end, &reset_plan),
+            local_timestamp(2025, 2, 3, 0, 0)
+        );
+
+        reset_plan.quota_reset_period = "monthly".into();
+        assert_eq!(
+            next_reset(start, end, &reset_plan),
+            local_timestamp(2025, 2, 1, 0, 0)
+        );
+    }
+
     #[test]
     fn reset_never_exceeds_subscription_end() {
-        assert_eq!(next_reset(100, 86_499, &plan()), 0);
+        let start = local_timestamp(2025, 1, 31, 12, 0);
+        let before_midnight = local_timestamp(2025, 1, 31, 23, 59);
+        assert_eq!(next_reset(start, before_midnight, &plan()), 0);
     }
 }
