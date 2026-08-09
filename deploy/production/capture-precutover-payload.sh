@@ -27,7 +27,7 @@ observed_host=${LMM_DEPLOY_OBSERVED_HOST:-$(hostnamectl --static)}
 [[ $WORKSPACE == "$WORK_ROOT"/* && -d $WORKSPACE && ! -L $WORKSPACE ]] || die 'unsafe workspace'
 [[ -f $WORKSPACE/.lmm-deploy-workspace && ! -L $WORKSPACE/.lmm-deploy-workspace ]] || die 'workspace marker is missing'
 [[ $OUTPUT == "$WORKSPACE"/staging/* && ! -e $OUTPUT && ! -L $OUTPUT ]] || die 'unsafe or pre-existing output'
-for command in cp find install pacman realpath sha256sum stat systemctl tar; do
+for command in chmod cp find install pacman realpath sha256sum stat systemctl tar; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 [[ $(pacman -Qq lmm-api) == lmm-api && $(pacman -Qq lmm-api-go) == lmm-api-go ]] || \
@@ -70,6 +70,17 @@ copy_package_payload() {
 
 copy_package_payload lmm-api "$capture_root/core-root"
 copy_package_payload lmm-api-go "$capture_root/go-root"
+chmod 0700 "$capture_root/core-root/etc/lmm-api"
+chmod 0600 "$capture_root/core-root/etc/lmm-api/lmm-api.env"
+chmod 0644 "$capture_root/core-root/etc/lmm-api/backend.conf" \
+  "$capture_root/core-root/usr/lib/systemd/system/lmm-api.service"
+chmod 0755 "$capture_root/core-root/usr/bin/lmm-api" \
+  "$capture_root/core-root/usr/bin/lmm-api-select" \
+  "$capture_root/go-root/usr/lib/lmm-api/backends/go/lmm-api"
+for public_root in "$capture_root/core-root/usr/share/doc" "$capture_root/core-root/usr/share/licenses"; do
+  [[ ! -d $public_root ]] || find "$public_root" -type d -exec chmod 0755 {} +
+  [[ ! -d $public_root ]] || find "$public_root" -type f -exec chmod 0644 {} +
+done
 [[ ! -s $capture_root/core-root/etc/lmm-api/lmm-api.env ]] || die 'secret environment data entered the payload'
 if find "$capture_root/core-root" "$capture_root/go-root" -type l -print -quit | grep -q .; then
   die 'captured package payload contains a symlink'

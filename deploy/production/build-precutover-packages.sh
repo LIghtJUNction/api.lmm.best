@@ -73,6 +73,7 @@ for required in \
   "$core_root/usr/lib/systemd/system/lmm-api.service" \
   "$core_root/etc/lmm-api/backend.conf" \
   "$core_root/etc/lmm-api/lmm-api.env" \
+  "$core_root/usr/share/licenses/lmm-api/LICENSE" \
   "$go_root/usr/lib/lmm-api/backends/go/lmm-api"; do
   [[ -f $required && ! -L $required ]] || die "captured payload is incomplete: ${required#"$extract_dir/"}"
 done
@@ -118,12 +119,16 @@ archive_mode() {
     '$NF == entry { count += 1; mode = $1 } END { if (count == 1) print mode; else exit 2 }'
 }
 for record in \
+  "${core_matches[0]}:etc/lmm-api/:drwx------" \
+  "${core_matches[0]}:etc/lmm-api/backend.conf:-rw-r--r--" \
   "${core_matches[0]}:usr/bin/:drwxr-xr-x" \
   "${core_matches[0]}:usr/bin/lmm-api:-rwxr-xr-x" \
   "${core_matches[0]}:usr/bin/lmm-api-select:-rwxr-xr-x" \
   "${core_matches[0]}:usr/lib/systemd/system/:drwxr-xr-x" \
   "${core_matches[0]}:usr/lib/systemd/system/lmm-api.service:-rw-r--r--" \
   "${core_matches[0]}:etc/lmm-api/lmm-api.env:-rw-------" \
+  "${core_matches[0]}:usr/share/licenses/lmm-api/:drwxr-xr-x" \
+  "${core_matches[0]}:usr/share/licenses/lmm-api/LICENSE:-rw-r--r--" \
   "${go_matches[0]}:usr/lib/lmm-api/:drwxr-xr-x" \
   "${go_matches[0]}:usr/lib/lmm-api/backends/:drwxr-xr-x" \
   "${go_matches[0]}:usr/lib/lmm-api/backends/go/:drwxr-xr-x" \

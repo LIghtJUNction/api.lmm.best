@@ -35,6 +35,7 @@ chmod 0644 "$root/core-root/usr/lib/systemd/system/lmm-api.service" \
   "$root/core-root/etc/lmm-api/backend.conf"
 chmod 0600 "$root/core-root/etc/lmm-api/lmm-api.env"
 printf 'fixture\n' >"$root/core-root/usr/share/licenses/lmm-api/LICENSE"
+chmod 0644 "$root/core-root/usr/share/licenses/lmm-api/LICENSE"
 tar -C "$root" -cf "$tmp/payload.tar" .
 
 mkdir -p "$tmp/workspace/tmp" "$tmp/output"
@@ -56,12 +57,16 @@ for expected in usr/bin/lmm-api usr/bin/lmm-api-select usr/lib/systemd/system/lm
 done
 bsdtar -tf "${go[0]}" | grep -Fqx 'usr/lib/lmm-api/backends/go/lmm-api' || fail 'Go package lacks captured binary'
 for record in \
+  "${core[0]}:etc/lmm-api/:drwx------" \
+  "${core[0]}:etc/lmm-api/backend.conf:-rw-r--r--" \
   "${core[0]}:usr/bin/:drwxr-xr-x" \
   "${core[0]}:usr/bin/lmm-api:-rwxr-xr-x" \
   "${core[0]}:usr/bin/lmm-api-select:-rwxr-xr-x" \
   "${core[0]}:usr/lib/systemd/system/:drwxr-xr-x" \
   "${core[0]}:usr/lib/systemd/system/lmm-api.service:-rw-r--r--" \
   "${core[0]}:etc/lmm-api/lmm-api.env:-rw-------" \
+  "${core[0]}:usr/share/licenses/lmm-api/:drwxr-xr-x" \
+  "${core[0]}:usr/share/licenses/lmm-api/LICENSE:-rw-r--r--" \
   "${go[0]}:usr/lib/lmm-api/:drwxr-xr-x" \
   "${go[0]}:usr/lib/lmm-api/backends/:drwxr-xr-x" \
   "${go[0]}:usr/lib/lmm-api/backends/go/:drwxr-xr-x" \
