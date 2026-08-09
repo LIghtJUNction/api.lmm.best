@@ -15,6 +15,12 @@ mkdir -p \
   "$root/core-root/etc/lmm-api" \
   "$root/core-root/usr/share/licenses/lmm-api" \
   "$root/go-root/usr/lib/lmm-api/backends/go"
+chmod 0755 "$root/core-root/usr" "$root/core-root/usr/bin" "$root/core-root/usr/lib" \
+  "$root/core-root/usr/lib/systemd" "$root/core-root/usr/lib/systemd/system" \
+  "$root/core-root/usr/share" "$root/core-root/usr/share/licenses" \
+  "$root/core-root/usr/share/licenses/lmm-api" "$root/go-root/usr" "$root/go-root/usr/lib" \
+  "$root/go-root/usr/lib/lmm-api" "$root/go-root/usr/lib/lmm-api/backends" \
+  "$root/go-root/usr/lib/lmm-api/backends/go"
 printf 'lmm-api\t0.1.0.r31.g3e39995.payrate2.cachefix1.txfix1-1\n' >"$root/metadata/packages.tsv"
 printf 'lmm-api-go\t0.1.0.r122.g27d4df76-1\n' >>"$root/metadata/packages.tsv"
 for command_path in "$root/core-root/usr/bin/lmm-api" "$root/core-root/usr/bin/lmm-api-select" \
@@ -25,6 +31,9 @@ done
 printf '[Service]\nExecStart=/usr/bin/lmm-api\n' >"$root/core-root/usr/lib/systemd/system/lmm-api.service"
 printf 'LMM_API_BACKEND=go\n' >"$root/core-root/etc/lmm-api/backend.conf"
 : >"$root/core-root/etc/lmm-api/lmm-api.env"
+chmod 0644 "$root/core-root/usr/lib/systemd/system/lmm-api.service" \
+  "$root/core-root/etc/lmm-api/backend.conf"
+chmod 0600 "$root/core-root/etc/lmm-api/lmm-api.env"
 printf 'fixture\n' >"$root/core-root/usr/share/licenses/lmm-api/LICENSE"
 tar -C "$root" -cf "$tmp/payload.tar" .
 
@@ -46,6 +55,24 @@ for expected in usr/bin/lmm-api usr/bin/lmm-api-select usr/lib/systemd/system/lm
   bsdtar -tf "${core[0]}" | grep -Fqx "$expected" || fail "core package lacks $expected"
 done
 bsdtar -tf "${go[0]}" | grep -Fqx 'usr/lib/lmm-api/backends/go/lmm-api' || fail 'Go package lacks captured binary'
+for record in \
+  "${core[0]}:usr/bin/:drwxr-xr-x" \
+  "${core[0]}:usr/bin/lmm-api:-rwxr-xr-x" \
+  "${core[0]}:usr/bin/lmm-api-select:-rwxr-xr-x" \
+  "${core[0]}:usr/lib/systemd/system/:drwxr-xr-x" \
+  "${core[0]}:usr/lib/systemd/system/lmm-api.service:-rw-r--r--" \
+  "${core[0]}:etc/lmm-api/lmm-api.env:-rw-------" \
+  "${go[0]}:usr/lib/lmm-api/:drwxr-xr-x" \
+  "${go[0]}:usr/lib/lmm-api/backends/:drwxr-xr-x" \
+  "${go[0]}:usr/lib/lmm-api/backends/go/:drwxr-xr-x" \
+  "${go[0]}:usr/lib/lmm-api/backends/go/lmm-api:-rwxr-xr-x"; do
+  archive=${record%%:*}
+  remainder=${record#*:}
+  entry=${remainder%%:*}
+  expected_mode=${remainder##*:}
+  actual_mode=$(bsdtar -tvf "$archive" "$entry" | awk -v entry="$entry" '$NF == entry {print $1}')
+  [[ $actual_mode == "$expected_mode" ]] || fail "package mode is wrong for $entry: $actual_mode"
+done
 if bsdtar -xOf "${core[0]}" etc/lmm-api/lmm-api.env | grep -q .; then
   fail 'core rollback package embedded an environment value'
 fi

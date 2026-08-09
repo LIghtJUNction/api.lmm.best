@@ -27,11 +27,11 @@ frontend=$tmp/frontend
 pacman_root=$tmp/pacman-root
 install -d -m0700 "$workspace/tmp" "$payload_root/metadata" \
   "$payload_root/core-root/etc/lmm-api" \
-  "$payload_root/core-root/usr/bin" \
+  "$rollback_dir" "$candidate_dir" "$frontend"
+install -d -m0755 "$payload_root/core-root/usr/bin" \
   "$payload_root/core-root/usr/lib/systemd/system" \
   "$payload_root/core-root/usr/share/licenses/lmm-api" \
-  "$payload_root/go-root/usr/lib/lmm-api/backends/go" \
-  "$rollback_dir" "$candidate_dir" "$frontend"
+  "$payload_root/go-root/usr/lib/lmm-api/backends/go"
 printf 'format=1\nrole=test\n' >"$workspace/.lmm-deploy-workspace"
 
 old_core_version=0.1.0.r31.gfixture-1
@@ -48,6 +48,9 @@ chmod 0755 "$payload_root/core-root/usr/bin/lmm-api" \
 printf '[Service]\nExecStart=/usr/bin/lmm-api\n' >"$payload_root/core-root/usr/lib/systemd/system/lmm-api.service"
 printf 'LMM_API_BACKEND=go\n' >"$payload_root/core-root/etc/lmm-api/backend.conf"
 : >"$payload_root/core-root/etc/lmm-api/lmm-api.env"
+chmod 0644 "$payload_root/core-root/usr/lib/systemd/system/lmm-api.service" \
+  "$payload_root/core-root/etc/lmm-api/backend.conf"
+chmod 0600 "$payload_root/core-root/etc/lmm-api/lmm-api.env"
 printf 'fixture\n' >"$payload_root/core-root/usr/share/licenses/lmm-api/LICENSE"
 tar --sort=name --numeric-owner --owner=0 --group=0 -C "$payload_root" -cf "$tmp/precutover-payload.tar" .
 
@@ -74,11 +77,12 @@ new_go=$(find "$candidate_dir" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*
 
 install -d -m0755 "$pacman_root/etc" "$pacman_root/usr" \
   "$pacman_root/var/lib/pacman/local" "$pacman_root/var/cache/pacman/pkg" "$pacman_root/var/log"
-tar -C /var/lib/pacman/local --exclude='lmm-api-*' -cf - . | \
-  tar -C "$pacman_root/var/lib/pacman/local" -xf -
 common=(--root "$pacman_root" --dbpath "$pacman_root/var/lib/pacman" \
   --cachedir "$pacman_root/var/cache/pacman/pkg" --logfile "$pacman_root/var/log/pacman.log")
-install_args=(pacman "${common[@]}" --noconfirm --noscriptlet)
+# This fixture validates file ownership and conflict transitions, not dependency
+# resolution. Keeping the database empty avoids copying the host's entire local
+# pacman database into every test run.
+install_args=(pacman "${common[@]}" --noconfirm --noscriptlet --nodeps --nodeps)
 query_args=(pacman "${common[@]}")
 
 fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
@@ -87,7 +91,10 @@ fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 
 fakeroot -- "${install_args[@]}" -Rdd lmm-api >/dev/null
 fakeroot -- "${install_args[@]}" -U "$new_go" >/dev/null
-! "${query_args[@]}" -Q lmm-api >/dev/null 2>&1
+if "${query_args[@]}" -Q lmm-api >/dev/null 2>&1; then
+  printf 'go-package-roundtrip: old core package remains installed\n' >&2
+  exit 1
+fi
 [[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
 [[ -x $pacman_root/usr/bin/lmm-api-go && ! -e $pacman_root/usr/bin/lmm-api ]]
 

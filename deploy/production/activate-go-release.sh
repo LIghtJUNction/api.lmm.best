@@ -50,7 +50,7 @@ readonly INSTALLED_BINARY PACKAGED_FRONTEND_DIR MIGRATION_WORKDIR
 readonly REMOVED_BINARY REMOVED_SELECTOR REMOVED_PROVIDER_ROOT OLD_SERVICE_FILE PROBE_ATTEMPTS
 readonly TRANSACTION_LOCK
 
-die() { printf 'activate-go-release: %s\n' "$*" >&2; exit 2; }
+die() { printf 'activate-go-release: %s\n' "$*" >&2; return 2; }
 is_sha256() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
 is_id() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; }
 
@@ -285,6 +285,31 @@ install_new_environment_config() {
   mv -Tf -- "$temporary" "$destination"
 }
 
+validate_old_configuration_directory() {
+  [[ -d $OLD_CONFIG_DIR && ! -L $OLD_CONFIG_DIR ]] || die 'old configuration directory is missing or unsafe'
+  if find "$OLD_CONFIG_DIR" -type l -print -quit | grep -q .; then
+    die 'old configuration directory contains a symlink'
+  fi
+  if find "$OLD_CONFIG_DIR" ! -type d ! -type f -print -quit | grep -q .; then
+    die 'old configuration directory contains an unsupported entry'
+  fi
+}
+
+remove_old_application_configuration() {
+  local name path
+  validate_old_configuration_directory
+  for name in backend.conf backend.conf.pacsave backend.conf.pacnew \
+    lmm-api.env lmm-api.env.pacsave lmm-api.env.pacnew; do
+    path=$OLD_CONFIG_DIR/$name
+    [[ ! -e $path && ! -L $path ]] && continue
+    [[ -f $path && ! -L $path ]] || die "old application configuration is unsafe: $path"
+    rm -f -- "$path"
+  done
+  # Auxiliary backup credentials and historical operator snapshots are not
+  # package-owned application configuration. Preserve them in place.
+  rmdir -- "$OLD_CONFIG_DIR" 2>/dev/null || true
+}
+
 run_candidate_migration() {
 	local mode=$1 unit="lmm-api-go-migrate-$1-$deployment_id"
 	case $mode in apply|verify) ;; *) die 'candidate migration mode must be apply or verify' ;; esac
@@ -317,7 +342,15 @@ cleanup_failed_prearm() {
   local rc=$? current
   ((rc != 0)) || return 0
   current=$(status_word)
-	case $current in ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK|ROLLED_BACK|CONFIRMED) return 0 ;; esac
+  case $current in
+    ROLLED_BACK|CONFIRMED) return 0 ;;
+    ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK)
+      if systemctl is-active --quiet "$timer_unit" 2>/dev/null; then
+        perform_rollback "activation-exit-$rc" || true
+      fi
+      return 0
+      ;;
+  esac
   if [[ $current == PREPARED ]] && systemctl is-active --quiet "$timer_unit" 2>/dev/null; then
     return 0
   fi
@@ -422,6 +455,7 @@ case $ACTION in
     [[ $(pacman -Qp "$ROLLBACK_GO") == "$(pacman -Q lmm-api-go)" ]] || die 'Go rollback package identity mismatch'
     systemctl is-active --quiet "$OLD_SERVICE" || die 'pre-cutover service is not active'
     systemctl is-enabled --quiet "$OLD_SERVICE" || die 'pre-cutover service is not enabled'
+    validate_old_configuration_directory
     old_frontend_link=$(readlink -- "$FRONTEND_ROOT/current")
     [[ $old_frontend_link =~ ^releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]] || die 'pre-cutover frontend identity is unsafe'
     old_frontend_release=${BASH_REMATCH[1]}
@@ -500,18 +534,7 @@ EOF
     pacman -Rdd --noconfirm lmm-api
     pacman -U --noconfirm "$PACKAGE"
     install_new_environment_config "$config_restore/lmm-api/lmm-api.env"
-    if [[ -d $OLD_CONFIG_DIR && ! -L $OLD_CONFIG_DIR ]]; then
-      if find "$OLD_CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -type f -print -quit | grep -q .; then
-        die 'removed configuration directory contains an unsupported entry'
-      fi
-      while IFS= read -r old_config; do
-        case ${old_config##*/} in
-          backend.conf|backend.conf.pacsave|backend.conf.pacnew|lmm-api.env|lmm-api.env.pacsave|lmm-api.env.pacnew) ;;
-          *) die "unexpected file remains in removed configuration directory: $old_config" ;;
-        esac
-      done < <(find "$OLD_CONFIG_DIR" -mindepth 1 -maxdepth 1 -type f -print)
-      rm -rf -- "$OLD_CONFIG_DIR"
-    fi
+    remove_old_application_configuration
     systemctl daemon-reload
     pacman -Qkk lmm-api-go >/dev/null
     [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'

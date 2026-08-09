@@ -42,7 +42,10 @@ build_root=$(mktemp -d "$WORKSPACE/tmp/precutover-build.XXXXXXXX")
 pkgdest=$(mktemp -d "$WORKSPACE/tmp/precutover-pkgdest.XXXXXXXX")
 cleanup() { rm -rf -- "$extract_dir" "$build_root" "$pkgdest"; }
 trap cleanup EXIT
-bsdtar -xf "$PAYLOAD" -C "$extract_dir"
+# libarchive applies the process umask while extracting archived modes. Keep the
+# surrounding workspace private, but preserve the payload's deliberate 0755 and
+# 0644 runtime modes inside this already-private extraction directory.
+(umask 022; bsdtar -xf "$PAYLOAD" -C "$extract_dir")
 
 metadata=$extract_dir/metadata/packages.tsv
 [[ -f $metadata && ! -L $metadata ]] || die 'payload package metadata is missing'
@@ -92,6 +95,10 @@ build_one() {
   rm -rf -- "$build_dir/root"
   (
     cd -- "$build_dir"
+    # makepkg inherits this script's private umask. The captured payload already
+    # carries deliberate per-file modes, so use the normal packaging umask while
+    # extracting it or executable paths become root-only in the rollback package.
+    umask 022
     BUILDDIR="$build_dir/makepkg" PKGDEST="$pkgdest" \
       LMM_PRECUTOVER_PKGVER="$pkgver" LMM_PRECUTOVER_PKGREL="$pkgrel" \
       makepkg --force --nodeps --noconfirm --cleanbuild
@@ -105,6 +112,30 @@ core_matches=("$pkgdest/lmm-api-$core_pkgver-$core_pkgrel-x86_64.pkg.tar."*)
 go_matches=("$pkgdest/lmm-api-go-$go_pkgver-$go_pkgrel-x86_64.pkg.tar."*)
 [[ ${#core_matches[@]} -eq 1 && -f ${core_matches[0]} ]] || die 'core rollback package was not produced exactly once'
 [[ ${#go_matches[@]} -eq 1 && -f ${go_matches[0]} ]] || die 'Go rollback package was not produced exactly once'
+archive_mode() {
+  local archive=$1 entry=$2
+  bsdtar -tvf "$archive" "$entry" | awk -v entry="$entry" \
+    '$NF == entry { count += 1; mode = $1 } END { if (count == 1) print mode; else exit 2 }'
+}
+for record in \
+  "${core_matches[0]}:usr/bin/:drwxr-xr-x" \
+  "${core_matches[0]}:usr/bin/lmm-api:-rwxr-xr-x" \
+  "${core_matches[0]}:usr/bin/lmm-api-select:-rwxr-xr-x" \
+  "${core_matches[0]}:usr/lib/systemd/system/:drwxr-xr-x" \
+  "${core_matches[0]}:usr/lib/systemd/system/lmm-api.service:-rw-r--r--" \
+  "${core_matches[0]}:etc/lmm-api/lmm-api.env:-rw-------" \
+  "${go_matches[0]}:usr/lib/lmm-api/:drwxr-xr-x" \
+  "${go_matches[0]}:usr/lib/lmm-api/backends/:drwxr-xr-x" \
+  "${go_matches[0]}:usr/lib/lmm-api/backends/go/:drwxr-xr-x" \
+  "${go_matches[0]}:usr/lib/lmm-api/backends/go/lmm-api:-rwxr-xr-x"; do
+  archive=${record%%:*}
+  remainder=${record#*:}
+  entry=${remainder%%:*}
+  expected_mode=${remainder##*:}
+  actual_mode=$(archive_mode "$archive" "$entry")
+  [[ $actual_mode == "$expected_mode" ]] || \
+    die "rollback package mode is unsafe: $entry ($actual_mode, expected $expected_mode)"
+done
 for archive in "${core_matches[0]}" "${go_matches[0]}"; do
   destination=$OUTPUT_DIR/${archive##*/}
   install -Dm0600 "$archive" "$destination"
