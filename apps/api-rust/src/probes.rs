@@ -44,6 +44,13 @@ allow_ips = '', "group" = '', cross_group_retry = FALSE, deleted_at = NULL WHERE
     "EXPLAIN (COSTS FALSE) UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE FALSE",
 ];
 
+const OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS: &[&str] = &[
+    "SELECT id, owner_user_id, repository_url, title, description, rules, reward_quota, net_reward_quota, reward_slots, escrow_quota, platform_fee_rate_bps, platform_fee_quota, status, created_at, updated_at, published_at, closed_at FROM open_source_bounty_projects WHERE FALSE",
+    "SELECT id, project_id, participant_user_id, github_handle, status, issue_url, pull_request_url, submission_note, review_note, reward_quota, tip_quota, owner_rating_score, owner_rating_comment, owner_rated_at, contributor_rating_score, contributor_rating_comment, contributor_rated_at, owner_rating_overturned, accepted_at, submitted_at, reviewed_at, rejected_at, paid_at, created_at, updated_at FROM open_source_bounty_challenges WHERE FALSE",
+    "SELECT id, project_id, challenge_id, user_id, counterparty_user_id, kind, quota, note, recipient_read_at, thanked_at, created_at FROM open_source_bounty_ledgers WHERE FALSE",
+    "SELECT id, challenge_id, project_id, opened_by_user_id, against_user_id, reason, statement, project_title_snapshot, repository_url_snapshot, project_rules_snapshot, project_escrow_quota_snapshot, challenge_status_snapshot, issue_url_snapshot, pull_request_url_snapshot, submission_note_snapshot, review_note_snapshot, reward_quota_snapshot, tip_quota_snapshot, owner_rating_score_snapshot, owner_rating_comment_snapshot, contributor_rating_score_snapshot, contributor_rating_comment_snapshot, status, resolution, resolved_by_user_id, created_at, updated_at, resolved_at FROM open_source_bounty_disputes WHERE FALSE",
+];
+
 pub struct InfrastructureProbe {
     pg: PgPool,
     valkey: redis::Client,
@@ -156,6 +163,9 @@ async fn schema_compatible_with(
     for query in API_TOKEN_SCHEMA_SELECTS {
         backend.verify_select(query).await?;
     }
+    for query in OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS {
+        backend.verify_select(query).await?;
+    }
     Ok(())
 }
 
@@ -210,6 +220,7 @@ mod tests {
                 STATUS_SCHEMA_SELECTS,
                 AUTH_SCHEMA_SELECTS,
                 API_TOKEN_SCHEMA_SELECTS,
+                OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS,
             ]
             .concat()
         );
@@ -221,6 +232,7 @@ mod tests {
             .iter()
             .chain(AUTH_SCHEMA_SELECTS)
             .chain(API_TOKEN_SCHEMA_SELECTS)
+            .chain(OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS)
         {
             let backend = backend(Some(query));
             let error = schema_compatible_with(&backend, 2)
