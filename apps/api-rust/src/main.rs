@@ -27,6 +27,9 @@ use lmm_api_rs::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
             registration_router,
         },
+        missing_identity_catalog::{
+            IdentityCatalogState, public_router as identity_catalog_public_router,
+        },
         missing_identity_checkin_aff::{
             IdentityCheckinAffState, read_router as identity_checkin_read_router,
         },
@@ -196,6 +199,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let identity_profile = identity_profile_router(
             ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
         );
+        let identity_catalog = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_catalog_public_router(IdentityCatalogState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+            )),
+        );
         let catalog_http = reqwest::Client::builder()
             .timeout(config.dependency_timeout)
             .build()
@@ -269,6 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         };
         let mut extra_surface = identity_profile
+            .merge(identity_catalog)
             .merge(admin_catalog)
             .merge(identity_admin)
             .merge(identity_topup)
