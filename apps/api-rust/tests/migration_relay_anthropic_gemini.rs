@@ -617,9 +617,15 @@ async fn static_model_lookup_contract_holds_over_a_real_tcp_listener() {
         .send()
         .await
         .expect("denied TCP response");
-    // Discovery routes deliberately conceal missing/invalid credentials as a
-    // not-found response, matching the production model-listing policy.
-    assert_eq!(denied.status(), reqwest::StatusCode::NOT_FOUND);
+    // The frozen Go relay uses TokenAuth for this route, so a missing
+    // credential is the OpenAI-compatible 401 envelope, not a generic 404.
+    assert_eq!(denied.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let denied_body = denied.json::<Value>().await.expect("denied JSON");
+    assert_eq!(denied_body["error"]["type"], "new_api_error");
+    assert_eq!(denied_body["error"]["code"], "");
+    assert!(denied_body["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.starts_with("Invalid token (request id: ")));
     server.abort();
 }
 
