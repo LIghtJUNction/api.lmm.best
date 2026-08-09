@@ -1013,7 +1013,7 @@ fn topup_info_data_for_user(
         && nonempty(options, "FastPayShopNo")
         && nonempty(options, "FastPayApiSecret");
     let mut pay_methods = if compliant {
-        json_value(options, "PayMethods", Value::Array(vec![]))
+        json_value(options, "PayMethods", default_pay_methods())
             .as_array()
             .cloned()
             .unwrap_or_default()
@@ -1116,7 +1116,7 @@ fn topup_info_data_for_user(
         "waffo_pay_methods": if waffo { json_value(options, "WaffoPayMethods", Value::Null) } else { Value::Null },
         "creem_products": creem_products,
         "pay_methods": pay_methods,
-        "topup_group_ratio": topup_group_ratio(options, group),
+        "topup_group_ratio": legacy_number(topup_group_ratio(options, group)),
         "min_topup": integer(options, "MinTopUp", 1),
         "stripe_min_topup": integer(options, "StripeMinTopUp", 1),
         "waffo_min_topup": integer(options, "WaffoMinTopUp", 1),
@@ -1173,6 +1173,29 @@ fn topup_group_ratio(options: &HashMap<String, String>, group: &str) -> f64 {
         .and_then(|value| value.get(group).and_then(Value::as_f64))
         .unwrap_or(1.0);
     if ratio == 0.0 { 1.0 } else { ratio }
+}
+
+/// Match Go's `encoding/json` spelling for integral `float64` values.
+fn legacy_number(value: f64) -> Value {
+    if value.is_finite()
+        && value.fract() == 0.0
+        && value >= i64::MIN as f64
+        && value <= i64::MAX as f64
+    {
+        Value::from(value as i64)
+    } else {
+        Number::from_f64(value)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
+    }
+}
+
+fn default_pay_methods() -> Value {
+    json!([
+        {"name": "支付宝", "icon": "SiAlipay", "type": "alipay"},
+        {"name": "微信", "icon": "SiWechat", "type": "wxpay"},
+        {"name": "自定义1", "icon": "LuCreditCard", "type": "custom1", "min_topup": "50"},
+    ])
 }
 
 fn append_payment_method(
@@ -1715,6 +1738,27 @@ mod tests {
         assert_eq!(production_waffo["enable_waffo_topup"], true);
         options.insert("WaffoEnabled".into(), "1".into());
         assert_eq!(topup_info_data(&options)["enable_waffo_topup"], false);
+    }
+
+    #[test]
+    fn topup_info_defaults_match_go_option_map_wire_shape() {
+        let options = HashMap::from([
+            ("payment_setting.compliance_confirmed".into(), "true".into()),
+            (
+                "payment_setting.compliance_terms_version".into(),
+                "v1".into(),
+            ),
+        ]);
+        let value = topup_info_data(&options);
+        assert_eq!(value["topup_group_ratio"], json!(1));
+        assert_eq!(
+            value["pay_methods"],
+            json!([
+                {"name": "支付宝", "icon": "SiAlipay", "type": "alipay"},
+                {"name": "微信", "icon": "SiWechat", "type": "wxpay"},
+                {"name": "自定义1", "icon": "LuCreditCard", "type": "custom1", "min_topup": "50"},
+            ])
+        );
     }
 
     #[test]
