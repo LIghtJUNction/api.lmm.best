@@ -50,10 +50,12 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     resolveRealKey,
     resolvedKeys,
     loadingKeys,
+    revealOpenKeyId,
+    setRevealOpenKeyId,
     copiedKeyId,
     markKeyCopied,
   } = useApiKeys()
-  const [popoverOpen, setPopoverOpen] = useState(false)
+  const popoverOpen = revealOpenKeyId === apiKey.id
   const [revealStatus, setRevealStatus] = useState<
     'idle' | 'pending' | 'failed'
   >('idle')
@@ -75,7 +77,6 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
     (open: boolean, eventDetails: PopoverOpenChangeDetails) => {
       if (
         !open &&
-        !popoverOpen &&
         eventDetails.reason === 'focus-out' &&
         revealRequestedRef.current === apiKey.id &&
         !resolvedFullKey &&
@@ -85,13 +86,13 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
         return
       }
 
-      setPopoverOpen(open)
+      setRevealOpenKeyId(open ? apiKey.id : null)
       if (!open) {
         revealRequestedRef.current = null
         setRevealStatus('idle')
       }
     },
-    [apiKey.id, popoverOpen, resolvedFullKey, revealStatus]
+    [apiKey.id, resolvedFullKey, revealStatus, setRevealOpenKeyId]
   )
 
   const handleRevealTriggerClick = useCallback(() => {
@@ -99,7 +100,7 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
       return
     }
 
-    setPopoverOpen(true)
+    setRevealOpenKeyId(apiKey.id)
 
     if (resolvedFullKey || revealRequestedRef.current === apiKey.id) {
       return
@@ -114,10 +115,15 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
         setRevealStatus('failed')
       }
     })
-  }, [apiKey.id, popoverOpen, resolveRealKey, resolvedFullKey])
+  }, [
+    apiKey.id,
+    popoverOpen,
+    resolveRealKey,
+    resolvedFullKey,
+    setRevealOpenKeyId,
+  ])
 
   useEffect(() => {
-    setPopoverOpen(false)
     setRevealStatus('idle')
     revealRequestedRef.current = null
   }, [apiKey.id])
