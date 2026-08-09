@@ -41,12 +41,12 @@ require_source_contract() {
     '/api/user/waffo-pancake/pay'; do
     rg -Fq ".route(\"$route\", post(" "$route_source"
   done
-  rg -Fq 'body::to_bytes' "$route_source"
+  rg -Fq 'to_bytes(request.into_body()' "$route_source"
   rg -Fq 'extract::{Request, State}' "$route_source"
   rg -Fq 'async fn legacy_json<T: DeserializeOwned + Default>' "$route_source"
   rg -Fq 'let actor = match authenticated(&state, &headers).await' "$route_source"
-  rg -Fq 'let request = match legacy_json(request).await' "$route_source"
-  rg -Fq 'fn format_amount(amount: f64, currency: &str)' "$route_source"
+  rg -Fq 'legacy_json(request).await' "$route_source"
+  rg -Fq 'fn format_amount(' "$route_source"
   rg -Fq 'fn normalized_amount(amount: i64, settings: &BTreeMap<String, String>)' "$route_source"
   rg -Fq 'fn waffo_provider_config(settings: &BTreeMap<String, String>)' "$route_source"
   rg -Fq 'fn pancake_provider_config(settings: &BTreeMap<String, String>)' "$route_source"
