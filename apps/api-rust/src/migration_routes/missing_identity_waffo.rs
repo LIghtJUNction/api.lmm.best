@@ -644,6 +644,7 @@ async fn settings(pg: &PgPool) -> Result<BTreeMap<String, String>, ()> {
                 "WaffoPancakePrivateKey",
                 "WaffoPancakeProductID",
                 "general_setting.quota_display_type",
+                "DisplayInCurrencyEnabled",
                 "QuotaPerUnit",
                 "TopupGroupRatio",
                 "payment_setting.amount_discount",
@@ -906,8 +907,7 @@ fn quote_money(
     settings: &BTreeMap<String, String>,
 ) -> FixedDecimal {
     let original = FixedDecimal::from_i64(amount);
-    let quota_display = setting_string(settings, "general_setting.quota_display_type")
-        .is_some_and(|value| value == "TOKENS");
+    let quota_display = token_display(settings);
     let displayed = if quota_display {
         original
             .div(positive_setting_decimal(
@@ -962,9 +962,7 @@ fn json_value(settings: &BTreeMap<String, String>, key: &str) -> Option<Value> {
     setting_string(settings, key).and_then(|v| serde_json::from_str(&v).ok())
 }
 fn normalized_amount(amount: i64, settings: &BTreeMap<String, String>) -> i64 {
-    if setting_string(settings, "general_setting.quota_display_type")
-        .is_some_and(|value| value == "TOKENS")
-    {
+    if token_display(settings) {
         FixedDecimal::from_i64(amount)
             .div(positive_setting_decimal(
                 settings,
@@ -977,6 +975,19 @@ fn normalized_amount(amount: i64, settings: &BTreeMap<String, String>) -> i64 {
     } else {
         amount
     }
+}
+
+/// `DisplayInCurrencyEnabled` is the legacy Go option. Go maps it to the
+/// registered `general_setting.quota_display_type` at startup; keep the same
+/// fallback for databases that have not yet been rewritten to the dotted key.
+/// The new registered value always wins when both forms exist.
+fn token_display(settings: &BTreeMap<String, String>) -> bool {
+    if let Some(value) = setting_string(settings, "general_setting.quota_display_type") {
+        return value == "TOKENS";
+    }
+    settings
+        .get("DisplayInCurrencyEnabled")
+        .is_some_and(|value| value != "true")
 }
 fn format_amount(amount: FixedDecimal, currency: &str) -> String {
     if matches!(currency, "IDR" | "JPY" | "KRW" | "VND") {
@@ -1206,6 +1217,31 @@ mod tests {
             FixedDecimal::parse("3").unwrap()
         );
         assert_eq!(normalized_amount(200, &settings), 2);
+    }
+
+    #[test]
+    fn token_display_keeps_go_legacy_option_fallback() {
+        let legacy_tokens = BTreeMap::from([
+            ("DisplayInCurrencyEnabled".to_owned(), "false".to_owned()),
+            ("QuotaPerUnit".to_owned(), "100".to_owned()),
+        ]);
+        assert!(token_display(&legacy_tokens));
+        assert_eq!(normalized_amount(200, &legacy_tokens), 2);
+        assert_eq!(
+            quote_money(200, "default", WAFFO, &legacy_tokens),
+            FixedDecimal::parse("2").unwrap()
+        );
+
+        let dotted_wins = BTreeMap::from([
+            ("DisplayInCurrencyEnabled".to_owned(), "false".to_owned()),
+            (
+                "general_setting.quota_display_type".to_owned(),
+                "USD".to_owned(),
+            ),
+            ("QuotaPerUnit".to_owned(), "100".to_owned()),
+        ]);
+        assert!(!token_display(&dotted_wins));
+        assert_eq!(normalized_amount(200, &dotted_wins), 200);
     }
     #[test]
     fn payment_method_is_server_allowlisted() {
