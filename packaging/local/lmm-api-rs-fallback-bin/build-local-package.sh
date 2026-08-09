@@ -35,6 +35,7 @@ readonly MIGRATION_ASSETS=(
   apps/api-rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql
   apps/api-rust/crates/lmm-db-migrate/schema/export-postgres-catalog.sql
   apps/api-rust/migrations/0001_schema_contract.sql
+  apps/api-rust/migrations/0002_open_source_bounty_schema.sql
   apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv
 )
 

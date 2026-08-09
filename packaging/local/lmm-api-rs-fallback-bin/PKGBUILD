@@ -124,6 +124,9 @@ package() {
     "$srcdir/apps/api-rust/migrations/0001_schema_contract.sql" \
     "$migration_root/0001_schema_contract.sql"
   install -Dm0644 \
+    "$srcdir/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+    "$migration_root/0002_open_source_bounty_schema.sql"
+  install -Dm0644 \
     "$srcdir/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv" \
     "$migration_root/legacy-go-routes.tsv"
 

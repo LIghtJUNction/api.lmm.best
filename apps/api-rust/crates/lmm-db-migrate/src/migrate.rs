@@ -23,6 +23,7 @@ use crate::{
         CanonicalValue, TableHasher, canonical_bool, canonical_decimal, canonical_json,
         canonical_timestamp,
     },
+    forward_schema::{BOUNTY_SCHEMA_CONTRACT_ID, verify_open_source_bounty_schema},
     inspect::inspect_sqlite,
     manifest::{Column, Converter, Manifest, Table},
     postgres_catalog::acquire_shared_migration_lock,
@@ -138,6 +139,9 @@ pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, Migrat
         options.contract_migration,
         options.release,
     )?;
+    if options.release.contract_id().as_i64() >= BOUNTY_SCHEMA_CONTRACT_ID {
+        verify_open_source_bounty_schema(&mut transaction, options.schema)?;
+    }
     transaction.commit()?;
     source.connection.execute_batch("COMMIT")?;
     Ok(report)
@@ -167,6 +171,9 @@ pub fn verify(options: &VerifyOptions<'_>) -> Result<MigrationReport, MigrationE
         options.release,
     )?;
     crate::contract::verify_release(&mut transaction, options.schema, options.release)?;
+    if options.release.contract_id().as_i64() >= BOUNTY_SCHEMA_CONTRACT_ID {
+        verify_open_source_bounty_schema(&mut transaction, options.schema)?;
+    }
     ensure_source_still_offline(options.sqlite, options.manifest, &source_before)?;
     transaction.commit()?;
     source.connection.execute_batch("COMMIT")?;
@@ -254,7 +261,7 @@ fn reject_sidecars(path: &Path) -> Result<(), MigrationError> {
     Ok(())
 }
 
-fn validate_schema(schema: &str) -> Result<(), MigrationError> {
+pub(crate) fn validate_schema(schema: &str) -> Result<(), MigrationError> {
     let valid = schema != "public"
         && !schema.is_empty()
         && schema.len() <= 63
