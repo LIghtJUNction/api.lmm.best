@@ -7,8 +7,9 @@
 use async_trait::async_trait;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -62,7 +63,50 @@ pub fn router(state: ChannelCoreState) -> Router {
         .route("/api/channel/ops", get(ops))
         .route("/api/channel/fix", post(fix_abilities))
         .route("/api/channel/multi_key/manage", post(manage_multi_keys))
+        // Go's authentication middleware runs before JSON binding. Keep a
+        // listener-owned preflight here so malformed/underspecified bodies
+        // cannot turn an anonymous request into Axum's 422 before the shared
+        // dashboard authorizer returns the legacy 401 envelope.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            channel_auth_boundary,
+        ))
         .with_state(state)
+}
+
+fn channel_action_for_request(request: &Request) -> ChannelAction {
+    let path = request.uri().path();
+    if request.method() == axum::http::Method::GET {
+        return ChannelAction::Read;
+    }
+    if path.ends_with("/status") || path.ends_with("/status/batch") {
+        return ChannelAction::Operate;
+    }
+    if path == "/api/channel/" && request.method() == axum::http::Method::PUT {
+        return ChannelAction::Write;
+    }
+    if path == "/api/channel/tag" {
+        return ChannelAction::Write;
+    }
+    if path == "/api/channel/batch/tag"
+        || path == "/api/channel/tag/disabled"
+        || path == "/api/channel/tag/enabled"
+    {
+        return ChannelAction::Operate;
+    }
+    ChannelAction::SensitiveWrite
+}
+
+async fn channel_auth_boundary(
+    axum::extract::State(state): axum::extract::State<ChannelCoreState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let action = channel_action_for_request(&request);
+    if let Err(error) = state.authorizer.authorize(request.headers(), action).await {
+        return error.legacy();
+    }
+    next.run(request).await
 }
 
 #[derive(Debug, Serialize)]
