@@ -2,48 +2,97 @@
 set -Eeuo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
-deploy=$repo/deploy/production/deploy-go.sh
-activate=$repo/deploy/production/activate-go-release.sh
+here=$repo/deploy/production
+: "${TMPDIR:?set TMPDIR to a marker-owned workspace}"
 
 fail() { printf 'go-deploy-contract: %s\n' "$*" >&2; exit 1; }
 contains() { grep -Fq -- "$1" "$2" || fail "$2 is missing: $1"; }
 
-bash -n "$deploy"
-bash -n "$activate"
+scripts=(
+  "$here/deploy-go.sh"
+  "$here/activate-go-release.sh"
+  "$here/build-go-binary.sh"
+  "$here/build-go-package.sh"
+  "$here/build-precutover-packages.sh"
+  "$here/capture-precutover-payload.sh"
+  "$here/prepare-production-backup.sh"
+  "$here/create-backup-copy.sh"
+  "$here/promote-production-backups.sh"
+)
+for script in "${scripts[@]}"; do
+  [[ -x $script ]] || fail "production script is not executable: $script"
+  bash -n "$script"
+done
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck "${scripts[@]}"
+fi
 
-# These strings intentionally match the shell source literally.
-# shellcheck disable=SC2016
 for literal in \
-  'frontend-dist.tar' \
-  'frontend-release.sh' \
-  '--frontend-archive' \
-  '--frontend-sha256' \
-  '--frontend-release-script'; do
-  contains "$literal" "$deploy"
+  'ExecStart=/usr/bin/lmm-api-go serve' \
+  'Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist' \
+  'Environment=LMM_DB_MIGRATION_MODE=verify'; do
+  contains "$literal" "$repo/packaging/common/lmm-api/lmm-api-go.service"
+done
+for literal in \
+  'lmm-api-go-rollback-$deployment_id.timer' \
+  'Persistent=true' \
+	'write_status "AWAITING_CONFIRMATION' \
+	'write_status "CONFIRMED' \
+	'write_status "MIGRATING' \
+  'probe_authenticated_models' \
+	'discover_database_schema' \
+	'database_schema=%s' \
+	'"$PROBE_BINARY" request' \
+	'run_candidate_migration apply' \
+	'run_candidate_migration verify' \
+  'pacman -Rdd --noconfirm lmm-api' \
+  'release_transaction_lock'; do
+  contains "$literal" "$here/activate-go-release.sh"
+done
+if grep -Fq 'search_path=public' "$here/activate-go-release.sh" \
+  "$repo/packaging/common/lmm-api/lmm-api-go.service"; then
+  fail 'production activation or service unit still hard-codes the public schema'
+fi
+contains 'PGOPTIONS="-c search_path=public"' "$repo/packaging/common/lmm-api/lmm-api-go.env"
+for literal in \
+  'origin/main' \
+  'backup-target-$deployment_id' \
+  'pg_restore --list' \
+  'LMM_BACKUP_AGE_IDENTITY_FILE' \
+  'decrypted database backup does not match the target copy' \
+  'production observation detected an anomaly; rollback timer remains armed' \
+  'activate-go-release.sh" confirm'; do
+  contains "$literal" "$here/deploy-go.sh"
 done
 
-# These strings intentionally match the shell source literally.
-# shellcheck disable=SC2016
-for literal in \
-  'old_frontend_release' \
-  'frontend archive checksum mismatch' \
-  'frontend-publish-failed' \
-  'frontend-health-probe-failed' \
-  'probe_frontend "$EXPECTED_VERSION" "$frontend_sha256"' \
-  'probe_frontend "$old_frontend_release" "$old_frontend_sha256"' \
-  'write_status "DEPLOYED $EXPECTED_VERSION $snapshot frontend=$EXPECTED_VERSION"'; do
-  contains "$literal" "$activate"
-done
+if grep -R -nE '(^|[^[:alnum:]_])(curl|wget)([^[:alnum:]_]|$)|SIGKILL|mktemp[^\n]*(/tmp|TMPDIR:-/tmp)' \
+  "$here/deploy-go.sh" "$here/activate-go-release.sh" "$here/build-go-package.sh" \
+  "$here/capture-precutover-payload.sh" "$here/prepare-production-backup.sh"; then
+  fail 'Go production path retains a browser-style client, SIGKILL fallback, or /tmp artifact path'
+fi
+if grep -R -nE 'lmm-api-launcher|backend\.conf.*selector|/usr/lib/lmm-api/backends/go/lmm-api.*ExecStart' \
+  "$repo/packaging/common/lmm-api" "$repo/packaging/local/lmm-api-go" \
+  "$repo"/packaging/aur/*/PKGBUILD "$repo"/packaging/aur/*/.SRCINFO; then
+  fail 'new package path retains launcher/provider architecture'
+fi
 
-# shellcheck disable=SC2016
-publish_line=$(grep -nF '"$FRONTEND_RELEASE_SCRIPT" publish' "$activate" | cut -d: -f1)
-# shellcheck disable=SC2016
-probe_line=$(grep -nF 'probe_frontend "$EXPECTED_VERSION" "$frontend_sha256"' "$activate" | cut -d: -f1)
-# shellcheck disable=SC2016
-deployed_line=$(grep -nF 'write_status "DEPLOYED $EXPECTED_VERSION $snapshot frontend=$EXPECTED_VERSION"' "$activate" | cut -d: -f1)
-[[ $publish_line =~ ^[0-9]+$ && $probe_line =~ ^[0-9]+$ && $deployed_line =~ ^[0-9]+$ ]] ||
-  fail 'could not locate ordered frontend deployment operations'
-(( publish_line < probe_line && probe_line < deployed_line )) ||
-  fail 'deployment may report success before frontend publication and probing'
+fixture=$(mktemp -d "$TMPDIR/lmm-go-deploy-env-test.XXXXXXXX")
+trap 'rm -rf -- "$fixture"' EXIT
+printf 'SQL_DSN=postgresql://fixture.invalid/lmm\n' >"$fixture/safe.env"
+LMM_DEPLOY_TEST_MODE=1 LMM_DEPLOY_OBSERVED_HOST=arch-dmit \
+  "$here/prepare-production-backup.sh" --check-env-only --env-file "$fixture/safe.env" \
+  | grep -Fqx 'database_engine=postgres'
+side_effect=$fixture/executed
+printf 'SQL_DSN=$(touch %s)\n' "$side_effect" >"$fixture/malicious.env"
+if LMM_DEPLOY_TEST_MODE=1 LMM_DEPLOY_OBSERVED_HOST=arch-dmit \
+  "$here/prepare-production-backup.sh" --check-env-only --env-file "$fixture/malicious.env" \
+  >"$fixture/out" 2>"$fixture/err"; then
+  fail 'malicious environment assignment was accepted'
+fi
+[[ ! -e $side_effect ]] || fail 'malicious environment assignment executed'
 
-printf 'Go production deployment contract verified\n'
+TMPDIR=$TMPDIR "$here/test-go-rollback-state-machine.sh"
+"$here/test-backup-promotion-contract.sh"
+"$repo/deploy/test-frontend-release.sh"
+
+printf 'direct lmm-api-go production deployment contract verified\n'

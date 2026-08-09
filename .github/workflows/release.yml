@@ -94,78 +94,6 @@ jobs:
           path: release-web/*
           if-no-files-found: error
 
-  core:
-    name: Package and sign shared core artifact
-    needs: [prepare, web]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout exact release revision
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.sha }}
-
-      - name: Download web artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: release-web
-          path: release-web
-
-      - name: Package shared launcher, configuration, and frontend
-        env:
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          artifact="lmm-api-core-${RELEASE_VERSION}"
-          bundle="release-core/${artifact}"
-          mkdir -p "$bundle/frontend-dist"
-          mkdir -p "$bundle/deploy/route-evidence" "$bundle/deploy/migration-evidence"
-          tar -xzf "release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz" \
-            -C "$bundle/frontend-dist" --strip-components=1
-          cp packaging/common/lmm-api/lmm-api-launcher "$bundle/"
-          cp packaging/common/lmm-api/lmm-api.service "$bundle/"
-          cp packaging/common/lmm-api/backend.conf "$bundle/"
-          cp packaging/common/lmm-api/lmm-api.env "$bundle/"
-          cp packaging/common/lmm-api/lmm-api-rs.env.example "$bundle/"
-          cp apps/web/scripts/production-acceptance.mjs "$bundle/deploy/"
-          cp apps/web/scripts/production-acceptance-lib.mjs "$bundle/deploy/"
-          cp apps/api-rust/tests/fixtures/routes/migration-gate.tsv "$bundle/deploy/"
-          cp apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv "$bundle/deploy/"
-          cp packaging/common/lmm-api/{validate-route-gate,migration-compatibility.env} "$bundle/deploy/"
-          if [[ -d apps/api-rust/tests/fixtures/routes/evidence ]]; then
-            cp -R apps/api-rust/tests/fixtures/routes/evidence/. "$bundle/deploy/route-evidence/"
-          fi
-          if [[ -d packaging/common/lmm-api/evidence ]]; then
-            cp -R packaging/common/lmm-api/evidence/. "$bundle/deploy/migration-evidence/"
-          fi
-          (cd "$bundle/deploy" && \
-            sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env frozen-route-auth.tsv > route-gate-assets.sha256)
-          cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
-          printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"
-          tar -czf "release-core/${artifact}.tar.gz" -C release-core "$artifact"
-          (cd release-core && sha256sum "${artifact}.tar.gz" > "${artifact}.tar.gz.sha256")
-          rm -rf "$bundle"
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Sign core artifact
-        env:
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          archive="release-core/lmm-api-core-${RELEASE_VERSION}.tar.gz"
-          cosign sign-blob --yes --bundle "${archive}.sigstore.json" "$archive"
-
-      - name: Upload core artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-core
-          path: release-core/*
-          if-no-files-found: error
-
   go-test:
     name: Test Go default backend and independent relaykit
     runs-on: ubuntu-latest
@@ -197,8 +125,8 @@ jobs:
           go build ./...
 
   go-build:
-    name: Build and sign Go linux/${{ matrix.arch }} artifact
-    needs: [prepare, go-test]
+    name: Build and sign complete Go linux/${{ matrix.arch }} artifact
+    needs: [prepare, web, go-test]
     strategy:
       fail-fast: false
       matrix:
@@ -220,7 +148,13 @@ jobs:
           go-version-file: apps/api-go/go.mod
           cache-dependency-path: apps/api-go/go.sum
 
-      - name: Build static Go binary and package artifact
+      - name: Download web artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-web
+          path: release-web
+
+      - name: Build static Go backend and package the complete application
         env:
           GOARCH: ${{ matrix.arch }}
           GOOS: linux
@@ -230,14 +164,18 @@ jobs:
           set -euo pipefail
           artifact="lmm-api-go-${RELEASE_VERSION}-linux-${GOARCH}"
           bundle="release-go/${artifact}"
-          mkdir -p "$bundle"
+          mkdir -p "$bundle/frontend-dist"
           (
             cd apps/api-go
             go build -trimpath \
               -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${RELEASE_VERSION}" \
-              -o "../../${bundle}/lmm-api" .
+              -o "../../${bundle}/lmm-api-go" .
           )
-          file "$bundle/lmm-api"
+          file "$bundle/lmm-api-go"
+          tar -xzf "release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz" \
+            -C "$bundle/frontend-dist" --strip-components=1
+          cp packaging/common/lmm-api/lmm-api-go.service "$bundle/"
+          cp packaging/common/lmm-api/lmm-api-go.env "$bundle/"
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
           printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"
           tar -czf "release-go/${artifact}.tar.gz" -C release-go "$artifact"
@@ -335,10 +273,9 @@ jobs:
       startsWith(github.ref, 'refs/tags/') &&
       always() &&
       needs.web.result == 'success' &&
-      needs.core.result == 'success' &&
       needs.go-build.result == 'success' &&
       needs.rust.result == 'success'
-    needs: [prepare, web, core, go-build, rust]
+    needs: [prepare, web, go-build, rust]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -350,7 +287,7 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Publish core, backend, and web artifacts
+      - name: Publish backend and web artifacts
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
           files: release-assets/*

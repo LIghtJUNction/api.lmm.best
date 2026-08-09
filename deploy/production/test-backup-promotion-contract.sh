@@ -48,9 +48,9 @@ args=("$@")
 destination=${args[${#args[@]}-1]}
 role=''
 case $destination in
-  */backup-target/) role=target; destination=${destination%/} ;;
+  */backup-target-*/) role=target; destination=${destination%/} ;;
   "$FAKE_CONTROLLER_OUTPUT") role=controller ;;
-  */backup-off-host/) role=off-host; destination=${destination%/} ;;
+  */backup-off-host-*/) role=off-host; destination=${destination%/} ;;
 esac
 if [[ -n $role ]]; then
   mkdir -p -m0700 -- "$destination"
@@ -105,6 +105,9 @@ export FAKE_CORE_SHA=ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 export FAKE_BACKEND_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export FAKE_REVISION=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 printf 'age1testrecipient\n' >"$tmp/recipient"
+printf 'captured payload\n' >"$tmp/precutover-payload.tar"
+printf 'rollback core\n' >"$tmp/rollback-core.pkg.tar.zst"
+printf 'rollback go\n' >"$tmp/rollback-go.pkg.tar.zst"
 
 run_promoter() {
   local deployment_id=$1 controller_output=$2 offhost_output=$3
@@ -116,7 +119,10 @@ run_promoter() {
     --artifact-sha256 "$FAKE_ARTIFACT_SHA" --core-sha256 "$FAKE_CORE_SHA" \
     --backend-sha256 "$FAKE_BACKEND_SHA" --git-revision "$FAKE_REVISION" \
     --prepare-script "$here/prepare-production-backup.sh" \
-    --copy-script "$here/create-backup-copy.sh" --verify-script "$verifier"
+    --copy-script "$here/create-backup-copy.sh" --verify-script "$verifier" \
+    --precutover-payload "$tmp/precutover-payload.tar" \
+    --rollback-core-package "$tmp/rollback-core.pkg.tar.zst" \
+    --rollback-go-package "$tmp/rollback-go.pkg.tar.zst"
 }
 
 # The remote prerequisite gate must reject a missing pg_restore before it
@@ -144,8 +150,8 @@ offhost_output=/var/backups/lmm-api/promotion-test
 run_promoter promotion-test "$controller_output" "$offhost_output" >/dev/null
 [[ -f $controller_output/configuration.age && -f $controller_output/database.age ]] || \
   fail 'controller backup was not promoted'
-[[ -f $tmp/controller-work/staging/backup-off-host/configuration.age ]] || fail 'off-host mirror is missing'
-[[ -f $tmp/controller-work/staging/backup-target/configuration.archive ]] || fail 'target mirror is missing'
+[[ -f $tmp/controller-work/staging/backup-off-host-promotion-test/configuration.age ]] || fail 'off-host mirror is missing'
+[[ -f $tmp/controller-work/staging/backup-target-promotion-test/configuration.archive ]] || fail 'target mirror is missing'
 grep -Fq -- "-F $ssh_config -J archczy -p 222 root@45.59.187.63" "$FAKE_SSH_LOG" || \
   fail 'target SSH transport does not use the controlled config/jump/port/endpoint'
 grep -Fq -- "-F $ssh_config -o ProxyJump=archczy -P 222" "$FAKE_SCP_LOG" || \
@@ -155,14 +161,14 @@ if grep -Eq 'StrictHostKeyChecking=no|UserKnownHostsFile=/dev/null|-F /dev/null'
   fail 'transport bypassed SSH host-key or user configuration controls'
 fi
 
-rm -rf -- "$tmp/controller-work/staging/backup-target" \
-  "$tmp/controller-work/staging/backup-off-host" "$controller_output"
+rm -rf -- "$tmp/controller-work/staging/backup-target-promotion-test" \
+  "$tmp/controller-work/staging/backup-off-host-promotion-test" "$controller_output"
 
 # Each pre-existing destination must fail before ownership is claimed, so the
 # cleanup trap must never issue a removal for that destination.
 : >"$FAKE_SSH_LOG"
 : >"$FAKE_SCP_LOG"
-export FAKE_PREEXISTING_MATCH=/var/lib/lmm-api/deploy-backups/preexisting-target
+export FAKE_PREEXISTING_MATCH=/var/lib/lmm-api-go/deploy-backups/preexisting-target
 expect_fail run_promoter preexisting-target "$tmp/controller-preexisting-target" \
   /var/backups/lmm-api/preexisting-target
 if grep -Fq "rm -rf -- $FAKE_PREEXISTING_MATCH" "$FAKE_SSH_LOG"; then
@@ -198,13 +204,13 @@ export FAKE_SCP_FAIL_MATCH="archczy:$failure_offhost"
 expect_fail run_promoter "$failure_id" "$failure_controller" "$failure_offhost"
 unset FAKE_SCP_FAIL_MATCH
 [[ ! -e $failure_controller ]] || fail 'invocation-owned controller partial was retained'
-[[ ! -e $tmp/controller-work/staging/backup-target ]] || fail 'invocation-owned target mirror was retained'
-[[ ! -e $tmp/controller-work/staging/backup-off-host ]] || fail 'invocation-owned off-host mirror was retained'
-grep -Fq "rm -rf -- /var/lib/lmm-api/deploy-backups/$failure_id" "$FAKE_SSH_LOG" || \
+[[ ! -e $tmp/controller-work/staging/backup-target-$failure_id ]] || fail 'invocation-owned target mirror was retained'
+[[ ! -e $tmp/controller-work/staging/backup-off-host-$failure_id ]] || fail 'invocation-owned off-host mirror was retained'
+grep -Fq "rm -rf -- /var/lib/lmm-api-go/deploy-backups/$failure_id" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned target partial was not removed'
 grep -Fq "rm -rf -- $failure_offhost" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned off-host partial was not removed'
-grep -Fq "rm -rf -- /var/lib/lmm-api/deploy-work/$failure_id/staging/controller-copy" "$FAKE_SSH_LOG" || \
+grep -Fq "rm -rf -- /var/lib/lmm-api-go/deploy-work/$failure_id/staging/controller-copy" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned target-side controller partial was not removed'
 
 printf 'backup promotion contract verified\n'

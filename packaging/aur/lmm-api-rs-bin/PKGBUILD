@@ -7,11 +7,11 @@ pkgdesc='LMM API Rust backend and database migrator (prebuilt)'
 arch=('x86_64')
 url='https://github.com/LIghtJUNction/api.lmm.best'
 license=('AGPL-3.0-or-later')
-depends=('lmm-api' 'gcc-libs' 'glibc')
+depends=('gcc-libs' 'glibc')
 makedepends=('cosign')
 optdepends=('postgresql: PostgreSQL database' 'valkey: cache and rate-limit service')
 provides=("lmm-api-rs=${pkgver}")
-conflicts=('lmm-api-rs' 'lmm-api-rs-git')
+conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-rs' 'lmm-api-rs-git')
 options=('!strip')
 
 _release_tag="v${pkgver}"
@@ -44,10 +44,8 @@ prepare() {
 
 package() {
   local bundle="${srcdir}/${_artifact}"
-  install -Dm0755 "${bundle}/lmm-api-rs" \
-    "${pkgdir}/usr/lib/lmm-api/backends/rs/lmm-api-rs"
-  install -Dm0755 "${bundle}/lmm-db-migrate" \
-    "${pkgdir}/usr/lib/lmm-api/backends/rs/lmm-db-migrate"
+  install -Dm0755 "${bundle}/lmm-api-rs" "${pkgdir}/usr/bin/lmm-api-rs"
+  install -Dm0755 "${bundle}/lmm-db-migrate" "${pkgdir}/usr/bin/lmm-db-migrate"
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     install -Dm0644 "${bundle}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
   done

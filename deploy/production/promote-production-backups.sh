@@ -21,6 +21,9 @@ SSH_CONFIG=${LMM_API_DEPLOY_SSH_CONFIG:-$HOME/.ssh/config}
 PREPARE_SCRIPT=''
 COPY_SCRIPT=''
 VERIFY_SCRIPT=''
+PRECUTOVER_PAYLOAD=''
+ROLLBACK_CORE_PACKAGE=''
+ROLLBACK_GO_PACKAGE=''
 while (($#)); do
   case $1 in
     --target-host) TARGET_HOST=${2:?}; shift 2 ;;
@@ -39,6 +42,9 @@ while (($#)); do
     --prepare-script) PREPARE_SCRIPT=${2:?}; shift 2 ;;
     --copy-script) COPY_SCRIPT=${2:?}; shift 2 ;;
     --verify-script) VERIFY_SCRIPT=${2:?}; shift 2 ;;
+    --precutover-payload) PRECUTOVER_PAYLOAD=${2:?}; shift 2 ;;
+    --rollback-core-package) ROLLBACK_CORE_PACKAGE=${2:?}; shift 2 ;;
+    --rollback-go-package) ROLLBACK_GO_PACKAGE=${2:?}; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -53,6 +59,9 @@ for path in "$CONTROLLER_WORKSPACE" "$CONTROLLER_OUTPUT" "$OFFHOST_OUTPUT"; do i
 [[ $ARTIFACT_SHA256 =~ ^[0-9a-f]{64}$ && $CORE_SHA256 =~ ^[0-9a-f]{64}$ && \
   $BACKEND_SHA256 =~ ^[0-9a-f]{64}$ && $GIT_REVISION =~ ^[0-9a-f]{7,64}$ ]] || die 'invalid release identity'
 for script in "$PREPARE_SCRIPT" "$COPY_SCRIPT" "$VERIFY_SCRIPT"; do [[ -x $script && ! -L $script ]] || die 'required backup helper is missing'; done
+for input in "$PRECUTOVER_PAYLOAD" "$ROLLBACK_CORE_PACKAGE" "$ROLLBACK_GO_PACKAGE"; do
+  [[ $input == /* && -s $input && -f $input && ! -L $input ]] || die 'rollback backup input is missing or unsafe'
+done
 [[ -f $SSH_CONFIG && ! -L $SSH_CONFIG && $(stat -c '%u' "$SSH_CONFIG") == "$EUID" ]] || die 'SSH config is missing, unsafe, or not owner-controlled'
 ssh_mode=$(stat -c '%a' "$SSH_CONFIG")
 (( (8#$ssh_mode & 8#022) == 0 )) || die 'SSH config is group/other writable'
@@ -62,13 +71,13 @@ ssh_bin=${LMM_DEPLOY_SSH_BIN:-ssh}
 scp_bin=${LMM_DEPLOY_SCP_BIN:-scp}
 target_endpoint=root@45.59.187.63
 target_port=222
-remote_workspace="/var/lib/lmm-api/deploy-work/$DEPLOYMENT_ID"
+remote_workspace="/var/lib/lmm-api-go/deploy-work/$DEPLOYMENT_ID"
 remote_stage="$remote_workspace/staging"
-target_output="/var/lib/lmm-api/deploy-backups/$DEPLOYMENT_ID"
+target_output="/var/lib/lmm-api-go/deploy-backups/$DEPLOYMENT_ID"
 controller_remote="$remote_stage/controller-copy"
 offhost_remote="$remote_stage/offhost-copy"
-target_mirror="$CONTROLLER_WORKSPACE/staging/backup-target"
-offhost_mirror="$CONTROLLER_WORKSPACE/staging/backup-off-host"
+target_mirror="$CONTROLLER_WORKSPACE/staging/backup-target-$DEPLOYMENT_ID"
+offhost_mirror="$CONTROLLER_WORKSPACE/staging/backup-off-host-$DEPLOYMENT_ID"
 target_owned=0
 controller_remote_owned=0
 offhost_remote_owned=0
@@ -100,8 +109,8 @@ trap on_error ERR
 "${target_ssh[@]}" bash -s -- "$DEPLOYMENT_ID" <<'EOF'
 set -Eeuo pipefail
 deployment_id=$1
-workspace="/var/lib/lmm-api/deploy-work/$deployment_id"
-lock=/var/lib/lmm-api/deploy-transaction.lock
+workspace="/var/lib/lmm-api-go/deploy-work/$deployment_id"
+lock=/var/lib/lmm-api-go/deploy-transaction.lock
 lock_marker="$lock/deployment.env"
 for command in age bash chmod install pg_dump pg_restore readlink sha256sum tar; do
   command -v "$command" >/dev/null 2>&1 || { echo "required backup command is unavailable: $command" >&2; exit 2; }
@@ -114,7 +123,7 @@ else
   grep -Fqx "deployment_id=$deployment_id" "$lock_marker"
   grep -Fqx 'status=ACTIVE' "$lock_marker"
 fi
-install -d -m0700 "$workspace" "$workspace/staging"
+install -d -m0700 "$workspace" "$workspace/staging" /var/lib/lmm-api-go/deploy-backups
 printf 'format=1\ndeployment_id=%s\nrole=target\nworkspace=%s\ncreated_at_utc=%s\n' \
   "$deployment_id" "$workspace" "$(date -u +%FT%TZ)" >"$workspace/.lmm-deploy-workspace"
 chmod 0600 "$workspace/.lmm-deploy-workspace"
@@ -130,11 +139,15 @@ target_owned=1
 controller_remote_owned=1
 offhost_remote_owned=1
 "${target_scp[@]}" "$PREPARE_SCRIPT" "$COPY_SCRIPT" \
-  "$AGE_RECIPIENT_FILE" "$target_endpoint:$remote_stage/"
+  "$AGE_RECIPIENT_FILE" "$PRECUTOVER_PAYLOAD" "$ROLLBACK_CORE_PACKAGE" \
+  "$ROLLBACK_GO_PACKAGE" "$target_endpoint:$remote_stage/"
 "${target_ssh[@]}" chmod 0700 \
   "$remote_stage/${PREPARE_SCRIPT##*/}" "$remote_stage/${COPY_SCRIPT##*/}"
 "${target_ssh[@]}" \
-  "$remote_stage/${PREPARE_SCRIPT##*/}" --deployment-id "$DEPLOYMENT_ID" >/dev/null
+  "$remote_stage/${PREPARE_SCRIPT##*/}" --deployment-id "$DEPLOYMENT_ID" \
+  --precutover-payload "$remote_stage/${PRECUTOVER_PAYLOAD##*/}" \
+  --rollback-core-package "$remote_stage/${ROLLBACK_CORE_PACKAGE##*/}" \
+  --rollback-go-package "$remote_stage/${ROLLBACK_GO_PACKAGE##*/}" >/dev/null
 
 frontend_release=$("${target_ssh[@]}" \
   readlink -- /srv/lmm-api-frontend/current)
