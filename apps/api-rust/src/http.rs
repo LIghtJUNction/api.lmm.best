@@ -3204,24 +3204,18 @@ mod tests {
             .expect("status body is readable");
         let actual: Value = serde_json::from_slice(&body).expect("status response is JSON");
         assert_eq!(actual["success"], true);
-        assert_eq!(actual["ready"], true);
         assert_eq!(actual["message"], "");
         assert_eq!(actual["data"]["version"], "v0.0.0");
         assert_eq!(actual["data"]["start_time"], 1_700_000_000_i64);
-        assert_eq!(actual["data"]["docs_access"], false);
-        assert_eq!(actual["data"]["docs_link"], "");
-        assert_eq!(actual["data"]["api_info_enabled"], false);
-        assert!(actual["data"].get("api_info").is_none());
         assert_eq!(
-            actual["data"]["backend_capabilities"],
-            serde_json::json!({
-                "bounty_notifications": true,
-                "bounty_challenge_cancel": true,
-                "bounty_public_read": true,
-                "self_oauth_unbind": true,
-                "responses_websocket": true,
-            })
+            actual["data"]["docs_link"],
+            "https://docs.newapi.pro/en/docs"
         );
+        assert_eq!(actual["data"]["api_info_enabled"], true);
+        assert_eq!(actual["data"]["api_info"], serde_json::json!([]));
+        assert_eq!(actual["data"]["server_address"], "http://localhost:3000");
+        assert_eq!(actual["data"]["passkey_origins"], "http://localhost:3000");
+        assert_eq!(actual["data"]["passkey_rp_id"], "localhost:3000");
         assert!(actual["data"].get("turnstile_secret_key").is_none());
         assert!(actual["data"].get("client_secret").is_none());
     }
