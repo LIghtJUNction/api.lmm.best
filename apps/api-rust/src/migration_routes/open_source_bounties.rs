@@ -55,6 +55,7 @@ pub fn router(state: OpenSourceBountyState) -> Router {
         )
         .route("/api/open-source-bounties/config", get(bounty_config))
         .route("/api/open-source-bounties/mine", get(owned_bounties))
+        .route("/api/open-source-bounties/accepted", get(accepted_bounties))
         .with_state(state)
 }
 
@@ -979,6 +980,55 @@ async fn owned_bounties(
                 return internal_failure();
             }
         }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: items,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+async fn accepted_bounties(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let query = format!(
+        "{} WHERE c.participant_user_id = $1 ORDER BY c.updated_at DESC, c.id DESC",
+        challenge_view_select()
+    );
+    let rows = match sqlx::query(&query)
+        .bind(viewer_id)
+        .fetch_all(&state.pg)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to list accepted open-source bounty challenges");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match challenge_view_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, viewer_id, "failed to decode accepted open-source bounty challenge");
+                return internal_failure();
+            }
+        }
+    }
+    if let Err(error) = attach_disputes(&state, &mut items).await {
+        tracing::error!(error = %error, viewer_id, "failed to attach accepted bounty disputes");
+        return internal_failure();
     }
     let mut response = Json(LegacySuccessEnvelope {
         success: true,

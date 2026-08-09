@@ -9,7 +9,7 @@ bounty	POST	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	f
 bounty	DELETE	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token revocation route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties	go	unimplemented	keep-go-owner	false	Go bounty draft creation route; Rust candidate absent and route is not production-mounted.
 bounty	GET	/api/open-source-bounties/mine	go	candidate	keep-go-owner	false	Rust authenticated owned-bounties candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
-bounty	GET	/api/open-source-bounties/accepted	go	unimplemented	keep-go-owner	false	Go accepted-challenges listing route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/accepted	go	candidate	keep-go-owner	false	Rust authenticated accepted-challenges candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 bounty	GET	/api/open-source-bounties/notifications	go	unimplemented	keep-go-owner	false	Go bounty settlement-notifications listing route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/notifications/read	go	unimplemented	keep-go-owner	false	Go bounty settlement-notifications acknowledgement route; Rust candidate absent and route is not production-mounted.
 bounty	GET	/api/open-source-bounties/tips/received	go	unimplemented	keep-go-owner	false	Go received-tip notifications listing route; Rust candidate absent and route is not production-mounted.
