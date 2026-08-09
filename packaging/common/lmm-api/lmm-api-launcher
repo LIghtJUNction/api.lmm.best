@@ -18,6 +18,142 @@ readonly STATE_FILE_NAME='state'
 readonly MARKER_NAME='.lmm-deploy-workspace'
 
 cli_die() { printf 'lmm-api: %s\n' "$*" >&2; exit 78; }
+run_http_request() {
+  local method=GET url='' base_url='' path='' body='' body_file='' token_file='' token_env=''
+  local cookie_file='' config_file='' token='' curl_status=0
+  local -a curl_args=()
+
+  while (($#)); do
+    case $1 in
+      --url)
+        (($# >= 2)) || cli_die 'request --url requires a value'
+        [[ -z $url ]] || cli_die 'request --url may only be specified once'
+        url=$2
+        shift 2
+        ;;
+      --base-url)
+        (($# >= 2)) || cli_die 'request --base-url requires a value'
+        [[ -z $base_url ]] || cli_die 'request --base-url may only be specified once'
+        base_url=$2
+        shift 2
+        ;;
+      --path)
+        (($# >= 2)) || cli_die 'request --path requires a value'
+        [[ -z $path ]] || cli_die 'request --path may only be specified once'
+        path=$2
+        shift 2
+        ;;
+      --method|-X)
+        (($# >= 2)) || cli_die "request $1 requires a value"
+        method=$2
+        shift 2
+        ;;
+      --body)
+        (($# >= 2)) || cli_die 'request --body requires a value'
+        [[ -z $body && -z $body_file ]] || cli_die 'request body was specified more than once'
+        body=$2
+        shift 2
+        ;;
+      --body-file)
+        (($# >= 2)) || cli_die 'request --body-file requires a path'
+        [[ -z $body && -z $body_file ]] || cli_die 'request body was specified more than once'
+        body_file=$2
+        shift 2
+        ;;
+      --header|-H)
+        (($# >= 2)) || cli_die "request $1 requires a value"
+        curl_args+=(--header "$2")
+        shift 2
+        ;;
+      --header-file)
+        (($# >= 2)) || cli_die 'request --header-file requires a path'
+        [[ -f $2 ]] || cli_die "request header file does not exist: $2"
+        curl_args+=(--header "@$2")
+        shift 2
+        ;;
+      --cookie-file)
+        (($# >= 2)) || cli_die 'request --cookie-file requires a path'
+        [[ -f $2 ]] || cli_die "request cookie file does not exist: $2"
+        cookie_file=$2
+        shift 2
+        ;;
+      --token-file)
+        (($# >= 2)) || cli_die 'request --token-file requires a path'
+        [[ -z $token_file && -z $token_env ]] || cli_die 'request token was specified more than once'
+        [[ -f $2 ]] || cli_die "request token file does not exist: $2"
+        token_file=$2
+        shift 2
+        ;;
+      --token-env)
+        (($# >= 2)) || cli_die 'request --token-env requires a variable name'
+        [[ -z $token_file && -z $token_env ]] || cli_die 'request token was specified more than once'
+        token_env=$2
+        shift 2
+        ;;
+      --json)
+        curl_args+=(--header 'Accept: application/json' --header 'Content-Type: application/json')
+        shift
+        ;;
+      --fail)
+        curl_args+=(--fail-with-body)
+        shift
+        ;;
+      --)
+        shift
+        curl_args+=("$@")
+        break
+        ;;
+      *)
+        cli_die "unknown request option: $1 (use -- to pass raw curl options)"
+        ;;
+    esac
+  done
+
+  if [[ -n $url ]]; then
+    [[ -z $base_url && -z $path ]] || cli_die 'request --url cannot be combined with --base-url or --path'
+  else
+    base_url=${base_url:-${LMM_API_URL:-http://127.0.0.1:3000}}
+    path=${path:-/}
+    [[ $path == /* ]] || path=/$path
+    url=${base_url%/}$path
+  fi
+  [[ $url =~ ^https?:// ]] || cli_die 'request URL must use http:// or https://'
+  [[ $method =~ ^[A-Za-z]+$ ]] || cli_die 'request method must contain only letters'
+
+  if [[ -n $body_file ]]; then
+    [[ -r $body_file ]] || cli_die "request body file is not readable: $body_file"
+    curl_args+=(--data-binary "@$body_file")
+  elif [[ -n $body ]]; then
+    curl_args+=(--data-raw "$body")
+  fi
+  [[ -z $cookie_file ]] || curl_args+=(--cookie "$cookie_file")
+
+  if [[ -n $token_file ]]; then
+    token=$(<"$token_file")
+  elif [[ -n $token_env ]]; then
+    [[ -v $token_env ]] || cli_die "request token environment variable is unset: $token_env"
+    token=${!token_env}
+  fi
+  if [[ -n $token ]]; then
+    if [[ $token == *$'\n'* || $token == *$'\r'* || $token == *'"'* || $token == *\\* ]]; then
+      cli_die 'request token contains unsupported control or quote characters'
+    fi
+    config_file=$(mktemp "${TMPDIR:-/tmp}/lmm-api-request.XXXXXXXX")
+    chmod 600 "$config_file"
+    printf 'header = "Authorization: Bearer %s"\n' "$token" >"$config_file"
+    curl_args+=(--config "$config_file")
+  fi
+
+  command -v curl >/dev/null 2>&1 || cli_die 'request requires curl'
+  set +e
+  curl --silent --show-error --request "$method" "$url" "${curl_args[@]}"
+  curl_status=$?
+  set -e
+  if [[ -n $config_file ]]; then
+    rm -f -- "$config_file"
+  fi
+  return "$curl_status"
+}
 backend_available() {
   case $1 in
     go) [[ -x $LMM_API_GO_BINARY && ! -L $LMM_API_GO_BINARY ]] ;;
@@ -169,6 +305,8 @@ show_usage() {
   cat <<'EOF'
 Usage:
   lmm-api serve [provider args...]
+  lmm-api request [options] [-- curl options...]
+  lmm-api cli request [options] [-- curl options...]
   lmm-api select auto|go|rs|status
   lmm-api status
   lmm-api doctor
@@ -208,6 +346,21 @@ before a remote switch. Frontend-only production validates and publishes the
 core package's frontend bytes while leaving the current Go backend untouched.
 Build/package/switch stage local markers unless --execute-remote is explicitly
 requested.
+
+HTTP request options:
+  --url URL                    Full request URL
+  --base-url URL --path PATH   Build a URL from a base and path
+  --method METHOD              HTTP method (default GET)
+  --body TEXT                  Request body (prefer --body-file for secrets)
+  --body-file PATH             Send a request body from a file
+  --header VALUE               Add a request header (repeatable)
+  --header-file PATH           Read request headers from a file
+  --cookie-file PATH           Send cookies from a Netscape cookie file
+  --token-file PATH            Send Authorization: Bearer from a file
+  --token-env NAME             Send Authorization: Bearer from an env var
+  --json                       Add JSON content negotiation headers
+  --fail                       Return non-zero for HTTP 4xx/5xx
+  --                            Pass remaining arguments directly to curl
 EOF
 }
 die() { printf 'lmm-api: %s\n' "$*" >&2; exit 2; }
@@ -216,6 +369,18 @@ usage() { show_usage; }
 
 command=${1:-help}
 case $command in
+  request)
+    shift
+    run_http_request "$@"
+    exit $?
+    ;;
+  cli)
+    shift
+    [[ ${1:-} == request ]] || cli_die 'cli expects the request subcommand'
+    shift
+    run_http_request "$@"
+    exit $?
+    ;;
   serve)
     shift
     backend=${LMM_API_BACKEND:-$(configured_backend)}
