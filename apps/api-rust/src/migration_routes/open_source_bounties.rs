@@ -53,6 +53,7 @@ pub fn router(state: OpenSourceBountyState) -> Router {
             "/api/open-source-bounties/projects/{id}",
             get(detail_bounty),
         )
+        .route("/api/open-source-bounties/config", get(bounty_config))
         .with_state(state)
 }
 
@@ -144,6 +145,12 @@ struct ListPayload {
     total: i64,
     page: i64,
     page_size: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyFeeConfig {
+    rate_percent: f64,
+    rate_basis_points: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,6 +311,36 @@ fn internal_failure() -> Response {
     )
 }
 
+fn parse_fee_rate_basis_points(raw: &str) -> Option<i64> {
+    let value = raw.trim();
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.len() > 2
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    if whole == "100" {
+        if fraction.bytes().any(|byte| byte != b'0') {
+            return None;
+        }
+    } else if whole.len() > 2 {
+        return None;
+    }
+    let whole = whole.parse::<i64>().ok()?;
+    if whole > 100 {
+        return None;
+    }
+    let fraction = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<i64>().ok()? * 10,
+        2 => fraction.parse::<i64>().ok()?,
+        _ => return None,
+    };
+    Some(whole * 100 + fraction)
+}
+
 fn authorization_token(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
     let mut parts = raw.split_ascii_whitespace();
@@ -418,6 +455,38 @@ async fn optional_viewer_id(
         return Err(auth_failure(AuthErrorKind::Unauthorized));
     }
     Ok(Some(user.id))
+}
+
+async fn bounty_config(State(state): State<OpenSourceBountyState>, headers: HeaderMap) -> Response {
+    let viewer_id = match optional_viewer_id(&state, &headers).await {
+        Ok(Some(viewer_id)) => viewer_id,
+        Ok(None) => {
+            return auth_failure(AuthErrorKind::Unauthorized);
+        }
+        Err(response) => return response,
+    };
+    let raw = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT value FROM options WHERE key = 'OpenSourceBountyFeeRate'",
+    )
+    .fetch_optional(&state.pg)
+    .await
+    {
+        Ok(value) => value.flatten().unwrap_or_default(),
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to load open-source bounty fee configuration");
+            return internal_failure();
+        }
+    };
+    let rate_basis_points = parse_fee_rate_basis_points(&raw).unwrap_or(100);
+    Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: BountyFeeConfig {
+            rate_percent: rate_basis_points as f64 / 100.0,
+            rate_basis_points,
+        },
+    })
+    .into_response()
 }
 
 fn project_select() -> &'static str {
@@ -874,6 +943,7 @@ mod tests {
 
     use super::{
         DEFAULT_PAGE_SIZE, ListQuery, MAX_PAGE_SIZE, challenge_priority, dashboard_token_candidate,
+        parse_fee_rate_basis_points,
     };
 
     #[test]
@@ -939,5 +1009,16 @@ mod tests {
         assert_eq!(challenge_priority("withdrawn"), 1);
         assert_eq!(challenge_priority("cancelled"), 1);
         assert_eq!(challenge_priority("draft"), 0);
+    }
+
+    #[test]
+    fn fee_rate_parser_matches_go_basis_points_contract() {
+        assert_eq!(parse_fee_rate_basis_points("0"), Some(0));
+        assert_eq!(parse_fee_rate_basis_points("1"), Some(100));
+        assert_eq!(parse_fee_rate_basis_points("2.5"), Some(250));
+        assert_eq!(parse_fee_rate_basis_points("100.00"), Some(10_000));
+        for value in ["", "001", "100.01", "101", "1.234", "-1"] {
+            assert_eq!(parse_fee_rate_basis_points(value), None, "value={value}");
+        }
     }
 }

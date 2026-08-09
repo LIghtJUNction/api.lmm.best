@@ -3,7 +3,7 @@ new	DELETE	/api/user/bindings/:binding_type	go	candidate	keep-go-owner	false	Rus
 new	GET	/v1/responses	go	unimplemented	keep-go-owner	false	Go Responses WebSocket registration at apps/api-go/router/relay-router.go:76; Rust has no production GET route.
 bounty	GET	/api/open-source-bounties	go	candidate	keep-go-owner	false	Rust public-list candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 bounty	GET	/api/open-source-bounties/projects/:id	go	candidate	keep-go-owner	false	Rust public-detail candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
-bounty	GET	/api/open-source-bounties/config	go	unimplemented	keep-go-owner	false	Go bounty configuration route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/config	go	candidate	keep-go-owner	false	Rust authenticated fee-config candidate is mounted on the normal/test listener; production ownership remains Go pending differential and options evidence.
 bounty	GET	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token status route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token rotation route; Rust candidate absent and route is not production-mounted.
 bounty	DELETE	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token revocation route; Rust candidate absent and route is not production-mounted.
