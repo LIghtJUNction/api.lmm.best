@@ -71,6 +71,19 @@ ssh_bin=${LMM_DEPLOY_SSH_BIN:-ssh}
 scp_bin=${LMM_DEPLOY_SCP_BIN:-scp}
 target_endpoint=root@45.59.187.63
 target_port=222
+[[ $ssh_bin =~ ^[A-Za-z0-9_./-]+$ && $SSH_CONFIG =~ ^[A-Za-z0-9_./-]+$ ]] || \
+  die 'SSH executable and configuration paths must be shell-safe'
+control_root=/run/user/$EUID
+[[ -d $control_root && ! -L $control_root && -w $control_root && $(stat -c '%u' "$control_root") == "$EUID" ]] || \
+  die 'controller runtime directory is missing or unsafe'
+control_digest=$(printf '%s' "$DEPLOYMENT_ID" | sha256sum)
+control_digest=${control_digest%% *}
+control_tag=${control_digest:0:16}
+target_control="$control_root/lmm-api-$control_tag-target-%C"
+jump_control="$control_root/lmm-api-$control_tag-jump-%C"
+# ProxyCommand is expanded once by the target SSH process. Escape %C so the
+# jump SSH process receives it and computes its own deployment-private socket.
+proxy_command="exec $ssh_bin -F $SSH_CONFIG -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$control_root/lmm-api-$control_tag-jump-%%C -W %h:%p $JUMP_HOST"
 remote_workspace="/var/lib/lmm-api-go/deploy-work/$DEPLOYMENT_ID"
 remote_stage="$remote_workspace/staging"
 target_output="/var/lib/lmm-api-go/deploy-backups/$DEPLOYMENT_ID"
@@ -85,16 +98,21 @@ controller_owned=0
 offhost_owned=0
 target_mirror_owned=0
 offhost_mirror_owned=0
-target_ssh=("$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint")
-offhost_ssh=("$ssh_bin" -F "$SSH_CONFIG" "$JUMP_HOST")
-target_scp=("$scp_bin" -F "$SSH_CONFIG" -o "ProxyJump=$JUMP_HOST" -P "$target_port")
+target_ssh=("$ssh_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
+  -o ControlPersist=60 -o "ControlPath=$target_control" -o "ProxyCommand=$proxy_command" \
+  -p "$target_port" "$target_endpoint")
+offhost_ssh=("$ssh_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
+  -o ControlPersist=60 -o "ControlPath=$jump_control" "$JUMP_HOST")
+target_scp=("$scp_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
+  -o ControlPersist=60 -o "ControlPath=$target_control" -o "ProxyCommand=$proxy_command" \
+  -P "$target_port")
 
 cleanup_partial() {
   set +e
-  ((controller_remote_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint" rm -rf -- "$controller_remote"
-  ((offhost_remote_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint" rm -rf -- "$offhost_remote"
-  ((target_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint" rm -rf -- "$target_output"
-  ((offhost_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" "$JUMP_HOST" rm -rf -- "$OFFHOST_OUTPUT"
+  ((controller_remote_owned == 0)) || "${target_ssh[@]}" rm -rf -- "$controller_remote"
+  ((offhost_remote_owned == 0)) || "${target_ssh[@]}" rm -rf -- "$offhost_remote"
+  ((target_owned == 0)) || "${target_ssh[@]}" rm -rf -- "$target_output"
+  ((offhost_owned == 0)) || "${offhost_ssh[@]}" rm -rf -- "$OFFHOST_OUTPUT"
   ((controller_owned == 0)) || rm -rf -- "$CONTROLLER_OUTPUT"
   ((offhost_mirror_owned == 0)) || rm -rf -- "$offhost_mirror"
   ((target_mirror_owned == 0)) || rm -rf -- "$target_mirror"
