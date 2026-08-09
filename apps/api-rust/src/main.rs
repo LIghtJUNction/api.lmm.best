@@ -35,6 +35,9 @@ use lmm_api_rs::{
             IdentityCheckinAffState, read_router as identity_checkin_read_router,
         },
         missing_identity_topup::{IdentityTopupState, read_router as identity_topup_read_router},
+        missing_relay_models_billing::{
+            ModelLookupState, PgStaticModelLookup, model_lookup_router,
+        },
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityState, PgObservabilityStore,
             PgReadOnlyObservabilityTokenAuthorizer, ValkeyObservabilityMetrics,
@@ -274,6 +277,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
         let open_source_bounties =
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
+        // The single-model GET is a read-only static catalogue lookup. Keep
+        // it separate from provider relay methods, and apply the current Go
+        // trust gate before exposing whether a model exists.
+        let model_lookup = model_lookup_router(ModelLookupState::new(
+            Arc::new(PgStaticModelLookup::with_current_policy(
+                pg.clone(),
+                local_acceptance,
+            )),
+            app_state.status.version().to_owned(),
+        ));
         let control_public = if local_acceptance {
             // Local acceptance must never contact an operator-configured
             // uptime service; the test adapter fails closed instead.
@@ -297,6 +310,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(billing_subscriptions)
             .merge(observability)
             .merge(open_source_bounties)
+            .merge(model_lookup)
             .merge(control_public);
         if local_acceptance {
             extra_surface = extra_surface.merge(test_instance::safe_system_config_surface(

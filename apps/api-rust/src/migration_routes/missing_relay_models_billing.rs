@@ -65,6 +65,7 @@ fn static_catalog() -> &'static HashMap<String, ModelView> {
 /// PostgreSQL token authentication with the frozen Go static model map.
 pub struct PgStaticModelLookup {
     authentication: PgModelsService,
+    enforce_discovery_policy: bool,
 }
 
 impl PgStaticModelLookup {
@@ -72,6 +73,21 @@ impl PgStaticModelLookup {
     pub fn new(pg: PgPool) -> Self {
         Self {
             authentication: PgModelsService::new(pg),
+            enforce_discovery_policy: false,
+        }
+    }
+
+    /// Builds the normal-listener lookup with the current Go trust gate.
+    ///
+    /// The static catalogue remains process-local, while authorization still
+    /// consults PostgreSQL for the user's persisted trust/payment facts.  The
+    /// loopback-only acceptance flag is shared with the normal listener and
+    /// never changes the frozen test-instance constructor above.
+    #[must_use]
+    pub fn with_current_policy(pg: PgPool, local_acceptance: bool) -> Self {
+        Self {
+            authentication: PgModelsService::new(pg).with_local_acceptance(local_acceptance),
+            enforce_discovery_policy: true,
         }
     }
 }
@@ -79,7 +95,9 @@ impl PgStaticModelLookup {
 #[async_trait]
 impl ModelLookupService for PgStaticModelLookup {
     async fn authenticate(&self, request: ModelLookupRequest) -> Result<(), ModelsError> {
-        self.authentication.authenticate_only(request.into()).await
+        self.authentication
+            .authenticate_only_with_policy(request.into(), self.enforce_discovery_policy)
+            .await
     }
 
     async fn find_static_model(&self, model: &str) -> Result<Option<ModelView>, ModelsError> {

@@ -163,8 +163,23 @@ impl PgModelsService {
     /// list endpoint, but retrieves from Go's process-wide static map instead
     /// of applying token limits, groups, channel state, or billing filters.
     pub async fn authenticate_only(&self, request: ModelsRequest) -> Result<(), ModelsError> {
+        self.authenticate_only_with_policy(request, false).await
+    }
+
+    /// Authenticate a static model lookup, optionally applying the current Go
+    /// developer/trust gate after token and user checks.  The frozen listener
+    /// keeps the historical TokenAuth-only behaviour; the normal listener
+    /// opts into the current policy before exposing the static catalogue.
+    pub async fn authenticate_only_with_policy(
+        &self,
+        request: ModelsRequest,
+        enforce_discovery_policy: bool,
+    ) -> Result<(), ModelsError> {
         let (key, has_channel_suffix) = legacy_token_parts(&request).ok_or_else(invalid_token)?;
         let token = authenticate(self, &key, request.client_ip).await?;
+        if enforce_discovery_policy && !self.developer_access_allowed(&token.user).await? {
+            return Err(discovery_hidden());
+        }
         if has_channel_suffix && token.role < 10 {
             return Err(ModelsError::new(
                 ModelsErrorKind::AccessDenied,
