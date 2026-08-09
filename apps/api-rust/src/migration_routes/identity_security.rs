@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
-use crate::auth::{AuthErrorKind, DashboardAuth, dashboard_token_candidate};
+use crate::auth::{AuthError, AuthErrorKind, DashboardAuth, dashboard_token_candidate};
 use secrecy::SecretString;
 
 const ADMIN_ROLE: i64 = 10;
@@ -171,19 +171,30 @@ impl DashboardSecurityAuthorizer {
     async fn actor(&self, headers: &HeaderMap) -> Result<SecurityActor, SecurityError> {
         let token = credential(headers).ok_or(SecurityError::Unauthorized)?;
         let session_candidate = dashboard_token_candidate(&token);
-        let user = self
-            .auth
-            .self_user(SecretString::from(token))
-            .await
-            .map_err(|error| match error.kind {
-                AuthErrorKind::TokenExpired => SecurityError::TokenExpired,
-                AuthErrorKind::SessionRevoked => SecurityError::SessionRevoked,
-                AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials => {
-                    SecurityError::Unauthorized
-                }
-                AuthErrorKind::UserDisabled => SecurityError::UserDisabled,
-                _ => SecurityError::InternalAuth,
-            })?;
+        let map_auth_error = |error: AuthError| match error.kind {
+            AuthErrorKind::TokenExpired => SecurityError::TokenExpired,
+            AuthErrorKind::SessionRevoked => SecurityError::SessionRevoked,
+            AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials => {
+                SecurityError::Unauthorized
+            }
+            AuthErrorKind::UserDisabled => SecurityError::UserDisabled,
+            _ => SecurityError::InternalAuth,
+        };
+        let (user, session_id) = if session_candidate {
+            let context = self
+                .auth
+                .current_session(SecretString::from(token))
+                .await
+                .map_err(map_auth_error)?;
+            (context.user, Some(context.session_id))
+        } else {
+            let user = self
+                .auth
+                .self_user(SecretString::from(token))
+                .await
+                .map_err(map_auth_error)?;
+            (user, None)
+        };
         if user.id <= 0 || user.username.trim().is_empty() || !matches!(user.role, 0 | 1 | 10 | 100)
         {
             return Err(SecurityError::InvalidUserInfo);
@@ -191,17 +202,10 @@ impl DashboardSecurityAuthorizer {
         if user.status != 1 {
             return Err(SecurityError::UserDisabled);
         }
-        if session_candidate {
-            // `DashboardAuth::self_user` validates the session but does not
-            // return its SID. Refuse to erase that distinction: a custom edge
-            // authorizer must supply the server-validated SID before any
-            // browser-session route can run.
-            return Err(SecurityError::AuthenticatedSessionUnavailable);
-        }
         Ok(SecurityActor {
             user_id: user.id,
             role: user.role,
-            session_id: None,
+            session_id,
         })
     }
 }
@@ -888,6 +892,18 @@ pub fn registration_router(state: IdentitySecurityState) -> Router {
     registration_route().with_state(state)
 }
 
+/// Builds only the read-only dashboard session inventory route.
+///
+/// Session deletion and revoke-others remain on the candidate router until
+/// their Valkey deny-fence publication is listener-owned.  The inventory
+/// response itself is a PostgreSQL read and is explicitly marked no-store by
+/// the handler.
+pub fn sessions_read_router(state: IdentitySecurityState) -> Router {
+    Router::new()
+        .route("/api/user/sessions", get(list_sessions))
+        .with_state(state)
+}
+
 fn registration_route() -> Router<IdentitySecurityState> {
     Router::new().route("/api/user/register", post(register))
 }
@@ -903,40 +919,56 @@ struct Envelope<T: Serialize> {
 }
 
 fn failure(status: StatusCode, message: &str, code: Option<&'static str>) -> Response {
-    (
-        status,
-        Json(Envelope::<()> {
-            success: false,
-            message: message.to_owned(),
-            data: None,
-            code,
-        }),
+    legacy_json_content_type(
+        (
+            status,
+            Json(Envelope::<()> {
+                success: false,
+                message: message.to_owned(),
+                data: None,
+                code,
+            }),
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
 fn success(data: Value) -> Response {
-    Json(Envelope {
-        success: true,
-        message: String::new(),
-        data: Some(data),
-        code: None,
-    })
-    .into_response()
+    legacy_json_content_type(
+        Json(Envelope {
+            success: true,
+            message: String::new(),
+            data: Some(data),
+            code: None,
+        })
+        .into_response(),
+    )
 }
 
 fn operation_success(operation: SecurityOperation, data: Value) -> Response {
     if operation == SecurityOperation::Register {
-        return Json(json!({"success": true, "message": ""})).into_response();
+        return legacy_json_content_type(
+            Json(json!({"success": true, "message": ""})).into_response(),
+        );
     }
     if operation == SecurityOperation::AdminResetPasskey {
-        return Json(json!({
-            "success": true,
-            "message": "Passkey 已重置",
-        }))
-        .into_response();
+        return legacy_json_content_type(
+            Json(json!({
+                "success": true,
+                "message": "Passkey 已重置",
+            }))
+            .into_response(),
+        );
     }
     success(data)
+}
+
+fn legacy_json_content_type(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
 }
 
 fn with_auth_version(mut response: Response) -> Response {

@@ -1,10 +1,11 @@
 use super::token::{AuthIdentity, LegacyTokenCodec, random_refresh_secret, split_refresh_token};
 use super::{
     AuthBundle, AuthError, AuthErrorKind, AuthResponseData, CriticalRateLimitOutcome,
-    DashboardAuth, DashboardSelfUserFacts, DashboardUser, DashboardUserView,
-    LOGIN_SESSION_TTL_SECONDS, LoginOutcome, LoginRequest, LoginSessionView, LogoutRequest,
-    LogoutResult, REFRESH_REPLAY_WINDOW_SECONDS, RequestMetadata, SecuritySessionRotationRequest,
-    TWO_FACTOR_FLOW_TTL_SECONDS, TwoFactorChallenge, TwoFactorLoginRequest,
+    DashboardAuth, DashboardSelfUserFacts, DashboardSessionContext, DashboardUser,
+    DashboardUserView, LOGIN_SESSION_TTL_SECONDS, LoginOutcome, LoginRequest, LoginSessionView,
+    LogoutRequest, LogoutResult, REFRESH_REPLAY_WINDOW_SECONDS, RequestMetadata,
+    SecuritySessionRotationRequest, TWO_FACTOR_FLOW_TTL_SECONDS, TwoFactorChallenge,
+    TwoFactorLoginRequest,
 };
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -1202,6 +1203,21 @@ return {0, ttl}
         };
         let capabilities = self.capabilities(user.id, user.role).await?;
         Ok(user.dashboard_user(capabilities))
+    }
+
+    async fn current_session(
+        &self,
+        access_token: SecretString,
+    ) -> Result<DashboardSessionContext, AuthError> {
+        let identity = self.codec.parse(&access_token)?;
+        let (session, user) = self.validate_identity(&identity).await?;
+        let capabilities = self.capabilities(user.id, user.role).await?;
+        Ok(DashboardSessionContext {
+            user: user.dashboard_user(capabilities),
+            session_id: session.sid,
+            client_ip: session.ip,
+            user_agent: session.user_agent,
+        })
     }
 
     async fn self_user_for_optional(

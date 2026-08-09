@@ -259,7 +259,7 @@ DELETE	/api/user/self	present	unverified	mounted	unverified	not-applicable	go	mo
 GET	/api/user/self	present	unverified	mounted	blocked-sol-stop	not-applicable	go	blocked-sol-stop	source=apps/api-rust/src/auth/http.rs;mount=apps/api-rust/src/auth/http.rs;stop=latest-independent-sol-review-invalidated-prior-compile-differential-and-approval-credit
 PUT	/api/user/self	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/identity_profile.rs;mount=apps/api-rust/src/migration_routes/identity_profile.rs
 GET	/api/user/self/groups	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/missing_identity_catalog.rs;mount=apps/api-rust/src/migration_routes/missing_identity_catalog.rs;listener=apps/api-rust/src/main.rs
-GET	/api/user/sessions	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/api/user/sessions	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/identity_security.rs;mount=apps/api-rust/src/migration_routes/identity_security.rs;listener=apps/api-rust/src/main.rs
 DELETE	/api/user/sessions/:sid	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/sessions/revoke-others	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 PUT	/api/user/setting	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/identity_profile.rs;mount=apps/api-rust/src/migration_routes/identity_profile.rs
