@@ -3,12 +3,8 @@ set -Eeuo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
-REPO_ROOT=$(cd -- "$HERE/../.." && pwd -P)
-readonly REPO_ROOT
 readonly SHARED="$HERE/../common/lmm-api"
 readonly PACKAGES=(
-  lmm-api-bin
-  lmm-api-git
   lmm-api-go-bin
   lmm-api-go-git
   lmm-api-rs-bin
@@ -19,15 +15,22 @@ die() { printf 'test-aur-matrix: %s\n' "$*" >&2; exit 1; }
 
 contains_srcinfo() {
   local package=$1 expected=$2
-  grep -Fqx "$expected" "$HERE/$package/.SRCINFO" || \
+  grep -Fqx "$expected" "$HERE/$package/.SRCINFO" ||
     die "$package .SRCINFO is missing: $expected"
 }
 
 contains_srcinfo_prefix() {
   local package=$1 expected=$2
-  grep -Fq "$expected" "$HERE/$package/.SRCINFO" || \
+  grep -Fq "$expected" "$HERE/$package/.SRCINFO" ||
     die "$package .SRCINFO is missing: $expected"
 }
+
+for removed in lmm-api-bin lmm-api-git; do
+  [[ ! -e $HERE/$removed/PKGBUILD ]] || die "removed core package still has a PKGBUILD: $removed"
+done
+for removed in lmm-api-launcher backend.conf lmm-api.install lmm-api.service lmm-api.env; do
+  [[ ! -e $SHARED/$removed ]] || die "removed launcher/provider asset remains: $removed"
+done
 
 for package in "${PACKAGES[@]}"; do
   pkgbuild="$HERE/$package/PKGBUILD"
@@ -37,34 +40,34 @@ for package in "${PACKAGES[@]}"; do
     shellcheck -s bash -e SC2034,SC2154 "$pkgbuild"
   fi
   srcinfo=$(cd -- "$HERE/$package" && makepkg --printsrcinfo)
-  cmp -s <(printf '%s\n' "$srcinfo") "$HERE/$package/.SRCINFO" || \
+  cmp -s <(printf '%s\n' "$srcinfo") "$HERE/$package/.SRCINFO" ||
     die "$package .SRCINFO is stale"
   contains_srcinfo "$package" $'pkgbase = '"$package"
+  if grep -Fq $'\tdepends = lmm-api' "$HERE/$package/.SRCINFO"; then
+    die "$package retains the removed shared launcher dependency"
+  fi
 done
 
-for package in lmm-api-bin lmm-api-git; do
-  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api'
-  contains_srcinfo "$package" $'\toptdepends = lmm-api-go: Go backend provider'
-  contains_srcinfo "$package" $'\toptdepends = lmm-api-rs: Rust backend provider'
-done
-contains_srcinfo lmm-api-bin $'\tconflicts = lmm-api-git'
-contains_srcinfo lmm-api-git $'\tconflicts = lmm-api-bin'
-
-for package in lmm-api-go-bin lmm-api-go-git lmm-api-rs-bin lmm-api-rs-git; do
-  contains_srcinfo "$package" $'\tdepends = lmm-api'
-done
 for package in lmm-api-go-bin lmm-api-go-git; do
   contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-go'
-done
-for package in lmm-api-rs-bin lmm-api-rs-git; do
-  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-rs'
+  contains_srcinfo "$package" $'\tbackup = etc/lmm-api-go/lmm-api-go.env'
 done
 contains_srcinfo lmm-api-go-bin $'\tconflicts = lmm-api-go-git'
 contains_srcinfo lmm-api-go-git $'\tconflicts = lmm-api-go-bin'
+
+for package in lmm-api-rs-bin lmm-api-rs-git; do
+  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-rs'
+done
 contains_srcinfo lmm-api-rs-bin $'\tconflicts = lmm-api-rs-git'
 contains_srcinfo lmm-api-rs-git $'\tconflicts = lmm-api-rs-bin'
 
-for package in lmm-api-bin lmm-api-go-bin lmm-api-rs-bin; do
+for package in "${PACKAGES[@]}"; do
+  for removed_core in lmm-api lmm-api-bin lmm-api-git; do
+    contains_srcinfo "$package" $'\tconflicts = '"$removed_core"
+  done
+done
+
+for package in lmm-api-go-bin lmm-api-rs-bin; do
   pkgbuild="$HERE/$package/PKGBUILD"
   grep -Fq 'cosign verify-blob' "$pkgbuild" || die "$package lacks Sigstore verification"
   grep -Fq 'sha256sum' "$pkgbuild" || die "$package lacks SHA-256 verification"
@@ -73,137 +76,72 @@ for package in lmm-api-bin lmm-api-go-bin lmm-api-rs-bin; do
     die "$package invokes a project compiler"
   fi
 done
-contains_srcinfo lmm-api-git $'\tmakedepends = bun'
+contains_srcinfo lmm-api-go-git $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 
-grep -Fqx 'LMM_API_BACKEND=auto' "$SHARED/backend.conf" || die 'default backend is not auto'
-grep -Fq 'Environment=LMM_API_BACKEND=auto' "$SHARED/lmm-api.service" || \
-  die 'systemd default backend is not auto'
-grep -Fqx 'ExecStart=/usr/bin/lmm-api serve' "$SHARED/lmm-api.service" || \
-  die 'systemd must invoke the canonical serve command'
+grep -Fqx 'ExecStart=/usr/bin/lmm-api-go serve' "$SHARED/lmm-api-go.service" ||
+  die 'Go systemd service does not execute the backend directly'
+grep -Fqx 'Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist' \
+  "$SHARED/lmm-api-go.service" || die 'Go service does not bind the packaged frontend'
+if grep -R -Eq '/usr/bin/lmm-api([^[:alnum:]_-]|$)|lmm-api-launcher|backends/(go|rs)' \
+    "$HERE"/*/PKGBUILD "$SHARED/lmm-api-go.service"; then
+  die 'package layout retains an unsuffixed launcher or provider directory'
+fi
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/lmm-aur-matrix.XXXXXXXX")
+: "${TMPDIR:?set TMPDIR to a marker-owned build workspace}"
+tmp=$(mktemp -d "$TMPDIR/lmm-aur-matrix.XXXXXXXX")
 cleanup() { rm -rf -- "$tmp"; }
 trap cleanup EXIT
-mkdir -p "$tmp/backends/go" "$tmp/backends/rs"
-printf '%s\n' '#!/usr/bin/env bash' 'printf "go:%s\n" "$*"' > "$tmp/backends/go/lmm-api"
-# shellcheck disable=SC2016 # Write a literal fixture script.
-printf '%s\n' '#!/usr/bin/env bash' 'printf "rs:%s\n" "$LMM_DATABASE_SCHEMA"' \
-  > "$tmp/backends/rs/lmm-api-rs"
-chmod 0755 "$tmp/backends/go/lmm-api" "$tmp/backends/rs/lmm-api-rs"
-output=$(LMM_API_BACKEND_ROOT="$tmp/backends" LMM_API_BACKEND=auto \
-  "$SHARED/lmm-api-launcher" serve marker)
-[[ $output == go:marker ]] || die 'auto selection did not prefer Go'
-rm -f "$tmp/backends/go/lmm-api"
-output=$(LMM_API_BACKEND_ROOT="$tmp/backends" LMM_API_BACKEND=auto \
-  LMM_DATABASE_SCHEMA=lmm_preview_fixture "$SHARED/lmm-api-launcher" serve)
-[[ $output == rs:lmm_preview_fixture ]] || die 'auto selection did not fall back to Rust'
-
-for package in lmm-api-bin lmm-api-git; do
-  pkgbuild="$HERE/$package/PKGBUILD"
-  grep -Fq '/usr/bin/lmm-api' "$pkgbuild" || die "$package lacks the canonical launcher"
-  if grep -Eq '/usr/bin/lmm-api-(select|deploy)' "$pkgbuild"; then
-    die "$package installs a retired public command"
-  fi
-done
-grep -Fq '/usr/lib/lmm-api/backends/go/lmm-api' "$HERE/lmm-api-go-bin/PKGBUILD" || \
-  die 'Go bin backend layout is wrong'
-grep -Fq '/usr/lib/lmm-api/backends/go/lmm-api' "$HERE/lmm-api-go-git/PKGBUILD" || \
-  die 'Go git backend layout is wrong'
-for package in lmm-api-rs-bin lmm-api-rs-git; do
-  grep -Fq '/usr/lib/lmm-api/backends/rs/lmm-api-rs' "$HERE/$package/PKGBUILD" || \
-    die "$package backend layout is wrong"
-  grep -Fq '/usr/lib/lmm-api/backends/rs/lmm-db-migrate' "$HERE/$package/PKGBUILD" || \
-    die "$package migrator layout is wrong"
-done
 
 stage="$tmp/stage"
-core_bundle="$stage/core/lmm-api-core-0.1.2"
-deploy_bundle="$core_bundle/deploy"
-mkdir -p "$core_bundle/frontend-dist" "$deploy_bundle/route-evidence" \
-  "$deploy_bundle/migration-evidence" "$stage/go/lmm-api-go-0.1.2-linux-amd64" \
-  "$stage/rs/lmm-api-rs-0.1.2-linux-amd64"
-cp "$SHARED"/* "$core_bundle/"
-cp "$REPO_ROOT/apps/web/scripts/production-acceptance.mjs" \
-  "$REPO_ROOT/apps/web/scripts/production-acceptance-lib.mjs" "$deploy_bundle/"
-cp "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/migration-gate.tsv" \
-  "$REPO_ROOT/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv" "$deploy_bundle/"
-cp "$SHARED/validate-route-gate" "$SHARED/migration-compatibility.env" "$deploy_bundle/"
-printf 'route evidence fixture\n' > "$deploy_bundle/route-evidence/fixture.txt"
-printf 'migration evidence fixture\n' > "$deploy_bundle/migration-evidence/fixture.txt"
-(
-  cd -- "$deploy_bundle"
-  sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env \
-    frozen-route-auth.tsv > route-gate-assets.sha256
-)
-printf '<!doctype html>\n' > "$core_bundle/frontend-dist/index.html"
-printf '#!/bin/sh\n' > "$stage/go/lmm-api-go-0.1.2-linux-amd64/lmm-api"
-printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-api-rs"
-printf '#!/bin/sh\n' > "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-db-migrate"
-chmod 0755 "$stage/go/lmm-api-go-0.1.2-linux-amd64/lmm-api" \
-  "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-api-rs" \
-  "$stage/rs/lmm-api-rs-0.1.2-linux-amd64/lmm-db-migrate"
-for component in core/lmm-api-core-0.1.2 go/lmm-api-go-0.1.2-linux-amd64 \
-  rs/lmm-api-rs-0.1.2-linux-amd64; do
+go_bundle="$stage/go/lmm-api-go-0.1.2-linux-amd64"
+rs_bundle="$stage/rs/lmm-api-rs-0.1.2-linux-amd64"
+mkdir -p "$go_bundle/frontend-dist" "$rs_bundle"
+printf '#!/bin/sh\n' > "$go_bundle/lmm-api-go"
+printf '#!/bin/sh\n' > "$rs_bundle/lmm-api-rs"
+printf '#!/bin/sh\n' > "$rs_bundle/lmm-db-migrate"
+chmod 0755 "$go_bundle/lmm-api-go" "$rs_bundle/lmm-api-rs" "$rs_bundle/lmm-db-migrate"
+printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
+cp "$SHARED/lmm-api-go.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
+for bundle in "$go_bundle" "$rs_bundle"; do
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
-    printf 'fixture\n' > "$stage/$component/$file"
+    printf 'fixture\n' > "$bundle/$file"
   done
-  printf '%040d\n' 0 > "$stage/$component/REVISION"
+  printf '%040d\n' 0 > "$bundle/REVISION"
 done
 
 (
-  srcdir="$stage/core"
-  pkgdir="$tmp/pkg-core"
-  # shellcheck disable=SC1091 # Dynamic path to the package under test.
-  source "$HERE/lmm-api-bin/PKGBUILD"
-  package
-)
-(
-  # shellcheck disable=SC2034 # Consumed by the sourced PKGBUILD.
+  # shellcheck disable=SC2034 # Read by the sourced PKGBUILD.
   CARCH=x86_64
   srcdir="$stage/go"
   pkgdir="$tmp/pkg-go"
-  # shellcheck disable=SC1091 # Dynamic path to the package under test.
+  # shellcheck disable=SC1091
   source "$HERE/lmm-api-go-bin/PKGBUILD"
   package
 )
 (
-  # shellcheck disable=SC2034
-  local_srcdir="$stage/rs"
-  local_pkgdir="$tmp/pkg-rs"
-  # shellcheck disable=SC2034
-  srcdir=$local_srcdir
-  # shellcheck disable=SC2034
-  pkgdir=$local_pkgdir
-  # shellcheck disable=SC1091 # Dynamic path to the package under test.
+  # shellcheck disable=SC2034 # Read by the sourced PKGBUILD.
+  srcdir="$stage/rs"
+  # shellcheck disable=SC2034 # Read by the sourced PKGBUILD.
+  pkgdir="$tmp/pkg-rs"
+  # shellcheck disable=SC1091
   source "$HERE/lmm-api-rs-bin/PKGBUILD"
   package
 )
-for path in \
-  pkg-core/usr/bin/lmm-api \
-  pkg-core/usr/lib/systemd/system/lmm-api.service \
-  pkg-core/usr/lib/lmm-api/deploy/production-acceptance.mjs \
-  pkg-core/usr/lib/lmm-api/deploy/production-acceptance-lib.mjs \
-  pkg-core/usr/lib/lmm-api/deploy/migration-gate.tsv \
-  pkg-core/usr/lib/lmm-api/deploy/validate-route-gate \
-  pkg-core/usr/lib/lmm-api/deploy/migration-compatibility.env \
-  pkg-core/usr/lib/lmm-api/deploy/frozen-route-auth.tsv \
-  pkg-core/usr/lib/lmm-api/deploy/route-gate-assets.sha256 \
-  pkg-core/usr/lib/lmm-api/deploy/route-evidence/fixture.txt \
-  pkg-core/usr/lib/lmm-api/deploy/migration-evidence/fixture.txt \
-  pkg-core/usr/share/lmm-api/frontend-dist/index.html \
-  pkg-go/usr/lib/lmm-api/backends/go/lmm-api \
-  pkg-rs/usr/lib/lmm-api/backends/rs/lmm-api-rs \
-  pkg-rs/usr/lib/lmm-api/backends/rs/lmm-db-migrate; do
-  [[ -f $tmp/$path ]] || die "mock package layout is missing $path"
-done
-for path in pkg-core/usr/bin/lmm-api-select pkg-core/usr/bin/lmm-api-deploy; do
-  [[ ! -e $tmp/$path && ! -L $tmp/$path ]] || die "mock package exposes retired command $path"
-done
-(
-  cd -- "$tmp/pkg-core/usr/lib/lmm-api/deploy"
-  sha256sum -c route-gate-assets.sha256 >/dev/null
-)
 
-printf '%s\n' 'six-package AUR matrix contract verified'
+for packaged_path in \
+  pkg-go/usr/bin/lmm-api-go \
+  pkg-go/usr/lib/systemd/system/lmm-api-go.service \
+  pkg-go/etc/lmm-api-go/lmm-api-go.env \
+  pkg-go/usr/share/lmm-api-go/frontend-dist/index.html \
+  pkg-rs/usr/bin/lmm-api-rs \
+  pkg-rs/usr/bin/lmm-db-migrate; do
+  [[ -f $tmp/$packaged_path ]] || die "mock package layout is missing $packaged_path"
+done
+for removed_path in pkg-go/usr/bin/lmm-api pkg-rs/usr/bin/lmm-api; do
+  [[ ! -e $tmp/$removed_path && ! -L $tmp/$removed_path ]] ||
+    die "mock package exposes removed command $removed_path"
+done
+
+printf '%s\n' 'four-package direct-backend AUR matrix verified'

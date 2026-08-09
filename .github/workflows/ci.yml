@@ -52,9 +52,13 @@ jobs:
       - name: Build production web assets
         env:
           VITE_REACT_APP_VERSION: ${{ github.sha }}
-        run: bun run --filter @lmm/web build
+        run: |
+          bun run --filter @lmm/web build
+          bun run --filter @lmm/web bundle:check
 
       - name: Verify protected production deployment contract
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: |
           bash deploy/test-frontend-release.sh
           bash deploy/production/test-go-deploy-contract.sh
@@ -93,9 +97,9 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           mkdir -p out
-          go build -trimpath -ldflags="-s -w" -o out/lmm-api .
-          file out/lmm-api
-          if ldd out/lmm-api 2>&1 | grep -qvE 'not a dynamic executable|statically linked'; then
+          go build -trimpath -ldflags="-s -w" -o out/lmm-api-go .
+          file out/lmm-api-go
+          if ldd out/lmm-api-go 2>&1 | grep -qvE 'not a dynamic executable|statically linked'; then
             echo 'Go production binary is dynamically linked' >&2
             exit 1
           fi
@@ -242,7 +246,7 @@ jobs:
           bash test-docker-image-namespace.sh
 
   aur-package-matrix:
-    name: AUR six-package contract
+    name: AUR direct-backend package contract
     runs-on: ubuntu-latest
     timeout-minutes: 10
     container: archlinux:base-devel
@@ -251,6 +255,7 @@ jobs:
         run: |
           pacman --sync --refresh --noconfirm git shellcheck
           useradd --create-home package-builder
+          install -d -o package-builder -g package-builder /home/package-builder/lmm-ci-tmp
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -260,3 +265,5 @@ jobs:
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
           runuser --user package-builder -- bash packaging/aur/test-matrix.sh
           runuser --user package-builder -- bash packaging/aur/test-bin-makepkg.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-precutover-packages.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-package-roundtrip.sh

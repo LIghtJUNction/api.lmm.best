@@ -1,19 +1,20 @@
 [Unit]
-Description=LMM API service
+Description=LMM API Go backend
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 DynamicUser=yes
-StateDirectory=lmm-api
-WorkingDirectory=/var/lib/lmm-api
+StateDirectory=lmm-api-go
+WorkingDirectory=/var/lib/lmm-api-go
 Environment=GIN_MODE=release
 Environment=PORT=3000
-Environment=LMM_API_BACKEND=auto
-EnvironmentFile=-/etc/lmm-api/lmm-api.env
-EnvironmentFile=-/etc/lmm-api/backend.conf
-ExecStart=/usr/bin/lmm-api serve
+Environment=LMM_API_BIND_ADDRESS=127.0.0.1
+Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist
+Environment=LMM_DB_MIGRATION_MODE=verify
+EnvironmentFile=-/etc/lmm-api-go/lmm-api-go.env
+ExecStart=/usr/bin/lmm-api-go serve
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=45s

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
-OUT_DIR="$REPO_DIR/apps/api-go/out"
+OUT_DIR="${LMM_API_GO_OUT_DIR:-$REPO_DIR/apps/api-go/out}"
 SOURCE_REF='HEAD'
 RELEASE_VERSION_OVERRIDE=''
 
@@ -56,7 +56,8 @@ fi
   exit 1
 }
 SOURCE_REVISION=$(git -C "$REPO_DIR" rev-parse "${SOURCE_REF}^{commit}")
-SOURCE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lmm-go-build.XXXXXX")"
+: "${TMPDIR:?set TMPDIR to a marker-owned build workspace}"
+SOURCE_DIR="$(mktemp -d "$TMPDIR/lmm-api-go-build.XXXXXX")"
 OUTPUT_TMP=''
 cleanup() {
   rm -rf -- "$SOURCE_DIR"
@@ -69,7 +70,7 @@ trap cleanup EXIT
 git -C "$REPO_DIR" archive "${SOURCE_REF}:apps/api-go" | tar -x -C "$SOURCE_DIR"
 
 mkdir -p "$OUT_DIR"
-OUTPUT_TMP="$(mktemp "$OUT_DIR/.lmm-api.XXXXXX")"
+OUTPUT_TMP="$(mktemp "$OUT_DIR/.lmm-api-go.XXXXXX")"
 (
   cd "$SOURCE_DIR"
   GOPROXY=off CGO_ENABLED=0 go build -trimpath -buildvcs=false \
@@ -77,7 +78,7 @@ OUTPUT_TMP="$(mktemp "$OUT_DIR/.lmm-api.XXXXXX")"
     -o "$OUTPUT_TMP" .
 )
 chmod 0755 "$OUTPUT_TMP"
-version_output="$("$OUTPUT_TMP" --version)"
+version_output="$("$OUTPUT_TMP" version)"
 if [[ "$version_output" != "$RELEASE_VERSION" ]]; then
   printf 'version assertion failed: expected %s, got %s\n' "$RELEASE_VERSION" "$version_output" >&2
   exit 1
@@ -92,9 +93,9 @@ if [[ "$ldd_output" != *'not a dynamic executable'* && "$ldd_output" != *'static
   printf 'static ldd assertion failed: %s\n' "$ldd_output" >&2
   exit 1
 fi
-mv -f -- "$OUTPUT_TMP" "$OUT_DIR/lmm-api"
+mv -f -- "$OUTPUT_TMP" "$OUT_DIR/lmm-api-go"
 OUTPUT_TMP=''
 
 printf 'built %s from %s (%s) version=%s\n' \
-  "$OUT_DIR/lmm-api" "$SOURCE_REF" "$SOURCE_REVISION" "$RELEASE_VERSION"
-sha256sum "$OUT_DIR/lmm-api"
+  "$OUT_DIR/lmm-api-go" "$SOURCE_REF" "$SOURCE_REVISION" "$RELEASE_VERSION"
+sha256sum "$OUT_DIR/lmm-api-go"

@@ -8,10 +8,19 @@ setup:
 
 # Start only the default PostgreSQL and Valkey development infrastructure.
 infra-up:
+    @if [[ ! -f docker-compose.dev.yml ]]; then \
+      echo "error: docker-compose.dev.yml is not present in this branch; infra-up requires a local compose file." >&2; \
+      echo "Set up a compose stack manually or restore docker-compose.dev.yml before using just infra-up." >&2; \
+      exit 1; \
+    fi
     docker compose -f docker-compose.dev.yml up -d postgres valkey
 
 # Stop only the default PostgreSQL and Valkey development infrastructure.
 infra-down:
+    @if [[ ! -f docker-compose.dev.yml ]]; then \
+      echo "error: docker-compose.dev.yml is not present in this branch; infra-down requires a local compose file." >&2; \
+      exit 1; \
+    fi
     docker compose -f docker-compose.dev.yml stop postgres valkey
 
 # Start PostgreSQL, Valkey, the Go API, and the shared web frontend.
@@ -37,17 +46,21 @@ dev-web:
 dev-rust:
     #!/usr/bin/env bash
     set -euo pipefail
+    @if [[ ! -f docker-compose.dev.yml ]]; then \
+      echo "error: docker-compose.dev.yml is not present in this branch; dev-rust requires the preview compose stack." >&2; \
+      exit 1; \
+    fi
     docker compose -f docker-compose.dev.yml --profile rust-preview up -d postgres valkey lmm-api-rs-preview
     exec bun run dev:web
 
 # Build and run the default static Go production binary.
 run: build
-    exec apps/api-go/out/lmm-api
+    exec apps/api-go/out/lmm-api-go
 
 # Run an already-built Go production binary.
 run-go:
-    @test -x apps/api-go/out/lmm-api || { echo "error: apps/api-go/out/lmm-api is missing; run 'just build'" >&2; exit 1; }
-    exec apps/api-go/out/lmm-api
+    @test -x apps/api-go/out/lmm-api-go || { echo "error: apps/api-go/out/lmm-api-go is missing; run 'just build'" >&2; exit 1; }
+    exec apps/api-go/out/lmm-api-go
 
 # Run the explicit Rust backend with standardized infrastructure.
 run-rust: infra-up
@@ -60,11 +73,12 @@ build: build-web build-go
 build-web:
     VITE_REACT_APP_VERSION="$(cat VERSION)" bun run build:web
     @test -f apps/web/dist/index.html || { echo "error: apps/web/dist/index.html was not produced" >&2; exit 1; }
+    bun run --filter @lmm/web bundle:check
 
 # Build the static Go production binary independently.
 build-go:
     bun run build:go
-    @test -x apps/api-go/out/lmm-api || { echo "error: static Go binary was not produced" >&2; exit 1; }
+    @test -x apps/api-go/out/lmm-api-go || { echo "error: static Go binary was not produced" >&2; exit 1; }
 
 # Build the explicit Rust backend.
 build-rust:
@@ -85,7 +99,7 @@ test-web:
 test-rust:
     bun run test:rust
 
-# Test both selectable backends and the shared frontend.
+# Test both backend implementations and the frontend.
 test-all: test test-rust
 
 # Run default Go and web quality gates.
@@ -144,35 +158,41 @@ typecheck-rust:
 clean-generated:
     rm -rf .turbo apps/web/.turbo apps/api-go/out apps/api-rust/target apps/web/dist
 
-# Build the default Go image from the root Dockerfile.
+# Build the default Go image from a local Dockerfile (if present).
 docker: docker-go
 
 docker-go:
+    @if [[ ! -f Dockerfile ]]; then \
+      echo "error: Dockerfile is not present in this branch; Docker build is unavailable." >&2; \
+      echo "Use local build commands instead (for example: just build-go / just build-rust)." >&2; \
+      exit 1; \
+    fi
     docker build -f Dockerfile -t "lmm-api-go:${LMM_IMAGE_TAG:-local}" .
 
 docker-rust:
+    @if [[ ! -f Dockerfile.rust ]]; then \
+      echo "error: Dockerfile.rust is not present in this branch; Rust Docker build is unavailable." >&2; \
+      echo "Use bun run build:rust if you need a local Rust preview artifact." >&2; \
+      exit 1; \
+    fi
     docker build -f Dockerfile.rust -t "lmm-api-rs-preview:${LMM_IMAGE_TAG:-local}" .
 
 # Build the default Go production package.
 package: package-go
 
-package-go:
-    bash packaging/local/lmm-api-split/build-local-package.sh
-
-package-rust:
-    bash packaging/local/lmm-api-rs-fallback-bin/build-local-package.sh
+package-go: build
+    @test -n "${LMM_API_BUILD_WORKSPACE:-}" || { echo "error: set LMM_API_BUILD_WORKSPACE to a marker-owned absolute path" >&2; exit 1; }
+    bash packaging/local/lmm-api-go/build-local-package.sh \
+      --workspace "$LMM_API_BUILD_WORKSPACE" \
+      --binary "$(pwd)/apps/api-go/out/lmm-api-go" \
+      --frontend "$(pwd)/apps/web/dist"
 
 # Validate the public AUR package that consumes prebuilt release assets.
 test-package-bin:
     bash packaging/aur/test-matrix.sh
     bash packaging/aur/test-bin-makepkg.sh
 
-# Deploy Go production only after explicit backend and site confirmation.
+# Deploy Go production only after explicit site confirmation.
 deploy-production:
-    @if [[ "${CONFIRM_PRODUCTION:-}" != "api.lmm.best" || "${LMM_API_BACKEND:-}" != "go" ]]; then echo "error: set CONFIRM_PRODUCTION=api.lmm.best and LMM_API_BACKEND=go" >&2; exit 1; fi
+    @if [[ "${CONFIRM_PRODUCTION:-}" != "api.lmm.best" ]]; then echo "error: set CONFIRM_PRODUCTION=api.lmm.best" >&2; exit 1; fi
     @script="deploy/production/deploy-go.sh"; if [[ ! -x "$script" ]]; then echo "error: $script is required before production deployment is available" >&2; exit 1; fi; "$script"
-
-# Deploy Rust production only through its explicit guarded recipe.
-deploy-production-rust:
-    @if [[ "${CONFIRM_PRODUCTION:-}" != "api.lmm.best" || "${LMM_API_BACKEND:-}" != "rust" ]]; then echo "error: set CONFIRM_PRODUCTION=api.lmm.best and LMM_API_BACKEND=rust" >&2; exit 1; fi
-    @script="deploy/production/deploy-rust.sh"; if [[ ! -x "$script" ]]; then echo "error: $script is required before Rust production deployment is available" >&2; exit 1; fi; "$script"

@@ -1,0 +1,54 @@
+# Maintainer: LMM API maintainers
+
+pkgname=lmm-api-go
+pkgver="${LMM_API_PKGVER:-0.1.0}"
+pkgrel="${LMM_API_PKGREL:-1}"
+pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (local build)'
+arch=('x86_64')
+url='https://github.com/LIghtJUNction/api.lmm.best'
+license=('AGPL-3.0-only')
+depends=('ca-certificates' 'systemd' 'tzdata')
+optdepends=(
+  'postgresql: production database'
+  'valkey: cache, rate limiting, and login sessions'
+)
+conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go-bin' 'lmm-api-go-git')
+backup=('etc/lmm-api-go/lmm-api-go.env')
+options=('!strip')
+source=(
+  lmm-api-go
+  frontend-dist.tar
+  lmm-api-go.service
+  lmm-api-go.env
+  REVISION
+  LICENSE
+  NOTICE
+  THIRD-PARTY-LICENSES.md
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  install -d -m0755 "${srcdir}/frontend-dist"
+  tar -xf "${srcdir}/frontend-dist.tar" -C "${srcdir}/frontend-dist"
+}
+
+package() {
+  local file
+
+  install -Dm0755 "${srcdir}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
+  install -Dm0644 "${srcdir}/lmm-api-go.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
+  install -Dm0600 "${srcdir}/lmm-api-go.env" \
+    "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
+
+  install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/frontend-dist"
+  cp -R --no-preserve=ownership,mode,timestamps -- "${srcdir}/frontend-dist/." \
+    "${pkgdir}/usr/share/lmm-api-go/frontend-dist/"
+  find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type d -exec chmod 0755 {} +
+  find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type f -exec chmod 0644 {} +
+
+  for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
+    install -Dm0644 "${srcdir}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
+  done
+  install -Dm0644 "${srcdir}/REVISION" "${pkgdir}/usr/share/doc/${pkgname}/REVISION"
+}

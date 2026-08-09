@@ -7,17 +7,19 @@ pkgbase = lmm-api-rs-git
 	license = AGPL-3.0-or-later
 	makedepends = cargo
 	makedepends = git
-	depends = lmm-api
 	depends = gcc-libs
 	depends = glibc
 	depends = sqlite
 	optdepends = postgresql: PostgreSQL database
 	optdepends = valkey: cache and rate-limit service
 	provides = lmm-api-rs
+	conflicts = lmm-api
+	conflicts = lmm-api-bin
+	conflicts = lmm-api-git
 	conflicts = lmm-api-rs
 	conflicts = lmm-api-rs-bin
 	options = !strip
-	source = lmm-api::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main
+	source = lmm-api-rs::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main
 	sha256sums = SKIP
 
 pkgname = lmm-api-rs-git

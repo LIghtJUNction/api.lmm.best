@@ -2,232 +2,555 @@
 set -Eeuo pipefail
 umask 077
 
-readonly SERVICE=lmm-api.service
 readonly EXPECTED_HOST=arch-dmit
-readonly BACKEND_CONFIG=/etc/lmm-api/backend.conf
-readonly ENV_FILE=/etc/lmm-api/lmm-api.env
-readonly BINARY=/usr/lib/lmm-api/backends/go/lmm-api
-readonly BACKUP_ROOT=/var/lib/lmm-api/deploy-backups
-readonly LOCK_FILE=/run/lock/lmm-api-go-deploy.lock
-readonly FRONTEND_ROOT=/srv/lmm-api-frontend
-readonly FRONTEND_PROBE_URL=https://127.0.0.1:9000/
-readonly FRONTEND_PROBE_HOST=api.lmm.best
+readonly NEW_SERVICE=lmm-api-go.service
+readonly OLD_SERVICE=lmm-api.service
+if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
+  WORK_ROOT=${LMM_DEPLOY_TEST_WORK_ROOT:?}
+  BACKUP_ROOT=${LMM_DEPLOY_TEST_BACKUP_ROOT:?}
+  LOCK_FILE=${LMM_DEPLOY_TEST_LOCK_FILE:?}
+  FRONTEND_ROOT=${LMM_DEPLOY_TEST_FRONTEND_ROOT:?}
+  SYSTEMD_UNIT_ROOT=${LMM_DEPLOY_TEST_SYSTEMD_UNIT_ROOT:?}
+  OLD_CONFIG_DIR=${LMM_DEPLOY_TEST_OLD_CONFIG_DIR:?}
+  NEW_CONFIG_DIR=${LMM_DEPLOY_TEST_NEW_CONFIG_DIR:?}
+  OLD_DROPIN_DIR=${LMM_DEPLOY_TEST_OLD_DROPIN_DIR:?}
+  NEW_DROPIN_DIR=${LMM_DEPLOY_TEST_NEW_DROPIN_DIR:?}
+  INSTALLED_BINARY=${LMM_DEPLOY_TEST_INSTALLED_BINARY:?}
+  PACKAGED_FRONTEND_DIR=${LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR:?}
+  MIGRATION_WORKDIR=${LMM_DEPLOY_TEST_MIGRATION_WORKDIR:?}
+  REMOVED_BINARY=${LMM_DEPLOY_TEST_REMOVED_BINARY:?}
+  REMOVED_SELECTOR=${LMM_DEPLOY_TEST_REMOVED_SELECTOR:?}
+  REMOVED_PROVIDER_ROOT=${LMM_DEPLOY_TEST_REMOVED_PROVIDER_ROOT:?}
+  OLD_SERVICE_FILE=${LMM_DEPLOY_TEST_OLD_SERVICE_FILE:?}
+  TRANSACTION_LOCK=${LMM_DEPLOY_TEST_TRANSACTION_LOCK:?}
+  PROBE_ATTEMPTS=${LMM_DEPLOY_TEST_PROBE_ATTEMPTS:-1}
+else
+  WORK_ROOT=/var/lib/lmm-api-go/deploy-work
+  BACKUP_ROOT=/var/lib/lmm-api-go/deploy-backups
+  LOCK_FILE=/run/lock/lmm-api-go-deploy.lock
+  FRONTEND_ROOT=/srv/lmm-api-frontend
+  SYSTEMD_UNIT_ROOT=/etc/systemd/system
+  OLD_CONFIG_DIR=/etc/lmm-api
+  NEW_CONFIG_DIR=/etc/lmm-api-go
+  OLD_DROPIN_DIR=/etc/systemd/system/lmm-api.service.d
+  NEW_DROPIN_DIR=/etc/systemd/system/lmm-api-go.service.d
+  INSTALLED_BINARY=/usr/bin/lmm-api-go
+  PACKAGED_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist
+  MIGRATION_WORKDIR=/var/lib/lmm-api
+  REMOVED_BINARY=/usr/bin/lmm-api
+  REMOVED_SELECTOR=/usr/bin/lmm-api-select
+  REMOVED_PROVIDER_ROOT=/usr/lib/lmm-api
+  OLD_SERVICE_FILE=/usr/lib/systemd/system/lmm-api.service
+  TRANSACTION_LOCK=/var/lib/lmm-api-go/deploy-transaction.lock
+  PROBE_ATTEMPTS=45
+fi
+readonly WORK_ROOT BACKUP_ROOT LOCK_FILE FRONTEND_ROOT SYSTEMD_UNIT_ROOT
+readonly OLD_CONFIG_DIR NEW_CONFIG_DIR OLD_DROPIN_DIR NEW_DROPIN_DIR
+readonly INSTALLED_BINARY PACKAGED_FRONTEND_DIR MIGRATION_WORKDIR
+readonly REMOVED_BINARY REMOVED_SELECTOR REMOVED_PROVIDER_ROOT OLD_SERVICE_FILE PROBE_ATTEMPTS
+readonly TRANSACTION_LOCK
 
-die() { printf 'activate-go-release: %s\n' "$*" >&2; exit 1; }
+die() { printf 'activate-go-release: %s\n' "$*" >&2; exit 2; }
 is_sha256() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
+is_id() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; }
 
+ACTION=${1:-}
+[[ -n $ACTION ]] && shift
+WORKSPACE=''
 PACKAGE=''
 PACKAGE_SHA256=''
-ROLLBACK_PACKAGE=''
-ROLLBACK_SHA256=''
-FRONTEND_ARCHIVE=''
-FRONTEND_SHA256=''
-FRONTEND_RELEASE_SCRIPT=''
+ROLLBACK_CORE=''
+ROLLBACK_CORE_SHA256=''
+ROLLBACK_GO=''
+ROLLBACK_GO_SHA256=''
+PROBE_BINARY=''
+PROBE_BINARY_SHA256=''
 EXPECTED_VERSION=''
-STATUS_FILE=''
+OLD_VERSION=''
+FRONTEND_INDEX_SHA256=''
+FRONTEND_RELEASE_SCRIPT=''
+BACKUP_DIR=''
+DATABASE_SCHEMA=''
+ROLLBACK_SECONDS=600
 while (($#)); do
   case $1 in
+    --workspace) (($# >= 2)) || die '--workspace requires a value'; WORKSPACE=$2; shift 2 ;;
     --package) (($# >= 2)) || die '--package requires a value'; PACKAGE=$2; shift 2 ;;
     --package-sha256) (($# >= 2)) || die '--package-sha256 requires a value'; PACKAGE_SHA256=$2; shift 2 ;;
-    --rollback-package) (($# >= 2)) || die '--rollback-package requires a value'; ROLLBACK_PACKAGE=$2; shift 2 ;;
-    --rollback-sha256) (($# >= 2)) || die '--rollback-sha256 requires a value'; ROLLBACK_SHA256=$2; shift 2 ;;
-    --frontend-archive) (($# >= 2)) || die '--frontend-archive requires a value'; FRONTEND_ARCHIVE=$2; shift 2 ;;
-    --frontend-sha256) (($# >= 2)) || die '--frontend-sha256 requires a value'; FRONTEND_SHA256=$2; shift 2 ;;
-    --frontend-release-script) (($# >= 2)) || die '--frontend-release-script requires a value'; FRONTEND_RELEASE_SCRIPT=$2; shift 2 ;;
+    --rollback-core-package) (($# >= 2)) || die '--rollback-core-package requires a value'; ROLLBACK_CORE=$2; shift 2 ;;
+    --rollback-core-sha256) (($# >= 2)) || die '--rollback-core-sha256 requires a value'; ROLLBACK_CORE_SHA256=$2; shift 2 ;;
+    --rollback-go-package) (($# >= 2)) || die '--rollback-go-package requires a value'; ROLLBACK_GO=$2; shift 2 ;;
+    --rollback-go-sha256) (($# >= 2)) || die '--rollback-go-sha256 requires a value'; ROLLBACK_GO_SHA256=$2; shift 2 ;;
+    --probe-binary) (($# >= 2)) || die '--probe-binary requires a value'; PROBE_BINARY=$2; shift 2 ;;
+    --probe-binary-sha256) (($# >= 2)) || die '--probe-binary-sha256 requires a value'; PROBE_BINARY_SHA256=$2; shift 2 ;;
     --expected-version) (($# >= 2)) || die '--expected-version requires a value'; EXPECTED_VERSION=$2; shift 2 ;;
-    --status-file) (($# >= 2)) || die '--status-file requires a value'; STATUS_FILE=$2; shift 2 ;;
+    --old-version) (($# >= 2)) || die '--old-version requires a value'; OLD_VERSION=$2; shift 2 ;;
+    --frontend-index-sha256) (($# >= 2)) || die '--frontend-index-sha256 requires a value'; FRONTEND_INDEX_SHA256=$2; shift 2 ;;
+    --frontend-release-script) (($# >= 2)) || die '--frontend-release-script requires a value'; FRONTEND_RELEASE_SCRIPT=$2; shift 2 ;;
+    --backup-dir) (($# >= 2)) || die '--backup-dir requires a value'; BACKUP_DIR=$2; shift 2 ;;
+    --rollback-seconds) (($# >= 2)) || die '--rollback-seconds requires a value'; ROLLBACK_SECONDS=$2; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
-[[ $EUID -eq 0 ]] || die 'must run as root'
-[[ $(hostnamectl --static) == "$EXPECTED_HOST" ]] || die 'refusing to run on an unexpected host'
-[[ $EXPECTED_VERSION =~ ^[0-9][0-9A-Za-z._-]*$ ]] || die 'invalid expected version'
-[[ $STATUS_FILE == /var/lib/lmm-api/deploy-staging/* && ! -L $STATUS_FILE ]] || die 'unsafe status path'
-for path in "$PACKAGE" "$ROLLBACK_PACKAGE" "$FRONTEND_ARCHIVE" "$FRONTEND_RELEASE_SCRIPT"; do
-  [[ $path == /var/lib/lmm-api/deploy-staging/* && -f $path && ! -L $path ]] || die "unsafe package path: $path"
-done
-is_sha256 "$PACKAGE_SHA256" || die 'invalid package checksum'
-is_sha256 "$ROLLBACK_SHA256" || die 'invalid rollback checksum'
-is_sha256 "$FRONTEND_SHA256" || die 'invalid frontend checksum'
-[[ $(sha256sum "$PACKAGE" | awk '{print $1}') == "$PACKAGE_SHA256" ]] || die 'package checksum mismatch'
-[[ $(sha256sum "$ROLLBACK_PACKAGE" | awk '{print $1}') == "$ROLLBACK_SHA256" ]] || die 'rollback checksum mismatch'
-[[ $(sha256sum "$FRONTEND_ARCHIVE" | awk '{print $1}') == "$FRONTEND_SHA256" ]] || die 'frontend archive checksum mismatch'
-[[ -x $FRONTEND_RELEASE_SCRIPT ]] || die 'frontend release script is not executable'
-for command in curl flock jq pacman pg_dump pg_restore readlink sha256sum systemctl tar; do
-  command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
-done
+case $ACTION in activate|rollback|confirm) ;; *) die 'first argument must be activate, rollback, or confirm' ;; esac
+[[ $EUID -eq 0 || ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]] || die 'must run as root'
+observed_host=${LMM_DEPLOY_OBSERVED_HOST:-$(hostnamectl --static)}
+[[ $observed_host == "$EXPECTED_HOST" ]] || die 'production host identity mismatch'
+[[ $WORKSPACE == "$WORK_ROOT"/* && -d $WORKSPACE && ! -L $WORKSPACE ]] || die 'unsafe workspace'
+deployment_id=${WORKSPACE##*/}
+is_id "$deployment_id" || die 'invalid deployment ID'
+marker=$WORKSPACE/.lmm-deploy-workspace
+[[ -f $marker && ! -L $marker ]] || die 'workspace marker is missing'
+grep -Fqx "deployment_id=$deployment_id" "$marker" || die 'workspace marker mismatch'
+
+state_dir=$WORKSPACE/state
+staging_dir=$WORKSPACE/staging
+status_file=$state_dir/status
+manifest=$state_dir/deployment.env
+probe_token=$state_dir/probe-token
+timer_unit="lmm-api-go-rollback-$deployment_id.timer"
+rollback_unit="lmm-api-go-rollback-$deployment_id.service"
+timer_path="$SYSTEMD_UNIT_ROOT/$timer_unit"
+rollback_path="$SYSTEMD_UNIT_ROOT/$rollback_unit"
+install -d -m0700 "$state_dir" "${LOCK_FILE%/*}"
+exec 9>"$LOCK_FILE"
+flock -w 120 9 || die 'another Go deployment holds the global lock'
 
 write_status() {
-  local value=$1 temporary="$STATUS_FILE.$$.new"
+  local value=$1 temporary=$status_file.$$.new
   printf '%s\n' "$value" >"$temporary"
   chmod 0600 "$temporary"
-  mv -Tf -- "$temporary" "$STATUS_FILE"
+  mv -Tf -- "$temporary" "$status_file"
 }
 
-restart_service() {
-  local state
-  systemctl stop --no-block "$SERVICE"
-  for _ in {1..15}; do
-    state=$(systemctl show "$SERVICE" --property=ActiveState --value)
-    [[ $state == inactive || $state == failed ]] && break
-    sleep 1
-  done
-  if [[ $state != inactive && $state != failed ]]; then
-    systemctl kill --kill-who=main --signal=SIGKILL "$SERVICE"
-  fi
-  for _ in {1..10}; do
-    state=$(systemctl show "$SERVICE" --property=ActiveState --value)
-    [[ $state == inactive || $state == failed ]] && break
-    sleep 1
-  done
-  [[ $state == inactive || $state == failed ]] || return 1
-  systemctl reset-failed "$SERVICE" 2>/dev/null || true
-  systemctl start "$SERVICE"
+status_word() {
+  local value=''
+  [[ -f $status_file && ! -L $status_file ]] && read -r value <"$status_file"
+  printf '%s' "${value%% *}"
 }
 
-probe_version() {
-  local expected=$1 response
-  for _ in {1..40}; do
-    response=$(curl --fail --silent --show-error --max-time 3 http://127.0.0.1:3000/api/status 2>/dev/null || true)
-    if jq -e --arg version "$expected" \
-      '.success == true and .ready == true and .data.version == $version' \
-      <<<"$response" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
+manifest_value() {
+  local key=$1 value
+  value=$(awk -F= -v key="$key" '$1 == key { count += 1; value = substr($0, index($0, "=") + 1) } END { if (count == 1) print value; else exit 2 }' "$manifest") || \
+    die "deployment manifest is missing or ambiguous: $key"
+  printf '%s' "$value"
+}
+
+assert_staged_file() {
+  local path=$1 checksum=$2 label=$3
+  [[ $path == "$staging_dir"/* && -s $path && -f $path && ! -L $path ]] || die "$label is missing or unsafe"
+  is_sha256 "$checksum" || die "$label checksum is invalid"
+  [[ $(sha256sum "$path" | awk '{print $1}') == "$checksum" ]] || die "$label checksum mismatch"
+}
+
+native_request() {
+  local base_url=$1 path=$2 output=$3 status=$4
+  shift 4
+  "$PROBE_BINARY" request --base-url "$base_url" --path "$path" \
+    --output "$output" --status-file "$status" --timeout 8s --fail "$@"
+}
+
+probe_status() {
+  local base_url=$1 expected=$2 output=$state_dir/status-response.json status=$state_dir/status-code
+  native_request "$base_url" /api/status "$output" "$status"
+  [[ $(<"$status") == 200 ]] && jq -e --arg version "$expected" \
+    '.success == true and .ready == true and .data.version == $version' "$output" >/dev/null
+}
+
+probe_doctor() {
+  local output=$state_dir/doctor-response.json status=$state_dir/doctor-code
+  native_request http://127.0.0.1:3000 /api/livez "$output" "$status"
+  [[ $(<"$status") == 200 ]] && jq -e '.success == true and .live == true' "$output" >/dev/null
 }
 
 probe_frontend() {
-  local expected_release=$1 expected_sha256=$2 response_file
-  response_file="${STATUS_FILE%/*}/frontend-probe.html"
-  for _ in {1..15}; do
-    if [[ $(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true) == "releases/$expected_release" ]] &&
-       curl --fail --silent --show-error --insecure --max-time 3 --noproxy '*' \
-         --header "Host: $FRONTEND_PROBE_HOST" \
-         --output "$response_file" "$FRONTEND_PROBE_URL" 2>/dev/null &&
-       [[ $(sha256sum "$response_file" | awk '{print $1}') == "$expected_sha256" ]]; then
-      rm -f -- "$response_file"
+  local expected=$1 output=$state_dir/frontend-response.html status=$state_dir/frontend-code
+  native_request https://api.lmm.best / "$output" "$status"
+  [[ $(<"$status") == 200 && $(sha256sum "$output" | awk '{print $1}') == "$expected" ]]
+}
+
+probe_authenticated_models() {
+  local output=$state_dir/models-response.json status=$state_dir/models-code
+  [[ -s $probe_token && -f $probe_token && ! -L $probe_token && $(stat -c '%a' "$probe_token") == 600 ]] || return 1
+  native_request https://api.lmm.best /v1/models "$output" "$status" --token-file "$probe_token"
+  [[ $(<"$status") == 200 ]] && jq -e '.data | type == "array"' "$output" >/dev/null
+}
+
+probe_release() {
+  local version=$1 frontend_sha=$2 attempt
+  for ((attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1)); do
+    if probe_status http://127.0.0.1:3000 "$version" && probe_doctor && \
+       probe_status https://api.lmm.best "$version" && probe_frontend "$frontend_sha" && \
+       probe_authenticated_models; then
       return 0
     fi
     sleep 1
   done
-  rm -f -- "$response_file"
   return 1
 }
 
-install -d -m0700 "${LOCK_FILE%/*}" "$BACKUP_ROOT"
-exec 9>"$LOCK_FILE"
-flock -n 9 || die 'another Go deployment is running'
-write_status PREPARING
-
-frontend_link=$(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true)
-[[ $frontend_link =~ ^releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]] || \
-  die 'current frontend release link is missing or unsafe'
-old_frontend_release=${BASH_REMATCH[1]}
-[[ -d $FRONTEND_ROOT/releases/$old_frontend_release ]] || \
-  die 'current frontend release directory is missing'
-old_frontend_sha256=$(sha256sum "$FRONTEND_ROOT/releases/$old_frontend_release/index.html" | awk '{print $1}')
-
-frontend_source="${STATUS_FILE%/*}/frontend-dist"
-[[ ! -e $frontend_source ]] || die 'frontend extraction directory already exists'
-if tar -tf "$FRONTEND_ARCHIVE" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-  die 'frontend archive contains an unsafe path'
-fi
-mkdir -m0700 -- "$frontend_source"
-tar --extract --file "$FRONTEND_ARCHIVE" --directory "$frontend_source" \
-  --no-same-owner --no-same-permissions
-if find "$frontend_source" \( -type l -o \( ! -type f ! -type d \) \) -print -quit | grep -q .; then
-  die 'frontend archive contains unsupported file types'
-fi
-[[ -f $frontend_source/index.html ]] || die 'frontend archive lacks index.html'
-frontend_sha256=$(sha256sum "$frontend_source/index.html" | awk '{print $1}')
-
-new_record=$(pacman -Qp "$PACKAGE")
-rollback_record=$(pacman -Qp "$ROLLBACK_PACKAGE")
-[[ $new_record == "lmm-api-go $EXPECTED_VERSION-1" ]] || die "unexpected release package: $new_record"
-[[ $rollback_record == lmm-api-go\ * ]] || die "unexpected rollback package: $rollback_record"
-old_version=${rollback_record#lmm-api-go }
-old_version=${old_version%-1}
-[[ $(pacman -Q lmm-api-go) == "lmm-api-go $old_version-1" ]] || die 'rollback package does not match the installed version'
-grep -Fqx 'LMM_API_BACKEND=go' "$BACKEND_CONFIG" || die 'production backend is not explicitly Go'
-systemctl is-active --quiet "$SERVICE" || die 'service is not active before deployment'
-[[ $($BINARY --version) == "$old_version" ]] || die 'installed binary version does not match package metadata'
-
-snapshot="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$EXPECTED_VERSION"
-install -d -m0700 "$snapshot"
-cp -a -- "$BINARY" "$BACKEND_CONFIG" "$ENV_FILE" "$snapshot/"
-pacman -Qi lmm-api lmm-api-go >"$snapshot/package-info.txt"
-sha256sum "$snapshot/lmm-api" "$snapshot/backend.conf" "$snapshot/lmm-api.env" >"$snapshot/files.sha256"
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-[[ -n ${SQL_DSN:-} ]] || die 'SQL_DSN is unavailable'
-pg_dump --format=custom --file="$snapshot/postgresql.dump.new" "$SQL_DSN"
-pg_restore --list "$snapshot/postgresql.dump.new" >/dev/null
-mv -T "$snapshot/postgresql.dump.new" "$snapshot/postgresql.dump"
-chmod 0600 "$snapshot/postgresql.dump"
-printf 'expected_version=%s\nold_version=%s\ncreated_at=%s\n' \
-  "$EXPECTED_VERSION" "$old_version" "$(date -u +%FT%TZ)" >"$snapshot/release.env"
-printf 'old_frontend_release=%s\nold_frontend_sha256=%s\n' \
-  "$old_frontend_release" "$old_frontend_sha256" >>"$snapshot/release.env"
-write_status "BACKUP_READY $snapshot"
-
-rollback() {
-  local reason=$1 frontend_restored=1 backend_restored=1
-  write_status "ROLLBACK_STARTED $reason"
-  if [[ $(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true) != "releases/$old_frontend_release" ]]; then
-    if ! "$FRONTEND_RELEASE_SCRIPT" rollback \
-      --root "$FRONTEND_ROOT" \
-      --release "$old_frontend_release" \
-      --keep 3; then
-      [[ $(readlink -- "$FRONTEND_ROOT/current" 2>/dev/null || true) == "releases/$old_frontend_release" ]] || frontend_restored=0
-    fi
-  fi
-  if pacman -U --noconfirm "$ROLLBACK_PACKAGE"; then
-    restart_service || backend_restored=0
+copy_old_dropins_for_new_service() {
+  local source=$OLD_DROPIN_DIR destination=$NEW_DROPIN_DIR
+  [[ ! -e $destination && ! -L $destination ]] || die 'new service drop-in directory already exists'
+  if [[ -d $source && ! -L $source ]]; then
+    cp -a -- "$source" "$destination"
   else
-    backend_restored=0
+    install -d -m0755 "$destination"
   fi
-  if (( frontend_restored && backend_restored )) &&
-     probe_version "$old_version" &&
-     probe_frontend "$old_frontend_release" "$old_frontend_sha256"; then
-    write_status "ROLLED_BACK $old_version $reason"
-  else
-    write_status "ROLLBACK_FAILED $reason"
-  fi
-  exit 1
+  printf 'deployment_id=%s\n' "$deployment_id" >"$destination/.lmm-deploy-owned"
+  chmod 0600 "$destination/.lmm-deploy-owned"
 }
 
-if ! pacman -U --noconfirm "$PACKAGE"; then
-  rollback package-install-failed
-fi
-if ! pacman -Qkk lmm-api-go >/dev/null; then
-  rollback package-integrity-failed
-fi
-if [[ $($BINARY --version) != "$EXPECTED_VERSION" ]]; then
-  rollback binary-version-failed
-fi
-write_status "PACKAGE_INSTALLED $EXPECTED_VERSION"
+remove_owned_new_dropins() {
+  local destination=$NEW_DROPIN_DIR
+  if [[ -f $destination/.lmm-deploy-owned && ! -L $destination/.lmm-deploy-owned ]] && \
+     grep -Fqx "deployment_id=$deployment_id" "$destination/.lmm-deploy-owned"; then
+    rm -rf -- "$destination"
+  fi
+}
 
-if ! restart_service; then
-  rollback service-restart-failed
-fi
-if ! probe_version "$EXPECTED_VERSION"; then
-  rollback health-or-version-probe-failed
-fi
-if ! "$FRONTEND_RELEASE_SCRIPT" publish \
-  --root "$FRONTEND_ROOT" \
-  --source "$frontend_source" \
-  --release "$EXPECTED_VERSION" \
-  --keep 3; then
-  rollback frontend-publish-failed
-fi
-if ! probe_frontend "$EXPECTED_VERSION" "$frontend_sha256"; then
-  rollback frontend-health-probe-failed
-fi
-write_status "DEPLOYED $EXPECTED_VERSION $snapshot frontend=$EXPECTED_VERSION"
+create_probe_token() {
+  local unit="lmm-api-go-token-$deployment_id"
+  [[ ! -e $probe_token && ! -L $probe_token ]] || die 'probe token path already exists'
+  # The single-quoted body is deliberately evaluated by the isolated systemd
+  # unit, where EnvironmentFile supplies SQL_DSN without exposing its value.
+  # shellcheck disable=SC2016
+  systemd-run --quiet --wait --collect --unit="$unit" \
+    --property=Type=oneshot \
+    --property=EnvironmentFile="$OLD_CONFIG_DIR/lmm-api.env" \
+    /usr/bin/bash -c '
+      set -Eeuo pipefail
+      umask 077
+      token=$(psql -X -v ON_ERROR_STOP=1 --dbname="$SQL_DSN" --no-align --tuples-only --command="
+        SELECT tokens.key
+        FROM tokens
+        JOIN users ON users.id = tokens.user_id
+        WHERE tokens.deleted_at IS NULL
+          AND tokens.status = 1
+          AND users.status = 1
+          AND (tokens.expired_time = -1 OR tokens.expired_time > EXTRACT(EPOCH FROM NOW()))
+          AND (tokens.unlimited_quota OR tokens.remain_quota > 0)
+          AND COALESCE(LENGTH(BTRIM(tokens.allow_ips)), 0) = 0
+        ORDER BY tokens.unlimited_quota DESC, tokens.remain_quota DESC, tokens.id DESC
+        LIMIT 1")
+      [[ $token =~ ^[A-Za-z0-9_-]{16,128}$ ]]
+      printf "sk-%s" "$token" >"$1"
+      chmod 0600 "$1"
+    ' lmm-api-token-writer "$probe_token"
+  [[ -s $probe_token && $(stat -c '%a' "$probe_token") == 600 ]] || die 'no safe production probe token is available'
+}
+
+discover_database_schema() {
+  local unit="lmm-api-go-schema-$deployment_id" schema_file=$state_dir/database-schema schema
+  [[ ! -e $schema_file && ! -L $schema_file ]] || die 'database schema path already exists'
+  # Query through the exact pre-cutover SQL_DSN so the deployment freezes the
+  # schema already used by production instead of guessing "public".
+  # shellcheck disable=SC2016
+  systemd-run --quiet --wait --collect --unit="$unit" \
+    --property=Type=oneshot \
+    --property=EnvironmentFile="$OLD_CONFIG_DIR/lmm-api.env" \
+    /usr/bin/bash -c '
+      set -Eeuo pipefail
+      umask 077
+      schema=$(psql -X -v ON_ERROR_STOP=1 --dbname="$SQL_DSN" --no-align --tuples-only \
+        --command="SELECT pg_catalog.current_schema()")
+      [[ $schema =~ ^[a-z_][a-z0-9_]{0,62}$ ]]
+      [[ $schema != pg_* && $schema != information_schema ]]
+      printf "%s\n" "$schema" >"$1"
+      chmod 0600 "$1"
+    ' lmm-api-schema-writer "$schema_file"
+  [[ -s $schema_file && -f $schema_file && ! -L $schema_file && $(stat -c '%a' "$schema_file") == 600 ]] || \
+    die 'production database schema was not captured safely'
+  IFS= read -r schema <"$schema_file"
+  is_database_schema "$schema" || die 'production database schema is unsafe'
+  [[ $(wc -l <"$schema_file") == 1 ]] || die 'production database schema capture is ambiguous'
+  DATABASE_SCHEMA=$schema
+}
+
+is_database_schema() {
+  [[ $1 =~ ^[a-z_][a-z0-9_]{0,62}$ && $1 != pg_* && $1 != information_schema ]]
+}
+
+install_new_environment_config() {
+  local source=$1 destination temporary
+  destination=$NEW_CONFIG_DIR/lmm-api-go.env
+  temporary=$destination.$$.new
+  is_database_schema "$DATABASE_SCHEMA" || die 'database schema is unavailable for the new service'
+  [[ -f $source && ! -L $source ]] || die 'restored environment file is missing or unsafe'
+  install -d -m0700 "$NEW_CONFIG_DIR"
+  awk '$0 !~ /^[[:space:]]*PGOPTIONS=/' "$source" >"$temporary"
+  printf 'PGOPTIONS="-c search_path=%s"\n' "$DATABASE_SCHEMA" >>"$temporary"
+  chmod 0600 "$temporary"
+  mv -Tf -- "$temporary" "$destination"
+}
+
+run_candidate_migration() {
+	local mode=$1 unit="lmm-api-go-migrate-$1-$deployment_id"
+	case $mode in apply|verify) ;; *) die 'candidate migration mode must be apply or verify' ;; esac
+	is_database_schema "$DATABASE_SCHEMA" || die 'database schema is unavailable for migration'
+	systemd-run --quiet --wait --collect --unit="$unit" \
+		--property=Type=oneshot \
+		--property=WorkingDirectory="$MIGRATION_WORKDIR" \
+		--property=EnvironmentFile="$OLD_CONFIG_DIR/lmm-api.env" \
+		--setenv=GIN_MODE=release \
+		--setenv="LMM_DB_MIGRATION_MODE=$mode" \
+		--setenv="PGOPTIONS=-c search_path=$DATABASE_SCHEMA" \
+		"$PROBE_BINARY" migrate "--$mode"
+}
+
+disable_rollback_timer() {
+  systemctl disable --now "$timer_unit" >/dev/null 2>&1 || true
+  systemctl reset-failed "$timer_unit" >/dev/null 2>&1 || true
+}
+
+release_transaction_lock() {
+  local lock_marker=$TRANSACTION_LOCK/deployment.env
+  if [[ -d $TRANSACTION_LOCK && ! -L $TRANSACTION_LOCK && -f $lock_marker && ! -L $lock_marker ]] && \
+     grep -Fqx "deployment_id=$deployment_id" "$lock_marker"; then
+    rm -f -- "$lock_marker"
+    rmdir -- "$TRANSACTION_LOCK"
+  fi
+}
+
+cleanup_failed_prearm() {
+  local rc=$? current
+  ((rc != 0)) || return 0
+  current=$(status_word)
+	case $current in ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK|ROLLED_BACK|CONFIRMED) return 0 ;; esac
+  if [[ $current == PREPARED ]] && systemctl is-active --quiet "$timer_unit" 2>/dev/null; then
+    return 0
+  fi
+  if ! systemctl is-active --quiet "$timer_unit" 2>/dev/null; then
+    rm -f -- "$probe_token"
+    [[ $current != PREPARED ]] || write_status 'FAILED_PREARM rollback-timer-not-active'
+    release_transaction_lock
+  fi
+}
+
+perform_rollback() {
+  local reason=$1 old_frontend config_restore
+  if [[ $(status_word) == CONFIRMED ]]; then
+    return 0
+  fi
+  write_status "ROLLING_BACK $reason"
+  old_frontend=$(manifest_value old_frontend_release)
+  config_restore=$state_dir/config-restore
+  if systemctl cat "$NEW_SERVICE" >/dev/null 2>&1; then
+    systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
+  fi
+  if [[ -d $FRONTEND_ROOT/releases/$old_frontend ]]; then
+    "$FRONTEND_RELEASE_SCRIPT" rollback --root "$FRONTEND_ROOT" --release "$old_frontend" --keep 3
+  fi
+  pacman -U --noconfirm "$ROLLBACK_CORE" "$ROLLBACK_GO"
+  install -d -m0700 "$OLD_CONFIG_DIR"
+  install -m0600 "$config_restore/lmm-api/lmm-api.env" "$OLD_CONFIG_DIR/lmm-api.env"
+  install -m0644 "$config_restore/lmm-api/backend.conf" "$OLD_CONFIG_DIR/backend.conf"
+  remove_owned_new_dropins
+  systemctl daemon-reload
+  systemctl enable --now "$OLD_SERVICE"
+  PROBE_BINARY=$(manifest_value probe_binary)
+  OLD_VERSION=$(manifest_value old_version)
+  FRONTEND_INDEX_SHA256=$(manifest_value old_frontend_index_sha256)
+  probe_release "$OLD_VERSION" "$FRONTEND_INDEX_SHA256"
+  disable_rollback_timer
+  rm -f -- "$probe_token"
+  write_status "ROLLED_BACK $OLD_VERSION $reason"
+  release_transaction_lock
+}
+
+activation_error() {
+  local rc=$? failure_line=${BASH_LINENO[0]:-unknown}
+  trap - ERR
+  if [[ $(status_word) != CONFIRMED ]]; then
+    perform_rollback "activation-error-line-$failure_line" || true
+  fi
+  exit "$rc"
+}
+
+load_manifest() {
+  [[ -f $manifest && ! -L $manifest ]] || die 'deployment manifest is missing'
+  PACKAGE=$(manifest_value package)
+  PACKAGE_SHA256=$(manifest_value package_sha256)
+  ROLLBACK_CORE=$(manifest_value rollback_core)
+  ROLLBACK_CORE_SHA256=$(manifest_value rollback_core_sha256)
+  ROLLBACK_GO=$(manifest_value rollback_go)
+  ROLLBACK_GO_SHA256=$(manifest_value rollback_go_sha256)
+  PROBE_BINARY=$(manifest_value probe_binary)
+  PROBE_BINARY_SHA256=$(manifest_value probe_binary_sha256)
+  EXPECTED_VERSION=$(manifest_value expected_version)
+  OLD_VERSION=$(manifest_value old_version)
+  FRONTEND_INDEX_SHA256=$(manifest_value frontend_index_sha256)
+  FRONTEND_RELEASE_SCRIPT=$(manifest_value frontend_release_script)
+  BACKUP_DIR=$(manifest_value backup_dir)
+  DATABASE_SCHEMA=$(manifest_value database_schema)
+  for pair in \
+    "$PACKAGE:$PACKAGE_SHA256:candidate package" \
+    "$ROLLBACK_CORE:$ROLLBACK_CORE_SHA256:core rollback package" \
+    "$ROLLBACK_GO:$ROLLBACK_GO_SHA256:Go rollback package" \
+    "$PROBE_BINARY:$PROBE_BINARY_SHA256:probe binary"; do
+    path=${pair%%:*}; remainder=${pair#*:}; checksum=${remainder%%:*}; label=${remainder#*:}
+    assert_staged_file "$path" "$checksum" "$label"
+  done
+  [[ $FRONTEND_RELEASE_SCRIPT == "$staging_dir"/* && -x $FRONTEND_RELEASE_SCRIPT && ! -L $FRONTEND_RELEASE_SCRIPT ]] || \
+    die 'frontend release script is missing or unsafe'
+  [[ $BACKUP_DIR == "$BACKUP_ROOT/$deployment_id" && -d $BACKUP_DIR && ! -L $BACKUP_DIR ]] || die 'verified target backup is missing'
+  [[ $EXPECTED_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ && $OLD_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ ]] || die 'invalid release version'
+  is_database_schema "$DATABASE_SCHEMA" || die 'deployment manifest database schema is unsafe'
+  is_sha256 "$FRONTEND_INDEX_SHA256" || die 'frontend checksum is invalid'
+}
+
+case $ACTION in
+  activate)
+    trap cleanup_failed_prearm EXIT
+    [[ ! -e $manifest && ! -L $manifest && ! -e $status_file && ! -L $status_file ]] || die 'deployment state already exists'
+    for pair in \
+      "$PACKAGE:$PACKAGE_SHA256:candidate package" \
+      "$ROLLBACK_CORE:$ROLLBACK_CORE_SHA256:core rollback package" \
+      "$ROLLBACK_GO:$ROLLBACK_GO_SHA256:Go rollback package" \
+      "$PROBE_BINARY:$PROBE_BINARY_SHA256:probe binary"; do
+      path=${pair%%:*}; remainder=${pair#*:}; checksum=${remainder%%:*}; label=${remainder#*:}
+      assert_staged_file "$path" "$checksum" "$label"
+    done
+    [[ $FRONTEND_RELEASE_SCRIPT == "$staging_dir"/* && -x $FRONTEND_RELEASE_SCRIPT && ! -L $FRONTEND_RELEASE_SCRIPT ]] || die 'frontend release script is unsafe'
+    [[ $BACKUP_DIR == "$BACKUP_ROOT/$deployment_id" && -d $BACKUP_DIR && ! -L $BACKUP_DIR ]] || die 'verified target backup is missing'
+    [[ $EXPECTED_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ && $OLD_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ ]] || die 'invalid release version'
+    is_sha256 "$FRONTEND_INDEX_SHA256" || die 'frontend checksum is invalid'
+    [[ $ROLLBACK_SECONDS =~ ^[0-9]+$ && $ROLLBACK_SECONDS -ge 600 && $ROLLBACK_SECONDS -le 1800 ]] || die 'rollback window must be 600-1800 seconds'
+    [[ $(pacman -Qp "$PACKAGE") == "lmm-api-go $EXPECTED_VERSION-1" ]] || die 'candidate package identity mismatch'
+    [[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package identity mismatch'
+    [[ $(pacman -Qp "$ROLLBACK_GO") == "$(pacman -Q lmm-api-go)" ]] || die 'Go rollback package identity mismatch'
+    systemctl is-active --quiet "$OLD_SERVICE" || die 'pre-cutover service is not active'
+    systemctl is-enabled --quiet "$OLD_SERVICE" || die 'pre-cutover service is not enabled'
+    old_frontend_link=$(readlink -- "$FRONTEND_ROOT/current")
+    [[ $old_frontend_link =~ ^releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]] || die 'pre-cutover frontend identity is unsafe'
+    old_frontend_release=${BASH_REMATCH[1]}
+    old_frontend_index_sha256=$(sha256sum "$FRONTEND_ROOT/current/index.html" | awk '{print $1}')
+    config_restore=$state_dir/config-restore
+    mkdir -m0700 "$config_restore"
+    if tar -tf "$BACKUP_DIR/configuration.archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+      die 'configuration backup contains an unsafe path'
+    fi
+    tar --extract --file "$BACKUP_DIR/configuration.archive" --directory "$config_restore" --no-same-owner --no-same-permissions
+    [[ -f $config_restore/lmm-api/lmm-api.env && ! -L $config_restore/lmm-api/lmm-api.env ]] || die 'configuration backup lacks environment file'
+    [[ -f $config_restore/lmm-api/backend.conf && ! -L $config_restore/lmm-api/backend.conf ]] || die 'configuration backup lacks backend selection'
+    discover_database_schema
+    create_probe_token
+    probe_status http://127.0.0.1:3000 "$OLD_VERSION" || die 'pre-cutover local status probe failed'
+    probe_status https://api.lmm.best "$OLD_VERSION" || die 'pre-cutover public status probe failed'
+    probe_authenticated_models || die 'pre-cutover authenticated business probe failed'
+		{
+      printf 'format=1\ndeployment_id=%s\npackage=%s\npackage_sha256=%s\n' "$deployment_id" "$PACKAGE" "$PACKAGE_SHA256"
+      printf 'rollback_core=%s\nrollback_core_sha256=%s\n' "$ROLLBACK_CORE" "$ROLLBACK_CORE_SHA256"
+      printf 'rollback_go=%s\nrollback_go_sha256=%s\n' "$ROLLBACK_GO" "$ROLLBACK_GO_SHA256"
+      printf 'probe_binary=%s\nprobe_binary_sha256=%s\n' "$PROBE_BINARY" "$PROBE_BINARY_SHA256"
+      printf 'expected_version=%s\nold_version=%s\n' "$EXPECTED_VERSION" "$OLD_VERSION"
+      printf 'frontend_index_sha256=%s\nold_frontend_release=%s\nold_frontend_index_sha256=%s\n' \
+        "$FRONTEND_INDEX_SHA256" "$old_frontend_release" "$old_frontend_index_sha256"
+      printf 'frontend_release_script=%s\nbackup_dir=%s\n' "$FRONTEND_RELEASE_SCRIPT" "$BACKUP_DIR"
+      printf 'database_schema=%s\n' "$DATABASE_SCHEMA"
+    } >"$manifest.new"
+    chmod 0600 "$manifest.new"
+    mv -T "$manifest.new" "$manifest"
+    deadline_epoch=$(( $(date +%s) + ROLLBACK_SECONDS ))
+    deadline_utc=$(date -u -d "@$deadline_epoch" +%FT%TZ)
+    write_status "PREPARED deadline=$deadline_utc"
+    cat >"$rollback_path.new" <<EOF
+[Unit]
+Description=LMM API Go release-scoped automatic rollback ($deployment_id)
+
+[Service]
+Type=oneshot
+ExecStart=$WORKSPACE/staging/activate-go-release.sh rollback --workspace $WORKSPACE
+TimeoutStartSec=5min
+Restart=on-failure
+RestartSec=10s
+EOF
+    cat >"$timer_path.new" <<EOF
+[Unit]
+Description=LMM API Go rollback deadline ($deployment_id)
+
+[Timer]
+OnCalendar=@$deadline_epoch
+AccuracySec=1s
+Persistent=true
+Unit=$rollback_unit
+
+[Install]
+WantedBy=timers.target
+EOF
+    install -m0644 "$rollback_path.new" "$rollback_path"
+    install -m0644 "$timer_path.new" "$timer_path"
+    rm -f -- "$rollback_path.new" "$timer_path.new"
+    systemctl daemon-reload
+    systemctl enable --now "$timer_unit"
+    systemctl is-active --quiet "$timer_unit" || die 'rollback timer did not arm'
+    write_status "ARMED deadline=$deadline_utc"
+		trap activation_error ERR
+		copy_old_dropins_for_new_service
+		systemctl disable --now "$OLD_SERVICE"
+		write_status "MIGRATING deadline=$deadline_utc version=$EXPECTED_VERSION"
+		run_candidate_migration apply
+		run_candidate_migration verify
+		write_status "DEPLOYING deadline=$deadline_utc version=$EXPECTED_VERSION"
+		# pacman does not resolve a local package's conflict with an explicitly
+    # installed package when --noconfirm is used. Remove the captured core
+    # package first; the armed rollback transaction can reinstall it if the
+    # direct package upgrade fails at any later step.
+    pacman -Rdd --noconfirm lmm-api
+    pacman -U --noconfirm "$PACKAGE"
+    install_new_environment_config "$config_restore/lmm-api/lmm-api.env"
+    if [[ -d $OLD_CONFIG_DIR && ! -L $OLD_CONFIG_DIR ]]; then
+      if find "$OLD_CONFIG_DIR" -mindepth 1 -maxdepth 1 ! -type f -print -quit | grep -q .; then
+        die 'removed configuration directory contains an unsupported entry'
+      fi
+      while IFS= read -r old_config; do
+        case ${old_config##*/} in
+          backend.conf|backend.conf.pacsave|backend.conf.pacnew|lmm-api.env|lmm-api.env.pacsave|lmm-api.env.pacnew) ;;
+          *) die "unexpected file remains in removed configuration directory: $old_config" ;;
+        esac
+      done < <(find "$OLD_CONFIG_DIR" -mindepth 1 -maxdepth 1 -type f -print)
+      rm -rf -- "$OLD_CONFIG_DIR"
+    fi
+    systemctl daemon-reload
+    pacman -Qkk lmm-api-go >/dev/null
+    [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'
+    for removed in "$REMOVED_BINARY" "$REMOVED_SELECTOR" "$REMOVED_PROVIDER_ROOT" "$OLD_SERVICE_FILE"; do
+      [[ ! -e $removed && ! -L $removed ]] || die "removed split-architecture path remains: $removed"
+    done
+    systemctl enable --now "$NEW_SERVICE"
+    "$FRONTEND_RELEASE_SCRIPT" publish --root "$FRONTEND_ROOT" \
+      --source "$PACKAGED_FRONTEND_DIR" --release "$EXPECTED_VERSION" --keep 3
+    probe_release "$EXPECTED_VERSION" "$FRONTEND_INDEX_SHA256"
+    trap - ERR
+    write_status "AWAITING_CONFIRMATION deadline=$deadline_utc version=$EXPECTED_VERSION"
+    trap - EXIT
+    printf 'rollback_timer=%s\nrollback_deadline=%s\nstatus=%s\n' "$timer_unit" "$deadline_utc" "$(<"$status_file")"
+    ;;
+  rollback)
+    load_manifest
+    case $(status_word) in
+      CONFIRMED) exit 0 ;;
+      ROLLED_BACK) exit 0 ;;
+		PREPARED|ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK) ;;
+      *) die 'rollback state is not eligible' ;;
+    esac
+    perform_rollback watchdog-deadline
+    ;;
+  confirm)
+    load_manifest
+    [[ $(status_word) == AWAITING_CONFIRMATION ]] || die 'deployment is not awaiting confirmation'
+    systemctl is-active --quiet "$NEW_SERVICE" || die 'new service is not active'
+    probe_release "$EXPECTED_VERSION" "$FRONTEND_INDEX_SHA256" || die 'final native CLI probes failed'
+    write_status "CONFIRMED version=$EXPECTED_VERSION"
+    disable_rollback_timer
+    systemctl stop "$rollback_unit" >/dev/null 2>&1 || true
+    systemctl reset-failed "$rollback_unit" >/dev/null 2>&1 || true
+    if systemctl is-active --quiet "$timer_unit" || systemctl is-active --quiet "$rollback_unit"; then
+      die 'rollback units remain active after confirmation'
+    fi
+    rm -f -- "$probe_token"
+    release_transaction_lock
+    printf 'confirmed=%s\nrollback_timer=%s\n' "$EXPECTED_VERSION" "$timer_unit"
+    ;;
+esac

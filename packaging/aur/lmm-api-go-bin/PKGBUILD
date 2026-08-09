@@ -3,14 +3,19 @@
 pkgname=lmm-api-go-bin
 pkgver=0.1.2
 pkgrel=1
-pkgdesc='LMM API Go backend (prebuilt)'
+pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (prebuilt)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/api.lmm.best'
 license=('AGPL-3.0-only')
-depends=('lmm-api')
+depends=('ca-certificates' 'systemd' 'tzdata')
 makedepends=('cosign')
+optdepends=(
+  'postgresql: production database'
+  'valkey: cache, rate limiting, and login sessions'
+)
 provides=("lmm-api-go=${pkgver}")
-conflicts=('lmm-api-go' 'lmm-api-go-git')
+conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-git')
+backup=('etc/lmm-api-go/lmm-api-go.env')
 options=('!strip')
 
 _release_tag="v${pkgver}"
@@ -55,8 +60,20 @@ prepare() {
 
 package() {
   local bundle="${srcdir}/${_artifact}-${_release_arch}"
-  install -Dm0755 "${bundle}/lmm-api" \
-    "${pkgdir}/usr/lib/lmm-api/backends/go/lmm-api"
+  local file
+
+  install -Dm0755 "${bundle}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
+  install -Dm0644 "${bundle}/lmm-api-go.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
+  install -Dm0600 "${bundle}/lmm-api-go.env" \
+    "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
+
+  install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/frontend-dist"
+  cp -R --no-preserve=ownership,mode,timestamps -- "${bundle}/frontend-dist/." \
+    "${pkgdir}/usr/share/lmm-api-go/frontend-dist/"
+  find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type d -exec chmod 0755 {} +
+  find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type f -exec chmod 0644 {} +
+
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     install -Dm0644 "${bundle}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
   done

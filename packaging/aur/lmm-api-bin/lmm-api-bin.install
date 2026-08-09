@@ -1,6 +1,0 @@
-post_install() {
-  printf '%s\n' 'Install one backend provider: lmm-api-go-bin, lmm-api-go-git, lmm-api-rs-bin, or lmm-api-rs-git.'
-}
-
-post_upgrade() { :; }
-post_remove() { :; }

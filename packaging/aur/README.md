@@ -1,22 +1,20 @@
-# AUR package matrix
+# AUR packages
 
-The public packages are split into a shared core and one selectable backend:
+Each backend is a self-contained binary and CLI. There is no shared launcher,
+provider selector, compatibility alias, or unsuffixed `lmm-api` command.
 
-| Component | Prebuilt release | Build from Git |
-| --- | --- | --- |
-| Shared launcher, service, configuration, and frontend | `lmm-api-bin` | `lmm-api-git` |
-| Go backend | `lmm-api-go-bin` | `lmm-api-go-git` |
-| Rust backend and migrator | `lmm-api-rs-bin` | `lmm-api-rs-git` |
+| Backend | Prebuilt release | Build from Git | Installed command |
+| --- | --- | --- | --- |
+| Go | `lmm-api-go-bin` | `lmm-api-go-git` | `/usr/bin/lmm-api-go` |
+| Rust | `lmm-api-rs-bin` | `lmm-api-rs-git` | `/usr/bin/lmm-api-rs` |
 
-Install exactly one core package and at least one backend package. Both core
-packages provide the virtual `lmm-api` dependency. Backend variants provide
-`lmm-api-go` or `lmm-api-rs`, and the `-bin`/`-git` variants of the same
-component conflict with one another.
+The Go packages also install the built frontend, `lmm-api-go.service`, and the
+private `/etc/lmm-api-go/lmm-api-go.env` configuration file. The service runs
+`lmm-api-go serve` directly.
 
-The default backend selection is `auto`: Go is preferred when installed,
-otherwise Rust is used. Use `lmm-api select auto|go|rs|status` to inspect or
-persist the backend choice. Deployment and serving are subcommands of the
-single `/usr/bin/lmm-api` CLI (`lmm-api deploy ...` and `lmm-api serve`).
+The Rust packages remain separate until the Rust backend satisfies the same
+native CLI and production route contract. They never stand behind a shell
+dispatcher.
 
-Run `bash packaging/aur/test-matrix.sh` after changing any `PKGBUILD`, and
-regenerate each `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
+Run `bash packaging/aur/test-matrix.sh` after changing a `PKGBUILD`, and
+regenerate each tracked `.SRCINFO` with `makepkg --printsrcinfo > .SRCINFO`.
