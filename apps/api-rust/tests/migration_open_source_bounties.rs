@@ -232,3 +232,49 @@ async fn owned_dispute_list_requires_dashboard_auth_before_dispute_lookup() {
         "AUTH_UNAUTHORIZED"
     );
 }
+
+#[tokio::test]
+async fn bounty_notification_routes_require_dashboard_auth_before_ledger_access() {
+    let pg = PgPoolOptions::new()
+        .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+        .expect("lazy PostgreSQL pool");
+    let valkey = redis::Client::open("redis://route-test:route-test@127.0.0.1:1")
+        .expect("lazy Valkey client");
+    let auth_config = AuthConfig {
+        session_secret: SecretString::from(
+            "open-source-bounty-notification-route-test-secret-012345678901234567890123456789",
+        ),
+        ..AuthConfig::default()
+    };
+    let auth = Arc::new(
+        PgValkeyDashboardAuth::new(pg.clone(), valkey, auth_config)
+            .expect("route-test auth adapter"),
+    );
+    let app = router(OpenSourceBountyState::new(pg, auth));
+
+    for (method, uri) in [
+        ("GET", "/api/open-source-bounties/notifications"),
+        ("POST", "/api/open-source-bounties/notifications/read"),
+        ("GET", "/api/open-source-bounties/tips/received"),
+        ("POST", "/api/open-source-bounties/tips/received/read"),
+        ("POST", "/api/open-source-bounties/tips/17/thank"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("route request"),
+            )
+            .await
+            .expect("route response");
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "{method} {uri}"
+        );
+    }
+}

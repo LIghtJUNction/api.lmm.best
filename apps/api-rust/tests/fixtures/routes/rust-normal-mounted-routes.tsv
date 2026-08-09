@@ -27,6 +27,11 @@ GET	/api/open-source-bounties/config	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/mine	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/accepted	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/disputes/mine	apps/api-rust/src/main.rs
+GET	/api/open-source-bounties/notifications	apps/api-rust/src/main.rs
+POST	/api/open-source-bounties/notifications/read	apps/api-rust/src/main.rs
+GET	/api/open-source-bounties/tips/received	apps/api-rust/src/main.rs
+POST	/api/open-source-bounties/tips/received/read	apps/api-rust/src/main.rs
+POST	/api/open-source-bounties/tips/:tip_id/thank	apps/api-rust/src/main.rs
 GET	/api/log/	apps/api-rust/src/main.rs:190
 GET	/api/log/channel_affinity_usage_cache	apps/api-rust/src/main.rs:190
 GET	/api/log/search	apps/api-rust/src/main.rs:190
