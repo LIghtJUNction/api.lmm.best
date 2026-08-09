@@ -201,13 +201,16 @@ impl BillingDashboardStore for PgBillingDashboardStore {
     async fn settings(&self) -> Result<BillingDashboardSettings, BillingDashboardStoreError> {
         let rows = sqlx::query(
             "SELECT key, value FROM options \
-             WHERE key IN ('QuotaPerUnit', 'USDExchangeRate', 'general_setting', \
+             WHERE key IN ('QuotaPerUnit', 'USDExchangeRate', \
+                           'general_setting.quota_display_type', 'general_setting', \
                            'DisplayTokenStatEnabled')",
         )
         .fetch_all(&self.pg)
         .await
         .map_err(|_| BillingDashboardStoreError::Unavailable)?;
         let mut settings = BillingDashboardSettings::default();
+        let mut dotted_display = None;
+        let mut aggregate_display = None;
         for row in rows {
             let key: String = row
                 .try_get("key")
@@ -230,18 +233,15 @@ impl BillingDashboardStore for PgBillingDashboardStore {
                     settings.display_token_stat_enabled =
                         value.eq_ignore_ascii_case("true") || value == "1";
                 }
-                "general_setting" => {
-                    if let Ok(setting) = serde_json::from_str::<Value>(&value) {
-                        settings.quota_display =
-                            match setting.get("quota_display_type").and_then(Value::as_str) {
-                                Some("CNY") => QuotaDisplay::Cny,
-                                Some("TOKENS") => QuotaDisplay::Tokens,
-                                _ => QuotaDisplay::Usd,
-                            };
-                    }
+                "general_setting.quota_display_type" => {
+                    dotted_display = parse_quota_display_type(&value);
                 }
+                "general_setting" => aggregate_display = parse_aggregate_display_type(&value),
                 _ => {}
             }
+        }
+        if let Some(display) = dotted_display.or(aggregate_display) {
+            settings.quota_display = display;
         }
         Ok(settings)
     }
@@ -359,6 +359,22 @@ fn display_amount(quota: i64, settings: BillingDashboardSettings) -> f64 {
         QuotaDisplay::Tokens => amount,
         QuotaDisplay::Usd => amount / settings.quota_per_unit,
     }
+}
+
+fn parse_quota_display_type(value: &str) -> Option<QuotaDisplay> {
+    match value.trim() {
+        "CNY" => Some(QuotaDisplay::Cny),
+        "TOKENS" => Some(QuotaDisplay::Tokens),
+        "USD" | "CUSTOM" => Some(QuotaDisplay::Usd),
+        _ => None,
+    }
+}
+
+fn parse_aggregate_display_type(value: &str) -> Option<QuotaDisplay> {
+    serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|setting| setting.get("quota_display_type").and_then(Value::as_str))
+        .and_then(parse_quota_display_type)
 }
 
 #[derive(Serialize)]
@@ -636,6 +652,20 @@ mod tests {
             serde_json::from_slice::<Value>(&body).expect("json"),
             json!({"object": "list", "total_usage": 100.0})
         );
+    }
+
+    #[test]
+    fn billing_display_type_prefers_registered_dotted_option() {
+        assert_eq!(
+            parse_quota_display_type("TOKENS"),
+            Some(QuotaDisplay::Tokens)
+        );
+        assert_eq!(
+            parse_aggregate_display_type(r#"{"quota_display_type":"CNY"}"#),
+            Some(QuotaDisplay::Cny)
+        );
+        assert_eq!(parse_quota_display_type("CUSTOM"), Some(QuotaDisplay::Usd));
+        assert_eq!(parse_quota_display_type("invalid"), None);
     }
 
     #[tokio::test]

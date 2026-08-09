@@ -849,16 +849,9 @@ async fn format_quota(pool: &PgPool, quota: i64, include_unit: bool) -> String {
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite())
         .unwrap_or(DEFAULT_QUOTA_PER_UNIT);
-    let general = options
-        .get("general_setting")
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .unwrap_or_else(|| json!({}));
-    let display_type = general
-        .get("quota_display_type")
-        .and_then(Value::as_str)
-        .unwrap_or("USD");
+    let (display_type, custom_symbol, custom_rate) = quota_display_settings(&options);
     let usd = quota as f64 / quota_per_unit;
-    match display_type {
+    match display_type.as_str() {
         "CNY" => {
             let exchange_rate = options
                 .get("USDExchangeRate")
@@ -872,19 +865,9 @@ async fn format_quota(pool: &PgPool, quota: i64, include_unit: bool) -> String {
             )
         }
         "CUSTOM" => {
-            let symbol = general
-                .get("custom_currency_symbol")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("¤");
-            let rate = general
-                .get("custom_currency_exchange_rate")
-                .and_then(Value::as_f64)
-                .filter(|value| *value > 0.0)
-                .unwrap_or(1.0);
             format!(
-                "{symbol}{:.6}{}",
-                usd * rate,
+                "{custom_symbol}{:.6}{}",
+                usd * custom_rate,
                 if include_unit { " 额度" } else { "" }
             )
         }
@@ -892,6 +875,49 @@ async fn format_quota(pool: &PgPool, quota: i64, include_unit: bool) -> String {
         "TOKENS" => quota.to_string(),
         _ => format!("＄{usd:.6}{}", if include_unit { " 额度" } else { "" }),
     }
+}
+
+fn quota_display_settings(options: &HashMap<String, String>) -> (String, String, f64) {
+    let general = options
+        .get("general_setting")
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| json!({}));
+    let display_type = options
+        .get("general_setting.quota_display_type")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .or_else(|| {
+            general
+                .get("quota_display_type")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "USD".to_owned());
+    let custom_symbol = options
+        .get("general_setting.custom_currency_symbol")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or_else(|| {
+            general
+                .get("custom_currency_symbol")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "¤".to_owned());
+    let custom_rate = options
+        .get("general_setting.custom_currency_exchange_rate")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            general
+                .get("custom_currency_exchange_rate")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+        })
+        .unwrap_or(1.0);
+    (display_type, custom_symbol, custom_rate)
 }
 
 fn caller_ip(context: Option<Extension<RequestContext>>) -> String {
@@ -1808,6 +1834,28 @@ mod tests {
                 {"name": "微信", "icon": "SiWechat", "type": "wxpay"},
                 {"name": "自定义1", "icon": "LuCreditCard", "type": "custom1", "min_topup": "50"},
             ])
+        );
+    }
+
+    #[test]
+    fn quota_display_settings_prefer_go_dotted_options_and_keep_legacy_fallback() {
+        let mut options = HashMap::from([(
+            "general_setting".into(),
+            r#"{"quota_display_type":"CNY","custom_currency_symbol":"X","custom_currency_exchange_rate":2}"#.into(),
+        )]);
+        assert_eq!(
+            quota_display_settings(&options),
+            ("CNY".into(), "X".into(), 2.0)
+        );
+        options.insert("general_setting.quota_display_type".into(), "CUSTOM".into());
+        options.insert("general_setting.custom_currency_symbol".into(), "¤¤".into());
+        options.insert(
+            "general_setting.custom_currency_exchange_rate".into(),
+            "3.5".into(),
+        );
+        assert_eq!(
+            quota_display_settings(&options),
+            ("CUSTOM".into(), "¤¤".into(), 3.5)
         );
     }
 
