@@ -307,6 +307,21 @@ pub fn migration_candidate_test_surface(state: &AppState, candidates: Router) ->
         .layer(Extension(AuthGlobalRateLimiter(limiter)))
 }
 
+/// Adds the Go `GlobalAPIRateLimit` boundary to an anonymous `/api` surface.
+///
+/// This is deliberately a separate, caller-owned mount instead of a
+/// listener-wide layer: health and non-API routes must not consume the API
+/// limiter, while authenticated and API-token surfaces already apply this
+/// boundary themselves.  The final listener boundary supplies the canonical
+/// trusted-proxy client key used by [`enforce_auth_global_rate_limit`].
+pub fn api_global_rate_limited_surface(state: &AppState, surface: Router) -> Router {
+    surface
+        .layer(middleware::from_fn(enforce_auth_global_rate_limit))
+        .layer(Extension(AuthGlobalRateLimiter(Arc::clone(
+            &state.global_api_rate_limiter,
+        ))))
+}
+
 async fn restrict_auth_surface(request: Request, next: Next) -> Response {
     if matches!(
         request.uri().path(),
@@ -1127,8 +1142,8 @@ fn status_code(status: StatusCode) -> &'static str {
 mod tests {
     use super::{
         ApiTokenMount, AppState, LEGACY_REQUEST_ID_HEADER, LEGACY_VERSION_HEADER,
-        REQUEST_ID_HEADER, RuntimeState, TrustedProxyPolicy, canonical_client_ip,
-        discovery_auth_error, discovery_unauthorized, finalize_listener,
+        REQUEST_ID_HEADER, RuntimeState, TrustedProxyPolicy, api_global_rate_limited_surface,
+        canonical_client_ip, discovery_auth_error, discovery_unauthorized, finalize_listener,
         migration_candidate_test_surface, preserves_legacy_non_json_error,
         router as production_router, router_with_api_token, router_with_api_token_and_extra,
     };
@@ -2366,6 +2381,56 @@ mod tests {
                 .expect("test mutex is healthy")
                 .as_slice(),
             ["127.0.0.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn public_extra_api_routes_use_one_global_limit_with_the_trusted_client_ip() {
+        let limiter = Arc::new(MockRateLimiter {
+            mode: MockLimitMode::Reject(19),
+            client_ips: Mutex::new(Vec::new()),
+        });
+        let state = state_with_rate_limiter(None, limiter.clone());
+        let public_routes = Router::new().route(
+            "/api/test-public-rate-limit/{name}",
+            get(|| async { StatusCode::NO_CONTENT }),
+        );
+        let app = finalize_listener(
+            api_global_rate_limited_surface(&state, public_routes),
+            state,
+        );
+
+        for uri in [
+            "/api/test-public-rate-limit/uptime",
+            "/api/test-public-rate-limit/agreement",
+            "/api/test-public-rate-limit/privacy",
+        ] {
+            let mut request = Request::get(uri)
+                .header("x-forwarded-for", "203.0.113.10, 127.0.0.2")
+                .body(Body::empty())
+                .expect("public request is valid");
+            request.extensions_mut().insert(ConnectInfo(
+                "127.0.0.1:12345"
+                    .parse::<SocketAddr>()
+                    .expect("test socket address is valid"),
+            ));
+
+            let response = app
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("router is infallible");
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+            assert_eq!(response.headers()[header::RETRY_AFTER], "19", "{uri}");
+        }
+
+        assert_eq!(
+            limiter
+                .client_ips
+                .lock()
+                .expect("test mutex is healthy")
+                .as_slice(),
+            ["203.0.113.10", "203.0.113.10", "203.0.113.10"]
         );
     }
 
