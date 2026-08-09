@@ -1748,7 +1748,7 @@ mod tests {
             "CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT)",
             "CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT, quota BIGINT, deleted_at TIMESTAMPTZ)",
             "CREATE TABLE top_ups (id BIGINT PRIMARY KEY, user_id BIGINT, amount BIGINT, money NUMERIC, trade_no TEXT UNIQUE, payment_method TEXT, payment_provider TEXT, create_time BIGINT, complete_time BIGINT, status TEXT)",
-            "CREATE TABLE logs (user_id BIGINT, created_at BIGINT, type BIGINT, content TEXT, username TEXT, ip TEXT, other TEXT)",
+            "CREATE TABLE logs (user_id BIGINT, created_at BIGINT, type BIGINT, content TEXT, username TEXT, token_name TEXT, model_name TEXT, quota BIGINT, prompt_tokens BIGINT, completion_tokens BIGINT, use_time BIGINT, is_stream BOOLEAN, channel_id BIGINT, token_id BIGINT, \"group\" TEXT, ip TEXT, other TEXT)",
             "CREATE TABLE redemptions (id BIGINT PRIMARY KEY, \"key\" TEXT UNIQUE, quota BIGINT, status BIGINT, expired_time BIGINT, deleted_at TIMESTAMPTZ, redeemed_time BIGINT, used_user_id BIGINT)",
         ] {
             sqlx::query(statement)
@@ -1760,7 +1760,7 @@ mod tests {
             .execute(&pool)
             .await
             .expect("seed non-default quota unit");
-        sqlx::query("INSERT INTO users (id, username, quota) VALUES (11, 'credited-user', 7)")
+        sqlx::query("INSERT INTO users (id, username, quota) VALUES (7, 'ordinary', 0), (11, 'credited-user', 7)")
             .execute(&pool)
             .await
             .expect("seed credited user");
