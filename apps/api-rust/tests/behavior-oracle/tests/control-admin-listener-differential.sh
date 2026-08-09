@@ -12,6 +12,7 @@ rust_valkey_port=${LMM_CONTROL_ADMIN_RUST_VALKEY_PORT:-56396}
 runtime=$(mktemp -d /tmp/lmm-control-admin-listener.XXXXXX)
 go_valkey_secret=$(openssl rand -hex 32)
 rust_valkey_secret=$(openssl rand -hex 32)
+rust_session_secret="ControlAdmin-Session-${rust_valkey_secret}!"
 
 # METHOD|PATH|BODY. These are the fourteen frozen Go registrations, excluding
 # the GET /api/task -> /api/task/ trailing-slash redirect alias.
@@ -96,8 +97,8 @@ parse_test_dsn() {
     printf '%s must target an explicit localhost PostgreSQL listener\n' "$name" >&2
     exit 2
   }
-  [[ $database == lmm_control_admin_* ]] || {
-    printf '%s database name must begin lmm_control_admin_\n' "$name" >&2
+  [[ $database == lmm_test_control_admin_* ]] || {
+    printf '%s database name must begin lmm_test_control_admin_\n' "$name" >&2
     exit 2
   }
   [[ $query != *search_path* && $query != *options=* ]] || {
@@ -109,8 +110,8 @@ parse_test_dsn() {
 
 require_unique_schema() {
   local name=$1 schema=$2
-  [[ $schema =~ ^lmm_control_admin_[A-Za-z0-9_]+$ ]] || {
-    printf '%s must match lmm_control_admin_[A-Za-z0-9_]+\n' "$name" >&2
+  [[ $schema =~ ^lmm_test_control_admin_[A-Za-z0-9_]+$ ]] || {
+    printf '%s must match lmm_test_control_admin_[A-Za-z0-9_]+\n' "$name" >&2
     exit 2
   }
 }
@@ -244,7 +245,7 @@ assert_root_read_surface() {
     "$base/api/custom-oauth-provider/"
   grep -qx 200 "$runtime/$prefix.status"
   jq -e '.success == true and (.data | type == "array")' "$runtime/$prefix.json" >/dev/null
-  grep -Eqi '^auth-version:[[:space:]]*864b7076dbcd0a3c01b5520316720ebf\r?$' \
+  grep -Eqi '^auth-version:[[:space:]]*864b7076dbcd0a3c01b5520316720ebf[[:space:]]*$' \
     "$runtime/$prefix.headers"
 }
 
@@ -336,7 +337,7 @@ SQL_DSN="$go_database_url" PORT="$go_port" \
 go_pid=$!
 DATABASE_URL="$rust_database_url" \
   VALKEY_URL="redis://:$rust_valkey_secret@127.0.0.1:$rust_valkey_port" \
-  SESSION_SECRET="$rust_valkey_secret" PASSWORD_LOGIN_ENABLED=true \
+  SESSION_SECRET="$rust_session_secret" PASSWORD_LOGIN_ENABLED=true \
   LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
   "$LMM_CONTROL_ADMIN_RUST_BIN" >"$runtime/rust.log" 2>&1 &
 rust_pid=$!
