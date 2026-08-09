@@ -45,8 +45,7 @@ impl IdentityCatalogState {
 /// Routes retained from `controller/group.go` and `controller/user.go`.
 pub fn router(state: IdentityCatalogState) -> Router {
     public_routes()
-        .route("/api/user/self/groups", get(get_self_groups))
-        .route("/api/user/models", get(get_user_models))
+        .merge(protected_read_routes())
         .route("/api/user/token", get(generate_access_token))
         .with_state(state)
 }
@@ -61,10 +60,23 @@ pub fn public_router(state: IdentityCatalogState) -> Router {
     public_routes().with_state(state)
 }
 
+/// Mounts the authenticated group/model reads without exposing token
+/// generation.  The normal listener owns this read slice only after the
+/// shared dashboard-auth service accepts the request.
+pub fn protected_read_router(state: IdentityCatalogState) -> Router {
+    protected_read_routes().with_state(state)
+}
+
 fn public_routes() -> Router<IdentityCatalogState> {
     // This legacy endpoint is deliberately public. In Gin it reads the absent
     // identity as user 0 and returns the default usable groups.
     Router::new().route("/api/user/groups", get(get_public_groups))
+}
+
+fn protected_read_routes() -> Router<IdentityCatalogState> {
+    Router::new()
+        .route("/api/user/self/groups", get(get_self_groups))
+        .route("/api/user/models", get(get_user_models))
 }
 
 async fn get_public_groups(
@@ -543,7 +555,7 @@ fn locale(headers: &HeaderMap) -> Locale {
 
 #[cfg(test)]
 mod tests {
-    use super::{IdentityCatalogState, public_router, router};
+    use super::{IdentityCatalogState, protected_read_router, public_router, router};
     use async_trait::async_trait;
     use axum::{
         body::to_bytes,
@@ -728,6 +740,31 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn protected_read_router_rejects_before_database_access() {
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(1))
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .expect("valid lazy PostgreSQL URL");
+        let app = protected_read_router(IdentityCatalogState::new(
+            pool,
+            std::sync::Arc::new(RejectingAuth),
+        ));
+        for path in ["/api/user/self/groups", "/api/user/models"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
     }
 
