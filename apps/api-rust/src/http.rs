@@ -273,6 +273,12 @@ fn finalize_listener(router: Router, state: AppState) -> Router {
     router
         .fallback(root_not_found)
         .method_not_allowed_fallback(root_not_found)
+        // Keep intentionally unmounted legacy auth surfaces concealed even
+        // when a different normal-listener surface owns the surrounding path
+        // space.  The auth router applies the same guard locally, but the
+        // listener-wide guard is needed for `/api/user/token` to avoid a
+        // fallback protocol error instead of Go's 404 contract.
+        .layer(middleware::from_fn(restrict_auth_surface))
         .layer(middleware::from_fn(legacy_models_cors))
         .layer(middleware::from_fn_with_state(boundary, request_boundary))
 }
@@ -2518,6 +2524,13 @@ mod tests {
                 .lock()
                 .expect("test mutex is healthy")
                 .is_empty()
+        );
+
+        let (status, _, body) = call("GET", "/api/user/token", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            body["error"]["type"], "invalid_request_error",
+            "listener-wide concealment keeps the legacy hidden-route envelope"
         );
     }
 

@@ -12,6 +12,7 @@ legacy_root=$(realpath -e -- "$legacy_root")
 case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 curl_connect_timeout=2
 curl_max_time=15
+listener_wait_attempts=${LMM_AUTH_LISTENER_WAIT_ATTEMPTS:-1200}
 approval_mode=${LMM_AUTH_LISTENER_APPROVAL:-0}
 probe_only=${LMM_AUTH_LISTENER_PROBE_ONLY:-0}
 expected_scenarios=33
@@ -21,6 +22,10 @@ mismatch_count=0
 mismatch_names=()
 case "$approval_mode" in 0|1) ;; *) echo 'LMM_AUTH_LISTENER_APPROVAL must be 0 or 1' >&2; exit 2 ;; esac
 case "$probe_only" in 0|1) ;; *) echo 'LMM_AUTH_LISTENER_PROBE_ONLY must be 0 or 1' >&2; exit 2 ;; esac
+[[ $listener_wait_attempts =~ ^[1-9][0-9]*$ ]] || {
+  echo 'LMM_AUTH_LISTENER_WAIT_ATTEMPTS must be a positive integer' >&2
+  exit 2
+}
 if [[ $approval_mode == 1 && $probe_only == 1 ]]; then
   echo 'approval mode refuses probe-only; run the full authenticated listener matrix' >&2
   exit 2
@@ -138,8 +143,11 @@ write_valkey_config() {
   chmod 600 "$config"
 }
 wait_for_listener() {
-  local port=$1 path=$2 pid_name=$3 pid
-  for _ in {1..300}; do
+  local port=$1 path=$2 pid_name=$3 pid attempt
+  # Go's disposable migration may take longer on a cold PostgreSQL 18 data
+  # directory under concurrent build load. Keep the wait bounded, but do not
+  # turn a slow startup into a false zero-scenario differential result.
+  for ((attempt = 0; attempt < listener_wait_attempts; attempt++)); do
     owned_pid_is_live "$pid_name" || return 1; pid=${!pid_name}
     if listener_owned_by "$port" "$pid" && curl -fsS "http://127.0.0.1:$port$path" >/dev/null 2>&1; then
       owned_pid_is_live "$pid_name" && listener_owned_by "$port" "$pid" && return 0
