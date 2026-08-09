@@ -989,19 +989,19 @@ fn waffo_method(
     settings: &BTreeMap<String, String>,
     request: &PayRequest,
 ) -> Option<(String, String)> {
-    let methods = json_value(settings, "WaffoPayMethods")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
+    let methods = waffo_methods(settings);
     if let Some(index) = request.pay_method_index {
         let method = methods.get(usize::try_from(index).ok()?)?;
         return Some((
             method
                 .get("pay_method_type")
+                .or_else(|| method.get("payMethodType"))
                 .or_else(|| method.get("PayMethodType"))?
                 .as_str()?
                 .to_owned(),
             method
                 .get("pay_method_name")
+                .or_else(|| method.get("payMethodName"))
                 .or_else(|| method.get("PayMethodName"))?
                 .as_str()?
                 .to_owned(),
@@ -1013,15 +1013,57 @@ fn waffo_method(
     methods.into_iter().find_map(|method| {
         let ty = method
             .get("pay_method_type")
+            .or_else(|| method.get("payMethodType"))
             .or_else(|| method.get("PayMethodType"))?
             .as_str()?;
         let name = method
             .get("pay_method_name")
+            .or_else(|| method.get("payMethodName"))
             .or_else(|| method.get("PayMethodName"))?
             .as_str()?;
         (ty == request.pay_method_type && name == request.pay_method_name)
             .then(|| (ty.to_owned(), name.to_owned()))
     })
+}
+
+/// Go's `GetWaffoPayMethods` falls back only when the option is absent, blank,
+/// or malformed. A valid `[]` remains an explicit empty allow-list. Keep the
+/// same distinction here and accept both the current camel-case JSON keys and
+/// legacy spellings used by older clients.
+fn waffo_methods(settings: &BTreeMap<String, String>) -> Vec<Value> {
+    let Some(raw) = settings.get("WaffoPayMethods") else {
+        return default_waffo_methods();
+    };
+    if raw.trim().is_empty() {
+        return default_waffo_methods();
+    }
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(methods)) => methods,
+        _ => default_waffo_methods(),
+    }
+}
+
+fn default_waffo_methods() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "Card",
+            "icon": "/pay-card.png",
+            "payMethodType": "CREDITCARD,DEBITCARD",
+            "payMethodName": "",
+        }),
+        json!({
+            "name": "Apple Pay",
+            "icon": "/pay-apple.png",
+            "payMethodType": "APPLEPAY",
+            "payMethodName": "APPLEPAY",
+        }),
+        json!({
+            "name": "Google Pay",
+            "icon": "/pay-google.png",
+            "payMethodType": "GOOGLEPAY",
+            "payMethodName": "GOOGLEPAY",
+        }),
+    ]
 }
 
 #[cfg(test)]
@@ -1194,6 +1236,54 @@ mod tests {
                 }
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn payment_methods_match_go_camel_case_and_default_fallbacks() {
+        let camel_case = BTreeMap::from([(
+            "WaffoPayMethods".to_owned(),
+            r#"[{"payMethodType":"APPLEPAY","payMethodName":"APPLEPAY"}]"#.to_owned(),
+        )]);
+        assert_eq!(
+            waffo_method(
+                &camel_case,
+                &PayRequest {
+                    amount: 1,
+                    pay_method_index: Some(0),
+                    pay_method_type: String::new(),
+                    pay_method_name: String::new(),
+                },
+            ),
+            Some(("APPLEPAY".to_owned(), "APPLEPAY".to_owned()))
+        );
+
+        let missing = BTreeMap::new();
+        assert_eq!(
+            waffo_method(
+                &missing,
+                &PayRequest {
+                    amount: 1,
+                    pay_method_index: Some(0),
+                    pay_method_type: String::new(),
+                    pay_method_name: String::new(),
+                },
+            ),
+            Some(("CREDITCARD,DEBITCARD".to_owned(), String::new()))
+        );
+
+        let explicit_empty = BTreeMap::from([("WaffoPayMethods".to_owned(), "[]".to_owned())]);
+        assert_eq!(
+            waffo_method(
+                &explicit_empty,
+                &PayRequest {
+                    amount: 1,
+                    pay_method_index: Some(0),
+                    pay_method_type: String::new(),
+                    pay_method_name: String::new(),
+                },
+            ),
+            None
         );
     }
     #[test]
