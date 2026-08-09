@@ -28,6 +28,7 @@ GET	/api/open-source-bounties/mine	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/accepted	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/disputes/mine	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/disputes/admin	apps/api-rust/src/main.rs
+GET	/api/open-source-bounties/mcp-token	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/notifications	apps/api-rust/src/main.rs
 POST	/api/open-source-bounties/notifications/read	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/tips/received	apps/api-rust/src/main.rs

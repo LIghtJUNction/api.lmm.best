@@ -37,7 +37,7 @@ new	GET	/v1/responses	go	unimplemented	keep-go-owner	false	Go Responses WebSocke
 bounty	GET	/api/open-source-bounties	go	candidate	keep-go-owner	false	Rust public-list candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 bounty	GET	/api/open-source-bounties/projects/:id	go	candidate	keep-go-owner	false	Rust public-detail candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 bounty	GET	/api/open-source-bounties/config	go	candidate	keep-go-owner	false	Rust authenticated fee-config candidate is mounted on the normal/test listener; production ownership remains Go pending differential and options evidence.
-bounty	GET	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token status route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/mcp-token	go	candidate	keep-go-owner	false	Rust personal MCP-token status candidate is mounted on the normal/test listener; status reads never return the secret, and production ownership remains Go pending differential and auth-cache evidence.
 bounty	POST	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token rotation route; Rust candidate absent and route is not production-mounted.
 bounty	DELETE	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token revocation route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties	go	unimplemented	keep-go-owner	false	Go bounty draft creation route; Rust candidate absent and route is not production-mounted.
