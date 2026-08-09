@@ -17,7 +17,7 @@ use axum::{
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 use sqlx::PgPool;
 
 use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
@@ -251,7 +251,7 @@ async fn groups_for(
             result.insert(
                 group.clone(),
                 GroupView {
-                    ratio: Value::from(
+                    ratio: legacy_ratio_value(
                         config
                             .group_ratios
                             .get(user_group)
@@ -280,6 +280,23 @@ async fn groups_for(
         );
     }
     Ok(result)
+}
+
+/// Go's `encoding/json` emits an integral `float64` as an integer literal
+/// (`1`), while `serde_json` otherwise preserves the Rust-side `1.0` spelling.
+/// Keep the wire representation identical without rounding non-integral
+/// pricing ratios such as `0.97`.
+fn legacy_ratio_value(ratio: f64) -> Value {
+    if ratio.is_finite()
+        && ratio.fract() == 0.0
+        && ratio >= i64::MIN as f64
+        && ratio <= i64::MAX as f64
+    {
+        return Value::Number(Number::from(ratio as i64));
+    }
+    Number::from_f64(ratio)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
 }
 
 fn usable_groups(config: &GroupConfig, user_group: &str) -> BTreeMap<String, String> {
@@ -555,7 +572,9 @@ fn locale(headers: &HeaderMap) -> Locale {
 
 #[cfg(test)]
 mod tests {
-    use super::{IdentityCatalogState, protected_read_router, public_router, router};
+    use super::{
+        IdentityCatalogState, legacy_ratio_value, protected_read_router, public_router, router,
+    };
     use async_trait::async_trait;
     use axum::{
         body::to_bytes,
@@ -879,6 +898,13 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             serde_json::json!({"success":true,"message":"","data":"new-management-token"})
         );
+    }
+
+    #[test]
+    fn group_ratio_wire_numbers_match_go_encoding() {
+        assert_eq!(legacy_ratio_value(1.0), serde_json::json!(1));
+        assert_eq!(legacy_ratio_value(0.97), serde_json::json!(0.97));
+        assert_eq!(legacy_ratio_value(-2.0), serde_json::json!(-2));
     }
 
     fn valid_user() -> DashboardUser {
