@@ -10,7 +10,7 @@ here=$repo/deploy/production
   exit 1
 }
 
-for command in cc fakeroot makepkg pacman tar; do
+for command in cc fakeroot makepkg pacman stat tar; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'go-package-roundtrip: required command is unavailable: %s\n' "$command" >&2
     exit 1
@@ -98,6 +98,8 @@ if "${query_args[@]}" -Q lmm-api >/dev/null 2>&1; then
 fi
 [[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
 [[ -x $pacman_root/usr/bin/lmm-api-go && ! -e $pacman_root/usr/bin/lmm-api ]]
+[[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go") == 700 ]]
+[[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go/lmm-api-go.env") == 600 ]]
 
 fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 [[ $("${query_args[@]}" -Q lmm-api 2>/dev/null) == "lmm-api $old_core_version" ]]
