@@ -167,6 +167,10 @@ grep -Fq -- "-F $ssh_config -o BatchMode=yes -o ControlMaster=auto -o ControlPer
 grep -Fq -- "ProxyCommand=exec $LMM_DEPLOY_SSH_BIN -F $ssh_config -o BatchMode=yes -o ControlMaster=auto" \
   "$FAKE_SCP_LOG" || fail 'target SCP transport does not use the isolated jump proxy'
 grep -Fq 'root@45.59.187.63:' "$FAKE_SCP_LOG" || fail 'target SCP endpoint is not explicit'
+grep -Fq -- "-p -r root@45.59.187.63:" "$FAKE_SCP_LOG" || \
+  fail 'target backup downloads do not preserve manifest timestamps'
+grep -Fq -- "-F $ssh_config -p -r $tmp/controller-work/staging/backup-off-host-promotion-test archczy:$offhost_output" \
+  "$FAKE_SCP_LOG" || fail 'off-host publication does not preserve manifest timestamps'
 if grep -Eq 'StrictHostKeyChecking=no|UserKnownHostsFile=/dev/null|-F /dev/null' "$FAKE_SSH_LOG" "$FAKE_SCP_LOG"; then
   fail 'transport bypassed SSH host-key or user configuration controls'
 fi
