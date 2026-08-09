@@ -58,6 +58,7 @@ GET	/api/token/search	apps/api-rust/src/main.rs
 GET	/api/user/aff	apps/api-rust/src/main.rs
 GET	/api/user/checkin	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_checkin_aff.rs
 GET	/api/user/groups	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_catalog.rs
+GET	/api/user/models	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_catalog.rs
 GET	/api/user/	apps/api-rust/src/main.rs
 POST	/api/user/	apps/api-rust/src/main.rs
 PUT	/api/user/	apps/api-rust/src/main.rs
@@ -67,6 +68,7 @@ GET	/api/user/:id	apps/api-rust/src/main.rs
 DELETE	/api/user/:id	apps/api-rust/src/main.rs
 POST	/api/user/manage	apps/api-rust/src/main.rs
 GET	/api/user/self	apps/api-rust/src/auth/http.rs
+GET	/api/user/self/groups	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_catalog.rs
 GET	/api/user/topup/info	apps/api-rust/src/main.rs:221;apps/api-rust/src/migration_routes/missing_identity_topup.rs:69
 GET	/api/user/topup/self	apps/api-rust/src/main.rs:221;apps/api-rust/src/migration_routes/missing_identity_topup.rs:69
 DELETE	/api/user/self	apps/api-rust/src/main.rs
