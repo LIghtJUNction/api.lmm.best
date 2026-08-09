@@ -255,6 +255,8 @@ route_for() {
   case "$1" in
     access-token-generation) printf 'GET\t/api/user/token\t__NONE__\tuser101\n' ;;
     checkin-status) printf 'GET\t/api/user/checkin?month=2026-08\t__NONE__\tuser101\n' ;;
+    topup-info) printf 'GET\t/api/user/topup/info\t__NONE__\tuser101\n' ;;
+    topup-self) printf 'GET\t/api/user/topup/self?p=1&page_size=10\t__NONE__\tuser101\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -266,6 +268,7 @@ phase_seed() {
   local route=$1 phase=$2
   case "$route:$phase" in
     checkin-status:failure) printf checkin-failure ;;
+    topup-self:positive|topup-self:rollback|topup-self:replay) printf topup ;;
     checkin-commit-rollback:failure) printf checkin-existing ;;
     affiliate-transfer:failure) printf aff-failure ;;
     amount-quote:failure) printf amount-failure ;;
@@ -355,7 +358,8 @@ valkey-server --bind 127.0.0.1 --port "$valkey_port" --save '' --appendonly no -
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
-if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null; then
+if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
+  && [[ $route_filter != topup-info && $route_filter != topup-self ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -364,5 +368,8 @@ while IFS=$'\t' read -r id; do
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
 done < <(jq -r '.fixtures[].id' "$fixtures")
+if [[ $route_filter == topup-info || $route_filter == topup-self ]]; then
+  for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
+fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi
 jq -cn --argjson routes "$expected_routes" --argjson phases "$passed" --argjson expected_phases "$expected_phases" '{test:"missing-routes-transaction-differential",routes:$routes,phases:$phases,expected_phases:$expected_phases,isolated:{postgres_schemas:["lmm_test_transaction_go","lmm_test_transaction_rust"],valkey_databases:[5,6],production_access:false},result:"passed"}'
