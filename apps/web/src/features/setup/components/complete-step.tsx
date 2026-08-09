@@ -52,7 +52,7 @@ export function CompleteStep({ status, values }: CompleteStepProps) {
 
   return (
     <div className='flex flex-col items-center gap-6 text-center'>
-      <div className='rounded-2xl bg-emerald-500/10 p-4 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300'>
+      <div className='setup-editorial-success p-4'>
         <CheckCircle2 className='size-8' />
       </div>
       <div className='space-y-2'>
@@ -66,7 +66,7 @@ export function CompleteStep({ status, values }: CompleteStepProps) {
         </p>
       </div>
 
-      <div className='bg-card w-full rounded-xl border p-6 text-left shadow-sm sm:p-8'>
+      <div className='setup-editorial-summary w-full border p-6 text-left sm:p-8'>
         <dl className='grid gap-6'>
           <div className='space-y-1.5'>
             <dt className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>

@@ -141,9 +141,13 @@ export function ModelCharts(props: ModelChartsProps) {
             setActiveTab(value as ModelAnalyticsChartTab)
           }
         >
-          <TabsList className='h-8 w-full sm:w-auto'>
+          <TabsList className='h-auto min-h-8 w-full max-w-full flex-wrap justify-start sm:h-8 sm:w-auto sm:max-w-none sm:flex-nowrap'>
             {MODEL_ANALYTICS_CHART_OPTIONS.map((tab) => (
-              <TabsTrigger key={tab.value} value={tab.value}>
+              <TabsTrigger
+                key={tab.value}
+                value={tab.value}
+                className='shrink-0'
+              >
                 {t(tab.labelKey)}
               </TabsTrigger>
             ))}

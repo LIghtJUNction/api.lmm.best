@@ -1,0 +1,112 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+.error-editorial {
+  --background: var(--forge-paper-light);
+  --foreground: var(--forge-ink-light);
+  --card: var(--forge-card-light);
+  --card-foreground: var(--forge-ink-light);
+  --primary: var(--forge-ink-light);
+  --primary-foreground: var(--forge-paper-light);
+  --border: color-mix(in oklch, var(--forge-ink-light) 20%, transparent);
+  --input: color-mix(in oklch, var(--forge-ink-light) 28%, transparent);
+  --error-paper: var(--forge-paper-light);
+  --error-ink: var(--forge-ink-light);
+  --error-muted: var(--forge-muted-ink-light);
+  --error-clay: var(--forge-clay-light);
+  --error-cactus: var(--forge-cactus-light);
+  color-scheme: light;
+  background: var(--error-paper);
+  color: var(--error-ink);
+}
+
+.dark .error-editorial {
+  --background: var(--forge-surface-dark);
+  --foreground: var(--forge-foreground-dark);
+  --card: var(--forge-card-dark);
+  --card-foreground: var(--forge-foreground-dark);
+  --primary: var(--forge-foreground-dark);
+  --primary-foreground: var(--forge-surface-dark);
+  --border: color-mix(in oklch, var(--forge-foreground-dark) 20%, transparent);
+  --input: color-mix(in oklch, var(--forge-foreground-dark) 28%, transparent);
+  --error-paper: var(--forge-surface-dark);
+  --error-ink: var(--forge-foreground-dark);
+  --error-muted: var(--forge-muted-ink-dark);
+  --error-clay: var(--forge-clay-dark);
+  --error-cactus: var(--forge-cactus-dark);
+  color-scheme: dark;
+}
+
+.error-editorial :where(a, button):focus-visible {
+  outline: 2px solid var(--error-clay);
+  outline-offset: 3px;
+}
+
+.error-editorial-kicker {
+  color: var(--error-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.error-editorial-muted {
+  color: var(--error-muted);
+}
+
+.error-editorial-status {
+  color: var(--error-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(4.5rem, 14vw, 10rem);
+  font-weight: 400;
+  letter-spacing: -0.08em;
+  line-height: 0.82;
+}
+
+.error-editorial-art {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.error-art-carrier {
+  fill: var(--error-paper);
+  stroke: var(--error-ink);
+  stroke-width: 2;
+}
+
+.error-art-gesture {
+  fill: var(--error-ink);
+}
+
+.error-art-contour {
+  fill: none;
+  stroke: var(--error-ink);
+  stroke-linecap: round;
+  stroke-width: 6;
+}
+
+.error-art-clay {
+  fill: var(--error-clay);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .error-editorial * {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -129,7 +129,7 @@ export function usePricingColumns(
           if (dynamicSummary.isSpecialExpression) {
             return (
               <div className='max-w-full min-w-0'>
-                <div className='text-xs font-medium text-amber-700 dark:text-amber-300'>
+                <div className='forge-price-warning-text text-xs font-medium'>
                   {t('Special billing expression')}
                 </div>
                 <div className='text-muted-foreground text-[11px]'>

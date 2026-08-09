@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 const ART_WIDTH = 720
@@ -271,9 +271,29 @@ function tokenFill(tone: (typeof CONTRIBUTION_NODES)[number]['tone']) {
 
 export function AuthArtPanel() {
   const { t } = useTranslation()
+  const [activeInsight, setActiveInsight] = useState(0)
   const panelRef = useRef<HTMLElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+
+  const insights = [
+    {
+      label: t('Authentication'),
+      title: t('Build in public. Earn access.'),
+      body: t('Verified open-source work becomes usable model access.'),
+    },
+    {
+      label: t('Security'),
+      title: t('Security'),
+      body: t('Protect login and registration with Cloudflare Turnstile'),
+    },
+    {
+      label: t('API.LMM.BEST / TOKEN SERVICE'),
+      title: t('API.LMM.BEST / TOKEN SERVICE'),
+      body: t('stable access layer'),
+    },
+  ]
+  const selectedInsight = insights[activeInsight] ?? insights[0]
 
   useEffect(() => {
     const panel = panelRef.current
@@ -281,9 +301,9 @@ export function AuthArtPanel() {
     const svg = svgRef.current
     if (!panel || !surface || !svg) return
 
-    const fieldElements: FieldElement[] = Array.from(
-      svg.querySelectorAll<SVGGraphicsElement>('[data-field]')
-    ).map((element) => ({
+    const fieldElements: FieldElement[] = [
+      ...svg.querySelectorAll<SVGGraphicsElement>('[data-field]'),
+    ].map((element) => ({
       element,
       samples: elementSamples(element),
       baseTransform: element.getAttribute('transform') ?? '',
@@ -322,26 +342,10 @@ export function AuthArtPanel() {
     let listening = false
 
     const render = () => {
-      const shadowX = clamp(
-        -surfaceMotion.x.current * 0.5 - surfaceMotion.rotateY.current * 1.1,
-        -10,
-        10
-      )
-      const shadowY =
-        18 +
-        clamp(
-          surfaceMotion.y.current * 0.35 + surfaceMotion.rotateX.current * 0.8,
-          -4,
-          4
-        )
-      const shadowBlur =
-        42 +
-        (Math.abs(surfaceMotion.rotateX.current) +
-          Math.abs(surfaceMotion.rotateY.current)) *
-          1.6
-
-      surface.style.transform = `perspective(1200px) translate3d(${surfaceMotion.x.current.toFixed(2)}px, ${surfaceMotion.y.current.toFixed(2)}px, 0) rotateX(${surfaceMotion.rotateX.current.toFixed(2)}deg) rotateY(${surfaceMotion.rotateY.current.toFixed(2)}deg)`
-      surface.style.boxShadow = `${shadowX.toFixed(2)}px ${shadowY.toFixed(2)}px ${shadowBlur.toFixed(2)}px var(--art-shadow)`
+      // Keep the response quiet and flat: anthropic-art uses broad 2D fills,
+      // not a tilted card or a generated drop shadow.
+      surface.style.transform = 'none'
+      surface.style.boxShadow = 'none'
       fieldElements.forEach((field) => {
         const translation = `translate(${field.x.current.toFixed(2)} ${field.y.current.toFixed(2)})`
         field.element.setAttribute(
@@ -618,21 +622,47 @@ export function AuthArtPanel() {
   return (
     <aside
       ref={panelRef}
-      aria-hidden='true'
+      aria-label={t('LMM / OPEN-SOURCE BOUNTY FIELD')}
       className='relative h-full min-h-0 overflow-visible p-4 [perspective:1200px]'
     >
       <div
         ref={surfaceRef}
-        className='pointer-events-none absolute inset-4 [transform-origin:50%_50%] overflow-hidden rounded-[2rem] border [border-color:var(--art-border)] bg-[var(--art-surface)] text-[var(--art-ink)] select-none [--art-border:rgba(20,20,19,0.2)] [--art-clay:#D97757] [--art-field:#FAF9F5] [--art-foundation:#141413] [--art-ink:#141413] [--art-muted:#5E5A52] [--art-on-foundation:#FAF9F5] [--art-sage:#788C5D] [--art-shadow:rgba(35,30,22,0.2)] [--art-surface:#E3DACC] [transform-style:preserve-3d] dark:[--art-border:rgba(250,249,245,0.18)] dark:[--art-clay:#E58A68] dark:[--art-field:#24231F] dark:[--art-foundation:#EEE8DC] dark:[--art-ink:#FAF9F5] dark:[--art-muted:#CDC6B9] dark:[--art-on-foundation:#181815] dark:[--art-sage:#AABD98] dark:[--art-shadow:rgba(0,0,0,0.5)] dark:[--art-surface:#181815]'
+        className='auth-art-surface pointer-events-auto absolute inset-4 [transform-origin:50%_50%] overflow-hidden rounded-none border [border-color:var(--art-border)] bg-[var(--art-surface)] text-[var(--art-ink)] select-none'
       >
         <svg
           ref={svgRef}
           viewBox={`0 0 ${ART_WIDTH} ${ART_HEIGHT}`}
           preserveAspectRatio='xMidYMid meet'
           focusable='false'
+          aria-hidden='true'
           className='h-full w-full'
           xmlns='http://www.w3.org/2000/svg'
         >
+          <g className='auth-art-editorial' aria-hidden='true'>
+            <path
+              className='auth-art-carrier'
+              d='M 82 254 C 130 205 220 218 292 240 C 368 263 434 232 514 244 C 598 257 652 307 644 382 C 638 445 659 501 622 560 C 582 624 500 643 426 625 C 350 607 302 645 224 622 C 145 599 99 548 105 482 C 112 409 69 347 82 254 Z'
+            />
+            <path
+              className='auth-art-left-gesture'
+              d='M -32 510 C 34 486 91 454 148 417 C 200 383 246 358 296 366 C 319 369 338 381 349 398 C 358 412 352 428 338 434 C 321 441 303 429 286 423 C 260 414 232 425 203 445 C 151 482 103 526 45 551 C 15 565 -11 565 -32 554 Z'
+            />
+            <path
+              className='auth-art-right-gesture'
+              d='M 752 548 C 699 534 650 510 605 484 C 568 462 535 449 505 455 C 483 459 467 474 461 491 C 457 504 464 516 477 519 C 491 522 503 511 517 503 C 538 491 560 498 584 514 C 625 541 661 575 709 593 C 729 601 744 599 752 588 Z'
+            />
+            <path
+              className='auth-art-contour'
+              d='M 148 503 C 194 476 230 454 267 448 C 292 444 312 450 330 465 M 489 503 C 520 503 548 514 575 534 C 596 550 614 556 636 554'
+            />
+            <path
+              className='auth-art-paper-line'
+              d='M 171 319 C 216 296 260 294 302 306 M 411 300 C 455 288 503 296 537 317 M 205 566 C 254 584 297 584 337 570'
+            />
+            <circle className='auth-art-core' cx='403' cy='442' r='8' />
+            <circle className='auth-art-clay' cx='540' cy='566' r='9' />
+          </g>
+
           <path
             d='M 30 265 C 102 231 207 243 276 256 C 358 271 439 245 523 259 C 610 273 683 318 686 410 C 689 500 652 602 562 643 C 470 684 360 633 278 650 C 187 668 91 641 48 571 C 11 510 0 347 30 265 Z'
             fill='var(--art-field)'
@@ -859,129 +889,162 @@ export function AuthArtPanel() {
             />
           </g>
 
-          <path
-            data-field='foundation'
-            data-mass='1.28'
-            d='M 38 690 C 159 686 266 694 361 690 C 462 686 558 693 682 689 L 682 835 C 563 840 452 833 356 837 C 245 841 148 833 38 838 Z'
-            fill='var(--art-foundation)'
-            stroke='var(--art-ink)'
-            strokeLinejoin='round'
-            strokeWidth='1.4'
-          />
-
-          <text
-            x='64'
-            y='733'
-            fill='var(--art-on-foundation)'
-            fontFamily='ui-monospace, SFMono-Regular, Menlo, monospace'
-            fontSize='12'
-            fontWeight='700'
-            letterSpacing='2'
-          >
-            {t('API.LMM.BEST / TOKEN SERVICE')}
-          </text>
-          <text
-            x='64'
-            y='758'
-            fill='var(--art-on-foundation)'
-            fillOpacity='.68'
-            fontFamily='ui-monospace, SFMono-Regular, Menlo, monospace'
-            fontSize='9.5'
-            letterSpacing='.65'
-          >
-            {t('stable access layer')}
-          </text>
-
-          <g
-            fill='none'
-            stroke='var(--art-on-foundation)'
-            strokeLinecap='round'
-          >
+          <g className='auth-art-foundation'>
             <path
               data-field='foundation'
-              data-mass='.9'
-              d='M 64 779 H 246'
-              strokeOpacity='.34'
+              data-mass='1.28'
+              d='M 38 690 C 159 686 266 694 361 690 C 462 686 558 693 682 689 L 682 835 C 563 840 452 833 356 837 C 245 841 148 833 38 838 Z'
+              fill='var(--art-foundation)'
+              stroke='var(--art-ink)'
+              strokeLinejoin='round'
+              strokeWidth='1.4'
             />
-            <path
-              data-field='foundation'
-              data-mass='1.18'
-              d='M 269 779 H 451'
-              strokeOpacity='.34'
-            />
-            <path
-              data-field='foundation'
-              data-mass='1.3'
-              d='M 474 779 H 654'
-              strokeOpacity='.34'
-            />
-          </g>
 
-          {[
-            { x: 64, label: 'TOKEN', value: 'earned', mass: 0.86 },
-            { x: 269, label: 'ACCOUNT', value: 'ready', mass: 1.12 },
-            { x: 474, label: '/V1 API', value: 'available', mass: 1.28 },
-          ].map((indicator, index) => (
-            <g
-              key={indicator.label}
-              data-field='foundation'
-              data-mass={indicator.mass}
+            <text
+              x='64'
+              y='733'
               fill='var(--art-on-foundation)'
               fontFamily='ui-monospace, SFMono-Regular, Menlo, monospace'
+              fontSize='12'
+              fontWeight='700'
+              letterSpacing='2'
             >
-              <circle
-                cx={indicator.x + 6}
-                cy='803'
-                r='4'
-                fill={index === 0 ? 'var(--art-clay)' : 'var(--art-sage)'}
-                stroke='var(--art-on-foundation)'
-                strokeWidth='1'
-              />
-              <path
-                d={`M ${indicator.x + 18} 803 H ${indicator.x + 36}`}
-                fill='none'
-                stroke='var(--art-on-foundation)'
-                strokeOpacity='.5'
-                strokeLinecap='round'
-              />
-              <text
-                x={indicator.x + 44}
-                y='806'
-                fontSize='9'
-                fontWeight='700'
-                letterSpacing='1.1'
-              >
-                {indicator.label}
-              </text>
-              <text
-                x={indicator.x + 121}
-                y='806'
-                fill='var(--art-on-foundation)'
-                fillOpacity='.58'
-                fontSize='8.5'
-                textAnchor='end'
-              >
-                {indicator.value}
-              </text>
-            </g>
-          ))}
+              {t('API.LMM.BEST / TOKEN SERVICE')}
+            </text>
+            <text
+              x='64'
+              y='758'
+              fill='var(--art-on-foundation)'
+              fillOpacity='.68'
+              fontFamily='ui-monospace, SFMono-Regular, Menlo, monospace'
+              fontSize='9.5'
+              letterSpacing='.65'
+            >
+              {t('stable access layer')}
+            </text>
 
-          <g
-            fill='none'
-            stroke='var(--art-on-foundation)'
-            strokeLinecap='round'
-            strokeOpacity='.27'
-          >
-            {FOUNDATION_TICKS.map((tick) => (
+            <g
+              fill='none'
+              stroke='var(--art-on-foundation)'
+              strokeLinecap='round'
+            >
               <path
-                key={tick.x}
                 data-field='foundation'
-                data-mass={tick.mass}
-                d={`M ${tick.x} 827 V ${827 - tick.h}`}
+                data-mass='.9'
+                d='M 64 779 H 246'
+                strokeOpacity='.34'
               />
+              <path
+                data-field='foundation'
+                data-mass='1.18'
+                d='M 269 779 H 451'
+                strokeOpacity='.34'
+              />
+              <path
+                data-field='foundation'
+                data-mass='1.3'
+                d='M 474 779 H 654'
+                strokeOpacity='.34'
+              />
+            </g>
+
+            {[
+              { x: 64, label: 'TOKEN', value: 'earned', mass: 0.86 },
+              { x: 269, label: 'ACCOUNT', value: 'ready', mass: 1.12 },
+              { x: 474, label: '/V1 API', value: 'available', mass: 1.28 },
+            ].map((indicator, index) => (
+              <g
+                key={indicator.label}
+                data-field='foundation'
+                data-mass={indicator.mass}
+                fill='var(--art-on-foundation)'
+                fontFamily='ui-monospace, SFMono-Regular, Menlo, monospace'
+              >
+                <circle
+                  cx={indicator.x + 6}
+                  cy='803'
+                  r='4'
+                  fill={index === 0 ? 'var(--art-clay)' : 'var(--art-sage)'}
+                  stroke='var(--art-on-foundation)'
+                  strokeWidth='1'
+                />
+                <path
+                  d={`M ${indicator.x + 18} 803 H ${indicator.x + 36}`}
+                  fill='none'
+                  stroke='var(--art-on-foundation)'
+                  strokeOpacity='.5'
+                  strokeLinecap='round'
+                />
+                <text
+                  x={indicator.x + 44}
+                  y='806'
+                  fontSize='9'
+                  fontWeight='700'
+                  letterSpacing='1.1'
+                >
+                  {indicator.label}
+                </text>
+                <text
+                  x={indicator.x + 121}
+                  y='806'
+                  fill='var(--art-on-foundation)'
+                  fillOpacity='.58'
+                  fontSize='8.5'
+                  textAnchor='end'
+                >
+                  {indicator.value}
+                </text>
+              </g>
             ))}
+
+            <g
+              fill='none'
+              stroke='var(--art-on-foundation)'
+              strokeLinecap='round'
+              strokeOpacity='.27'
+            >
+              {FOUNDATION_TICKS.map((tick) => (
+                <path
+                  key={tick.x}
+                  data-field='foundation'
+                  data-mass={tick.mass}
+                  d={`M ${tick.x} 827 V ${827 - tick.h}`}
+                />
+              ))}
+            </g>
           </g>
         </svg>
+
+        <div className='auth-art-overlay'>
+          <div className='auth-art-overlay-card' aria-live='polite'>
+            <div className='auth-art-overlay-index'>
+              0{activeInsight + 1} / 03
+            </div>
+            <h2 className='auth-art-overlay-title'>{selectedInsight.title}</h2>
+            <p className='auth-art-overlay-copy'>{selectedInsight.body}</p>
+          </div>
+
+          <div
+            className='auth-art-tabs'
+            role='tablist'
+            aria-label={t('Authentication')}
+          >
+            {insights.map((insight, index) => (
+              <button
+                key={insight.label}
+                type='button'
+                role='tab'
+                aria-selected={activeInsight === index}
+                className='auth-art-tab'
+                data-active={activeInsight === index}
+                onClick={() => setActiveInsight(index)}
+              >
+                <span className='auth-art-tab-number'>0{index + 1}</span>
+                <span className='auth-art-tab-label'>{insight.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
     </aside>
   )

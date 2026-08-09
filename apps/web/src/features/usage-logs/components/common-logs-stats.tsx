@@ -90,17 +90,17 @@ export function CommonLogsStats() {
       <StatBadge
         label={t('Usage')}
         value={sensitiveVisible ? formatLogQuota(stats?.quota || 0) : '••••'}
-        accent='bg-sky-500/70'
+        accent='console-stat-accent-info'
       />
       <StatBadge
         label={t('RPM')}
         value={stats?.rpm || 0}
-        accent='bg-rose-500/65'
+        accent='console-stat-accent-danger'
       />
       <StatBadge
         label={t('TPM')}
         value={stats?.tpm || 0}
-        accent='bg-slate-400/70'
+        accent='console-stat-accent-neutral'
       />
     </div>
   )

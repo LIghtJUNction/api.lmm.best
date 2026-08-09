@@ -55,7 +55,7 @@ export function TrustLevelPanel({
 
   if (loading) {
     return (
-      <section className='bg-card overflow-hidden rounded-lg border'>
+      <section className='bg-card overflow-hidden rounded-none border'>
         <div className='grid gap-6 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)] lg:p-6'>
           <div className='space-y-4'>
             <Skeleton className='h-4 w-32' />
@@ -100,7 +100,7 @@ export function TrustLevelPanel({
   }
 
   return (
-    <section className='bg-card overflow-hidden rounded-lg border'>
+    <section className='bg-card overflow-hidden rounded-none border'>
       <div className='grid gap-6 p-5 lg:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)] lg:p-6'>
         <div className='min-w-0'>
           <div className='flex flex-wrap items-center justify-between gap-3'>

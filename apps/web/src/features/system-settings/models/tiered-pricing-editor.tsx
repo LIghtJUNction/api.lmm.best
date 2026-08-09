@@ -615,7 +615,7 @@ function VisualTierCard({
   }
 
   return (
-    <div className='space-y-3 rounded-lg border p-3'>
+    <div className='space-y-3 rounded-none border p-3'>
       <div className='flex flex-wrap items-center justify-between gap-2'>
         <div className='flex items-center gap-2'>
           <Badge variant='outline'>
@@ -1214,7 +1214,7 @@ function RuleGroupCard({
   }
 
   return (
-    <div className='bg-muted/30 space-y-3 rounded-md border p-3'>
+    <div className='bg-muted/30 space-y-3 rounded-none border p-3'>
       <div className='flex items-center justify-between gap-2'>
         <Badge variant='outline'>
           {t('Rule group')} #{index + 1}
@@ -1375,7 +1375,7 @@ function CostEstimator({ effectiveExpr }: EstimatorProps) {
   )
 
   return (
-    <div className='bg-muted/30 space-y-3 rounded-md border p-3'>
+    <div className='bg-muted/30 space-y-3 rounded-none border p-3'>
       <div className='space-y-1'>
         <h4 className='text-sm font-medium'>{t('Token estimator')}</h4>
         <p className='text-muted-foreground text-xs'>
@@ -1433,7 +1433,7 @@ function CostEstimator({ effectiveExpr }: EstimatorProps) {
       )}
       <div
         className={cn(
-          'rounded-md border p-3 text-sm',
+          'rounded-none border p-3 text-sm',
           result.error
             ? 'border-destructive/50 bg-destructive/10 text-destructive'
             : 'border-primary/50 bg-primary/10'
@@ -1578,7 +1578,7 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
         {t('LLM prompt helper')}
       </CollapsibleTrigger>
       <CollapsibleContent className='mt-2'>
-        <div className='bg-muted/30 rounded-md border p-3'>
+        <div className='bg-muted/30 rounded-none border p-3'>
           <div className='mb-2 flex items-center justify-between'>
             <p className='text-muted-foreground text-xs'>
               {t(
@@ -1793,7 +1793,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
 
       <PresetSection applyPreset={applyPreset} />
 
-      <div className='bg-muted/30 space-y-3 rounded-md border p-3'>
+      <div className='bg-muted/30 space-y-3 rounded-none border p-3'>
         {editorMode === 'visual' ? (
           <VisualEditor
             visualConfig={visualConfig}

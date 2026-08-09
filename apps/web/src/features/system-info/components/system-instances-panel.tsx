@@ -74,14 +74,13 @@ const INSTANCE_SKELETON_KEYS = [
 ]
 
 const STATUS_CLASS_NAME: Record<SystemInstanceStatus, string> = {
-  online:
-    'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
-  stale: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+  online: 'console-status-success-badge',
+  stale: 'console-status-warning-badge',
 }
 
 const STATUS_DOT_CLASS_NAME: Record<SystemInstanceStatus, string> = {
-  online: 'bg-emerald-500',
-  stale: 'bg-amber-500',
+  online: 'forge-status-dot-success',
+  stale: 'forge-status-dot-warning',
 }
 
 function roleLabel(instance: SystemInstance) {
@@ -136,9 +135,9 @@ function formatBytes(bytes?: number): string {
 
 function ringColorClass(percent: number | null) {
   if (percent === null) return 'text-muted-foreground/40'
-  if (percent >= 90) return 'text-red-500'
-  if (percent >= 70) return 'text-amber-500'
-  return 'text-emerald-500'
+  if (percent >= 90) return 'console-status-danger'
+  if (percent >= 70) return 'console-status-warning-icon'
+  return 'console-status-success'
 }
 
 type RingProgressProps = {
@@ -304,7 +303,7 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                             >
                               <Badge
                                 variant='outline'
-                                className='border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300'
+                                className='console-status-warning-badge'
                               >
                                 <AlertTriangle
                                   className='size-3'
@@ -628,7 +627,7 @@ export function SystemInstancesPanel() {
 
   return (
     <>
-      <section className='bg-card overflow-hidden rounded-lg border shadow-xs'>
+      <section className='bg-card overflow-hidden rounded-none border shadow-none'>
         <div className='flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5'>
           <div className='min-w-0'>
             <div className='flex items-center gap-2'>

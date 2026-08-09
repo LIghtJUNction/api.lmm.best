@@ -92,6 +92,7 @@ export function DeveloperAccessPage() {
         model_limits: '',
         allow_ips: '',
         group: 'default',
+        auto_groups: [],
         cross_group_retry: false,
       })
       if (!result.success) {

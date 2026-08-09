@@ -138,7 +138,11 @@ export function ThemeCustomizationProvider(props: {
   useEffect(() => {
     applyAttribute(
       'data-theme-preset',
-      preset === DEFAULT_THEME_CUSTOMIZATION.preset ? null : preset
+      // `anthropic` is the shipped default, but it still needs its selector
+      // on the body so the warm cream/ink tokens override the legacy :root
+      // blue palette. The explicit `default` option remains the neutral
+      // fallback and intentionally removes the attribute.
+      preset === 'default' ? null : preset
     )
   }, [preset])
 

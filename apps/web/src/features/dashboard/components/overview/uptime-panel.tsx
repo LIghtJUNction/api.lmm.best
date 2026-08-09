@@ -33,10 +33,10 @@ import { cn } from '@/lib/utils'
 import { PanelWrapper } from '../ui/panel-wrapper'
 
 const STATUS_COLOR_MAP: Record<number, string> = {
-  1: 'bg-emerald-500',
-  0: 'bg-red-500',
-  2: 'bg-amber-500',
-  3: 'bg-blue-500',
+  1: 'forge-status-dot-success',
+  0: 'forge-status-dot-danger',
+  2: 'forge-status-dot-warning',
+  3: 'forge-status-dot-info',
 }
 const DEFAULT_STATUS_COLOR = 'bg-muted-foreground/40'
 

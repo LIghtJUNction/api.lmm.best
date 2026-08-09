@@ -50,53 +50,54 @@ export function useStatus() {
     if (!user) return 'anonymous'
     return `user:${user.id}:docs:${user.permissions?.docs_access === true ? 1 : 0}`
   })
-  const { data, isFetchedAfterMount, isFetching, isLoading, error } = useQuery({
-    queryKey: ['status', statusScope],
-    queryFn: async () => {
-      const rawStatus = await getStatus()
-      const status = rawStatus
-        ? normalizeBackendCapabilities(rawStatus as SystemStatus)
-        : null
-      try {
-        if (status) {
-          const { setConfig } = useSystemConfigStore.getState()
-          setConfig(
-            mapStatusDataToConfig(
-              status as Parameters<typeof mapStatusDataToConfig>[0]
+  const { data, isFetchedAfterMount, isFetching, isLoading, error, refetch } =
+    useQuery({
+      queryKey: ['status', statusScope],
+      queryFn: async () => {
+        const rawStatus = await getStatus()
+        const status = rawStatus
+          ? normalizeBackendCapabilities(rawStatus as SystemStatus)
+          : null
+        try {
+          if (status) {
+            const { setConfig } = useSystemConfigStore.getState()
+            setConfig(
+              mapStatusDataToConfig(
+                status as Parameters<typeof mapStatusDataToConfig>[0]
+              )
             )
-          )
+          }
+        } catch (err) {
+          if (import.meta.env.DEV) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[useStatus] Failed to sync status to system config',
+              err
+            )
+          }
         }
-      } catch (err) {
-        if (import.meta.env.DEV) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            '[useStatus] Failed to sync status to system config',
-            err
-          )
+        // Save to localStorage
+        try {
+          if (typeof window !== 'undefined' && status) {
+            window.localStorage.setItem('status', JSON.stringify(status))
+          }
+        } catch {
+          /* empty */
         }
-      }
-      // Save to localStorage
-      try {
-        if (typeof window !== 'undefined' && status) {
-          window.localStorage.setItem('status', JSON.stringify(status))
-        }
-      } catch {
-        /* empty */
-      }
-      return status as SystemStatus | null
-    },
-    // Use localStorage data as initial data
-    placeholderData: getInitialStatus(),
-    // Capability decisions require a live response for this observer mount.
-    staleTime: 0,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
-    refetchOnReconnect: 'always',
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: true,
-    // Cache expires after 30 minutes
-    gcTime: 30 * 60 * 1000,
-  })
+        return status as SystemStatus | null
+      },
+      // Use localStorage data as initial data
+      placeholderData: getInitialStatus(),
+      // Capability decisions require a live response for this observer mount.
+      staleTime: 0,
+      refetchOnMount: 'always',
+      refetchOnWindowFocus: 'always',
+      refetchOnReconnect: 'always',
+      refetchInterval: 30_000,
+      refetchIntervalInBackground: true,
+      // Cache expires after 30 minutes
+      gcTime: 30 * 60 * 1000,
+    })
 
   const capabilitiesReady =
     Boolean(data) && isFetchedAfterMount && !isFetching && !error
@@ -106,5 +107,6 @@ export function useStatus() {
     loading: isLoading,
     capabilitiesReady,
     error,
+    refetch,
   }
 }

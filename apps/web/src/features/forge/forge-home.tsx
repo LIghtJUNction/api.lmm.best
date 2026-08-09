@@ -43,13 +43,19 @@ export function ForgeHome() {
   return (
     <ForgePublicShell>
       <main>
-        <section className='border-border bg-background border-b pt-16'>
+        <section
+          aria-labelledby='forge-home-title'
+          className='border-border bg-background border-b pt-16'
+        >
           <div className='mx-auto grid min-h-[calc(100svh-9rem)] max-w-7xl items-center gap-10 px-5 py-10 md:px-10 md:py-12 lg:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)] lg:gap-6'>
             <div className='relative z-10 max-w-xl'>
               <p className='before:bg-foreground mb-5 flex items-center gap-2 text-xs font-bold uppercase before:block before:size-2 before:rounded-full'>
                 {t('Open-source work, made accountable')}
               </p>
-              <h1 className='mb-7 max-w-3xl font-serif text-5xl leading-[1.02] font-normal md:text-7xl'>
+              <h1
+                id='forge-home-title'
+                className='mb-7 max-w-3xl font-serif text-5xl leading-[1.02] font-normal md:text-7xl'
+              >
                 LMM Forge
               </h1>
               <p className='mb-8 max-w-2xl text-base leading-7 md:text-lg'>
@@ -180,7 +186,7 @@ export function ForgeHome() {
           </div>
         </section>
 
-        <section className='border-border bg-muted/60 border-b py-16 md:py-20'>
+        <section className='forge-muted-section border-border border-b py-16 md:py-20'>
           <div className='mx-auto grid max-w-7xl gap-8 px-5 md:grid-cols-[auto_1fr_auto] md:items-center md:px-10'>
             <HugeiconsIcon
               icon={WalletCardsIcon}
@@ -214,7 +220,7 @@ export function ForgeHome() {
           </div>
         </section>
 
-        <section className='border-border bg-accent/60 border-b py-20 md:py-28'>
+        <section className='forge-accent-section border-border border-b py-20 md:py-28'>
           <div className='mx-auto grid max-w-7xl gap-12 px-5 md:grid-cols-[0.9fr_1.1fr] md:px-10'>
             <div>
               <HugeiconsIcon

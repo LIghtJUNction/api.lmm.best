@@ -26,6 +26,9 @@ export async function getSetupStatus(): Promise<SetupResponse> {
     params: {
       t: Date.now(),
     },
+    // Root bootstrap and the setup screen both render their own fallback.
+    skipBusinessError: true,
+    skipErrorHandler: true,
   })
   return res.data
 }

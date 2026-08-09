@@ -180,23 +180,39 @@ const codeMirrorTheme = EditorView.theme({
 
 const codeMirrorHighlightStyle = syntaxHighlighting(
   HighlightStyle.define([
-    { tag: highlightTags.heading, color: '#e06c75', fontWeight: '600' },
-    { tag: [highlightTags.strong, highlightTags.emphasis], color: '#d19a66' },
-    { tag: [highlightTags.link, highlightTags.url], color: '#61afef' },
+    {
+      tag: highlightTags.heading,
+      color: 'var(--forge-code-heading)',
+      fontWeight: '600',
+    },
+    {
+      tag: [highlightTags.strong, highlightTags.emphasis],
+      color: 'var(--forge-code-emphasis)',
+    },
+    {
+      tag: [highlightTags.link, highlightTags.url],
+      color: 'var(--forge-code-link)',
+    },
     {
       tag: [highlightTags.monospace, highlightTags.contentSeparator],
-      color: '#98c379',
+      color: 'var(--forge-code-string)',
     },
     {
       tag: [highlightTags.keyword, highlightTags.processingInstruction],
-      color: '#c678dd',
+      color: 'var(--forge-code-keyword)',
     },
     {
       tag: [highlightTags.atom, highlightTags.bool, highlightTags.number],
-      color: '#d19a66',
+      color: 'var(--forge-code-number)',
     },
-    { tag: [highlightTags.string, highlightTags.inserted], color: '#98c379' },
-    { tag: [highlightTags.deleted, highlightTags.invalid], color: '#e06c75' },
+    {
+      tag: [highlightTags.string, highlightTags.inserted],
+      color: 'var(--forge-code-string)',
+    },
+    {
+      tag: [highlightTags.deleted, highlightTags.invalid],
+      color: 'var(--forge-code-heading)',
+    },
     {
       tag: [highlightTags.meta, highlightTags.comment],
       color: 'var(--muted-foreground)',

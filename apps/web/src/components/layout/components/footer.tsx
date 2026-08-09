@@ -55,7 +55,7 @@ function FooterLinkItem(props: { link: FooterLink }) {
         href={props.link.href}
         target='_blank'
         rel='noopener noreferrer'
-        className='text-muted-foreground hover:text-foreground text-sm transition-colors duration-200'
+        className='forge-footer-link text-muted-foreground hover:text-foreground text-sm transition-colors duration-200'
       >
         {label}
       </a>
@@ -65,7 +65,7 @@ function FooterLinkItem(props: { link: FooterLink }) {
   return (
     <Link
       to={props.link.href}
-      className='text-muted-foreground hover:text-foreground text-sm transition-colors duration-200'
+      className='forge-footer-link text-muted-foreground hover:text-foreground text-sm transition-colors duration-200'
     >
       {label}
     </Link>
@@ -92,7 +92,7 @@ function ComplianceLinks() {
     },
   ]
   return (
-    <div className='w-full border-y border-[#141413]/25 py-3 text-sm text-[#141413]/75 dark:border-[#FAF9F5]/25 dark:text-[#FAF9F5]/75'>
+    <div className='footer-compliance border-foreground/25 text-foreground/75 w-full border-y py-3 text-sm'>
       <div className='flex flex-wrap items-center justify-center gap-x-5 gap-y-2 sm:justify-start'>
         {items.map((item) => (
           <Link
@@ -166,12 +166,15 @@ export function Footer(props: FooterProps) {
     pathname.startsWith('/reset') ||
     pathname.startsWith('/otp') ||
     pathname.startsWith('/oauth')
+  const isSetupSurface = pathname.startsWith('/setup')
   const displayLogo = systemLogo || props.logo || DEFAULT_LOGO
   const configuredName = systemName || props.name || DEFAULT_SYSTEM_NAME
   const usesDefaultBrand = displayLogo === DEFAULT_LOGO
   const displayName =
     isForgeSurface ||
-    (usesDefaultBrand && configuredName === DEFAULT_SYSTEM_NAME)
+    (!isSetupSurface &&
+      usesDefaultBrand &&
+      configuredName === DEFAULT_SYSTEM_NAME)
       ? LMM_BRAND_NAME
       : configuredName
   const isDemoSiteMode = Boolean(demoSiteEnabled)
@@ -219,13 +222,34 @@ export function Footer(props: FooterProps) {
 
   const displayColumns = props.columns ?? fallbackColumns
 
+  if (isSetupSurface) {
+    return (
+      <footer
+        className={cn('setup-footer relative z-10 border-t', props.className)}
+      >
+        <div className='mx-auto flex max-w-6xl flex-col gap-3 px-4 py-5 text-xs sm:flex-row sm:items-center sm:justify-between sm:px-8'>
+          <span className='setup-footer-name font-semibold'>{displayName}</span>
+          <nav
+            aria-label={t('Legal')}
+            className='flex flex-wrap gap-x-4 gap-y-2'
+          >
+            <Link to='/user-agreement'>{t('Terms of Service')}</Link>
+            <Link to='/privacy-policy'>{t('Privacy Policy')}</Link>
+          </nav>
+          <ProjectAttribution
+            currentYear={currentYear}
+            name={displayName}
+            inline
+          />
+        </div>
+      </footer>
+    )
+  }
+
   if (isForgeSurface) {
     return (
       <footer
-        className={cn(
-          'relative z-10 border-t border-[#141413]/15 bg-[#f7f3eb] text-[#141413] dark:border-[#faf9f5]/15 dark:bg-[#1b1b19] dark:text-[#faf9f5]',
-          props.className
-        )}
+        className={cn('forge-footer relative z-10 border-t', props.className)}
       >
         <div className='mx-auto max-w-7xl px-5 py-12 sm:px-8 md:py-16'>
           <div className='grid gap-12 md:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)] md:gap-16'>
@@ -239,14 +263,14 @@ export function Footer(props: FooterProps) {
               <p className='mt-8 max-w-lg font-serif text-3xl leading-[1.08] tracking-[-0.035em] md:text-4xl'>
                 {t('Open-source work, made accountable')}
               </p>
-              <p className='mt-5 max-w-sm text-sm leading-6 text-[#141413]/60 dark:text-[#faf9f5]/60'>
+              <p className='forge-footer-muted mt-5 max-w-sm text-sm leading-6'>
                 {t('Open-source bounty collaboration')}
               </p>
             </div>
 
             <div className='grid grid-cols-2 gap-8 sm:gap-12 md:justify-self-end'>
               <div>
-                <p className='mb-4 text-[11px] font-semibold tracking-[0.18em] text-[#141413]/45 uppercase dark:text-[#faf9f5]/45'>
+                <p className='forge-footer-kicker mb-4 text-[11px] font-semibold tracking-[0.18em] uppercase'>
                   {t('Challenges')}
                 </p>
                 <ul className='space-y-3'>
@@ -262,7 +286,7 @@ export function Footer(props: FooterProps) {
                 </ul>
               </div>
               <div>
-                <p className='mb-4 text-[11px] font-semibold tracking-[0.18em] text-[#141413]/45 uppercase dark:text-[#faf9f5]/45'>
+                <p className='forge-footer-kicker mb-4 text-[11px] font-semibold tracking-[0.18em] uppercase'>
                   {t('Terms')}
                 </p>
                 <ul className='space-y-3'>
@@ -279,18 +303,18 @@ export function Footer(props: FooterProps) {
             </div>
           </div>
 
-          <div className='mt-12 flex flex-col gap-5 border-t border-[#141413]/15 pt-5 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-[#faf9f5]/15'>
+          <div className='forge-footer-rule mt-12 flex flex-col gap-5 border-t pt-5 text-sm sm:flex-row sm:items-center sm:justify-between'>
             <a
               href='mailto:support@lmm.best'
-              className='inline-flex w-fit items-center gap-2 font-medium transition-colors hover:text-[#9c5e39] dark:hover:text-[#d8a47d]'
+              className='forge-footer-support inline-flex w-fit items-center gap-2 font-medium transition-colors'
             >
               <span
-                className='size-2 rounded-full bg-[#9c5e39] dark:bg-[#d8a47d]'
+                className='forge-footer-support-dot size-2 rounded-full'
                 aria-hidden='true'
               />
               {t('Customer Support')}: support@lmm.best
             </a>
-            <div className='flex flex-wrap gap-x-3 gap-y-1 text-xs text-[#141413]/45 sm:justify-end dark:text-[#faf9f5]/45'>
+            <div className='forge-footer-meta flex flex-wrap gap-x-3 gap-y-1 text-xs sm:justify-end'>
               <span>
                 &copy; {currentYear} {displayName}.{' '}
                 {props.copyright ?? t('footer.defaultCopyright')}
@@ -308,7 +332,7 @@ export function Footer(props: FooterProps) {
     return (
       <footer
         className={cn(
-          'relative z-10 border-t-2 border-[#141413] bg-[#FAF9F5] text-[#141413] dark:border-[#FAF9F5] dark:bg-[#141413] dark:text-[#FAF9F5]',
+          'app-footer relative z-10 border-foreground border-t-2 bg-background text-foreground',
           props.className
         )}
       >
@@ -335,13 +359,13 @@ export function Footer(props: FooterProps) {
   return (
     <footer
       className={cn(
-        'relative z-10 border-t-2 border-[#141413] bg-[#FAF9F5] text-[#141413] dark:border-[#FAF9F5] dark:bg-[#141413] dark:text-[#FAF9F5]',
+        'app-footer relative z-10 border-foreground border-t-2 bg-background text-foreground',
         props.className
       )}
     >
       <div className='mx-auto max-w-7xl px-5 py-7 sm:px-8 md:py-8'>
         <div
-          className='mb-6 h-[3px] w-20 rotate-[-1deg] rounded-full bg-[#BCD1CA]'
+          className='bg-accent mb-6 h-[3px] w-20 rotate-[-1deg] rounded-full'
           aria-hidden='true'
         />
         <div className='flex flex-col justify-between gap-6 md:flex-row md:gap-16'>
@@ -360,7 +384,7 @@ export function Footer(props: FooterProps) {
                 {displayName}
               </span>
             </Link>
-            <p className='mt-3 max-w-[15rem] text-xs leading-relaxed text-[#141413]/58 dark:text-[#FAF9F5]/58'>
+            <p className='text-muted-foreground mt-3 max-w-[15rem] text-xs leading-relaxed'>
               {t('Open-source bounty collaboration')}
             </p>
           </div>
@@ -391,7 +415,7 @@ export function Footer(props: FooterProps) {
         </div>
 
         {/* Copyright and project attribution; wraps on narrow screens. */}
-        <div className='mt-6 flex flex-col items-center justify-between gap-x-3 gap-y-2 border-t border-[#141413]/25 pt-4 sm:flex-row dark:border-[#FAF9F5]/25'>
+        <div className='border-foreground/25 mt-6 flex flex-col items-center justify-between gap-x-3 gap-y-2 border-t pt-4 sm:flex-row'>
           <div className='text-muted-foreground/40 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs sm:justify-start'>
             <span>
               &copy; {currentYear} {displayName}.{' '}

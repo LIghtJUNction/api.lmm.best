@@ -435,7 +435,7 @@ const percentTextClassName: Record<
   grey: 'text-muted-foreground',
   indigo: 'text-chart-1',
   'light-blue': 'text-info',
-  'light-green': 'text-emerald-500 dark:text-emerald-300',
+  'light-green': 'text-success',
   lime: 'text-chart-3',
   orange: 'text-warning',
   pink: 'text-chart-5',
@@ -577,7 +577,7 @@ function RateLimitGroupSection(props: RateLimitGroupSectionProps) {
   const statusBadge = getUsageStatusBadge(props.source?.rate_limit, t)
 
   return (
-    <section className='bg-muted/40 flex flex-col gap-3 rounded-xl p-3'>
+    <section className='bg-muted/40 flex flex-col gap-3 rounded-none p-3'>
       <SectionHeading title={props.title} description={props.description}>
         {statusBadge}
       </SectionHeading>
@@ -1101,7 +1101,7 @@ export function CodexUsageDialog({
     >
       <div className='flex flex-col gap-4'>
         {errorMessage && (
-          <div className='rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400'>
+          <div className='console-status-danger-surface rounded-none px-4 py-3 text-sm'>
             {errorMessage}
           </div>
         )}

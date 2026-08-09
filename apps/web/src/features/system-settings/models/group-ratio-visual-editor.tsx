@@ -24,7 +24,14 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react'
-import { useState, useMemo, useEffect, useCallback, memo } from 'react'
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  memo,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
@@ -76,6 +83,7 @@ type GroupRatioVisualEditorProps = {
   userUsableGroups: string
   groupGroupRatio: string
   autoGroups: string
+  maxTokenAutoGroupsField?: ReactNode
   groupSpecialUsableGroup: string
   onChange: (field: string, value: string) => void
 }
@@ -121,7 +129,7 @@ type AutoGroupsParseResult = {
 }
 
 const sectionCardClassName =
-  'relative shadow-sm ring-0 before:pointer-events-none before:absolute before:inset-0 before:rounded-xl before:border before:border-border/90'
+  'relative rounded-none shadow-none ring-0 before:pointer-events-none before:absolute before:inset-0 before:rounded-none before:border before:border-border/90'
 const sectionHeaderClassName = 'border-b bg-muted/20'
 
 let groupPricingIdCounter = 0
@@ -461,6 +469,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   userUsableGroups,
   groupGroupRatio,
   autoGroups,
+  maxTokenAutoGroupsField,
   groupSpecialUsableGroup,
   onChange,
 }: GroupRatioVisualEditorProps) {
@@ -649,6 +658,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
         </CardHeader>
         <CardContent>
           <div className='space-y-4'>
+            {maxTokenAutoGroupsField}
             <div className='flex flex-wrap items-center gap-2'>
               <GroupNameSelect
                 options={autoGroupCandidates}

@@ -81,7 +81,7 @@ export function MessageError({
 
     return (
       <Alert variant='default' className={className}>
-        <AlertTriangle className='text-orange-500' />
+        <AlertTriangle className='console-status-warning-icon' />
         <AlertTitle>{t('Model Price Not Configured')}</AlertTitle>
         <AlertDescription className='space-y-2'>
           <p>{content}</p>

@@ -1,45 +1,99 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 .root {
-  --forge-stage: #efebe2;
-  --forge-paper: #fbf9f3;
-  --forge-ink: #171b18;
-  --forge-line: color-mix(in oklch, var(--forge-ink) 48%, transparent);
-  --forge-line-quiet: color-mix(in oklch, var(--forge-ink) 24%, transparent);
-  --forge-clay: #b8874b;
-  --forge-sage: #52735f;
-  --forge-foundation: #f1eee7;
-  --forge-foundation-ink: #171b18;
+  --forge-line: color-mix(in oklch, var(--forge-gesture-ink) 48%, transparent);
+  --forge-line-quiet: color-mix(
+    in oklch,
+    var(--forge-gesture-ink) 24%,
+    transparent
+  );
 
   position: relative;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in oklch, var(--forge-ink) 14%, transparent);
-  border-radius: 24px;
+  border: 0;
+  border-radius: 1.5rem;
   background: var(--forge-stage);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklch, var(--forge-ink) 5%, transparent),
-    0 18px 45px color-mix(in oklch, var(--forge-ink) 12%, transparent);
+  box-shadow: none;
   isolation: isolate;
   touch-action: pan-y;
 }
 
 :global(.dark) .root {
-  --forge-stage: #1d211e;
-  --forge-paper: #f1eee7;
-  --forge-ink: #f1eee7;
-  --forge-line: color-mix(in oklch, var(--forge-ink) 42%, transparent);
-  --forge-line-quiet: color-mix(in oklch, var(--forge-ink) 22%, transparent);
-  --forge-foundation: #f1eee7;
-  --forge-foundation-ink: #171b18;
-  border-color: color-mix(in oklch, var(--forge-ink) 12%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklch, var(--forge-ink) 5%, transparent),
-    0 18px 45px color-mix(in oklch, #000 24%, transparent);
+  --forge-line: color-mix(in oklch, var(--forge-paper) 42%, transparent);
+  --forge-line-quiet: color-mix(in oklch, var(--forge-paper) 22%, transparent);
 }
 
 .artwork {
   display: block;
   width: 100%;
   height: auto;
+  pointer-events: none;
+}
+
+/* Visible editorial illustration: flat field, irregular ivory carrier, and
+ * broad near-black gestures. Keep this layer deliberately free of gradients,
+ * shadows, hairlines, and decorative geometry. */
+.anthropicArtwork {
+  pointer-events: none;
+}
+
+.ivoryCarrier {
+  fill: var(--forge-paper);
+}
+
+.ivoryCore {
+  fill: var(--forge-paper);
+}
+
+.gestureLeft,
+.gestureRight {
+  fill: var(--forge-gesture-ink);
+}
+
+.gestureContour,
+.paperContour {
+  fill: none;
+  stroke: var(--forge-gesture-ink);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.gestureContour {
+  stroke-width: 7;
+}
+
+.paperContour {
+  stroke-width: 5;
+  opacity: 0.82;
+}
+
+.coreMark {
+  fill: var(--forge-gesture-ink);
+}
+
+.clayMark {
+  fill: var(--forge-clay);
+}
+
+.legacyField {
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -62,6 +116,13 @@
   stroke-linejoin: round;
 }
 
+.contributionPath,
+.connectorPath,
+.connectorStrong {
+  pointer-events: stroke;
+  cursor: crosshair;
+}
+
 .contributionPath {
   stroke: var(--forge-line-quiet);
   stroke-width: 1.05;
@@ -77,12 +138,20 @@
   opacity: 0.9;
 }
 
+.contributionPath:hover,
+.connectorPath:hover,
+.connectorStrong:hover {
+  stroke: var(--forge-clay);
+  stroke-width: 2.6;
+  opacity: 1;
+}
+
 .root:hover .contributionPath {
   opacity: 0.9;
 }
 
 .connectorPath {
-  stroke: var(--forge-ink);
+  stroke: var(--forge-gesture-ink);
   stroke-width: 1.7;
   opacity: 0.78;
 }
@@ -97,13 +166,11 @@
 .surfacePaper,
 .surfaceSage,
 .foundationSurface {
-  stroke: var(--forge-ink);
-  stroke-width: 1.1;
-  stroke-linejoin: round;
+  stroke: none;
 }
 
 .surfaceClay {
-  fill: var(--forge-clay);
+  fill: var(--forge-paper);
 }
 
 .surfacePaper {
@@ -111,7 +178,7 @@
 }
 
 .surfaceSage {
-  fill: var(--forge-sage);
+  fill: var(--forge-paper);
 }
 
 .foundationSurface {
@@ -140,7 +207,7 @@
 
 .label,
 .secondaryLabel {
-  fill: var(--forge-ink);
+  fill: var(--forge-gesture-ink);
   font-family: var(--font-sans);
   font-size: 9px;
   font-weight: 800;

@@ -26,6 +26,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { listBounties } from '@/features/open-source-bounties/api'
 import { useStatus } from '@/hooks/use-status'
@@ -56,7 +57,12 @@ function repositoryName(url: string): string {
 export function ChallengeList(props: ChallengeListProps) {
   const { t } = useTranslation()
   const limit = props.limit ?? 50
-  const { status, capabilitiesReady, error: capabilitiesError } = useStatus()
+  const {
+    status,
+    capabilitiesReady,
+    error: capabilitiesError,
+    refetch: refetchStatus,
+  } = useStatus()
   const canReadPublicBounties =
     getBackendCapabilities(status).bounty_public_read
   const query = useQuery({
@@ -78,7 +84,7 @@ export function ChallengeList(props: ChallengeListProps) {
   }
 
   return (
-    <section className={cn('min-w-0', props.className)}>
+    <section aria-busy={loading} className={cn('min-w-0', props.className)}>
       {props.showHeading !== false && (
         <div className='border-border mb-6 flex items-end justify-between gap-5 border-b pb-5'>
           <div>
@@ -114,10 +120,27 @@ export function ChallengeList(props: ChallengeListProps) {
           ))}
 
         {!loading && items.length === 0 && (
-          <div className='border-border border-b py-10 text-sm'>
-            {capabilitiesUnavailable || query.isError
-              ? t('Challenges are temporarily unavailable.')
-              : t('No open challenges yet.')}
+          <div
+            className='border-border flex flex-wrap items-center justify-between gap-4 border-b py-10 text-sm'
+            role='status'
+            aria-live='polite'
+          >
+            <span>
+              {capabilitiesUnavailable || query.isError
+                ? t('Challenges are temporarily unavailable.')
+                : t('No open challenges yet.')}
+            </span>
+            {(capabilitiesUnavailable || query.isError) && (
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => {
+                  void Promise.all([refetchStatus(), query.refetch()])
+                }}
+              >
+                {t('Retry')}
+              </Button>
+            )}
           </div>
         )}
 
@@ -126,7 +149,7 @@ export function ChallengeList(props: ChallengeListProps) {
             key={challenge.id}
             to='/challenges/$challengeId'
             params={{ challengeId: String(challenge.id) }}
-            className='border-border group hover:bg-muted grid min-h-24 grid-cols-[minmax(0,1fr)_auto] items-center gap-5 border-b py-4 transition-colors md:grid-cols-[minmax(280px,1fr)_150px_190px_28px] md:px-3'
+            className='border-border group hover:bg-muted focus-visible:bg-muted grid min-h-24 grid-cols-[minmax(0,1fr)_auto] items-center gap-5 border-b py-4 transition-colors focus-visible:outline-none md:grid-cols-[minmax(280px,1fr)_150px_190px_28px] md:px-3'
           >
             <div className='min-w-0'>
               <h3 className='mb-1 truncate font-serif text-lg font-medium'>

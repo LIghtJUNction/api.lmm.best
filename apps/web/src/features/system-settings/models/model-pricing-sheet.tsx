@@ -480,7 +480,7 @@ export const ModelPricingEditorPanel = forwardRef<
   return (
     <div
       className={cn(
-        'bg-background flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border',
+        'bg-background flex min-h-0 flex-1 flex-col overflow-hidden rounded-none border',
         className
       )}
     >
@@ -654,7 +654,7 @@ export const ModelPricingEditorPanel = forwardRef<
                 </Tabs>
               </FieldGroup>
 
-              <aside className='bg-muted/20 sticky top-0 rounded-lg border'>
+              <aside className='bg-muted/20 sticky top-0 rounded-none border'>
                 <div className='border-b px-3 py-2'>
                   <div className='text-sm font-medium'>{t('Preview')}</div>
                 </div>
@@ -681,7 +681,7 @@ export const ModelPricingEditorPanel = forwardRef<
             </div>
           </div>
           {showActions && (
-            <div className='bg-background/95 supports-[backdrop-filter]:bg-background/80 shrink-0 border-t p-3 backdrop-blur'>
+            <div className='bg-background shrink-0 border-t p-3'>
               <div className='flex flex-col-reverse gap-2 sm:flex-row sm:justify-end'>
                 {onSave && (
                   <Button

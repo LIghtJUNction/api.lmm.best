@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -723,6 +723,7 @@ export function ForgeBountyHeroArt() {
       className={styles.root}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
+      onPointerCancel={handlePointerLeave}
       data-forge-bounty-art='interactive'
     >
       <svg
@@ -740,7 +741,49 @@ export function ForgeBountyHeroArt() {
           )}
         </desc>
 
-        <g className={styles.contributionField} aria-hidden='true'>
+        {/*
+         * The registered field below remains in the DOM for the interaction
+         * contract and for old clients that query its data attributes. The
+         * visible layer is intentionally much simpler: one paper carrier,
+         * one handoff gesture, and one small core token.
+         */}
+        <g className={styles.anthropicArtwork} aria-hidden='true'>
+          <path
+            className={styles.ivoryCarrier}
+            d='M 96 92 C 144 42 232 56 298 78 C 370 102 422 68 488 76 C 565 86 630 130 640 190 C 650 246 610 278 624 340 C 639 407 600 466 532 474 C 464 482 422 452 352 468 C 278 486 214 476 164 446 C 116 416 108 364 120 314 C 133 260 80 224 82 170 C 84 138 84 112 96 92 Z'
+          />
+          <path
+            className={styles.ivoryCore}
+            d='M 337 250 C 351 226 385 223 405 240 C 425 257 422 290 400 307 C 378 324 344 318 332 294 C 325 280 327 263 337 250 Z'
+          />
+          <path
+            className={styles.gestureLeft}
+            d='M -34 374 C 33 350 96 320 154 286 C 202 258 245 235 292 230 C 313 228 335 237 348 252 C 357 263 354 275 344 283 C 330 294 310 289 292 285 C 264 279 235 291 206 311 C 157 345 106 391 46 414 C 15 426 -10 427 -34 418 Z'
+          />
+          <path
+            className={styles.gestureRight}
+            d='M 754 395 C 702 383 650 362 604 337 C 564 315 531 300 499 301 C 481 302 466 312 459 326 C 453 337 458 348 468 353 C 481 359 495 352 508 345 C 529 334 552 340 574 354 C 614 379 650 413 698 433 C 724 444 744 444 754 438 Z'
+          />
+          <path
+            className={styles.gestureContour}
+            d='M 166 350 C 205 328 235 309 271 298 C 290 292 307 294 321 303'
+          />
+          <path
+            className={styles.gestureContour}
+            d='M 493 336 C 517 338 542 350 567 369 C 585 383 601 390 620 391'
+          />
+          <path
+            className={styles.paperContour}
+            d='M 170 170 C 220 143 267 141 309 154 M 432 150 C 474 137 520 144 552 165 M 218 402 C 268 418 303 418 334 409'
+          />
+          <circle className={styles.coreMark} cx='369' cy='270' r='6' />
+          <circle className={styles.clayMark} cx='535' cy='414' r='8' />
+        </g>
+
+        <g
+          className={`${styles.contributionField} ${styles.legacyField}`}
+          aria-hidden='true'
+        >
           {CONTRIBUTION_PATHS.map(renderPath)}
           {CONNECTOR_PATHS.map(renderPath)}
         </g>
@@ -752,7 +795,7 @@ export function ForgeBountyHeroArt() {
               if (element) layerRefs.current.set(layer.id, element)
               else layerRefs.current.delete(layer.id)
             }}
-            className={styles.paperLayer}
+            className={`${styles.paperLayer} ${styles.legacyField}`}
             data-layer-id={layer.id}
             aria-hidden='true'
           >
@@ -778,7 +821,7 @@ export function ForgeBountyHeroArt() {
           </g>
         ))}
 
-        <g aria-hidden='true'>
+        <g className={styles.legacyField} aria-hidden='true'>
           {NODES.map((node) => (
             <circle
               key={node.id}

@@ -44,15 +44,16 @@ export const PAYMENT_TYPES = {
 export const DEFAULT_PAYMENT_TYPE = PAYMENT_TYPES.ALIPAY
 
 /**
- * Payment icon colors (HEX format for react-icons)
+ * Payment icon colors. The actual palette lives in forge-tokens.css so icons
+ * follow the same source of truth as the rest of the editorial surface.
  */
 export const PAYMENT_ICON_COLORS = {
-  [PAYMENT_TYPES.ALIPAY]: '#1677FF',
-  [PAYMENT_TYPES.WECHAT]: '#07C160',
-  [PAYMENT_TYPES.STRIPE]: '#635BFF',
-  [PAYMENT_TYPES.CREEM]: '#6366F1',
-  [PAYMENT_TYPES.WAFFO]: '#2563EB',
-  [PAYMENT_TYPES.WAFFO_PANCAKE]: '#F97316',
+  [PAYMENT_TYPES.ALIPAY]: 'var(--forge-payment-alipay)',
+  [PAYMENT_TYPES.WECHAT]: 'var(--forge-payment-wechat)',
+  [PAYMENT_TYPES.STRIPE]: 'var(--forge-payment-stripe)',
+  [PAYMENT_TYPES.CREEM]: 'var(--forge-payment-creem)',
+  [PAYMENT_TYPES.WAFFO]: 'var(--forge-payment-waffo)',
+  [PAYMENT_TYPES.WAFFO_PANCAKE]: 'var(--forge-payment-waffo-pancake)',
 } as const
 
 /**

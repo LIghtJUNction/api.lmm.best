@@ -270,7 +270,7 @@ export function SupportTicket({
         <CardStaggerContainer className='mx-auto flex w-full max-w-6xl flex-col gap-4 sm:gap-6'>
           <CardStaggerItem>
             <div className='flex items-start gap-3 sm:gap-4'>
-              <div className='bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-xl sm:size-12'>
+              <div className='bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-none sm:size-12'>
                 <HugeiconsIcon
                   icon={CustomerSupportIcon}
                   strokeWidth={1.8}

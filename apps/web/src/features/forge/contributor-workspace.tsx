@@ -51,8 +51,8 @@ export function ContributorWorkspace() {
         </Button>
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
-        <div className='mx-auto max-w-6xl overflow-hidden border border-[#141413]/25 bg-[#FAF9F5] text-[#141413]'>
-          <section className='grid gap-8 border-b border-[#141413] bg-[#D97757] px-6 py-9 md:grid-cols-[1fr_280px] md:px-10 md:py-12'>
+        <div className='border-foreground/25 bg-background text-foreground mx-auto max-w-6xl overflow-hidden border'>
+          <section className='border-foreground grid gap-8 border-b bg-[var(--forge-clay)] px-6 py-9 md:grid-cols-[1fr_280px] md:px-10 md:py-12'>
             <div>
               <p className='mb-4 text-xs font-bold uppercase'>
                 {t('Delivery workspace')}
@@ -66,7 +66,7 @@ export function ContributorWorkspace() {
                 )}
               </p>
             </div>
-            <div className='flex flex-col justify-end border-t border-[#141413]/40 pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-7'>
+            <div className='border-foreground/40 flex flex-col justify-end border-t pt-5 md:border-t-0 md:border-l md:pt-0 md:pl-7'>
               <HugeiconsIcon
                 icon={ShieldCheck}
                 className='mb-5 size-7'
@@ -79,7 +79,7 @@ export function ContributorWorkspace() {
                 )}
               </p>
               <Button
-                className='w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+                className='bg-foreground text-background hover:bg-foreground/85 w-full rounded-sm'
                 render={<Link to='/wallet' />}
               >
                 {t('View trust level')}

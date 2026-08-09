@@ -40,6 +40,8 @@ import { ModelsChartPreferences } from './components/models/models-chart-prefere
 import { ModelsFilter } from './components/models/models-filter-dialog'
 import { OverviewDashboard } from './components/overview/overview-dashboard'
 import { DEFAULT_TIME_GRANULARITY } from './constants'
+
+import './dashboard-editorial.css'
 import {
   buildDefaultDashboardFilters,
   getDefaultDays,
@@ -322,7 +324,7 @@ export function Dashboard() {
     <SectionPageLayout>
       <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='space-y-3 sm:space-y-4'>
+        <div className='dashboard-editorial space-y-3 sm:space-y-4'>
           {activeSection !== 'overview' && (
             <div className='flex flex-wrap items-center justify-between gap-1.5 sm:gap-2'>
               {showSectionTabs ? (

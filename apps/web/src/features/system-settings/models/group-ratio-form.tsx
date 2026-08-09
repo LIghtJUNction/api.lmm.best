@@ -43,6 +43,7 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import {
   Sheet,
   SheetContent,
@@ -59,6 +60,7 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
 import { safeJsonParse } from '../utils/json-parser'
+import { safeNumberFieldProps } from '../utils/numeric-field'
 import { GroupRatioVisualEditor } from './group-ratio-visual-editor'
 import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
@@ -68,6 +70,7 @@ type GroupFormValues = {
   UserUsableGroups: string
   GroupGroupRatio: string
   AutoGroups: string
+  MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
 }
@@ -169,6 +172,34 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               userUsableGroups={form.watch('UserUsableGroups')}
               groupGroupRatio={form.watch('GroupGroupRatio')}
               autoGroups={form.watch('AutoGroups')}
+              maxTokenAutoGroupsField={
+                <FormField
+                  control={form.control}
+                  name='MaxTokenAutoGroups'
+                  render={({ field, fieldState }) => (
+                    <FormItem data-invalid={fieldState.invalid}>
+                      <FormLabel>
+                        {t('Maximum custom groups per token')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          {...safeNumberFieldProps(field)}
+                          type='number'
+                          min={1}
+                          step={1}
+                          aria-invalid={fieldState.invalid}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Limits only token-specific Auto snapshots. Global Auto inheritance remains unlimited.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              }
               groupSpecialUsableGroup={form.watch('GroupSpecialUsableGroup')}
               onChange={(field, value) =>
                 handleFieldChange(field as keyof GroupFormValues, value)
@@ -341,6 +372,31 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 
             <FormField
               control={form.control}
+              name='MaxTokenAutoGroups'
+              render={({ field, fieldState }) => (
+                <FormItem data-invalid={fieldState.invalid}>
+                  <FormLabel>{t('Maximum custom groups per token')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      {...safeNumberFieldProps(field)}
+                      type='number'
+                      min={1}
+                      step={1}
+                      aria-invalid={fieldState.invalid}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Limits only token-specific Auto snapshots. Global Auto inheritance remains unlimited.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
               name='GroupSpecialUsableGroup'
               render={({ field }) => (
                 <FormItem>
@@ -400,7 +456,7 @@ type GroupPricingGuideProps = {
 
 function GuideCodeBlock({ children }: { children: string }) {
   return (
-    <pre className='bg-muted/60 overflow-x-auto rounded-lg border px-3 py-2 text-xs leading-6 whitespace-pre-wrap'>
+    <pre className='bg-muted/60 overflow-x-auto rounded-none border px-3 py-2 text-xs leading-6 whitespace-pre-wrap'>
       {children}
     </pre>
   )
@@ -518,7 +574,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
               )}
             </p>
 
-            <div className='overflow-hidden rounded-lg border'>
+            <div className='overflow-hidden rounded-none border'>
               <div className='bg-muted/40 border-b px-3 py-1.5 text-xs font-medium'>
                 {t('Pricing groups')}
               </div>
@@ -550,7 +606,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
               </table>
             </div>
 
-            <div className='overflow-hidden rounded-lg border'>
+            <div className='overflow-hidden rounded-none border'>
               <div className='bg-muted/40 border-b px-3 py-1.5 text-xs font-medium'>
                 {t('Special ratio rules')}
               </div>
@@ -572,7 +628,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
             </p>
 
             <div className='space-y-3'>
-              <div className='overflow-hidden rounded-lg border'>
+              <div className='overflow-hidden rounded-none border'>
                 <div className='bg-muted/40 border-b px-3 py-2 text-sm font-medium'>
                   {t('Call 1: the token group is premium')}
                 </div>
@@ -595,7 +651,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </div>
               </div>
 
-              <div className='overflow-hidden rounded-lg border'>
+              <div className='overflow-hidden rounded-none border'>
                 <div className='bg-muted/40 border-b px-3 py-2 text-sm font-medium'>
                   {t('Call 2: the token group is default')}
                 </div>
@@ -618,7 +674,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </div>
               </div>
 
-              <div className='overflow-hidden rounded-lg border'>
+              <div className='overflow-hidden rounded-none border'>
                 <div className='bg-muted/40 border-b px-3 py-2 text-sm font-medium'>
                   {t('Call 3: the token has no group')}
                 </div>
@@ -643,7 +699,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
             </div>
           </section>
 
-          <Accordion className='rounded-lg border px-3'>
+          <Accordion className='rounded-none border px-3'>
             <AccordionItem value='groups'>
               <AccordionTrigger>{t('Pricing group example')}</AccordionTrigger>
               <AccordionContent className='space-y-3'>

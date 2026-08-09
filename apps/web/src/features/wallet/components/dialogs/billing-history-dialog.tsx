@@ -150,7 +150,7 @@ export function BillingHistoryDialog({
             {loading ? (
               <div className='space-y-3'>
                 {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className='rounded-lg border p-3 sm:p-4'>
+                  <div key={i} className='rounded-none border p-3 sm:p-4'>
                     <div className='flex items-start justify-between'>
                       <div className='flex-1 space-y-2'>
                         <Skeleton className='h-4 w-48' />
@@ -184,7 +184,7 @@ export function BillingHistoryDialog({
                   return (
                     <div
                       key={record.id}
-                      className='rounded-lg border p-3 sm:p-4'
+                      className='rounded-none border p-3 sm:p-4'
                     >
                       {/* Header Row */}
                       <div className='flex items-start justify-between gap-2'>
@@ -252,7 +252,7 @@ export function BillingHistoryDialog({
                           <Label className='text-muted-foreground text-xs'>
                             {t('Payment')}
                           </Label>
-                          <div className='text-sm font-semibold text-red-600'>
+                          <div className='text-destructive text-sm font-semibold'>
                             {formatNumber(record.money)}
                           </div>
                         </div>

@@ -25,6 +25,8 @@ import { ThemeSwitch } from '@/components/theme-switch'
 
 import { AuthArtPanel } from './components/auth-art-panel'
 
+import '../forge/forge-public-shell.css'
+
 type AuthLayoutProps = {
   children: React.ReactNode
 }
@@ -39,7 +41,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   }, [])
 
   return (
-    <div className='relative min-h-svh max-w-none lg:grid lg:grid-cols-[minmax(31rem,0.92fr)_minmax(31rem,1.08fr)]'>
+    <div className='auth-editorial relative min-h-svh max-w-none lg:grid lg:grid-cols-[minmax(31rem,0.92fr)_minmax(31rem,1.08fr)]'>
       <header className='absolute inset-x-0 top-0 z-20 flex min-h-20 items-center justify-between px-4 sm:min-h-24 sm:px-8'>
         <Link
           to='/'
