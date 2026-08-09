@@ -15,7 +15,9 @@ use lmm_api_rs::{
         AuthBundle, AuthError, AuthErrorKind, DashboardAuth, DashboardUser, LoginOutcome,
         LoginRequest, LogoutRequest, LogoutResult, RequestMetadata, TwoFactorLoginRequest,
     },
-    migration_routes::billing_subscriptions::{BillingSubscriptionsState, router},
+    migration_routes::billing_subscriptions::{
+        BillingSubscriptionsState, maintenance_once, router,
+    },
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::json;
@@ -313,6 +315,104 @@ async fn subscription_admin_routes_preserve_tcp_contract_atomicity_and_cache_rec
     server.abort();
 }
 
+/// This is intentionally ignored by default: it requires disposable
+/// PostgreSQL 18 and Valkey, and proves the background maintenance side
+/// effects independently from the HTTP route tests.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18 and Valkey; no production services"]
+async fn subscription_maintenance_expires_resets_and_cleans() {
+    let database_url = env::var("LMM_BILLING_SUBSCRIPTIONS_TEST_DATABASE_URL")
+        .expect("set isolated PostgreSQL 18 URL");
+    let valkey_url =
+        env::var("LMM_BILLING_SUBSCRIPTIONS_TEST_VALKEY_URL").expect("set isolated Valkey URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(Duration::from_secs(3))
+        .connect(&database_url)
+        .await
+        .expect("isolated PostgreSQL must be reachable");
+    let version: String = sqlx::query_scalar("SHOW server_version")
+        .fetch_one(&pool)
+        .await
+        .expect("PostgreSQL version");
+    assert!(version.starts_with("18."), "requires PostgreSQL 18, got {version}");
+    reset_schema(&pool).await;
+
+    let valkey = redis::Client::open(valkey_url).expect("isolated Valkey URL");
+    let mut cache = valkey
+        .get_multiplexed_async_connection()
+        .await
+        .expect("Valkey connection");
+    redis::cmd("FLUSHDB")
+        .query_async::<()>(&mut cache)
+        .await
+        .expect("reset Valkey");
+
+    let current: i64 = sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM NOW())::BIGINT")
+        .fetch_one(&pool)
+        .await
+        .expect("database clock");
+    sqlx::query("INSERT INTO users (id, \"group\", setting, deleted_at) VALUES (7,'pro','{}',NULL),(8,'default','{}',NULL)")
+        .execute(&pool)
+        .await
+        .expect("users fixture");
+    sqlx::query("INSERT INTO subscription_plans (id,title,price_amount,enabled,total_amount,duration_unit,duration_value,quota_reset_period,quota_reset_custom_seconds,upgrade_group,downgrade_group) VALUES (3,'Daily',1,TRUE,1000,'day',1,'daily',0,'pro','')")
+        .execute(&pool)
+        .await
+        .expect("plan fixture");
+    sqlx::query("INSERT INTO user_subscriptions (id,user_id,plan_id,amount_total,amount_used,start_time,end_time,status,source,last_reset_time,next_reset_time,upgrade_group,prev_user_group,downgrade_group,allow_wallet_overflow,created_at,updated_at) VALUES (11,7,3,1000,50,$1,$2,'active','admin',0,0,'pro','default','',TRUE,$3,$3),(12,8,3,1000,875,$4,$5,'active','admin',$6,1,'','','',TRUE,$7,$7)")
+        .bind(current - 172_800)
+        .bind(current - 1)
+        .bind(current - 1)
+        .bind(current - 172_800)
+        .bind(current + 172_800)
+        .bind(current - 172_800)
+        .bind(current - 172_800)
+        .execute(&pool)
+        .await
+        .expect("subscriptions fixture");
+    sqlx::query("INSERT INTO subscription_pre_consume_records (request_id,user_id,user_subscription_id,pre_consumed,status,created_at,updated_at) VALUES ('old',8,12,10,'consumed',$1,$1),('fresh',8,12,10,'consumed',$2,$2)")
+        .bind(current - 8 * 24 * 60 * 60)
+        .bind(current)
+        .execute(&pool)
+        .await
+        .expect("pre-consume fixture");
+    redis::cmd("SET")
+        .arg("user:7")
+        .arg("stale")
+        .query_async::<()>(&mut cache)
+        .await
+        .expect("user cache fixture");
+
+    maintenance_once(&pool, Some(&valkey))
+        .await
+        .expect("maintenance pass");
+
+    let expired: (String, String) = sqlx::query_as(
+        "SELECT status, (SELECT \"group\" FROM users WHERE id=7) FROM user_subscriptions WHERE id=11",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("expired subscription");
+    assert_eq!(expired, ("expired".to_owned(), "default".to_owned()));
+    let reset: (i64, i64, i64) = sqlx::query_as(
+        "SELECT amount_used,last_reset_time,next_reset_time FROM user_subscriptions WHERE id=12",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("reset subscription");
+    assert_eq!(reset.0, 0);
+    assert!(reset.1 > 0 && reset.2 > current);
+    let remaining_records: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM subscription_pre_consume_records",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("pre-consume count");
+    assert_eq!(remaining_records, 1);
+    assert_eq!(exists(&mut cache, "user:7").await, 0);
+}
+
 async fn exists(connection: &mut redis::aio::MultiplexedConnection, key: &str) -> i64 {
     redis::cmd("EXISTS")
         .arg(key)
@@ -351,6 +451,7 @@ async fn seed(pool: &PgPool) {
 async fn reset_schema(pool: &PgPool) {
     for table in [
         "user_subscriptions",
+        "subscription_pre_consume_records",
         "subscription_plans",
         "users",
         "options",
@@ -370,4 +471,6 @@ async fn reset_schema(pool: &PgPool) {
         .execute(pool).await.expect("plans schema");
     sqlx::query("CREATE TABLE user_subscriptions (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, plan_id BIGINT NOT NULL, amount_total BIGINT NOT NULL CHECK (amount_total > 0), amount_used BIGINT NOT NULL, start_time BIGINT NOT NULL, end_time BIGINT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, last_reset_time BIGINT NOT NULL, next_reset_time BIGINT NOT NULL, upgrade_group TEXT NOT NULL, prev_user_group TEXT NOT NULL, downgrade_group TEXT NOT NULL, allow_wallet_overflow BOOLEAN NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)")
         .execute(pool).await.expect("subscriptions schema");
+    sqlx::query("CREATE TABLE subscription_pre_consume_records (id BIGSERIAL PRIMARY KEY, request_id TEXT NOT NULL, user_id BIGINT NOT NULL, user_subscription_id BIGINT NOT NULL, pre_consumed BIGINT NOT NULL, status TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)")
+        .execute(pool).await.expect("pre-consume schema");
 }
