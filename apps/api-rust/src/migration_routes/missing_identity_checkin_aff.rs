@@ -250,12 +250,7 @@ async fn user(
     state: &IdentityCheckinAffState,
     headers: &HeaderMap,
 ) -> Result<DashboardUser, Response> {
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| auth_error(StatusCode::UNAUTHORIZED))?;
+    let token = dashboard_token(headers).ok_or_else(|| auth_error(StatusCode::UNAUTHORIZED))?;
     match state
         .auth
         .self_user(SecretString::from(token.to_owned()))
@@ -280,10 +275,26 @@ async fn user(
         Err(_) => Err(auth_error(StatusCode::INTERNAL_SERVER_ERROR)),
     }
 }
+
+/// Mirrors the frozen Go `authorizationToken` parser: accept a bare token or
+/// a case-insensitive two-word `Bearer <token>` value, while rejecting extra
+/// words and empty credentials.
+fn dashboard_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let mut words = value.split_whitespace();
+    let first = words.next()?;
+    let second = words.next();
+    if let Some(token) = second {
+        (first.eq_ignore_ascii_case("bearer") && words.next().is_none()).then(|| token.to_owned())
+    } else {
+        Some(first.to_owned())
+    }
+}
+
 fn auth_error(status: StatusCode) -> Response {
     (
         status,
-        Json(json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Invalid Access Token"})),
+        Json(json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token"})),
     )
         .into_response()
 }
@@ -415,9 +426,10 @@ async fn checkin_status(
     if !enabled {
         return fail("签到功能未启用");
     }
+    // Go's `DefaultQuery` only supplies the current month when the parameter
+    // is absent; malformed or empty values are passed through verbatim.
     let requested = query
         .month
-        .filter(|v| v.len() == 7)
         .unwrap_or_else(|| state.calendar.month(state.clock.now()));
     let rows = match sqlx::query("SELECT checkin_date, quota_awarded FROM checkins WHERE user_id=$1 AND checkin_date >= $2 AND checkin_date <= $3 ORDER BY checkin_date DESC").bind(actor.id).bind(format!("{requested}-01")).bind(format!("{requested}-31")).fetch_all(&state.pg).await { Ok(v)=>v, Err(_)=>return fail("系统错误") };
     let records: Vec<Value> = rows.iter().map(|r| json!({"checkin_date":r.get::<String,_>("checkin_date"),"quota_awarded":r.get::<i64,_>("quota_awarded")})).collect();
@@ -892,7 +904,7 @@ mod tests {
                     &to_bytes(response.into_body(), 1024).await.unwrap()
                 )
                 .unwrap(),
-                json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Invalid Access Token"}),
+                json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token"}),
                 "{method} {uri}"
             );
         }
@@ -949,6 +961,22 @@ mod tests {
             ("checkin_setting.max_quota".to_owned(), "250".to_owned()),
         ]);
         assert_eq!(checkin_config_from_options(&setting), (true, 100, 250));
+    }
+
+    #[test]
+    fn dashboard_token_matches_go_bare_and_bearer_forms() {
+        for value in ["token", "Bearer token", "bearer token"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+            assert_eq!(
+                dashboard_token(&headers).as_deref(),
+                Some("token"),
+                "{value}"
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer token extra".parse().unwrap());
+        assert_eq!(dashboard_token(&headers), None);
     }
 
     #[test]

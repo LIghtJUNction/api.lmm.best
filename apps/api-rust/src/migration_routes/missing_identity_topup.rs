@@ -152,10 +152,13 @@ fn user_auth_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response 
 fn bearer(headers: &HeaderMap) -> Option<String> {
     let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let mut words = value.split_whitespace();
-    let scheme = words.next()?;
-    let token = words.next()?;
-    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty() && words.next().is_none())
-        .then(|| token.to_owned())
+    let first = words.next()?;
+    let second = words.next();
+    if let Some(token) = second {
+        (first.eq_ignore_ascii_case("bearer") && words.next().is_none()).then(|| token.to_owned())
+    } else {
+        Some(first.to_owned())
+    }
 }
 
 async fn actor(state: &IdentityTopupState, headers: &HeaderMap) -> Result<DashboardUser, Response> {
@@ -1404,6 +1407,18 @@ mod tests {
                 .unwrap(),
             Arc::new(StaticAuth { role }),
         ))
+    }
+
+    #[test]
+    fn bearer_matches_go_bare_and_case_insensitive_forms() {
+        for value in ["token", "Bearer token", "bearer token"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+            assert_eq!(bearer(&headers).as_deref(), Some("token"), "{value}");
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer token extra".parse().unwrap());
+        assert_eq!(bearer(&headers), None);
     }
 
     async fn integration_pools() -> Option<(PgPool, PgPool, String)> {
