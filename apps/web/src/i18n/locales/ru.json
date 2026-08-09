@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "Повторно используемые наборы моделей для подключения к каналам.",
     "Collections of metadata tags for bulk operations.": "Коллекции тегов метаданных для пакетных операций.",
     "HTTP endpoint mappings shared across providers.": "Сопоставления HTTP-конечных точек, общие для провайдеров.",
-    "Endpoint Group": "Группа конечных точек"
+    "Endpoint Group": "Группа конечных точек",
+    "Bug report": "Отчёт об ошибке",
+    "Feature request": "Запрос функции",
+    "Feedback rewards": "Вознаграждения за отзывы",
+    "Frontend improvement": "Улучшение интерфейса",
+    "Improve interface, accessibility, or mobile usability.": "Предложить улучшение интерфейса, доступности или мобильной версии.",
+    "Report & earn": "Сообщить и получить награду",
+    "Report a reproducible problem and its impact.": "Сообщить о воспроизводимой проблеме и её влиянии.",
+    "Suggest a useful capability or workflow.": "Предложить полезную функцию или улучшение процесса.",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "За подтверждённые сообщения после проверки полагается вознаграждение от 5 $. Сам факт отправки не гарантирует награду."
   }
 }

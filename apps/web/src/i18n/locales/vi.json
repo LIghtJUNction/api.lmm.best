@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "Các bộ mô hình có thể dùng lại và gắn vào kênh.",
     "Collections of metadata tags for bulk operations.": "Tập hợp thẻ siêu dữ liệu cho thao tác hàng loạt.",
     "HTTP endpoint mappings shared across providers.": "Ánh xạ endpoint HTTP dùng chung giữa các nhà cung cấp.",
-    "Endpoint Group": "Nhóm endpoint"
+    "Endpoint Group": "Nhóm endpoint",
+    "Bug report": "Báo lỗi",
+    "Feature request": "Yêu cầu tính năng",
+    "Feedback rewards": "Phần thưởng phản hồi",
+    "Frontend improvement": "Cải tiến giao diện",
+    "Improve interface, accessibility, or mobile usability.": "Cải thiện giao diện, khả năng tiếp cận hoặc trải nghiệm di động.",
+    "Report & earn": "Gửi phản hồi, nhận thưởng",
+    "Report a reproducible problem and its impact.": "Báo cáo sự cố có thể tái hiện và mức độ ảnh hưởng.",
+    "Suggest a useful capability or workflow.": "Đề xuất tính năng hoặc quy trình hữu ích.",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "Báo cáo hợp lệ được thưởng từ 5 USD sau khi duyệt. Việc gửi báo cáo không bảo đảm nhận thưởng."
   }
 }

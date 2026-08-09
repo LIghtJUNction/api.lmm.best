@@ -27,6 +27,7 @@ import {
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
 import { useEffect } from 'react'
 
+import { FeedbackRewardButton } from '@/components/feedback-reward-button'
 import { Footer } from '@/components/layout/components/footer'
 import { NavigationProgress } from '@/components/navigation-progress'
 import { Toaster } from '@/components/ui/sonner'
@@ -102,6 +103,7 @@ function RootComponent() {
       <NavigationProgress />
       <Outlet />
       <Footer />
+      <FeedbackRewardButton />
       <Toaster closeButton duration={5000} position='top-center' richColors />
       {import.meta.env.DEV &&
         import.meta.env.VITE_ENABLE_DEVTOOLS === 'true' && (

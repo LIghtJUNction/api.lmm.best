@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "Ensembles réutilisables de modèles à associer aux canaux.",
     "Collections of metadata tags for bulk operations.": "Collections de tags de métadonnées pour les opérations groupées.",
     "HTTP endpoint mappings shared across providers.": "Mappages de points de terminaison HTTP partagés entre fournisseurs.",
-    "Endpoint Group": "Groupe de points de terminaison"
+    "Endpoint Group": "Groupe de points de terminaison",
+    "Bug report": "Rapport de bug",
+    "Feature request": "Demande de fonctionnalité",
+    "Feedback rewards": "Récompenses pour les retours",
+    "Frontend improvement": "Amélioration de l’interface",
+    "Improve interface, accessibility, or mobile usability.": "Améliorer l’interface, l’accessibilité ou l’usage mobile.",
+    "Report & earn": "Signaler et être récompensé",
+    "Report a reproducible problem and its impact.": "Signaler un problème reproductible et son impact.",
+    "Suggest a useful capability or workflow.": "Proposer une fonctionnalité utile ou un meilleur processus.",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "Les signalements valides donnent droit à une récompense d’au moins 5 $ après examen. Tout envoi ne garantit pas de récompense."
   }
 }

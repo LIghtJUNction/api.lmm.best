@@ -2,9 +2,9 @@
 Copyright (C) 2023-2026 QuantumNous
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -92,6 +92,19 @@ const en = {
   'HTTP endpoint mappings shared across providers.':
     'HTTP endpoint mappings shared across providers.',
   'Endpoint Group': 'Endpoint Group',
+  'Bug report': 'Bug report',
+  'Feature request': 'Feature request',
+  'Feedback rewards': 'Feedback rewards',
+  'Frontend improvement': 'Frontend improvement',
+  'Improve interface, accessibility, or mobile usability.':
+    'Improve interface, accessibility, or mobile usability.',
+  'Report & earn': 'Report & earn',
+  'Report a reproducible problem and its impact.':
+    'Report a reproducible problem and its impact.',
+  'Suggest a useful capability or workflow.':
+    'Suggest a useful capability or workflow.',
+  'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.',
 }
 
 const translations = {
@@ -166,6 +179,18 @@ const translations = {
       '各提供商共享的 HTTP 端点映射。',
     'Endpoint Group': '端点分组',
     'API.LMM.BEST / TOKEN SERVICE': 'API.LMM.BEST / 令牌服务',
+    'Bug report': 'Bug 反馈',
+    'Feature request': '功能请求',
+    'Feedback rewards': '反馈奖励',
+    'Frontend improvement': '前端改进',
+    'Improve interface, accessibility, or mobile usability.':
+      '改进界面、无障碍体验或移动端可用性。',
+    'Report & earn': '反馈并获奖励',
+    'Report a reproducible problem and its impact.':
+      '报告可复现的问题及其影响。',
+    'Suggest a useful capability or workflow.': '建议实用的新能力或流程改进。',
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+      '有效反馈经审核后可获得 5 美元起的奖励；提交并不代表一定获奖。',
   },
   'zh-TW': {
     Breadcrumb: '麵包屑',
@@ -238,6 +263,18 @@ const translations = {
       '各提供者共用的 HTTP 端點對應。',
     'Endpoint Group': '端點群組',
     'API.LMM.BEST / TOKEN SERVICE': 'API.LMM.BEST / 權杖服務',
+    'Bug report': 'Bug 回報',
+    'Feature request': '功能請求',
+    'Feedback rewards': '回饋獎勵',
+    'Frontend improvement': '前端改進',
+    'Improve interface, accessibility, or mobile usability.':
+      '改善介面、無障礙體驗或行動裝置可用性。',
+    'Report & earn': '回報並獲獎',
+    'Report a reproducible problem and its impact.':
+      '回報可重現的問題及其影響。',
+    'Suggest a useful capability or workflow.': '建議實用的新功能或工作流程。',
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+      '有效回饋經審核後可獲得 5 美元起的獎勵；提交不代表必定獲獎。',
   },
   fr: {
     Breadcrumb: 'Fil d’Ariane',
@@ -313,6 +350,19 @@ const translations = {
       'Mappages de points de terminaison HTTP partagés entre fournisseurs.',
     'Endpoint Group': 'Groupe de points de terminaison',
     'API.LMM.BEST / TOKEN SERVICE': 'API.LMM.BEST / SERVICE DE JETONS',
+    'Bug report': 'Rapport de bug',
+    'Feature request': 'Demande de fonctionnalité',
+    'Feedback rewards': 'Récompenses pour les retours',
+    'Frontend improvement': 'Amélioration de l’interface',
+    'Improve interface, accessibility, or mobile usability.':
+      'Améliorer l’interface, l’accessibilité ou l’usage mobile.',
+    'Report & earn': 'Signaler et être récompensé',
+    'Report a reproducible problem and its impact.':
+      'Signaler un problème reproductible et son impact.',
+    'Suggest a useful capability or workflow.':
+      'Proposer une fonctionnalité utile ou un meilleur processus.',
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+      'Les signalements valides donnent droit à une récompense d’au moins 5 $ après examen. Tout envoi ne garantit pas de récompense.',
   },
   ja: {
     Breadcrumb: 'パンくずリスト',
@@ -389,6 +439,19 @@ const translations = {
       'プロバイダー間で共有する HTTP エンドポイントマッピング。',
     'Endpoint Group': 'エンドポイントグループ',
     'API.LMM.BEST / TOKEN SERVICE': 'API.LMM.BEST / トークンサービス',
+    'Bug report': 'バグ報告',
+    'Feature request': '機能リクエスト',
+    'Feedback rewards': 'フィードバック報酬',
+    'Frontend improvement': 'フロントエンド改善',
+    'Improve interface, accessibility, or mobile usability.':
+      'UI、アクセシビリティ、モバイル操作性を改善します。',
+    'Report & earn': '報告して報酬を得る',
+    'Report a reproducible problem and its impact.':
+      '再現可能な問題と影響を報告します。',
+    'Suggest a useful capability or workflow.':
+      '役立つ機能やワークフローを提案します。',
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+      '有効な報告は審査後に5米ドル以上の報酬対象です。提出だけでは報酬は保証されません。',
   },
   ru: {
     Breadcrumb: 'Хлебные крошки',
@@ -463,6 +526,19 @@ const translations = {
       'Сопоставления HTTP-конечных точек, общие для провайдеров.',
     'Endpoint Group': 'Группа конечных точек',
     'API.LMM.BEST / TOKEN SERVICE': 'API.LMM.BEST / СЕРВИС ТОКЕНОВ',
+    'Bug report': 'Отчёт об ошибке',
+    'Feature request': 'Запрос функции',
+    'Feedback rewards': 'Вознаграждения за отзывы',
+    'Frontend improvement': 'Улучшение интерфейса',
+    'Improve interface, accessibility, or mobile usability.':
+      'Предложить улучшение интерфейса, доступности или мобильной версии.',
+    'Report & earn': 'Сообщить и получить награду',
+    'Report a reproducible problem and its impact.':
+      'Сообщить о воспроизводимой проблеме и её влиянии.',
+    'Suggest a useful capability or workflow.':
+      'Предложить полезную функцию или улучшение процесса.',
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+      'За подтверждённые сообщения после проверки полагается вознаграждение от 5 $. Сам факт отправки не гарантирует награду.',
   },
   vi: {
     Breadcrumb: 'Breadcrumb',
@@ -536,6 +612,19 @@ const translations = {
       'Ánh xạ endpoint HTTP dùng chung giữa các nhà cung cấp.',
     'Endpoint Group': 'Nhóm endpoint',
     'API.LMM.BEST / TOKEN SERVICE': 'API.LMM.BEST / DỊCH VỤ TOKEN',
+    'Bug report': 'Báo lỗi',
+    'Feature request': 'Yêu cầu tính năng',
+    'Feedback rewards': 'Phần thưởng phản hồi',
+    'Frontend improvement': 'Cải tiến giao diện',
+    'Improve interface, accessibility, or mobile usability.':
+      'Cải thiện giao diện, khả năng tiếp cận hoặc trải nghiệm di động.',
+    'Report & earn': 'Gửi phản hồi, nhận thưởng',
+    'Report a reproducible problem and its impact.':
+      'Báo cáo sự cố có thể tái hiện và mức độ ảnh hưởng.',
+    'Suggest a useful capability or workflow.':
+      'Đề xuất tính năng hoặc quy trình hữu ích.',
+    'Valid reports earn at least $5 after review. Submission does not guarantee a reward.':
+      'Báo cáo hợp lệ được thưởng từ 5 USD sau khi duyệt. Việc gửi báo cáo không bảo đảm nhận thưởng.',
   },
 }
 

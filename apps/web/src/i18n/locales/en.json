@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "Reusable sets of models you can attach to channels.",
     "Collections of metadata tags for bulk operations.": "Collections of metadata tags for bulk operations.",
     "HTTP endpoint mappings shared across providers.": "HTTP endpoint mappings shared across providers.",
-    "Endpoint Group": "Endpoint Group"
+    "Endpoint Group": "Endpoint Group",
+    "Bug report": "Bug report",
+    "Feature request": "Feature request",
+    "Feedback rewards": "Feedback rewards",
+    "Frontend improvement": "Frontend improvement",
+    "Improve interface, accessibility, or mobile usability.": "Improve interface, accessibility, or mobile usability.",
+    "Report & earn": "Report & earn",
+    "Report a reproducible problem and its impact.": "Report a reproducible problem and its impact.",
+    "Suggest a useful capability or workflow.": "Suggest a useful capability or workflow.",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "Valid reports earn at least $5 after review. Submission does not guarantee a reward."
   }
 }

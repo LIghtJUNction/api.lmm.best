@@ -16,6 +16,10 @@ body:
         - For third-party hosted services, private forks, or external provider failures, contact the relevant maintainer or provider.
         - Remove API keys, cookies, tokens, passwords, DSNs, and all other secrets before posting.
 
+        ## Rewards for valid feedback
+
+        Reports confirmed by a maintainer as valid, non-duplicate, and in scope may earn a reward starting at **$5**. Submitting an Issue does not guarantee a reward; final eligibility and amount depend on the review.
+
   - type: checkboxes
     id: submission-checks
     attributes:

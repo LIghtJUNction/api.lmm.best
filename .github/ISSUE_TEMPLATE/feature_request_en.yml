@@ -13,6 +13,10 @@ body:
 
         Search this repository's Issues, then review the [project README](https://github.com/LIghtJUNction/api.lmm.best#readme) and [bounty workflow guide](https://github.com/LIghtJUNction/api.lmm.best/blob/main/docs/open-source-bounties.zh-CN.md) before submitting.
 
+        ## Rewards for valid feedback
+
+        Requests confirmed by a maintainer as valid, non-duplicate, and in scope may earn a reward starting at **$5**. Submitting an Issue does not guarantee a reward; final eligibility and amount depend on the review.
+
   - type: checkboxes
     id: submission-checks
     attributes:
