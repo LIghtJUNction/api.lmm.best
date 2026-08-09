@@ -44,14 +44,27 @@ impl IdentityCatalogState {
 
 /// Routes retained from `controller/group.go` and `controller/user.go`.
 pub fn router(state: IdentityCatalogState) -> Router {
-    Router::new()
-        // This legacy endpoint is deliberately public.  In Gin it reads the
-        // absent identity as user 0 and returns the default usable groups.
-        .route("/api/user/groups", get(get_public_groups))
+    public_routes()
         .route("/api/user/self/groups", get(get_self_groups))
         .route("/api/user/models", get(get_user_models))
         .route("/api/user/token", get(generate_access_token))
         .with_state(state)
+}
+
+/// Mounts only the anonymous catalogue endpoint on the normal listener.
+///
+/// The protected group/model reads and personal-token write remain in the
+/// isolated candidate surface until their own listener differential is
+/// complete.  Keeping this slice explicit prevents a public read migration
+/// from accidentally exposing the token-generation route.
+pub fn public_router(state: IdentityCatalogState) -> Router {
+    public_routes().with_state(state)
+}
+
+fn public_routes() -> Router<IdentityCatalogState> {
+    // This legacy endpoint is deliberately public. In Gin it reads the absent
+    // identity as user 0 and returns the default usable groups.
+    Router::new().route("/api/user/groups", get(get_public_groups))
 }
 
 async fn get_public_groups(
@@ -530,7 +543,7 @@ fn locale(headers: &HeaderMap) -> Locale {
 
 #[cfg(test)]
 mod tests {
-    use super::{IdentityCatalogState, router};
+    use super::{IdentityCatalogState, public_router, router};
     use async_trait::async_trait;
     use axum::{
         body::to_bytes,
@@ -687,6 +700,35 @@ mod tests {
                 "message": "ERROR: transaction fixture injected write failure (SQLSTATE P0001)"
             })
         );
+    }
+
+    #[tokio::test]
+    async fn public_router_does_not_expose_protected_catalogue_or_token_routes() {
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(1))
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .expect("valid lazy PostgreSQL URL");
+        let app = public_router(IdentityCatalogState::new(
+            pool,
+            std::sync::Arc::new(RejectingAuth),
+        ));
+        for path in [
+            "/api/user/self/groups",
+            "/api/user/models",
+            "/api/user/token",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
     }
 
     #[async_trait]

@@ -57,6 +57,7 @@ POST	/api/token/batch/keys	lmm_api_rs::migration_routes::api_token::batch_keys
 GET	/api/token/search	lmm_api_rs::migration_routes::api_token::search
 GET	/api/user/aff	lmm_api_rs::migration_routes::identity_profile::router
 GET	/api/user/checkin	lmm_api_rs::migration_routes::missing_identity_checkin_aff::read_router
+GET	/api/user/groups	lmm_api_rs::migration_routes::missing_identity_catalog::public_router
 GET	/api/user/	lmm_api_rs::migration_routes::identity_admin::router
 POST	/api/user/	lmm_api_rs::migration_routes::identity_admin::router
 PUT	/api/user/	lmm_api_rs::migration_routes::identity_admin::router
