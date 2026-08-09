@@ -152,10 +152,17 @@ run_promoter promotion-test "$controller_output" "$offhost_output" >/dev/null
   fail 'controller backup was not promoted'
 [[ -f $tmp/controller-work/staging/backup-off-host-promotion-test/configuration.age ]] || fail 'off-host mirror is missing'
 [[ -f $tmp/controller-work/staging/backup-target-promotion-test/configuration.archive ]] || fail 'target mirror is missing'
-grep -Fq -- "-F $ssh_config -J archczy -p 222 root@45.59.187.63" "$FAKE_SSH_LOG" || \
-  fail 'target SSH transport does not use the controlled config/jump/port/endpoint'
-grep -Fq -- "-F $ssh_config -o ProxyJump=archczy -P 222" "$FAKE_SCP_LOG" || \
-  fail 'target SCP transport does not use the controlled config/jump/port'
+control_prefix="/run/user/$(id -u)/lmm-api-"
+grep -Fq -- "-F $ssh_config -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$control_prefix" \
+  "$FAKE_SSH_LOG" || fail 'target SSH transport does not use an isolated control socket'
+grep -Fq -- "ProxyCommand=exec $LMM_DEPLOY_SSH_BIN -F $ssh_config -o BatchMode=yes -o ControlMaster=auto" \
+  "$FAKE_SSH_LOG" || fail 'target SSH transport does not use the isolated jump proxy'
+grep -Fq -- "-p 222 root@45.59.187.63" "$FAKE_SSH_LOG" || \
+  fail 'target SSH transport does not use the controlled port and endpoint'
+grep -Fq -- "-F $ssh_config -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$control_prefix" \
+  "$FAKE_SCP_LOG" || fail 'target SCP transport does not use an isolated control socket'
+grep -Fq -- "ProxyCommand=exec $LMM_DEPLOY_SSH_BIN -F $ssh_config -o BatchMode=yes -o ControlMaster=auto" \
+  "$FAKE_SCP_LOG" || fail 'target SCP transport does not use the isolated jump proxy'
 grep -Fq 'root@45.59.187.63:' "$FAKE_SCP_LOG" || fail 'target SCP endpoint is not explicit'
 if grep -Eq 'StrictHostKeyChecking=no|UserKnownHostsFile=/dev/null|-F /dev/null' "$FAKE_SSH_LOG" "$FAKE_SCP_LOG"; then
   fail 'transport bypassed SSH host-key or user configuration controls'
