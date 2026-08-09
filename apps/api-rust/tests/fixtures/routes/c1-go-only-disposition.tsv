@@ -1,5 +1,12 @@
 category	method	path	production_owner	rust_status	disposition	differential_verified	notes
 new	DELETE	/api/user/bindings/:binding_type	go	candidate	keep-go-owner	false	Rust self-service built-in OAuth unlink candidate is mounted on the normal/test listener; production ownership remains Go pending differential and auth-cache evidence.
+identity	GET	/api/user/	go	candidate	keep-go-owner	false	Rust administrator user-list candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
+identity	POST	/api/user/	go	candidate	keep-go-owner	false	Rust administrator user-create candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
+identity	PUT	/api/user/	go	candidate	keep-go-owner	false	Rust administrator user-update candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
+identity	GET	/api/user/search	go	candidate	keep-go-owner	false	Rust administrator user-search candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
+identity	GET	/api/user/:id	go	candidate	keep-go-owner	false	Rust administrator user-detail candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
+identity	DELETE	/api/user/:id	go	candidate	keep-go-owner	false	Rust administrator user-delete candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
+identity	POST	/api/user/manage	go	candidate	keep-go-owner	false	Rust administrator user-management candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 new	GET	/v1/responses	go	unimplemented	keep-go-owner	false	Go Responses WebSocket registration at apps/api-go/router/relay-router.go:76; Rust has no production GET route.
 bounty	GET	/api/open-source-bounties	go	candidate	keep-go-owner	false	Rust public-list candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
 bounty	GET	/api/open-source-bounties/projects/:id	go	candidate	keep-go-owner	false	Rust public-detail candidate is mounted on the normal/test listener; production ownership remains Go pending differential and database evidence.
