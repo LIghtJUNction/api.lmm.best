@@ -21,8 +21,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use bcrypt::{DEFAULT_COST, hash};
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::Serialize;
+use rand::{RngCore, rng};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
@@ -283,6 +285,18 @@ pub enum SecurityError {
     Unavailable,
     /// A known legacy business-rule rejection.
     Rejected(String),
+    /// Public registration is disabled by the operator.
+    RegistrationDisabled,
+    /// Password registration is disabled by the operator.
+    PasswordRegistrationDisabled,
+    /// Registration cannot proceed until both legal documents are published.
+    RegistrationLegalUnavailable,
+    /// Registration requires explicit acceptance of both legal documents.
+    LegalConsentRequired,
+    /// Registration input does not satisfy the legacy validation contract.
+    InvalidRegistration,
+    /// The requested username or email already belongs to an account.
+    RegistrationConflict,
 }
 
 impl SecurityError {
@@ -340,6 +354,30 @@ impl SecurityError {
                 None,
             ),
             Self::Rejected(message) => failure(StatusCode::OK, &message, None),
+            Self::RegistrationDisabled => {
+                failure(StatusCode::OK, "注册功能已关闭", Some("REGISTER_DISABLED"))
+            }
+            Self::PasswordRegistrationDisabled => failure(
+                StatusCode::OK,
+                "管理员关闭了密码注册",
+                Some("PASSWORD_REGISTER_DISABLED"),
+            ),
+            Self::RegistrationLegalUnavailable => failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "注册暂不可用：用户协议和隐私政策尚未发布",
+                Some("REGISTRATION_LEGAL_UNAVAILABLE"),
+            ),
+            Self::LegalConsentRequired => failure(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "注册前必须同意用户协议和隐私政策",
+                Some("LEGAL_CONSENT_REQUIRED"),
+            ),
+            Self::InvalidRegistration => {
+                failure(StatusCode::OK, "无效的注册参数", Some("INVALID_PARAMS"))
+            }
+            Self::RegistrationConflict => {
+                failure(StatusCode::OK, "用户名或邮箱已存在", Some("USER_EXISTS"))
+            }
         }
     }
 }
@@ -501,6 +539,159 @@ impl PgValkeySecurityProvider {
             .collect::<Result<Vec<_>, SecurityError>>()?;
         Ok(Value::Array(sessions))
     }
+
+    async fn option(&self, key: &str) -> Result<Option<String>, SecurityError> {
+        sqlx::query_scalar::<_, Option<String>>("SELECT value FROM options WHERE key = $1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await
+            .map(|value| value.flatten())
+            .map_err(|_| SecurityError::Unavailable)
+    }
+
+    async fn option_bool(&self, key: &str, default: bool) -> Result<bool, SecurityError> {
+        Ok(self
+            .option(key)
+            .await?
+            .as_deref()
+            .map(|value| value.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(default))
+    }
+
+    async fn register(&self, input: Value) -> Result<Value, SecurityError> {
+        if !self.option_bool("RegisterEnabled", true).await? {
+            return Err(SecurityError::RegistrationDisabled);
+        }
+        if !self.option_bool("PasswordRegisterEnabled", true).await? {
+            return Err(SecurityError::PasswordRegistrationDisabled);
+        }
+
+        let request: RegistrationInput =
+            serde_json::from_value(input).map_err(|_| SecurityError::InvalidRegistration)?;
+        let username = request.username.trim().to_owned();
+        let password = request.password;
+        let email = request
+            .email
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if username.is_empty()
+            || username.chars().count() > 20
+            || username.chars().any(char::is_control)
+            || password.len() < 8
+            || password.len() > 20
+            || (!email.is_empty() && email.chars().count() > 50)
+        {
+            return Err(SecurityError::InvalidRegistration);
+        }
+
+        let agreement = self.option("legal.user_agreement").await?;
+        let privacy = self.option("legal.privacy_policy").await?;
+        if agreement
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+            || privacy
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(SecurityError::RegistrationLegalUnavailable);
+        }
+        if !request.accepted_legal {
+            return Err(SecurityError::LegalConsentRequired);
+        }
+        if self.option_bool("EmailVerificationEnabled", false).await? {
+            // Verification-code delivery/confirmation is not part of this mounted
+            // slice yet.  Refuse the write when the legacy flag is enabled rather
+            // than creating an account that bypasses the configured gate.
+            return Err(SecurityError::Unavailable);
+        }
+
+        let password_hash = tokio::task::spawn_blocking(move || hash(password, DEFAULT_COST))
+            .await
+            .map_err(|_| SecurityError::Unavailable)?
+            .map_err(|_| SecurityError::Unavailable)?;
+        let now = unix_seconds()?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| SecurityError::Unavailable)?;
+        let existing = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE deleted_at IS NULL AND (username = $1 OR ($2 <> '' AND lower(COALESCE(email, '')) = $2)))",
+        )
+        .bind(&username)
+        .bind(&email)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| SecurityError::Unavailable)?;
+        if existing {
+            return Err(SecurityError::RegistrationConflict);
+        }
+
+        let inviter_id = if request.aff_code.trim().is_empty() {
+            0_i64
+        } else {
+            sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT id FROM users WHERE deleted_at IS NULL AND aff_code = $1 LIMIT 1",
+            )
+            .bind(request.aff_code.trim())
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| SecurityError::Unavailable)?
+            .flatten()
+            .unwrap_or(0)
+        };
+
+        let aff_code = new_aff_code();
+        let inserted = sqlx::query(
+            "INSERT INTO users (username, password, display_name, role, status, email, \"group\", aff_code, inviter_id, quota, used_quota, request_count, created_at, auth_version) VALUES ($1, $2, $1, 1, 1, $3, 'default', $4, $5, 0, 0, 0, $6, 1)",
+        )
+        .bind(&username)
+        .bind(&password_hash)
+        .bind(&email)
+        .bind(&aff_code)
+        .bind(inviter_id)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await;
+        match inserted {
+            Ok(_) => transaction
+                .commit()
+                .await
+                .map_err(|_| SecurityError::Unavailable)?,
+            Err(error)
+                if error
+                    .as_database_error()
+                    .is_some_and(|db| db.code().as_deref() == Some("23505")) =>
+            {
+                return Err(SecurityError::RegistrationConflict);
+            }
+            Err(_) => return Err(SecurityError::Unavailable),
+        }
+        Ok(Value::Null)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistrationInput {
+    username: String,
+    password: String,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    aff_code: String,
+    #[serde(default)]
+    accepted_legal: bool,
+}
+
+fn new_aff_code() -> String {
+    let mut bytes = [0_u8; 8];
+    rng().fill_bytes(&mut bytes);
+    const ALPHABET: &[u8] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    bytes
+        .into_iter()
+        .map(|byte| ALPHABET[(byte as usize) % ALPHABET.len()] as char)
+        .collect()
 }
 
 #[async_trait]
@@ -551,9 +742,9 @@ impl SecurityProvider for PgValkeySecurityProvider {
             | SecurityOperation::PasskeyRegisterFinish
             | SecurityOperation::PasskeyVerifyBegin
             | SecurityOperation::PasskeyVerifyFinish
-            | SecurityOperation::Register
             | SecurityOperation::ResetPassword
             | SecurityOperation::UniversalVerify => Err(SecurityError::Unavailable),
+            SecurityOperation::Register => self.register(call.input).await,
         }
     }
 }
@@ -673,7 +864,7 @@ pub fn router(state: IdentitySecurityState) -> Router {
             "/api/user/passkey/verify/finish",
             post(passkey_verify_finish),
         )
-        .route("/api/user/register", post(register))
+        .merge(registration_route())
         .route("/api/user/reset", post(reset_password))
         .route(
             "/api/user/sessions/revoke-others",
@@ -681,6 +872,18 @@ pub fn router(state: IdentitySecurityState) -> Router {
         )
         .route("/api/verify", post(universal_verify))
         .with_state(state)
+}
+
+/// The password-registration route is the one anonymous identity surface that
+/// has a complete PostgreSQL implementation. Keep it separate from the
+/// remaining account-security candidates so the normal listener cannot
+/// accidentally claim ownership of passkey, mail, or session-mutation routes.
+pub fn registration_router(state: IdentitySecurityState) -> Router {
+    registration_route().with_state(state)
+}
+
+fn registration_route() -> Router<IdentitySecurityState> {
+    Router::new().route("/api/user/register", post(register))
 }
 
 #[derive(Serialize)]
@@ -717,6 +920,9 @@ fn success(data: Value) -> Response {
 }
 
 fn operation_success(operation: SecurityOperation, data: Value) -> Response {
+    if operation == SecurityOperation::Register {
+        return Json(json!({"success": true, "message": ""})).into_response();
+    }
     if operation == SecurityOperation::AdminResetPasskey {
         return Json(json!({
             "success": true,
