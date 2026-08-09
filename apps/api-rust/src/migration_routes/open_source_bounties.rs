@@ -56,6 +56,10 @@ pub fn router(state: OpenSourceBountyState) -> Router {
         .route("/api/open-source-bounties/config", get(bounty_config))
         .route("/api/open-source-bounties/mine", get(owned_bounties))
         .route("/api/open-source-bounties/accepted", get(accepted_bounties))
+        .route(
+            "/api/open-source-bounties/disputes/mine",
+            get(owned_disputes),
+        )
         .with_state(state)
 }
 
@@ -63,6 +67,39 @@ pub fn router(state: OpenSourceBountyState) -> Router {
 struct ListQuery {
     page: Option<String>,
     page_size: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DisputeListQuery {
+    status: Option<String>,
+    limit: Option<String>,
+}
+
+impl DisputeListQuery {
+    fn normalized(&self) -> Result<(Option<&str>, i64), Response> {
+        let status = self
+            .status
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| matches!(*value, "open" | "resolved_paid" | "resolved_denied"));
+        if self.status.as_deref().is_some_and(|value| {
+            let value = value.trim();
+            !value.is_empty() && status.is_none()
+        }) {
+            return Err(business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_DISPUTE_FILTER",
+                "invalid bounty dispute status filter",
+            ));
+        }
+        let limit = self
+            .limit
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|limit| *limit > 0)
+            .unwrap_or(50)
+            .min(100);
+        Ok((status, limit))
+    }
 }
 
 impl ListQuery {
@@ -1042,13 +1079,68 @@ async fn accepted_bounties(
     response
 }
 
+async fn owned_disputes(
+    State(state): State<OpenSourceBountyState>,
+    Query(query): Query<DisputeListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let (status, limit) = match query.normalized() {
+        Ok(values) => values,
+        Err(response) => return response,
+    };
+    let mut sql = format!(
+        "{} WHERE (d.opened_by_user_id = $1 OR d.against_user_id = $1)",
+        dispute_view_select()
+    );
+    if status.is_some() {
+        sql.push_str(" AND d.status = $2");
+    }
+    sql.push_str(" ORDER BY CASE WHEN d.status = 'open' THEN 0 ELSE 1 END, d.updated_at DESC, d.id DESC LIMIT $");
+    sql.push_str(if status.is_some() { "3" } else { "2" });
+    let mut request = sqlx::query(&sql).bind(viewer_id);
+    if let Some(status) = status {
+        request = request.bind(status);
+    }
+    let rows = match request.bind(limit).fetch_all(&state.pg).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to list owned open-source bounty disputes");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match dispute_view_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, viewer_id, "failed to decode owned open-source bounty dispute");
+                return internal_failure();
+            }
+        }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: items,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use base64::Engine;
 
     use super::{
-        DEFAULT_PAGE_SIZE, ListQuery, MAX_PAGE_SIZE, challenge_priority, dashboard_token_candidate,
-        parse_fee_rate_basis_points,
+        DEFAULT_PAGE_SIZE, DisputeListQuery, ListQuery, MAX_PAGE_SIZE, challenge_priority,
+        dashboard_token_candidate, parse_fee_rate_basis_points,
     };
 
     #[test]
@@ -1125,5 +1217,24 @@ mod tests {
         for value in ["", "001", "100.01", "101", "1.234", "-1"] {
             assert_eq!(parse_fee_rate_basis_points(value), None, "value={value}");
         }
+    }
+
+    #[test]
+    fn dispute_list_query_matches_go_filter_and_limit_bounds() {
+        let query = DisputeListQuery {
+            status: Some(" resolved_paid ".to_owned()),
+            limit: Some("101".to_owned()),
+        };
+        assert_eq!(query.normalized().unwrap(), (Some("resolved_paid"), 100));
+        let default = DisputeListQuery {
+            status: Some(" ".to_owned()),
+            limit: Some("not-a-number".to_owned()),
+        };
+        assert_eq!(default.normalized().unwrap(), (None, 50));
+        let invalid = DisputeListQuery {
+            status: Some("pending".to_owned()),
+            limit: None,
+        };
+        assert!(invalid.normalized().is_err());
     }
 }
