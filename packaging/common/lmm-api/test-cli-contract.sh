@@ -57,7 +57,7 @@ grep -Fqx 'resolved=rs' <<<"$status" || fail 'select status omitted resolved bac
 protocol=$("${common_env[@]}" "$cli" deploy internal protocol)
 [[ $protocol == $'min=1\nmax=1' ]] || fail 'deployment protocol report is not stable'
 help=$("${common_env[@]}" "$cli" help)
-for command_name in serve select deploy; do
+for command_name in serve select deploy request; do
   grep -Fq "lmm-api $command_name" <<<"$help" || fail "help omits $command_name"
 done
 "${common_env[@]}" "$cli" deploy production --help >/dev/null
