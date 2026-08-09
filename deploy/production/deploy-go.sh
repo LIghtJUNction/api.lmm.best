@@ -118,9 +118,8 @@ ssh -o BatchMode=yes "$HOST" "$remote_stage/capture-precutover-payload.sh" \
 ssh -o BatchMode=yes "$HOST" "$remote_stage/lmm-api-go" status \
   --base-url http://127.0.0.1:3000 --timeout 8s \
   --output "$remote_stage/precutover-status.json" --status-file "$remote_stage/precutover-status.code"
-old_version=$(ssh -o BatchMode=yes "$HOST" jq -er \
-  '.success == true and .ready == true and (.data.version | type == "string") and .data.version' \
-  "$remote_stage/precutover-status.json")
+old_version=$(ssh -o BatchMode=yes "$HOST" cat -- "$remote_stage/precutover-status.json" |
+  jq -er 'select(.success == true and .ready == true and (.data.version | type == "string")) | .data.version')
 [[ $old_version =~ ^[0-9][0-9A-Za-z._+]*$ ]] || die 'pre-cutover listener returned an invalid version'
 comparison=$(ssh -o BatchMode=yes "$HOST" vercmp "$old_version" "$release_version")
 ((comparison < 0)) || die "candidate is not an upgrade: $old_version -> $release_version"

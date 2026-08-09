@@ -57,6 +57,8 @@ contains 'PGOPTIONS="-c search_path=public"' "$repo/packaging/common/lmm-api/lmm
 for literal in \
   'origin/main' \
   'backup-target-$deployment_id' \
+  'old_version=$(ssh -o BatchMode=yes "$HOST" cat --' \
+  'select(.success == true and .ready == true and (.data.version | type == "string")) | .data.version' \
   'pg_restore --list' \
   'LMM_BACKUP_AGE_IDENTITY_FILE' \
   'decrypted database backup does not match the target copy' \
@@ -64,6 +66,9 @@ for literal in \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
 done
+if grep -Fq 'old_version=$(ssh -o BatchMode=yes "$HOST" jq' "$here/deploy-go.sh"; then
+  fail 'pre-cutover version parsing still sends a jq filter through the remote shell'
+fi
 
 if grep -R -nE '(^|[^[:alnum:]_])(curl|wget)([^[:alnum:]_]|$)|SIGKILL|mktemp[^\n]*(/tmp|TMPDIR:-/tmp)' \
   "$here/deploy-go.sh" "$here/activate-go-release.sh" "$here/build-go-package.sh" \
