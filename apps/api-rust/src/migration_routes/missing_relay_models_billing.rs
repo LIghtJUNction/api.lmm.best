@@ -495,9 +495,8 @@ mod tests {
         let body = json_body(response).await;
         assert_eq!(body["error"]["type"], "new_api_error");
         assert_eq!(body["error"]["code"], "");
-        assert!(body["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("Invalid token (request id: ")));
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.starts_with("Invalid token (request id: "));
     }
 
     #[tokio::test]
@@ -518,9 +517,8 @@ mod tests {
         let body = json_body(response).await;
         assert_eq!(body["error"]["type"], "new_api_error");
         assert_eq!(body["error"]["code"], "");
-        assert!(body["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("Invalid token (request id: ")));
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.starts_with("Invalid token (request id: "));
     }
 
     #[tokio::test]

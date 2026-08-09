@@ -623,9 +623,8 @@ async fn static_model_lookup_contract_holds_over_a_real_tcp_listener() {
     let denied_body = denied.json::<Value>().await.expect("denied JSON");
     assert_eq!(denied_body["error"]["type"], "new_api_error");
     assert_eq!(denied_body["error"]["code"], "");
-    assert!(denied_body["error"]["message"]
-        .as_str()
-        .is_some_and(|message| message.starts_with("Invalid token (request id: ")));
+    let denied_message = denied_body["error"]["message"].as_str().unwrap_or_default();
+    assert!(denied_message.starts_with("Invalid token (request id: "));
     server.abort();
 }
 
