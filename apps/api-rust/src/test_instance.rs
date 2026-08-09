@@ -1920,6 +1920,16 @@ impl TopupAuthorizer for DashboardTopupAuthorizer {
             .then_some(user.id)
             .ok_or(TopupError::Unauthorized)
     }
+
+    async fn check_critical_rate_limit(
+        &self,
+        client_ip: &str,
+    ) -> Result<lmm_api_rs::auth::CriticalRateLimitOutcome, TopupError> {
+        self.auth
+            .check_critical_rate_limit(client_ip)
+            .await
+            .map_err(|_| TopupError::Storage)
+    }
 }
 
 /// Payment creation is deliberately unavailable in the copied-data test
