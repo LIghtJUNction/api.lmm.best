@@ -259,6 +259,7 @@ route_for() {
     topup-self) printf 'GET\t/api/user/topup/self?p=1&page_size=10\t__NONE__\tuser101\n' ;;
     user-groups) printf 'GET\t/api/user/groups\t__NONE__\tanonymous\n' ;;
     self-groups) printf 'GET\t/api/user/self/groups\t__NONE__\tuser101\n' ;;
+    user-models) printf 'GET\t/api/user/models\t__NONE__\tuser101\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -361,7 +362,7 @@ for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
 if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
-  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups ]]; then
+  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -370,7 +371,7 @@ while IFS=$'\t' read -r id; do
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
 done < <(jq -r '.fixtures[].id' "$fixtures")
-if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups ]]; then
+if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models ]]; then
   for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
 fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi
