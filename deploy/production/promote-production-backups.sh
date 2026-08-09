@@ -98,6 +98,7 @@ controller_owned=0
 offhost_owned=0
 target_mirror_owned=0
 offhost_mirror_owned=0
+transaction_lock_claimed=0
 target_ssh=("$ssh_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
   -o ControlPersist=60 -o "ControlPath=$target_control" -o "ProxyCommand=$proxy_command" \
   -p "$target_port" "$target_endpoint")
@@ -106,6 +107,28 @@ offhost_ssh=("$ssh_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto 
 target_scp=("$scp_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
   -o ControlPersist=60 -o "ControlPath=$target_control" -o "ProxyCommand=$proxy_command" \
   -P "$target_port")
+
+release_failed_backup_transaction_lock() {
+  "${target_ssh[@]}" bash -s -- "$DEPLOYMENT_ID" <<'EOF'
+set -Eeuo pipefail
+deployment_id=$1
+lock=/var/lib/lmm-api-go/deploy-transaction.lock
+marker="$lock/deployment.env"
+[[ -e $lock || -L $lock ]] || exit 0
+[[ -d $lock && ! -L $lock && -f $marker && ! -L $marker ]] || {
+  printf 'backup transaction lock is unsafe\n' >&2
+  exit 3
+}
+grep -Fqx 'format=1' "$marker"
+grep -Fqx "deployment_id=$deployment_id" "$marker" || {
+  printf 'backup transaction lock ownership changed\n' >&2
+  exit 3
+}
+grep -Fqx 'status=ACTIVE' "$marker"
+rm -f -- "$marker"
+rmdir -- "$lock"
+EOF
+}
 
 cleanup_partial() {
   set +e
@@ -116,6 +139,7 @@ cleanup_partial() {
   ((controller_owned == 0)) || rm -rf -- "$CONTROLLER_OUTPUT"
   ((offhost_mirror_owned == 0)) || rm -rf -- "$offhost_mirror"
   ((target_mirror_owned == 0)) || rm -rf -- "$target_mirror"
+  ((transaction_lock_claimed == 0)) || release_failed_backup_transaction_lock
 }
 on_error() {
   local rc=$?
@@ -124,6 +148,7 @@ on_error() {
 }
 trap on_error ERR
 
+transaction_lock_claimed=1
 "${target_ssh[@]}" bash -s -- "$DEPLOYMENT_ID" <<'EOF'
 set -Eeuo pipefail
 deployment_id=$1
