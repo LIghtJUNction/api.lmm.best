@@ -778,7 +778,7 @@ impl PgModelsService {
         if let Some(token) = self.cache_token(key).await {
             return Ok(token);
         }
-        let row = sqlx::query(r#"SELECT id, user_id, name, created_time, accessed_time, status, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, "group", cross_group_retry FROM tokens WHERE key = $1 AND deleted_at IS NULL"#)
+        let row = sqlx::query(r#"SELECT id, user_id, name, created_time, accessed_time, status::INT4 AS status, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, "group", cross_group_retry FROM tokens WHERE key = $1 AND deleted_at IS NULL"#)
             .bind(key).fetch_optional(&self.pg).await.map_err(|_| database_error())?.ok_or_else(invalid_token)?;
         let token = token_from_row(&row)?;
         self.store_token(key, &row).await;
@@ -789,7 +789,7 @@ impl PgModelsService {
         if let Some(user) = self.cache_user(id).await {
             return Ok(user);
         }
-        let row = sqlx::query(r#"SELECT id, username, role, status, email, quota, "group", setting, auth_version FROM users WHERE id = $1 AND deleted_at IS NULL"#)
+        let row = sqlx::query(r#"SELECT id, username, role, status::INT4 AS status, email, quota, "group", setting, auth_version FROM users WHERE id = $1 AND deleted_at IS NULL"#)
             .bind(id).fetch_optional(&self.pg).await.map_err(|_| database_error())?.ok_or_else(invalid_token)?;
         let user = user_from_row(&row)?;
         if self
