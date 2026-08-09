@@ -6,7 +6,10 @@
 //! issuance to the shared [`DashboardAuth`] implementation so session and
 //! token semantics stay identical to the login subsystem.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use axum::{
     Json, Router,
@@ -321,10 +324,17 @@ fn usable_groups(config: &GroupConfig, user_group: &str) -> BTreeMap<String, Str
 }
 
 fn auto_groups(config: &GroupConfig, usable: &BTreeMap<String, String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
     config
         .auto
         .iter()
-        .filter(|group| usable.contains_key(*group))
+        .filter(|group| {
+            !group.is_empty()
+                && group.as_str() != "auto"
+                && usable.contains_key(group.as_str())
+                && config.ratios.contains_key(group.as_str())
+                && seen.insert((*group).clone())
+        })
         .cloned()
         .collect()
 }
@@ -573,7 +583,8 @@ fn locale(headers: &HeaderMap) -> Locale {
 #[cfg(test)]
 mod tests {
     use super::{
-        IdentityCatalogState, legacy_ratio_value, protected_read_router, public_router, router,
+        GroupConfig, IdentityCatalogState, auto_groups, legacy_ratio_value, protected_read_router,
+        public_router, router,
     };
     use async_trait::async_trait;
     use axum::{
@@ -905,6 +916,33 @@ mod tests {
         assert_eq!(legacy_ratio_value(1.0), serde_json::json!(1));
         assert_eq!(legacy_ratio_value(0.97), serde_json::json!(0.97));
         assert_eq!(legacy_ratio_value(-2.0), serde_json::json!(-2));
+    }
+
+    #[test]
+    fn auto_groups_match_go_selection_rules() {
+        let config = GroupConfig {
+            ratios: std::collections::BTreeMap::from([
+                ("default".to_owned(), 1.0),
+                ("vip".to_owned(), 0.9),
+            ]),
+            auto: vec![
+                "unknown".to_owned(),
+                "vip".to_owned(),
+                "auto".to_owned(),
+                "vip".to_owned(),
+                "default".to_owned(),
+            ],
+            ..GroupConfig::default()
+        };
+        let usable = std::collections::BTreeMap::from([
+            ("default".to_owned(), "默认分组".to_owned()),
+            ("vip".to_owned(), "vip分组".to_owned()),
+            ("auto".to_owned(), "自动".to_owned()),
+        ]);
+        assert_eq!(
+            auto_groups(&config, &usable),
+            vec!["vip".to_owned(), "default".to_owned()]
+        );
     }
 
     fn valid_user() -> DashboardUser {
