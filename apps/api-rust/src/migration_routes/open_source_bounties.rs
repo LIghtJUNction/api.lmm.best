@@ -1,18 +1,19 @@
-//! Read-only public open-source bounty discovery.
+//! Open-source bounty discovery and settlement notifications.
 //!
 //! The Go service exposes the public bounty list through `TryUserAuth`: an
 //! anonymous visitor may browse published/paused projects, while a valid
 //! dashboard credential receives the current user's challenge for each
-//! project.  This slice deliberately owns only that read path.  Mutating
-//! escrow, challenge, notification, and MCP operations remain Go-owned until
-//! their transaction and provider evidence is migrated.
+//! project. This slice owns public discovery, authenticated read views, and
+//! settlement-notification acknowledgement paths. Mutating escrow, challenge,
+//! and MCP operations remain Go-owned until their transaction and provider
+//! evidence is migrated.
 
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lmm_contracts::LegacySuccessEnvelope;
@@ -44,8 +45,7 @@ impl OpenSourceBountyState {
     }
 }
 
-/// Public read-only bounty routes.  Authenticated writes are intentionally not
-/// mounted here; their Go ownership remains explicit in the route ledgers.
+/// Public discovery and authenticated bounty notification routes.
 pub fn router(state: OpenSourceBountyState) -> Router {
     Router::new()
         .route("/api/open-source-bounties", get(list_bounties))
@@ -59,6 +59,26 @@ pub fn router(state: OpenSourceBountyState) -> Router {
         .route(
             "/api/open-source-bounties/disputes/mine",
             get(owned_disputes),
+        )
+        .route(
+            "/api/open-source-bounties/notifications",
+            get(list_notifications),
+        )
+        .route(
+            "/api/open-source-bounties/notifications/read",
+            post(mark_notifications_read),
+        )
+        .route(
+            "/api/open-source-bounties/tips/received",
+            get(list_tip_notifications),
+        )
+        .route(
+            "/api/open-source-bounties/tips/received/read",
+            post(mark_tip_notifications_read),
+        )
+        .route(
+            "/api/open-source-bounties/tips/{tip_id}/thank",
+            post(thank_tip),
         )
         .with_state(state)
 }
@@ -75,8 +95,23 @@ struct DisputeListQuery {
     limit: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct NotificationQuery {
+    limit: Option<String>,
+}
+
+impl NotificationQuery {
+    fn normalized_limit(&self) -> i64 {
+        self.limit
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|limit| (1..=100).contains(limit))
+            .unwrap_or(50)
+    }
+}
+
 impl DisputeListQuery {
-    fn normalized(&self) -> Result<(Option<&str>, i64), Response> {
+    fn normalized(&self) -> Result<(Option<&str>, i64), Box<Response>> {
         let status = self
             .status
             .as_deref()
@@ -86,10 +121,10 @@ impl DisputeListQuery {
             let value = value.trim();
             !value.is_empty() && status.is_none()
         }) {
-            return Err(business_failure(
+            return Err(Box::new(business_failure(
                 "OPEN_SOURCE_BOUNTY_INVALID_DISPUTE_FILTER",
                 "invalid bounty dispute status filter",
-            ));
+            )));
         }
         let limit = self
             .limit
@@ -286,6 +321,37 @@ struct BountyDisputeView {
     opened_by_username: String,
     against_username: String,
     live_evidence_changed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyNotification {
+    id: i64,
+    project_id: i64,
+    challenge_id: i64,
+    sender_user_id: i64,
+    sender_username: String,
+    kind: String,
+    project_title: String,
+    quota: i64,
+    note: String,
+    recipient_read_at: i64,
+    thanked_at: i64,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyTipNotification {
+    id: i64,
+    project_id: i64,
+    challenge_id: i64,
+    sender_user_id: i64,
+    sender_username: String,
+    project_title: String,
+    quota: i64,
+    note: String,
+    recipient_read_at: i64,
+    thanked_at: i64,
+    created_at: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1090,7 +1156,7 @@ async fn owned_disputes(
     };
     let (status, limit) = match query.normalized() {
         Ok(values) => values,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let mut sql = format!(
         "{} WHERE (d.opened_by_user_id = $1 OR d.against_user_id = $1)",
@@ -1134,13 +1200,307 @@ async fn owned_disputes(
     response
 }
 
+fn notification_from_row(row: &PgRow) -> Result<BountyNotification, sqlx::Error> {
+    Ok(BountyNotification {
+        id: row.try_get("id")?,
+        project_id: row.try_get("project_id")?,
+        challenge_id: row.try_get("challenge_id")?,
+        sender_user_id: row.try_get("sender_user_id")?,
+        sender_username: row.try_get("sender_username")?,
+        kind: row.try_get("kind")?,
+        project_title: row.try_get("project_title")?,
+        quota: row.try_get("quota")?,
+        note: row.try_get("note")?,
+        recipient_read_at: row.try_get("recipient_read_at")?,
+        thanked_at: row.try_get("thanked_at")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn tip_notification_from_row(row: &PgRow) -> Result<BountyTipNotification, sqlx::Error> {
+    Ok(BountyTipNotification {
+        id: row.try_get("id")?,
+        project_id: row.try_get("project_id")?,
+        challenge_id: row.try_get("challenge_id")?,
+        sender_user_id: row.try_get("sender_user_id")?,
+        sender_username: row.try_get("sender_username")?,
+        project_title: row.try_get("project_title")?,
+        quota: row.try_get("quota")?,
+        note: row.try_get("note")?,
+        recipient_read_at: row.try_get("recipient_read_at")?,
+        thanked_at: row.try_get("thanked_at")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn add_auth_version(response: &mut Response) {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+}
+
+async fn list_notifications(
+    State(state): State<OpenSourceBountyState>,
+    Query(query): Query<NotificationQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let limit = query.normalized_limit();
+    let rows = match sqlx::query(
+        "SELECT notification.id::BIGINT AS id, notification.project_id::BIGINT AS project_id, \
+                notification.challenge_id::BIGINT AS challenge_id, notification.user_id::BIGINT AS sender_user_id, \
+                sender.username AS sender_username, notification.kind, project.title AS project_title, \
+                notification.quota::BIGINT AS quota, notification.note, notification.recipient_read_at::BIGINT AS recipient_read_at, \
+                notification.thanked_at::BIGINT AS thanked_at, notification.created_at::BIGINT AS created_at \
+         FROM open_source_bounty_ledgers notification \
+         JOIN users sender ON sender.id = notification.user_id AND sender.deleted_at IS NULL \
+         JOIN open_source_bounty_projects project ON project.id = notification.project_id \
+         WHERE notification.kind IN ('tip_transfer', 'reward_transfer', 'dispute_reward_transfer') \
+           AND notification.counterparty_user_id = $1 \
+         ORDER BY notification.created_at DESC, notification.id DESC LIMIT $2",
+    )
+    .bind(viewer_id)
+    .bind(limit)
+    .fetch_all(&state.pg)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to list open-source bounty notifications");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match notification_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, viewer_id, "failed to decode open-source bounty notification");
+                return internal_failure();
+            }
+        }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: items,
+    })
+    .into_response();
+    add_auth_version(&mut response);
+    response
+}
+
+async fn mark_notifications_read(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_ledgers \
+         SET recipient_read_at = $1 \
+         WHERE kind IN ('tip_transfer', 'reward_transfer', 'dispute_reward_transfer') \
+           AND counterparty_user_id = $2 AND recipient_read_at = 0",
+    )
+    .bind(now)
+    .bind(viewer_id)
+    .execute(&state.pg)
+    .await
+    {
+        tracing::error!(error = %error, viewer_id, "failed to mark open-source bounty notifications read");
+        return internal_failure();
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: Value::Null,
+    })
+    .into_response();
+    add_auth_version(&mut response);
+    response
+}
+
+async fn list_tip_notifications(
+    State(state): State<OpenSourceBountyState>,
+    Query(query): Query<NotificationQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let limit = query.normalized_limit();
+    let rows = match sqlx::query(
+        "SELECT tip.id::BIGINT AS id, tip.project_id::BIGINT AS project_id, tip.challenge_id::BIGINT AS challenge_id, \
+                tip.user_id::BIGINT AS sender_user_id, sender.username AS sender_username, project.title AS project_title, \
+                tip.quota::BIGINT AS quota, tip.note, tip.recipient_read_at::BIGINT AS recipient_read_at, \
+                tip.thanked_at::BIGINT AS thanked_at, tip.created_at::BIGINT AS created_at \
+         FROM open_source_bounty_ledgers tip \
+         JOIN users sender ON sender.id = tip.user_id AND sender.deleted_at IS NULL \
+         JOIN open_source_bounty_projects project ON project.id = tip.project_id \
+         WHERE tip.kind = 'tip_transfer' AND tip.counterparty_user_id = $1 \
+         ORDER BY tip.created_at DESC, tip.id DESC LIMIT $2",
+    )
+    .bind(viewer_id)
+    .bind(limit)
+    .fetch_all(&state.pg)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to list open-source bounty tip notifications");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match tip_notification_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, viewer_id, "failed to decode open-source bounty tip notification");
+                return internal_failure();
+            }
+        }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: items,
+    })
+    .into_response();
+    add_auth_version(&mut response);
+    response
+}
+
+async fn mark_tip_notifications_read(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_ledgers \
+         SET recipient_read_at = $1 \
+         WHERE kind = 'tip_transfer' AND counterparty_user_id = $2 AND recipient_read_at = 0",
+    )
+    .bind(now)
+    .bind(viewer_id)
+    .execute(&state.pg)
+    .await
+    {
+        tracing::error!(error = %error, viewer_id, "failed to mark open-source bounty tip notifications read");
+        return internal_failure();
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: Value::Null,
+    })
+    .into_response();
+    add_auth_version(&mut response);
+    response
+}
+
+async fn thank_tip(
+    State(state): State<OpenSourceBountyState>,
+    Path(tip_id): Path<i64>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    if tip_id <= 0 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_ID",
+            "invalid open-source bounty tip identifier",
+        );
+    }
+    let now = chrono::Utc::now().timestamp();
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, tip_id, "failed to begin bounty tip acknowledgement");
+            return internal_failure();
+        }
+    };
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_ledgers SET thanked_at = $1, recipient_read_at = $1 \
+         WHERE id = $2 AND kind = 'tip_transfer' AND counterparty_user_id = $3 AND thanked_at = 0",
+    )
+    .bind(now)
+    .bind(tip_id)
+    .bind(viewer_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(error = %error, viewer_id, tip_id, "failed to acknowledge bounty tip");
+        return internal_failure();
+    }
+    let row = match sqlx::query(
+        "SELECT tip.id::BIGINT AS id, tip.project_id::BIGINT AS project_id, tip.challenge_id::BIGINT AS challenge_id, \
+                tip.user_id::BIGINT AS sender_user_id, sender.username AS sender_username, project.title AS project_title, \
+                tip.quota::BIGINT AS quota, tip.note, tip.recipient_read_at::BIGINT AS recipient_read_at, \
+                tip.thanked_at::BIGINT AS thanked_at, tip.created_at::BIGINT AS created_at \
+         FROM open_source_bounty_ledgers tip \
+         JOIN users sender ON sender.id = tip.user_id AND sender.deleted_at IS NULL \
+         JOIN open_source_bounty_projects project ON project.id = tip.project_id \
+         WHERE tip.id = $1 AND tip.kind = 'tip_transfer' AND tip.counterparty_user_id = $2",
+    )
+    .bind(tip_id)
+    .bind(viewer_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, tip_id, "failed to load acknowledged bounty tip");
+            return internal_failure();
+        }
+    };
+    let Some(row) = row else {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_TIP_NOT_FOUND",
+            "tip notification was not found",
+        );
+    };
+    let notification = match tip_notification_from_row(&row) {
+        Ok(notification) => notification,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, tip_id, "failed to decode acknowledged bounty tip");
+            return internal_failure();
+        }
+    };
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(error = %error, viewer_id, tip_id, "failed to commit bounty tip acknowledgement");
+        return internal_failure();
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: notification,
+    })
+    .into_response();
+    add_auth_version(&mut response);
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use base64::Engine;
 
     use super::{
-        DEFAULT_PAGE_SIZE, DisputeListQuery, ListQuery, MAX_PAGE_SIZE, challenge_priority,
-        dashboard_token_candidate, parse_fee_rate_basis_points,
+        DEFAULT_PAGE_SIZE, DisputeListQuery, ListQuery, MAX_PAGE_SIZE, NotificationQuery,
+        challenge_priority, dashboard_token_candidate, parse_fee_rate_basis_points,
     };
 
     #[test]
@@ -1236,5 +1596,27 @@ mod tests {
             limit: None,
         };
         assert!(invalid.normalized().is_err());
+    }
+
+    #[test]
+    fn notification_limit_matches_go_default_and_bounds() {
+        assert_eq!(NotificationQuery { limit: None }.normalized_limit(), 50);
+        assert_eq!(
+            NotificationQuery {
+                limit: Some("100".to_owned())
+            }
+            .normalized_limit(),
+            100
+        );
+        for value in ["0", "-1", "101", "not-a-number"] {
+            assert_eq!(
+                NotificationQuery {
+                    limit: Some(value.to_owned())
+                }
+                .normalized_limit(),
+                50,
+                "value={value}"
+            );
+        }
     }
 }
