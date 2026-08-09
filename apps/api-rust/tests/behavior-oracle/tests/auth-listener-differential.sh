@@ -553,7 +553,14 @@ wait_for_listener "$go_port" /api/status go_pid
 
 # Go's migration is the schema source for the disposable legacy database.  We
 # provision the Rust schema explicitly so the harness also detects missing
-# auth tables and permissions before sending a request.
+# auth tables and permissions before sending a request.  The normal Rust
+# listener also mounts the open-source bounty read surface, and /readyz
+# verifies its four core tables before serving any auth request.  Reuse the
+# canonical forward migration here so this TCP fixture cannot drift from the
+# mounted schema.
+sed 's/__LMM_APP_SCHEMA__/public/g' \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" |
+  psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 >/dev/null
 psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE ROLE lmm_auth_runtime LOGIN;
 CREATE TABLE lmm_schema_contract (singleton BOOLEAN PRIMARY KEY, min_reader_version BIGINT NOT NULL, max_reader_version BIGINT NOT NULL);
@@ -576,6 +583,11 @@ ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 GRANT USAGE ON SCHEMA public TO lmm_auth_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, lmm_schema_contract TO lmm_auth_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON tokens TO lmm_auth_runtime;
+-- Readiness validates these mounted bounty tables before the auth matrix runs.
+-- Keep this fixture least-privilege: the auth differential never exercises
+-- bounty mutations, so it must not grant their write path accidentally.
+GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges,
+  open_source_bounty_ledgers, open_source_bounty_disputes TO lmm_auth_runtime;
 GRANT USAGE ON SEQUENCE auth_flows_id_seq, tokens_id_seq TO lmm_auth_runtime;
 SQL
 # The gateway no longer bootstraps a root account during startup.  Seed the same
