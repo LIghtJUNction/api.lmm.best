@@ -804,8 +804,7 @@ async function runPersonaB(browser) {
     .slice(-3)}`
   const credentials = {
     username: process.env.PERSONA_USERNAME ?? `buyer_${suffix}`,
-    email:
-      process.env.PERSONA_EMAIL ?? `buyer_${suffix}@example.invalid`,
+    email: process.env.PERSONA_EMAIL ?? `buyer_${suffix}@example.invalid`,
     password: process.env.PERSONA_PASSWORD ?? 'PreviewPass123!',
   }
   const tokenName = `acceptance-credential-${suffix}`
