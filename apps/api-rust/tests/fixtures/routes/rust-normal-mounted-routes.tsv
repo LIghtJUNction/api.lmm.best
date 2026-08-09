@@ -108,3 +108,7 @@ GET	/v1/models	apps/api-rust/src/models.rs
 GET	/v1/models/:model	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_relay_models_billing.rs
 GET	/v1beta/models	apps/api-rust/src/models.rs
 GET	/v1beta/openai/models	apps/api-rust/src/models.rs
+GET	/api/user/:id/oauth/bindings	apps/api-rust/src/main.rs:identity_federation_bindings_router
+DELETE	/api/user/:id/oauth/bindings/:provider_id	apps/api-rust/src/main.rs:identity_federation_bindings_router
+GET	/api/user/oauth/bindings	apps/api-rust/src/main.rs:identity_federation_bindings_router
+DELETE	/api/user/oauth/bindings/:provider_id	apps/api-rust/src/main.rs:identity_federation_bindings_router
