@@ -341,6 +341,16 @@ for owner_pair in "$go_schema:$go_role" "$rust_schema:$rust_role"; do
     END LOOP;
   END \$\$; ALTER SCHEMA $schema OWNER TO $role;"
 done
+# Rust's readiness probe also requires the forward-only contract-2
+# open-source-bounty relations.  Apply this after the baseline ownership pass
+# because PostgreSQL does not allow a linked serial sequence to be re-owned
+# independently from its table.
+sed "s/__LMM_APP_SCHEMA__/$rust_schema/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/$rust_schema-open-source-bounty.sql"
+PGOPTIONS="-c search_path=$rust_schema" psql -h 127.0.0.1 -p "$pg_port" -d "$database" \
+  -q -v ON_ERROR_STOP=1 -f "$runtime/$rust_schema-open-source-bounty.sql" >/dev/null
+admin_schema_sql "$rust_schema" "GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges, open_source_bounty_ledgers, open_source_bounty_disputes, open_source_bounty_mcp_tokens, open_source_bounty_mcp_confirmations, open_source_bounty_mcp_operations, open_source_bounty_rest_operations TO $rust_role;"
 valkey-server --bind 127.0.0.1 --port "$valkey_port" --save '' --appendonly no --dir "$runtime" --logfile "$runtime/valkey.log" > /dev/null 2>&1 & record_pid valkey_pid "$!"
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
