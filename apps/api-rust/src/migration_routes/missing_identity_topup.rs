@@ -338,6 +338,7 @@ struct TopupSelfRecord {
     money: Value,
     trade_no: String,
     payment_method: String,
+    payment_provider: String,
     create_time: i64,
     complete_time: i64,
     status: String,
@@ -352,6 +353,7 @@ impl From<TopupRecord> for TopupSelfRecord {
             money: record.money,
             trade_no: record.trade_no,
             payment_method: record.payment_method,
+            payment_provider: record.payment_provider,
             create_time: record.create_time,
             complete_time: record.complete_time,
             status: record.status,
@@ -1779,7 +1781,7 @@ mod tests {
         assert_eq!(value["id"], 7);
         assert_eq!(value["money"], 20.0);
         assert_eq!(value["payment_method"], "stripe");
-        assert!(value.get("payment_provider").is_none());
+        assert_eq!(value["payment_provider"], "stripe");
     }
 
     #[tokio::test]
