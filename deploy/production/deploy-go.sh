@@ -37,7 +37,7 @@ else
 fi
 [[ $OBSERVATION_SECONDS =~ ^[0-9]+$ && $OBSERVATION_SECONDS -ge 120 && $OBSERVATION_SECONDS -le 360 ]] || \
   die 'observation window must be 120-360 seconds'
-for command in bun file git jq makepkg pacman pg_restore realpath scp sha256sum ssh tar; do
+for command in bsdtar bun file git jq makepkg pacman pg_restore realpath scp sha256sum ssh tar; do
   command -v "$command" >/dev/null 2>&1 || die "required controller command is unavailable: $command"
 done
 
@@ -155,12 +155,21 @@ scp -q "$HOST:$remote_stage/precutover-payload.tar" "$capture_dir/precutover-pay
 remote_payload_sha256=$(ssh -o BatchMode=yes "$HOST" sha256sum "$remote_stage/precutover-payload.tar" | awk '{print $1}')
 local_payload_sha256=$(sha256sum "$capture_dir/precutover-payload.tar" | awk '{print $1}')
 [[ $remote_payload_sha256 == "$local_payload_sha256" ]] || die 'captured payload changed in transit'
+rollback_layout=$(bsdtar -xOf "$capture_dir/precutover-payload.tar" ./metadata/layout)
+case $rollback_layout in split|direct) ;; *) die 'captured rollback layout is invalid' ;; esac
 
 TMPDIR=$WORKSPACE/tmp "$SCRIPT_DIR/build-precutover-packages.sh" \
   --workspace "$WORKSPACE" --payload "$capture_dir/precutover-payload.tar" --output-dir "$rollback_dir"
-rollback_core=$(find "$rollback_dir" -maxdepth 1 -type f -name 'lmm-api-*.pkg.tar.*' ! -name 'lmm-api-go-*' ! -name '*.sha256' -print -quit)
 rollback_go=$(find "$rollback_dir" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*' ! -name '*.sha256' -print -quit)
-[[ -n $rollback_core && -n $rollback_go ]] || die 'rollback packages are incomplete'
+if [[ $rollback_layout == split ]]; then
+  rollback_core=$(find "$rollback_dir" -maxdepth 1 -type f -name 'lmm-api-*.pkg.tar.*' ! -name 'lmm-api-go-*' ! -name '*.sha256' -print -quit)
+else
+  rollback_core=$rollback_dir/rollback-layout.direct
+fi
+[[ -n $rollback_core && -f $rollback_core && -n $rollback_go ]] || die 'rollback artifacts are incomplete'
+if [[ $rollback_layout == direct && $(<"$rollback_core") != direct ]]; then
+  die 'direct rollback marker is invalid'
+fi
 rollback_core_sha256=$(sha256sum "$rollback_core" | awk '{print $1}')
 rollback_go_sha256=$(sha256sum "$rollback_go" | awk '{print $1}')
 if ! is_sha256 "$rollback_core_sha256" || ! is_sha256 "$rollback_go_sha256"; then
@@ -179,6 +188,7 @@ fi
   --verify-script "$REPO_ROOT/.agents/skills/lmm-deploy-safely/scripts/verify-backup-set.sh" \
   --precutover-payload "$capture_dir/precutover-payload.tar" \
   --rollback-core-package "$rollback_core" --rollback-go-package "$rollback_go" \
+  --rollback-layout "$rollback_layout" \
   >"$manifest_dir/backup-locations.txt"
 controller_transaction_lock_owned=1
 target_mirror="$WORKSPACE/staging/backup-target-$deployment_id"
@@ -223,6 +233,7 @@ if ! ssh -o BatchMode=yes "$HOST" systemd-run \
   --package "$remote_candidate" --package-sha256 "$candidate_sha256" \
   --rollback-core-package "$remote_core" --rollback-core-sha256 "$rollback_core_sha256" \
   --rollback-go-package "$remote_go" --rollback-go-sha256 "$rollback_go_sha256" \
+  --rollback-layout "$rollback_layout" \
   --probe-binary "$remote_stage/lmm-api-go" --probe-binary-sha256 "$binary_sha256" \
   --expected-version "$release_version" --old-version "$old_version" \
   --frontend-index-sha256 "$frontend_index_sha256" \
