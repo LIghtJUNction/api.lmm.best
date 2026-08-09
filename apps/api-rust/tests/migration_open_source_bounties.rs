@@ -121,3 +121,40 @@ async fn bounty_config_requires_dashboard_auth_before_options_lookup() {
         "AUTH_UNAUTHORIZED"
     );
 }
+
+#[tokio::test]
+async fn owned_bounty_list_requires_dashboard_auth_before_project_lookup() {
+    let pg = PgPoolOptions::new()
+        .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+        .expect("lazy PostgreSQL pool");
+    let valkey = redis::Client::open("redis://127.0.0.1:1").expect("lazy Valkey client");
+    let auth_config = AuthConfig {
+        session_secret: SecretString::from(
+            "open-source-bounty-mine-route-test-secret-012345678901234567890123456789",
+        ),
+        ..AuthConfig::default()
+    };
+    let auth = Arc::new(
+        PgValkeyDashboardAuth::new(pg.clone(), valkey, auth_config)
+            .expect("route-test auth adapter"),
+    );
+    let app = router(OpenSourceBountyState::new(pg, auth));
+
+    let response = app
+        .oneshot(
+            Request::get("/api/open-source-bounties/mine")
+                .body(Body::empty())
+                .expect("route request"),
+        )
+        .await
+        .expect("route response");
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
+        "AUTH_UNAUTHORIZED"
+    );
+}

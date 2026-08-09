@@ -54,6 +54,7 @@ pub fn router(state: OpenSourceBountyState) -> Router {
             get(detail_bounty),
         )
         .route("/api/open-source-bounties/config", get(bounty_config))
+        .route("/api/open-source-bounties/mine", get(owned_bounties))
         .with_state(state)
 }
 
@@ -458,11 +459,8 @@ async fn optional_viewer_id(
 }
 
 async fn bounty_config(State(state): State<OpenSourceBountyState>, headers: HeaderMap) -> Response {
-    let viewer_id = match optional_viewer_id(&state, &headers).await {
-        Ok(Some(viewer_id)) => viewer_id,
-        Ok(None) => {
-            return auth_failure(AuthErrorKind::Unauthorized);
-        }
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
         Err(response) => return response,
     };
     let raw = match sqlx::query_scalar::<_, Option<String>>(
@@ -487,6 +485,16 @@ async fn bounty_config(State(state): State<OpenSourceBountyState>, headers: Head
         },
     })
     .into_response()
+}
+
+async fn required_viewer_id(
+    state: &OpenSourceBountyState,
+    headers: &HeaderMap,
+) -> Result<i64, Response> {
+    match optional_viewer_id(state, headers).await? {
+        Some(viewer_id) => Ok(viewer_id),
+        None => Err(auth_failure(AuthErrorKind::Unauthorized)),
+    }
 }
 
 fn project_select() -> &'static str {
@@ -934,6 +942,53 @@ async fn list_bounties(
             .headers_mut()
             .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
     }
+    response
+}
+
+async fn owned_bounties(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let now = chrono::Utc::now().timestamp();
+    let query = format!(
+        "{} WHERE p.owner_user_id = $2 ORDER BY p.created_at DESC, p.id DESC",
+        project_select()
+    );
+    let rows = match sqlx::query(&query)
+        .bind(now - 7 * 24 * 60 * 60)
+        .bind(viewer_id)
+        .fetch_all(&state.pg)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to list owned open-source bounties");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match project_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, viewer_id, "failed to decode owned open-source bounty");
+                return internal_failure();
+            }
+        }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: items,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
     response
 }
 
