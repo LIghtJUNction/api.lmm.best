@@ -121,6 +121,10 @@ case $1 in
     shift
     [[ $# == 1 && $1 == lmm-api ]] || exit 94
     : >"$LMM_TEST_SERVICE_STATE/core.removed"
+    mv -- "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env" \
+      "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env.pacsave"
+    mv -- "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/backend.conf" \
+      "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/backend.conf.pacsave"
     rm -f -- "$LMM_DEPLOY_TEST_REMOVED_BINARY" "$LMM_DEPLOY_TEST_REMOVED_SELECTOR" \
       "$LMM_DEPLOY_TEST_OLD_SERVICE_FILE"
     ;;
@@ -136,6 +140,9 @@ case $1 in
       install -d -m0755 "$LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR"
       printf 'new frontend\n' >"$LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR/index.html"
       install -Dm0755 "$LMM_TEST_PROBE_SOURCE" "$LMM_DEPLOY_TEST_INSTALLED_BINARY"
+      if [[ ${LMM_TEST_INJECT_UNSAFE_OLD_CONFIG:-0} == 1 ]]; then
+        ln -s -- /run/unsafe "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/injected-link"
+      fi
     elif (($# == 2)); then
       printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed"
@@ -268,6 +275,10 @@ setup_case() {
   printf 'SQL_DSN=postgres://fixture\nSESSION_SECRET=fixture\n' >"$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env"
   chmod 0600 "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env"
   printf 'LMM_API_BACKEND=go\n' >"$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/backend.conf"
+  install -d -m0700 "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/credentials"
+  printf 'credential fixture\n' >"$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/credentials/backup.identity"
+  printf 'backup fixture\n' >"$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/postgresql-backup.env"
+  printf 'history fixture\n' >"$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env.before-fixture"
   printf '[Service]\nMemoryHigh=224M\n' >"$LMM_DEPLOY_TEST_OLD_DROPIN_DIR/50-memory.conf"
   printf '[Service]\nExecStart=/usr/bin/lmm-api\n' >"$LMM_TEST_OLD_SERVICE_SOURCE"
   install -Dm0755 "$LMM_TEST_OLD_EXECUTABLE" "$LMM_DEPLOY_TEST_REMOVED_BINARY"
@@ -319,6 +330,14 @@ grep -Fqx 'PGOPTIONS="-c search_path=lmm_prod_contract"' \
   "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || fail 'new service config did not preserve the production schema'
 [[ $(readlink "$LMM_DEPLOY_TEST_FRONTEND_ROOT/current") == "releases/$LMM_TEST_NEW_VERSION" ]] || fail 'new frontend was not published'
 [[ -f $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'rollback timer was not armed'
+[[ -f $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/credentials/backup.identity ]] || fail 'auxiliary credentials were removed'
+[[ -f $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/postgresql-backup.env ]] || fail 'auxiliary backup config was removed'
+[[ -f $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env.before-fixture ]] || fail 'operator config history was removed'
+[[ ! -e $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env && \
+   ! -e $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/lmm-api.env.pacsave && \
+   ! -e $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/backend.conf && \
+   ! -e $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/backend.conf.pacsave ]] || \
+  fail 'old application configuration was retained after cutover'
 "$confirm_workspace/staging/activate-go-release.sh" confirm --workspace "$confirm_workspace" >"$tmp/confirm.out"
 grep -Fq 'CONFIRMED' "$confirm_workspace/state/status" || fail 'confirmation state was not recorded'
 [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'confirmation did not stop the timer'
@@ -336,5 +355,17 @@ grep -Fq 'ROLLED_BACK' "$rollback_workspace/state/status" || fail 'probe failure
 [[ -x $LMM_DEPLOY_TEST_REMOVED_BINARY && -f $LMM_DEPLOY_TEST_OLD_SERVICE_FILE ]] || fail 'rollback did not restore old package paths'
 [[ -f $LMM_TEST_SERVICE_STATE/old.active && ! -e $LMM_TEST_SERVICE_STATE/new.active ]] || fail 'rollback did not restore the old service state'
 [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'rollback left its timer active'
+
+setup_case explicit-die-case
+explicit_die_workspace=$CASE_WORKSPACE
+export LMM_TEST_INJECT_UNSAFE_OLD_CONFIG=1
+if activate_case "$explicit_die_workspace" >"$tmp/activate-explicit-die.out" 2>"$tmp/activate-explicit-die.err"; then
+  fail 'injected explicit validation failure unexpectedly succeeded'
+fi
+unset LMM_TEST_INJECT_UNSAFE_OLD_CONFIG
+grep -Fq 'ROLLED_BACK' "$explicit_die_workspace/state/status" || fail 'explicit validation failure did not roll back'
+[[ -f $LMM_TEST_SERVICE_STATE/old.active && ! -e $LMM_TEST_SERVICE_STATE/new.active ]] || \
+  fail 'explicit validation failure did not restore the old service'
+[[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'explicit validation rollback left its timer active'
 
 printf 'Go rollback and confirmation state machine verified\n'
