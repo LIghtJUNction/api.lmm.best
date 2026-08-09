@@ -562,6 +562,8 @@ struct CatalogRedemption {
     redeemed_time: i64,
     used_user_id: i64,
     expired_time: i64,
+    #[serde(rename = "DeletedAt")]
+    deleted_at: Value,
 }
 
 fn model_from_row(row: &sqlx::postgres::PgRow) -> Result<CatalogModel, CatalogError> {
@@ -625,6 +627,9 @@ fn redemption_from_row(row: &sqlx::postgres::PgRow) -> Result<CatalogRedemption,
         redeemed_time: row.try_get("redeemed_time").map_err(database_error)?,
         used_user_id: row.try_get("used_user_id").map_err(database_error)?,
         expired_time: row.try_get("expired_time").map_err(database_error)?,
+        // GORM's gorm.DeletedAt has no json tag in the frozen Go model. A
+        // non-deleted row therefore serializes this zero value as null.
+        deleted_at: Value::Null,
     })
 }
 
@@ -717,6 +722,137 @@ fn normalize_sync_filter(value: &str) -> String {
     }
 }
 
+fn catalog_endpoint_types_for_channel(channel_type: i64, model_name: &str) -> Vec<&'static str> {
+    let mut endpoint_types = match channel_type {
+        38 => vec!["jina-rerank"],
+        14 | 33 => vec!["anthropic", "openai"],
+        24 | 41 => vec!["gemini", "openai"],
+        20 => vec!["openai"],
+        48 => vec!["openai", "openai-response"],
+        55 => vec!["openai-video"],
+        57 => vec![
+            "openai-response",
+            "openai-response-compact",
+            "openai-alpha-search",
+        ],
+        59 | 60 => vec![
+            "openai",
+            "openai-response",
+            "openai-response-compact",
+            "anthropic",
+            "gemini",
+            "openai-alpha-search",
+        ],
+        _ if ["o3-pro", "o3-deep-research", "o4-mini-deep-research"]
+            .iter()
+            .any(|known| model_name.contains(known)) =>
+        {
+            vec!["openai-response"]
+        }
+        _ => vec!["openai"],
+    };
+    let lower_name = model_name.to_ascii_lowercase();
+    if ["dall-e-3", "dall-e-2", "gpt-image-1", "flux-", "flux.1-"]
+        .iter()
+        .any(|needle| lower_name.contains(needle))
+        || lower_name.starts_with("imagen-")
+    {
+        endpoint_types.insert(0, "image-generation");
+    }
+    endpoint_types
+}
+
+async fn enrich_exact_models(pg: &PgPool, items: &mut [CatalogModel]) -> Result<(), CatalogError> {
+    let names = items
+        .iter()
+        .filter(|item| item.name_rule == 0)
+        .map(|item| item.model_name.clone())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    let mut groups = HashMap::<String, Vec<String>>::new();
+    let mut channels = HashMap::<String, Vec<CatalogBoundChannel>>::new();
+    let mut endpoints = HashMap::<String, Vec<String>>::new();
+    let rows = sqlx::query(
+        r#"SELECT a.model, a."group", c.id AS channel_id,
+                   COALESCE(c.name, '') AS channel_name, COALESCE(c.type, 0) AS channel_type
+              FROM abilities a
+              LEFT JOIN channels c ON c.id = a.channel_id
+             WHERE a.model = ANY($1) AND a.enabled = TRUE
+             ORDER BY a.model, a.channel_id, a."group""#,
+    )
+    .bind(&names)
+    .fetch_all(pg)
+    .await
+    .map_err(database_error)?;
+    for row in rows {
+        let model: String = row.try_get("model").map_err(database_error)?;
+        let group: String = row.try_get("group").map_err(database_error)?;
+        let model_groups = groups.entry(model.clone()).or_default();
+        if !model_groups.iter().any(|known| known == &group) {
+            model_groups.push(group);
+        }
+
+        let channel_id: Option<i64> = row.try_get("channel_id").map_err(database_error)?;
+        if channel_id.is_none() {
+            continue;
+        }
+        let channel_name: String = row.try_get("channel_name").map_err(database_error)?;
+        let channel_type: i64 = row.try_get("channel_type").map_err(database_error)?;
+        let bound = channels.entry(model.clone()).or_default();
+        if !bound
+            .iter()
+            .any(|known| known.name == channel_name && known.channel_type == channel_type)
+        {
+            bound.push(CatalogBoundChannel {
+                name: channel_name,
+                channel_type,
+            });
+        }
+        let supported = endpoints.entry(model.clone()).or_default();
+        for endpoint in catalog_endpoint_types_for_channel(channel_type, &model) {
+            if !supported.iter().any(|known| known == endpoint) {
+                supported.push(endpoint.to_owned());
+            }
+        }
+    }
+
+    let model_price =
+        sqlx::query_scalar::<_, String>("SELECT value FROM options WHERE key = 'ModelPrice'")
+            .fetch_optional(pg)
+            .await
+            .map_err(database_error)?
+            .and_then(|value| serde_json::from_str::<Value>(&value).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+
+    for item in items.iter_mut().filter(|item| item.name_rule == 0) {
+        // Go fills an empty endpoints column from the process-wide pricing
+        // snapshot, including an explicit [] when no ability exists.
+        if item.endpoints.is_empty() {
+            let values = endpoints.get(&item.model_name).cloned().unwrap_or_default();
+            item.endpoints =
+                serde_json::to_string(&values).map_err(|_| CatalogError::Unavailable)?;
+        }
+        if let Some(values) = channels.remove(&item.model_name) {
+            item.bound_channels = values;
+        }
+        if let Some(values) = groups.remove(&item.model_name) {
+            item.enable_groups = values;
+            if item.status == 1 {
+                item.quota_types = vec![if model_price.contains_key(&item.model_name) {
+                    1
+                } else {
+                    0
+                }];
+            }
+        }
+    }
+    Ok(())
+}
+
 fn unique_error(error: sqlx::Error) -> CatalogError {
     match &error {
         sqlx::Error::Database(database) if database.code().as_deref() == Some("23505") => {
@@ -774,10 +910,11 @@ async fn list_models_pg(pg: &PgPool, input: &Value, search: bool) -> Result<Valu
         }
     }
     let rows = request.fetch_all(pg).await.map_err(database_error)?;
-    let items = rows
+    let mut items = rows
         .iter()
         .map(model_from_row)
         .collect::<Result<Vec<_>, _>>()?;
+    enrich_exact_models(pg, &mut items).await?;
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM models WHERE deleted_at IS NULL AND ($1 = '' OR model_name LIKE '%' || $1 || '%' OR COALESCE(description, '') LIKE '%' || $1 || '%' OR COALESCE(tags, '') LIKE '%' || $1 || '%') AND ($2::bigint IS NULL OR vendor_id = $2) AND ($3 = '' OR EXISTS (SELECT 1 FROM vendors v WHERE v.id = models.vendor_id AND v.deleted_at IS NULL AND v.name LIKE '%' || $3 || '%')) AND ($4 = '' OR status = $4::bigint) AND ($5 = '' OR sync_official = $5::bigint)").bind(keyword).bind(vendor_id).bind(vendor_name).bind(status).bind(sync).fetch_one(pg).await.map_err(database_error)?;
     let count_rows = sqlx::query("SELECT COALESCE(vendor_id, 0) AS vendor_id, COUNT(*) AS count FROM models WHERE deleted_at IS NULL GROUP BY vendor_id").fetch_all(pg).await.map_err(database_error)?;
     let vendor_counts = count_rows
@@ -802,7 +939,9 @@ async fn get_model_pg(pg: &PgPool, id: i64) -> Result<Value, CatalogError> {
     .await
     .map_err(database_error)?
     .ok_or(CatalogError::NotFound)?;
-    serde_json::to_value(model_from_row(&row)?).map_err(|_| CatalogError::Unavailable)
+    let mut item = model_from_row(&row)?;
+    enrich_exact_models(pg, std::slice::from_mut(&mut item)).await?;
+    serde_json::to_value(item).map_err(|_| CatalogError::Unavailable)
 }
 
 async fn create_model_pg(pg: &PgPool, input: &Value) -> Result<Value, CatalogError> {
@@ -2020,8 +2159,10 @@ mod tests {
             redeemed_time: 0,
             used_user_id: 0,
             expired_time: 0,
+            deleted_at: Value::Null,
         })
         .expect("redemption JSON");
         assert_eq!(redemption["count"], 0);
+        assert_eq!(redemption["DeletedAt"], Value::Null);
     }
 }
