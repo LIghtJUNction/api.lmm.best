@@ -88,6 +88,38 @@ async fn channel_core_router_rejects_an_unauthenticated_request_before_storage_a
 }
 
 #[tokio::test]
+async fn channel_core_auth_preflight_runs_before_malformed_json_rejection() {
+    let app = router(ChannelCoreState {
+        pg: PgPoolOptions::new()
+            .connect_lazy("postgres://unused")
+            .expect("lazy PostgreSQL pool"),
+        valkey: redis::Client::open("redis://127.0.0.1/").expect("Valkey client"),
+        authorizer: Arc::new(Deny),
+        retry_times: 0,
+    });
+    let response = app
+        .oneshot(
+            Request::post("/api/channel/")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: serde_json::Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body"),
+    )
+    .expect("response JSON");
+    assert_eq!(
+        body,
+        serde_json::json!({"success":false,"message":"Unauthorized, invalid access token","code":"AUTH_UNAUTHORIZED"})
+    );
+}
+
+#[tokio::test]
 async fn channel_status_rejects_an_unmanageable_value_with_the_frozen_go_body() {
     let app = router(ChannelCoreState {
         pg: PgPoolOptions::new()
