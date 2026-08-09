@@ -29,9 +29,270 @@ For commercial licensing, please contact support@quantumnous.com
 
 @import './theme.css';
 @import './theme-presets.css';
+@import './forge-tokens.css';
+@import './console-editorial.css';
 
 /* Shiki dual themes: token colors follow dark theme (pre background stays `bg-background` on the block) */
 @layer components {
+  /* Keep fixed mobile chrome clear of notches and give every compact action
+   * a comfortable touch target without changing the desktop header geometry. */
+  .public-header {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .public-mobile-navigation {
+    padding-top: calc(5rem + env(safe-area-inset-top));
+    padding-bottom: max(2.5rem, env(safe-area-inset-bottom));
+  }
+
+  @media (max-width: 639px) {
+    .public-header-mobile-actions button {
+      min-height: 2.75rem;
+      min-width: 2.75rem;
+    }
+  }
+
+  /* Keep the authentication journey in the same warm editorial language as
+   * the public Forge: paper, ink, and one restrained clay accent. */
+  .auth-editorial {
+    --background: var(--forge-paper-light);
+    --foreground: var(--forge-ink-light);
+    --card: var(--forge-card-light);
+    --card-foreground: var(--forge-ink-light);
+    --popover: var(--forge-paper-light);
+    --popover-foreground: var(--forge-ink-light);
+    --primary: var(--forge-ink-light);
+    --primary-foreground: var(--forge-paper-light);
+    --secondary: var(--forge-secondary-light);
+    --secondary-foreground: var(--forge-ink-light);
+    --muted: var(--forge-muted-light);
+    --muted-foreground: var(--forge-muted-ink-light);
+    --accent: var(--forge-cactus-light);
+    --accent-foreground: var(--forge-ink-light);
+    --border: color-mix(in oklch, var(--forge-ink-light) 18%, transparent);
+    --input: color-mix(in oklch, var(--forge-ink-light) 24%, transparent);
+    --ring: var(--forge-ink-light);
+    --destructive: var(--forge-destructive-light);
+    --destructive-foreground: var(--forge-paper-light);
+    --art-border: color-mix(in oklch, var(--forge-ink-light) 20%, transparent);
+    --art-clay: var(--forge-clay-light);
+    --art-field: var(--forge-paper-light);
+    --art-foundation: var(--forge-ink-light);
+    --art-ink: var(--forge-ink-light);
+    --art-muted: var(--forge-muted-ink-light);
+    --art-on-foundation: var(--forge-paper-light);
+    --art-sage: var(--forge-sage-light);
+    --art-surface: var(--forge-secondary-light);
+    color-scheme: light;
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  .dark .auth-editorial {
+    --background: var(--forge-surface-dark);
+    --foreground: var(--forge-foreground-dark);
+    --card: var(--forge-card-dark);
+    --card-foreground: var(--forge-foreground-dark);
+    --popover: var(--forge-card-dark);
+    --popover-foreground: var(--forge-foreground-dark);
+    --primary: var(--forge-foreground-dark);
+    --primary-foreground: var(--forge-surface-dark);
+    --secondary: var(--forge-secondary-dark);
+    --secondary-foreground: var(--forge-foreground-dark);
+    --muted: var(--forge-muted-dark);
+    --muted-foreground: var(--forge-muted-ink-dark);
+    --accent: var(--forge-stage-dark);
+    --accent-foreground: var(--forge-foreground-dark);
+    --border: color-mix(
+      in oklch,
+      var(--forge-foreground-dark) 18%,
+      transparent
+    );
+    --input: color-mix(in oklch, var(--forge-foreground-dark) 26%, transparent);
+    --ring: var(--forge-foreground-dark);
+    --destructive: var(--forge-destructive-dark);
+    --destructive-foreground: var(--forge-surface-dark);
+    --art-border: color-mix(
+      in oklch,
+      var(--forge-foreground-dark) 18%,
+      transparent
+    );
+    --art-clay: var(--forge-clay-dark);
+    --art-field: var(--forge-card-dark);
+    --art-foundation: var(--forge-foreground-dark);
+    --art-ink: var(--forge-foreground-dark);
+    --art-muted: var(--forge-muted-ink-dark);
+    --art-on-foundation: var(--forge-surface-dark);
+    --art-sage: var(--forge-sage-dark);
+    --art-surface: var(--forge-surface-dark);
+    color-scheme: dark;
+  }
+
+  .auth-editorial :where(a, button, input, textarea, select):focus-visible {
+    outline: 2px solid var(--art-clay);
+    outline-offset: 3px;
+  }
+
+  .auth-art-surface svg path[data-field] {
+    pointer-events: stroke;
+    cursor: crosshair;
+    transition:
+      stroke 160ms ease,
+      opacity 160ms ease;
+  }
+
+  .auth-art-surface svg path[data-field]:hover {
+    stroke: var(--art-clay) !important;
+    opacity: 1;
+  }
+
+  /* The visible auth artwork is a flat editorial handoff. The old field stays
+   * mounted, but is hidden so its pointer contract remains testable without
+   * returning the technical network language to the surface. */
+  .auth-art-editorial {
+    pointer-events: none;
+  }
+
+  .auth-art-carrier {
+    fill: var(--art-field);
+  }
+
+  .auth-art-left-gesture,
+  .auth-art-right-gesture,
+  .auth-art-core {
+    fill: var(--art-foundation);
+  }
+
+  .auth-art-contour,
+  .auth-art-paper-line {
+    fill: none;
+    stroke: var(--art-foundation);
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .auth-art-contour {
+    stroke-width: 7;
+  }
+
+  .auth-art-paper-line {
+    opacity: 0.82;
+    stroke-width: 5;
+  }
+
+  .auth-art-clay {
+    fill: var(--art-clay);
+  }
+
+  .auth-art-foundation {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .auth-art-surface svg > :not(.auth-art-editorial) {
+    opacity: 1;
+    pointer-events: none;
+  }
+
+  .auth-art-surface svg > .auth-art-foundation {
+    opacity: 0;
+  }
+
+  .auth-art-overlay {
+    position: absolute;
+    inset: 1.25rem;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    pointer-events: none;
+  }
+
+  .auth-art-overlay-card {
+    width: min(100%, 22rem);
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--art-border);
+    background: var(--art-surface);
+    color: var(--art-ink);
+    pointer-events: auto;
+    transform: translateY(-4.25rem);
+  }
+
+  .auth-art-overlay-index {
+    color: var(--art-clay);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+
+  .auth-art-overlay-title {
+    margin-top: 0.45rem;
+    font-family: var(--font-serif);
+    font-size: clamp(1.45rem, 2vw, 2.2rem);
+    line-height: 1.04;
+    letter-spacing: -0.04em;
+  }
+
+  .auth-art-overlay-copy {
+    margin-top: 0.5rem;
+    max-width: 28rem;
+    color: var(--art-muted);
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+
+  .auth-art-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    pointer-events: auto;
+  }
+
+  .auth-art-tab {
+    display: flex;
+    min-height: 3rem;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0.18rem;
+    border: 1px solid var(--art-border);
+    padding: 0.55rem 0.65rem;
+    background: color-mix(in oklch, var(--art-surface) 82%, transparent);
+    color: var(--art-muted);
+    text-align: start;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .auth-art-tab:hover,
+  .auth-art-tab:focus-visible,
+  .auth-art-tab[data-active='true'] {
+    border-color: var(--art-clay);
+    background: color-mix(in oklch, var(--art-clay) 16%, var(--art-surface));
+    color: var(--art-ink);
+  }
+
+  .auth-art-tab-number {
+    color: var(--art-clay);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+  }
+
+  .auth-art-tab-label {
+    overflow: hidden;
+    max-width: 100%;
+    font-size: 0.72rem;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .shiki span {
     color: var(--shiki-light) !important;
     font-style: var(--shiki-light-font-style) !important;
@@ -523,19 +784,12 @@ For commercial licensing, please contact support@quantumnous.com
 /* Micro-interactions — Vercel-style subtle hover/active feedback */
 @media (prefers-reduced-motion: no-preference) {
   [data-slot='card']:not([data-card-hover='false']) {
-    transition:
-      transform 150ms ease,
-      box-shadow 150ms ease;
+    transition: transform 150ms ease;
   }
 
   @media (min-width: 641px) {
     [data-slot='card']:not([data-card-hover='false']):hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgb(0 0 0 / 0.06);
-    }
-
-    .dark [data-slot='card']:not([data-card-hover='false']):hover {
-      box-shadow: 0 4px 12px rgb(0 0 0 / 0.3);
     }
   }
 
@@ -648,5 +902,46 @@ For commercial licensing, please contact support@quantumnous.com
   .terminal-demo-spin,
   .terminal-demo-pulse {
     animation: none !important;
+  }
+}
+
+/* Auto group flowing border */
+@property --auto-group-flow-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes auto-group-flow-border-travel {
+  to {
+    --auto-group-flow-angle: 360deg;
+  }
+}
+
+.auto-group-flow-border {
+  padding: 1.5px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from var(--auto-group-flow-angle),
+    transparent 0deg,
+    transparent 240deg,
+    color-mix(in oklch, var(--primary) 45%, transparent) 300deg,
+    var(--primary) 342deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: auto-group-flow-border-travel 3.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-group-flow-border {
+    display: none;
   }
 }

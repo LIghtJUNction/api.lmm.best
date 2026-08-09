@@ -40,6 +40,31 @@ type TooltipLineItem = {
 }
 
 export function getDashboardChartColors(domainLength: number): string[] {
+  if (typeof document !== 'undefined') {
+    const scope = document.querySelector<HTMLElement>(
+      '.dashboard-editorial, .forge-surface'
+    )
+    if (scope) {
+      const computed = getComputedStyle(scope)
+      const themed = [
+        '--forge-model-1',
+        '--forge-model-2',
+        '--forge-model-3',
+        '--forge-model-4',
+        '--forge-model-5',
+      ]
+        .map((token) => computed.getPropertyValue(token).trim())
+        .filter(Boolean)
+
+      if (themed.length > 0) {
+        return Array.from(
+          { length: Math.max(domainLength, 1) },
+          (_, index) => themed[index % themed.length] ?? themed[0]
+        )
+      }
+    }
+  }
+
   const scheme =
     vchartDefaultDataScheme.find(
       (item) => !item.maxDomainLength || domainLength <= item.maxDomainLength
@@ -265,7 +290,7 @@ export function processChartData(
   const modelColorRange = getDashboardChartColors(modelColorDomain.length)
   const otherColor = modelColorRange[modelColorDomain.indexOf(otherLabel)]
   const otherTooltipColor =
-    typeof otherColor === 'string' ? otherColor : '#FF8A00'
+    typeof otherColor === 'string' ? otherColor : 'var(--overview-accent-2)'
   const modelColor = {
     type: 'ordinal',
     domain: modelColorDomain,
@@ -463,8 +488,16 @@ export function processChartData(
         style:
           chartCornerRadius == null ? {} : { cornerRadius: chartCornerRadius },
         state: {
-          hover: { outerRadius: 0.85, stroke: '#000', lineWidth: 1 },
-          selected: { outerRadius: 0.85, stroke: '#000', lineWidth: 1 },
+          hover: {
+            outerRadius: 0.85,
+            stroke: 'var(--forge-chart-text)',
+            lineWidth: 1,
+          },
+          selected: {
+            outerRadius: 0.85,
+            stroke: 'var(--forge-chart-text)',
+            lineWidth: 1,
+          },
         },
       },
       title: {
@@ -499,7 +532,7 @@ export function processChartData(
       color: modelColor,
       bar: {
         state: {
-          hover: { stroke: '#000', lineWidth: 1 },
+          hover: { stroke: 'var(--forge-chart-text)', lineWidth: 1 },
         },
       },
       tooltip: {
@@ -666,7 +699,7 @@ export function processChartData(
       },
       bar: {
         state: {
-          hover: { stroke: '#000', lineWidth: 1 },
+          hover: { stroke: 'var(--forge-chart-text)', lineWidth: 1 },
         },
       },
       tooltip: {
@@ -688,19 +721,6 @@ export function processChartData(
   }
 }
 
-const USER_COLORS = [
-  '#5B8FF9',
-  '#5AD8A6',
-  '#F6BD16',
-  '#E8684A',
-  '#6DC8EC',
-  '#9270CA',
-  '#FF9D4D',
-  '#269A99',
-  '#FF99C3',
-  '#5D7092',
-]
-
 export function processUserChartData(
   data: QuotaDataItem[],
   timeGranularity: TimeGranularity = 'day',
@@ -712,6 +732,7 @@ export function processUserChartData(
   const quotaPerUnit = config.quotaPerUnit
 
   const formatVal = (raw: number) => renderQuotaCompat(raw, 2)
+  const userColors = getDashboardChartColors(10)
 
   const emptyResult: ProcessedUserChartData = {
     spec_user_rank: {
@@ -727,7 +748,7 @@ export function processUserChartData(
         subtext: tt('No data available'),
       },
       legends: { visible: false },
-      color: { type: 'ordinal', range: USER_COLORS },
+      color: { type: 'ordinal', range: userColors },
       background: { fill: 'transparent' },
     },
     spec_user_trend: {
@@ -742,7 +763,7 @@ export function processUserChartData(
         subtext: tt('No data available'),
       },
       legends: { visible: true, selectMode: 'single' },
-      color: { type: 'ordinal', range: USER_COLORS },
+      color: { type: 'ordinal', range: userColors },
       point: { visible: false },
       background: { fill: 'transparent' },
     },
@@ -770,7 +791,7 @@ export function processUserChartData(
 
   const userColorMap = topUsers.reduce<Record<string, string>>(
     (acc, user, i) => {
-      acc[user] = USER_COLORS[i % USER_COLORS.length]
+      acc[user] = userColors[i % userColors.length] ?? userColors[0]
       return acc
     },
     {}
@@ -825,7 +846,9 @@ export function processUserChartData(
       },
       legends: { visible: false },
       bar: {
-        state: { hover: { stroke: '#000', lineWidth: 1 } },
+        state: {
+          hover: { stroke: 'var(--forge-chart-text)', lineWidth: 1 },
+        },
       },
       label: {
         visible: true,

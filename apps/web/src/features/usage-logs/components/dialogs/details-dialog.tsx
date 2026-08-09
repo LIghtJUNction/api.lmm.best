@@ -97,9 +97,9 @@ const CHANNEL_FIELD_LABELS: Record<string, string> = {
 function timingTextColorClass(
   variant: 'success' | 'warning' | 'danger'
 ): string {
-  if (variant === 'success') return 'text-emerald-600'
-  if (variant === 'warning') return 'text-amber-600'
-  return 'text-rose-600'
+  if (variant === 'success') return 'console-status-success-text'
+  if (variant === 'warning') return 'console-status-warning-text'
+  return 'console-status-danger-text'
 }
 
 function DetailRow(props: {
@@ -140,7 +140,7 @@ function DetailSection(props: {
       <Label
         className={cn(
           'flex items-center gap-1.5 text-xs font-semibold',
-          isDanger && 'text-red-500'
+          isDanger && 'console-status-danger-text'
         )}
       >
         {props.icon && (
@@ -153,9 +153,7 @@ function DetailSection(props: {
       <div
         className={cn(
           'min-w-0 space-y-1 overflow-hidden rounded-md border p-2.5 max-sm:p-2',
-          isDanger
-            ? 'border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20'
-            : 'bg-muted/30'
+          isDanger ? 'console-log-danger-panel' : 'bg-muted/30'
         )}
       >
         {props.children}
@@ -695,7 +693,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
               label={t('IP Address')}
               value={
                 <span className='flex items-center gap-1'>
-                  <Globe className='size-3 text-amber-500' aria-hidden='true' />
+                  <Globe
+                    className='console-status-warning-icon size-3'
+                    aria-hidden='true'
+                  />
                   {props.log.ip}
                 </span>
               }
@@ -753,7 +754,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 aria-label={t('Copy to clipboard')}
               >
                 {copiedText === conversionLabel ? (
-                  <Check className='size-3 text-green-600' />
+                  <Check className='console-status-success-icon size-3' />
                 ) : (
                   <Copy className='size-3' />
                 )}
@@ -882,8 +883,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
               />
             ))}
             {showLegacyTopupWarning && (
-              <div className='flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400'>
-                <Info className='mt-0.5 size-3.5 shrink-0' aria-hidden='true' />
+              <div className='console-status-warning-text flex items-start gap-1.5 text-xs'>
+                <Info
+                  className='console-status-warning-icon mt-0.5 size-3.5 shrink-0'
+                  aria-hidden='true'
+                />
                 <span>
                   {t(
                     'This historical record predates audit-info tracking and cannot be backfilled. The current instance already records server IP, callback IP, payment method, and system version for new top-ups going forward.'
@@ -1095,9 +1099,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
               value={
                 <span className='flex items-center gap-1'>
                   {isUsageBillingPathLocal(other.admin_info) ? (
-                    <Monitor className='size-3 text-blue-500' />
+                    <Monitor className='console-status-info-icon size-3' />
                   ) : (
-                    <Cloud className='size-3 text-emerald-500' />
+                    <Cloud className='console-status-success-icon size-3' />
                   )}
                   <span className='text-xs'>
                     {getUsageBillingPathLabel(t, other.admin_info)}
@@ -1107,48 +1111,46 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
 
-        {/* Stream status details (admin only) */}
-        {props.isAdmin &&
-          other?.stream_status &&
-          other.stream_status.status !== 'ok' && (
-            <DetailSection label={t('Stream Status')}>
+        {/* Stream status details */}
+        {other?.stream_status && other.stream_status.status !== 'ok' && (
+          <DetailSection label={t('Stream Status')}>
+            <DetailRow
+              label={t('Status')}
+              value={
+                <StatusBadge
+                  label={other.stream_status.status || t('Error')}
+                  variant='red'
+                  size='sm'
+                  copyable={false}
+                />
+              }
+            />
+            {other.stream_status.end_reason && (
               <DetailRow
-                label={t('Status')}
-                value={
-                  <StatusBadge
-                    label={other.stream_status.status || t('Error')}
-                    variant='red'
-                    size='sm'
-                    copyable={false}
-                  />
-                }
+                label={t('End Reason')}
+                value={other.stream_status.end_reason}
               />
-              {other.stream_status.end_reason && (
-                <DetailRow
-                  label={t('End Reason')}
-                  value={other.stream_status.end_reason}
-                />
+            )}
+            {(other.stream_status.error_count ?? 0) > 0 && (
+              <DetailRow
+                label={t('Soft Errors')}
+                value={String(other.stream_status.error_count)}
+              />
+            )}
+            {other.stream_status.end_error && (
+              <DetailRow
+                label={t('End Error')}
+                value={other.stream_status.end_error}
+              />
+            )}
+            {Array.isArray(other.stream_status.errors) &&
+              other.stream_status.errors.length > 0 && (
+                <pre className='bg-background/60 mt-1 max-h-32 overflow-y-auto rounded border p-2 font-mono text-[11px] leading-relaxed wrap-break-word whitespace-pre-wrap'>
+                  {other.stream_status.errors.join('\n')}
+                </pre>
               )}
-              {(other.stream_status.error_count ?? 0) > 0 && (
-                <DetailRow
-                  label={t('Soft Errors')}
-                  value={String(other.stream_status.error_count)}
-                />
-              )}
-              {other.stream_status.end_error && (
-                <DetailRow
-                  label={t('End Error')}
-                  value={other.stream_status.end_error}
-                />
-              )}
-              {Array.isArray(other.stream_status.errors) &&
-                other.stream_status.errors.length > 0 && (
-                  <pre className='bg-background/60 mt-1 max-h-32 overflow-y-auto rounded border p-2 font-mono text-[11px] leading-relaxed wrap-break-word whitespace-pre-wrap'>
-                    {other.stream_status.errors.join('\n')}
-                  </pre>
-                )}
-            </DetailSection>
-          )}
+          </DetailSection>
+        )}
 
         {/* Subscription billing details */}
         {isSubscription && other && (
@@ -1242,7 +1244,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 aria-label={t('Copy to clipboard')}
               >
                 {copiedText === details ? (
-                  <Check className='size-3 text-green-600' />
+                  <Check className='console-status-success-icon size-3' />
                 ) : (
                   <Copy className='size-3' />
                 )}

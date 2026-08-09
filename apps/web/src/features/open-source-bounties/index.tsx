@@ -710,7 +710,7 @@ export function OpenSourceBounties({
           <CardStaggerItem>
             <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
               <div className='flex items-start gap-3 sm:gap-4'>
-                <div className='bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-xl sm:size-12'>
+                <div className='bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-none sm:size-12'>
                   <HugeiconsIcon
                     icon={Award01Icon}
                     strokeWidth={1.8}
@@ -1333,7 +1333,7 @@ function BountyCard({
           label={t('Thanks received')}
           value={
             <span className='inline-flex items-center gap-1.5'>
-              <Heart className='size-4 fill-rose-500 text-rose-500' />
+              <Heart className='console-status-danger-text size-4 fill-current' />
               {project.owner_thank_heart_count ?? 0}
             </span>
           }
@@ -1367,14 +1367,11 @@ function BountyCard({
 function BountyRankBadge({ rank }: { rank: number }) {
   let className = 'border-border bg-background text-muted-foreground'
   if (rank === 1) {
-    className =
-      'border-amber-500/70 bg-amber-400 text-amber-950 dark:border-amber-300/70 dark:bg-amber-300 dark:text-amber-950'
+    className = 'console-rank-gold'
   } else if (rank === 2) {
-    className =
-      'border-zinc-400/70 bg-zinc-200 text-zinc-800 dark:border-zinc-300/60 dark:bg-zinc-300 dark:text-zinc-950'
+    className = 'console-rank-silver'
   } else if (rank === 3) {
-    className =
-      'border-orange-500/60 bg-orange-200 text-orange-950 dark:border-orange-300/60 dark:bg-orange-300 dark:text-orange-950'
+    className = 'console-rank-bronze'
   }
 
   return (
@@ -2087,7 +2084,7 @@ export function ProjectReviewDialog(props: {
                 challenge.id === props.focusedChallengeId ? 'true' : undefined
               }
               className={cn(
-                'flex flex-col gap-3 rounded-xl border p-4',
+                'flex flex-col gap-3 rounded-none border p-4',
                 challenge.id === props.focusedChallengeId &&
                   'border-primary ring-primary/20 ring-2'
               )}
@@ -3144,7 +3141,7 @@ function RulesPanel() {
       >
         <div className='grid gap-3 sm:grid-cols-2'>
           {steps.map(([number, title, description]) => (
-            <div key={number} className='flex gap-3 rounded-xl border p-4'>
+            <div key={number} className='flex gap-3 rounded-none border p-4'>
               <Badge variant='secondary'>{number}</Badge>
               <div>
                 <h3 className='font-semibold'>{t(title)}</h3>

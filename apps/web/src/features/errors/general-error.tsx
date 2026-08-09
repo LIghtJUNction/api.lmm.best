@@ -22,6 +22,8 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
+import { ErrorPageFrame } from './error-page-frame'
+
 const FEEDBACK_URL = 'https://github.com/LIghtJUNction/api.lmm.best/issues'
 
 type GeneralErrorProps = React.HTMLAttributes<HTMLDivElement> & {
@@ -55,45 +57,54 @@ export function GeneralError({
     : t('Please try again later.')
 
   return (
-    <div className={cn('h-svh w-full', className)}>
-      <div className='m-auto flex h-full w-full flex-col items-center justify-center gap-2'>
-        {!minimal && (
-          <h1 className='text-[7rem] leading-tight font-bold'>
-            {status ?? 500}
-          </h1>
-        )}
-        <span className='font-medium'>{title}</span>
-        <p className='text-muted-foreground text-center'>
-          {t('We apologize for the inconvenience.')} <br /> {description}
-        </p>
-        {!minimal && (
-          <p className='text-muted-foreground text-center text-sm'>
-            {t('If this keeps happening, please report it on GitHub Issues.')}
-          </p>
-        )}
-        {!minimal && (
-          <div className='mt-6 flex flex-wrap justify-center gap-4'>
-            <Button variant='outline' onClick={() => history.go(-1)}>
-              {t('Go Back')}
-            </Button>
-            <Button
-              variant='outline'
-              render={
-                <a
-                  href={FEEDBACK_URL}
-                  target='_blank'
-                  rel='noopener noreferrer'
-                />
-              }
-            >
-              {t('Report an issue')}
-            </Button>
-            <Button onClick={() => navigate({ to: '/' })}>
-              {t('Back to Home')}
-            </Button>
-          </div>
-        )}
-      </div>
+    <div className={cn('min-h-svh w-full', className)}>
+      <ErrorPageFrame
+        status={status ?? 500}
+        showStatus={!minimal}
+        title={title}
+        description={
+          <>
+            {t('We apologize for the inconvenience.')} <br /> {description}
+          </>
+        }
+        note={
+          !minimal
+            ? t('If this keeps happening, please report it on GitHub Issues.')
+            : undefined
+        }
+        actions={
+          !minimal ? (
+            <>
+              <Button
+                variant='outline'
+                className='rounded-sm'
+                onClick={() => history.go(-1)}
+              >
+                {t('Go Back')}
+              </Button>
+              <Button
+                variant='outline'
+                className='rounded-sm'
+                render={
+                  <a
+                    href={FEEDBACK_URL}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  />
+                }
+              >
+                {t('Report an issue')}
+              </Button>
+              <Button
+                className='rounded-sm'
+                onClick={() => navigate({ to: '/' })}
+              >
+                {t('Back to Home')}
+              </Button>
+            </>
+          ) : undefined
+        }
+      />
     </div>
   )
 }

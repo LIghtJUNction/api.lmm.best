@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 
 import { useThemeCustomization } from '@/context/theme-customization-provider'
 import { getSuccessRateColor } from '@/features/performance-metrics/lib/format'
+import { resolveForgeColor } from '@/lib/forge-colors'
 import { useThemeRadiusPx } from '@/lib/theme-radius'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { cn } from '@/lib/utils'
@@ -51,15 +52,20 @@ function formatDayLabel(date: string): string {
 }
 
 function getChartThemeTokens(resolvedTheme: string) {
+  const isDark = resolvedTheme === 'dark'
   return {
-    textColor:
-      resolvedTheme === 'dark'
-        ? 'rgba(255, 255, 255, 0.68)'
-        : 'rgba(15, 23, 42, 0.58)',
-    gridColor:
-      resolvedTheme === 'dark'
-        ? 'rgba(255, 255, 255, 0.12)'
-        : 'rgba(15, 23, 42, 0.12)',
+    textColor: resolveForgeColor(
+      isDark ? '--forge-chart-text-dark' : '--forge-chart-text-light'
+    ),
+    gridColor: resolveForgeColor(
+      isDark ? '--forge-chart-grid-dark' : '--forge-chart-grid-light'
+    ),
+    pointColor: resolveForgeColor(
+      isDark ? '--forge-chart-point-dark' : '--forge-chart-point-light'
+    ),
+    seriesColor: resolveForgeColor(
+      isDark ? '--forge-chart-series-dark' : '--forge-chart-series-light'
+    ),
   }
 }
 
@@ -99,7 +105,8 @@ export function LatencyTrendChart(props: {
 }) {
   const { t } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
-  const { textColor, gridColor } = getChartThemeTokens(resolvedTheme)
+  const { textColor, gridColor, pointColor } =
+    getChartThemeTokens(resolvedTheme)
 
   const spec = useMemo(() => {
     if (props.series.length === 0) return null
@@ -117,7 +124,7 @@ export function LatencyTrendChart(props: {
       smooth: true,
       point: {
         visible: true,
-        style: { size: 5, stroke: '#ffffff', lineWidth: 1.5 },
+        style: { size: 5, stroke: pointColor, lineWidth: 1.5 },
       },
       line: {
         style: { lineWidth: 2 },
@@ -155,7 +162,7 @@ export function LatencyTrendChart(props: {
         },
       ],
     }
-  }, [gridColor, props.series, t, textColor])
+  }, [gridColor, pointColor, props.series, t, textColor])
 
   if (props.series.length === 0) {
     return (
@@ -197,7 +204,8 @@ export function UptimeTrendChart(props: {
 }) {
   const { t } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
-  const { textColor, gridColor } = getChartThemeTokens(resolvedTheme)
+  const { textColor, gridColor, pointColor, seriesColor } =
+    getChartThemeTokens(resolvedTheme)
 
   const spec = useMemo(() => {
     if (props.series.length === 0) return null
@@ -224,13 +232,13 @@ export function UptimeTrendChart(props: {
       yField: 'uptime',
       smooth: true,
       line: {
-        style: { stroke: '#10b981', lineWidth: 2 },
+        style: { stroke: seriesColor, lineWidth: 2 },
       },
       point: {
         visible: true,
         style: {
           size: 5,
-          stroke: '#ffffff',
+          stroke: pointColor,
           lineWidth: 1.5,
           fill: (datum: { uptime: number }) =>
             getSuccessRateColor(datum.uptime),
@@ -283,7 +291,7 @@ export function UptimeTrendChart(props: {
         },
       ],
     }
-  }, [gridColor, props.series, t, textColor])
+  }, [gridColor, pointColor, props.series, seriesColor, t, textColor])
 
   if (props.series.length === 0) {
     return (
@@ -325,7 +333,8 @@ export function ThroughputBarChart(props: {
 }) {
   const { t } = useTranslation()
   const { resolvedTheme, themeReady } = useChartTheme()
-  const { textColor, gridColor } = getChartThemeTokens(resolvedTheme)
+  const { textColor, gridColor, seriesColor } =
+    getChartThemeTokens(resolvedTheme)
   const { customization } = useThemeCustomization()
   const barRadius = useThemeRadiusPx(
     '--radius-sm',
@@ -347,7 +356,7 @@ export function ThroughputBarChart(props: {
       yField: 'group',
       bar: {
         style: {
-          fill: '#6366f1',
+          fill: seriesColor,
           ...(barRadius == null ? {} : { cornerRadius: barRadius }),
         },
       },
@@ -385,7 +394,7 @@ export function ThroughputBarChart(props: {
         },
       },
     }
-  }, [barRadius, filtered, gridColor, t, textColor])
+  }, [barRadius, filtered, gridColor, seriesColor, t, textColor])
 
   if (filtered.length === 0) {
     return null

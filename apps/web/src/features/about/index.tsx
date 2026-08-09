@@ -20,32 +20,39 @@ import { useQuery } from '@tanstack/react-query'
 import { Construction } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { PublicLayout } from '@/components/layout'
 import { RichContent } from '@/components/rich-content'
 import { Skeleton } from '@/components/ui/skeleton'
 import { isHttpUrl, isLikelyHtml } from '@/lib/content-format'
 
+import { ForgePublicShell } from '../forge/forge-public-shell'
 import { getAboutContent } from './api'
 
 function EmptyAboutState() {
   const { t } = useTranslation()
 
   return (
-    <div className='flex min-h-[60vh] items-center justify-center p-8'>
-      <div className='max-w-2xl space-y-6 text-center'>
-        <div className='flex justify-center'>
-          <Construction className='text-muted-foreground h-24 w-24' />
-        </div>
-        <div className='space-y-2'>
-          <h2 className='text-2xl font-bold'>{t('No About Content Set')}</h2>
-          <p className='text-muted-foreground'>
+    <main className='mx-auto max-w-7xl px-5 pt-32 pb-24 md:px-10 md:pt-40'>
+      <div className='grid gap-12 md:grid-cols-[minmax(0,0.9fr)_minmax(18rem,0.7fr)] md:items-end'>
+        <div>
+          <p className='mb-5 flex items-center gap-2 text-xs font-bold uppercase'>
+            <span className='bg-foreground size-2 rounded-full' />
+            {t('About LMM Forge')}
+          </p>
+          <h1 className='max-w-3xl font-serif text-5xl leading-[1.02] font-normal md:text-7xl'>
+            {t('Open-source work, made accountable.')}
+          </h1>
+          <p className='text-muted-foreground mt-7 max-w-2xl text-base leading-7 md:text-lg'>
             {t(
               'The administrator has not configured any about content yet. You can set it in the settings page, supporting HTML or URL.'
             )}
           </p>
         </div>
-        <div className='space-y-4 text-sm'>
-          <p className='text-muted-foreground'>
+        <div className='border-foreground border-t-2 pt-5 text-sm leading-6'>
+          <div className='mb-8 flex items-center gap-3'>
+            <Construction className='size-8' aria-hidden='true' />
+            <span className='font-serif text-2xl'>{t('A clear space')}</span>
+          </div>
+          <p className='text-muted-foreground mb-5'>
             {t('Open-source bounty collaboration')}
           </p>
           <p className='text-muted-foreground'>
@@ -54,7 +61,7 @@ function EmptyAboutState() {
               href='https://github.com/LIghtJUNction/api.lmm.best/blob/main/LICENSE'
               target='_blank'
               rel='noopener noreferrer'
-              className='text-primary hover:underline'
+              className='border-foreground text-foreground border-b hover:opacity-70'
             >
               {t('AGPL v3.0 License')}
             </a>
@@ -62,7 +69,7 @@ function EmptyAboutState() {
           </p>
         </div>
       </div>
-    </div>
+    </main>
   )
 }
 
@@ -80,60 +87,60 @@ export function About() {
 
   if (isLoading) {
     return (
-      <PublicLayout>
-        <div className='mx-auto flex max-w-4xl flex-col gap-4 py-12'>
+      <ForgePublicShell>
+        <main className='mx-auto flex max-w-4xl flex-col gap-4 px-5 pt-32 pb-24 md:px-10'>
           <Skeleton className='h-8 w-[45%]' />
           <Skeleton className='h-4 w-full' />
           <Skeleton className='h-4 w-[90%]' />
           <Skeleton className='h-4 w-[80%]' />
-        </div>
-      </PublicLayout>
+        </main>
+      </ForgePublicShell>
     )
   }
 
   if (!hasContent) {
     return (
-      <PublicLayout>
+      <ForgePublicShell>
         <EmptyAboutState />
-      </PublicLayout>
+      </ForgePublicShell>
     )
   }
 
   if (isUrl) {
     return (
-      <PublicLayout showMainContainer={false}>
+      <ForgePublicShell>
         <iframe
           src={rawContent}
-          className='h-[calc(100vh-3.5rem)] w-full border-0'
+          className='h-[calc(100svh-4rem)] w-full border-0 pt-16'
           title={t('About')}
           sandbox='allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts'
         />
-      </PublicLayout>
+      </ForgePublicShell>
     )
   }
 
   if (contentIsHtml) {
     return (
-      <PublicLayout showMainContainer={false}>
+      <ForgePublicShell>
         <RichContent
           mode='html'
           htmlVariant='isolated'
           content={rawContent}
-          className='prose-neutral dark:prose-invert max-w-none'
+          className='forge-rich-content prose-neutral dark:prose-invert max-w-none'
         />
-      </PublicLayout>
+      </ForgePublicShell>
     )
   }
 
   return (
-    <PublicLayout>
-      <div className='mx-auto max-w-6xl px-4 py-8'>
+    <ForgePublicShell>
+      <main className='mx-auto max-w-6xl px-5 pt-32 pb-24 md:px-10'>
         <RichContent
           mode='markdown'
           content={rawContent}
-          className='prose-neutral dark:prose-invert max-w-none'
+          className='forge-rich-content prose-neutral dark:prose-invert max-w-none'
         />
-      </div>
-    </PublicLayout>
+      </main>
+    </ForgePublicShell>
   )
 }

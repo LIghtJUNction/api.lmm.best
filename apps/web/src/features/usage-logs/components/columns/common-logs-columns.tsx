@@ -394,7 +394,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                           }
                         >
                           <GitBranch
-                            className='size-3.5 text-amber-500'
+                            className='console-status-warning-icon size-3.5'
                             aria-hidden='true'
                           />
                         </PopoverTrigger>
@@ -415,7 +415,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                     {affinity && (
                       <button
                         type='button'
-                        className='absolute -top-1 -right-1 leading-none text-amber-500'
+                        className='console-status-warning-text absolute -top-1 -right-1 leading-none'
                         onClick={(e) => {
                           e.stopPropagation()
                           setAffinityTarget({
@@ -738,7 +738,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         if (primary?.muted) {
           primaryTextClass = 'text-muted-foreground/60'
         } else if (primary?.danger) {
-          primaryTextClass = 'text-red-600 dark:text-red-400'
+          primaryTextClass = 'console-status-danger-text'
         }
         let detailPreview = <span className='text-muted-foreground/40'>—</span>
         if (primary) {

@@ -377,7 +377,7 @@ function BountyNotificationsContent({
                           data-icon='inline-start'
                           className={
                             item.thanked_at > 0
-                              ? 'fill-current text-rose-500'
+                              ? 'text-destructive fill-current'
                               : undefined
                           }
                         />

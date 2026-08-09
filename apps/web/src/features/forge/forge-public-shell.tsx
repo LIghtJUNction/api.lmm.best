@@ -21,6 +21,8 @@ import { useEffect } from 'react'
 import { PublicLayout } from '@/components/layout'
 import { LmmBrandMark } from '@/components/lmm-brand-mark'
 
+import './forge-public-shell.css'
+
 type ForgePublicShellProps = {
   children: React.ReactNode
 }
@@ -47,13 +49,10 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
       showNotifications={false}
       headerProps={{
         useDynamicNavLinks: false,
-        className:
-          '[&>div>nav]:!border-border [&>div>nav]:!bg-background [&>div>nav]:!text-foreground [&>div>nav_a]:!text-foreground [&>div>nav_a:hover]:!text-foreground [&>div>nav>div]:!text-foreground [&>div>nav>div_a]:!text-foreground [&>div>nav>div_a:hover]:!text-foreground [&>div>nav>div_button]:!text-foreground',
+        className: 'forge-public-header',
       }}
     >
-      <div className='bg-background text-foreground min-h-svh'>
-        {props.children}
-      </div>
+      <div className='forge-surface min-h-svh'>{props.children}</div>
     </PublicLayout>
   )
 }

@@ -34,9 +34,9 @@ type UserQuotaCellProps = {
 }
 
 function getQuotaProgressColor(percentage: number): string {
-  if (percentage <= 10) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
-  if (percentage <= 30) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
-  return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
+  if (percentage <= 10) return 'console-status-progress-danger'
+  if (percentage <= 30) return 'console-status-progress-warning'
+  return 'console-status-progress-success'
 }
 
 export function UserQuotaCell(props: UserQuotaCellProps) {

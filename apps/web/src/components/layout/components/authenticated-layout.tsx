@@ -42,7 +42,10 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
   return (
     <LayoutProvider>
       <SearchProvider>
-        <SidebarProvider defaultOpen={defaultOpen} className='flex-col'>
+        <SidebarProvider
+          defaultOpen={defaultOpen}
+          className='console-editorial flex-col'
+        >
           <SkipToMain />
           <AppHeader
             showTopNav={consoleActivated}

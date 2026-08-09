@@ -583,7 +583,7 @@ function SupportedParametersSection(props: { model: PricingModel }) {
                 {p.required && (
                   <Badge
                     variant='outline'
-                    className='h-6 border-rose-500/40 px-2 text-sm text-rose-600 dark:text-rose-400'
+                    className='forge-price-danger-badge h-6 px-2 text-sm'
                   >
                     {t('required')}
                   </Badge>

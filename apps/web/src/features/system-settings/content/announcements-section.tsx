@@ -96,35 +96,37 @@ type AnnouncementFormValues = z.infer<typeof announcementSchema>
 
 const ANNOUNCEMENT_FORM_ID = 'announcement-form'
 
+type AnnouncementTone = 'neutral' | 'info' | 'success' | 'warning' | 'danger'
+
 const typeOptions = [
   {
     value: 'default',
     label: 'Default',
-    color: 'bg-gray-500',
+    tone: 'neutral' as AnnouncementTone,
     badgeVariant: 'neutral' as const,
   },
   {
     value: 'ongoing',
     label: 'Ongoing',
-    color: 'bg-blue-500',
+    tone: 'info' as AnnouncementTone,
     badgeVariant: 'info' as const,
   },
   {
     value: 'success',
     label: 'Success',
-    color: 'bg-green-500',
+    tone: 'success' as AnnouncementTone,
     badgeVariant: 'success' as const,
   },
   {
     value: 'warning',
     label: 'Warning',
-    color: 'bg-orange-500',
+    tone: 'warning' as AnnouncementTone,
     badgeVariant: 'warning' as const,
   },
   {
     value: 'error',
     label: 'Error',
-    color: 'bg-red-500',
+    tone: 'danger' as AnnouncementTone,
     badgeVariant: 'danger' as const,
   },
 ]
@@ -527,7 +529,7 @@ export function AnnouncementsSection({
                       label: (
                         <div className='flex items-center gap-2'>
                           <div
-                            className={`h-3 w-3 rounded-full ${option.color}`}
+                            className={`console-announcement-dot console-announcement-dot-${option.tone}`}
                           />
                           {option.label}
                         </div>
@@ -549,7 +551,7 @@ export function AnnouncementsSection({
                           <SelectItem key={option.value} value={option.value}>
                             <div className='flex items-center gap-2'>
                               <div
-                                className={`h-3 w-3 rounded-full ${option.color}`}
+                                className={`console-announcement-dot console-announcement-dot-${option.tone}`}
                               />
                               {option.label}
                             </div>

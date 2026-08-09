@@ -53,27 +53,24 @@ const STATUS_VARIANT: Record<SystemTaskStatus, 'secondary' | 'destructive'> = {
 }
 
 const STATUS_CLASS_NAME: Record<SystemTaskStatus, string> = {
-  pending:
-    'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
-  running:
-    'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300 [&_span]:bg-sky-500',
-  succeeded:
-    'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+  pending: 'console-status-warning-badge',
+  running: 'console-status-info-badge',
+  succeeded: 'console-status-success-badge',
   failed: '',
 }
 
 const STATUS_DOT_CLASS_NAME: Record<SystemTaskStatus, string> = {
-  pending: 'bg-amber-500',
-  running: 'bg-sky-500',
-  succeeded: 'bg-emerald-500',
-  failed: 'bg-destructive',
+  pending: 'forge-status-dot-warning',
+  running: 'forge-status-dot-info',
+  succeeded: 'forge-status-dot-success',
+  failed: 'forge-status-dot-danger',
 }
 
 const PROGRESS_BAR_CLASS_NAME: Record<SystemTaskStatus, string> = {
-  pending: '[&_[data-slot=progress-indicator]]:bg-amber-500',
-  running: '[&_[data-slot=progress-indicator]]:bg-sky-500',
-  succeeded: '[&_[data-slot=progress-indicator]]:bg-emerald-500',
-  failed: '[&_[data-slot=progress-indicator]]:bg-destructive',
+  pending: 'console-status-progress-warning',
+  running: 'console-status-progress-info',
+  succeeded: 'console-status-progress-success',
+  failed: 'console-status-progress-danger',
 }
 
 // Maps backend system task type constants to i18n source keys. Unknown/future
@@ -231,7 +228,7 @@ export function SystemTasksPanel() {
   const historyTasks = tasks.filter((task) => !isActiveStatus(task.status))
 
   return (
-    <section className='bg-card overflow-hidden rounded-lg border shadow-xs'>
+    <section className='bg-card overflow-hidden rounded-none border shadow-none'>
       <div className='flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5'>
         <div className='min-w-0'>
           <div className='flex items-center gap-2'>
@@ -256,7 +253,9 @@ export function SystemTasksPanel() {
             <span
               className={cn(
                 'size-1.5 rounded-full',
-                hasActiveTasks ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+                hasActiveTasks
+                  ? 'forge-status-dot-success'
+                  : 'bg-muted-foreground/40'
               )}
               aria-hidden='true'
             />

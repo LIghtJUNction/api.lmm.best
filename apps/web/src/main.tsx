@@ -24,7 +24,7 @@ import {
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { AxiosError } from 'axios'
 import i18next from 'i18next'
-import { StrictMode } from 'react'
+import { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 import { toast } from 'sonner'
 
@@ -194,15 +194,30 @@ if (!rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement)
   root.render(
     <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <FontProvider>
-            <DirectionProvider>
-              <RouterProvider router={router} />
-            </DirectionProvider>
-          </FontProvider>
-        </ThemeProvider>
-      </QueryClientProvider>
+      <Suspense
+        fallback={
+          <div
+            className='bg-background text-foreground flex min-h-svh items-center justify-center'
+            role='status'
+            aria-label='Loading interface'
+          >
+            <span
+              className='bg-primary size-3 animate-pulse'
+              aria-hidden='true'
+            />
+          </div>
+        }
+      >
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider>
+            <FontProvider>
+              <DirectionProvider>
+                <RouterProvider router={router} />
+              </DirectionProvider>
+            </FontProvider>
+          </ThemeProvider>
+        </QueryClientProvider>
+      </Suspense>
     </StrictMode>
   )
 }

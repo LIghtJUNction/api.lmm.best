@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { LucideIcon } from 'lucide-react'
-import { useId, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -55,12 +55,9 @@ interface StatCardProps {
 }
 
 const TONE_CLASSES: Record<StatCardTone, string> = {
-  'accent-1':
-    'from-overview-accent-1/80 via-overview-accent-1/45 to-overview-accent-1/5 dark:from-overview-accent-1/70 dark:via-overview-accent-1/30',
-  'accent-2':
-    'from-overview-accent-2/80 via-overview-accent-2/45 to-overview-accent-2/5 dark:from-overview-accent-2/70 dark:via-overview-accent-2/30',
-  'accent-3':
-    'from-overview-accent-3/80 via-overview-accent-3/45 to-overview-accent-3/5 dark:from-overview-accent-3/70 dark:via-overview-accent-3/30',
+  'accent-1': 'bg-overview-accent-1/75',
+  'accent-2': 'bg-overview-accent-2/75',
+  'accent-3': 'bg-overview-accent-3/75',
 }
 
 const LINE_TONE_CLASSES: Record<StatCardTone, string> = {
@@ -145,8 +142,6 @@ function buildLineSparkline(values?: number[]) {
 }
 
 function LineSparkline(props: { values?: number[]; tone: StatCardTone }) {
-  const rawGradientId = useId()
-  const gradientId = `stat-card-line-${rawGradientId.replaceAll(':', '')}`
   const paths = buildLineSparkline(props.values)
 
   if (!paths) return <div className='h-8' aria-hidden='true' />
@@ -164,13 +159,7 @@ function LineSparkline(props: { values?: number[]; tone: StatCardTone }) {
         preserveAspectRatio='none'
         className='size-full'
       >
-        <defs>
-          <linearGradient id={gradientId} x1='0' x2='0' y1='0' y2='1'>
-            <stop offset='0%' stopColor='currentColor' stopOpacity='0.24' />
-            <stop offset='100%' stopColor='currentColor' stopOpacity='0' />
-          </linearGradient>
-        </defs>
-        <path d={paths.areaPath} fill={`url(#${gradientId})`} />
+        <path d={paths.areaPath} fill='currentColor' fillOpacity='0.1' />
         <path
           d={paths.linePath}
           fill='none'
@@ -194,7 +183,7 @@ function BarSparkline(props: { values?: number[]; tone: StatCardTone }) {
         <span
           key={bucket.position}
           className={cn(
-            'flex-1 rounded-t-sm bg-linear-to-t',
+            'flex-1 rounded-t-sm',
             bucket.height <= 0 && 'opacity-20',
             TONE_CLASSES[props.tone]
           )}

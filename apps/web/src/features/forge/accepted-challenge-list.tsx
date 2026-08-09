@@ -166,7 +166,7 @@ export function AcceptedChallengeList() {
   const challenges = query.data ?? []
 
   return (
-    <section className='mt-10 border-t border-[#141413]/30 pt-8'>
+    <section className='border-foreground/30 mt-10 border-t pt-8'>
       <div className='mb-5 flex flex-wrap items-end justify-between gap-3'>
         <div>
           <p className='mb-2 text-xs font-bold uppercase'>
@@ -178,7 +178,7 @@ export function AcceptedChallengeList() {
         </div>
         <Link
           to='/challenges'
-          className='border-b border-[#141413] pb-1 text-sm font-semibold'
+          className='border-foreground border-b pb-1 text-sm font-semibold'
         >
           {t('Browse challenges')}
         </Link>
@@ -186,18 +186,18 @@ export function AcceptedChallengeList() {
 
       {query.isLoading ? (
         <div className='grid gap-3 md:grid-cols-2'>
-          <Skeleton className='h-48 w-full bg-[#141413]/10' />
-          <Skeleton className='h-48 w-full bg-[#141413]/10' />
+          <Skeleton className='bg-foreground/10 h-48 w-full' />
+          <Skeleton className='bg-foreground/10 h-48 w-full' />
         </div>
       ) : query.isError ? (
-        <div className='border border-[#141413]/30 px-5 py-6 text-sm'>
+        <div className='border-foreground/30 border px-5 py-6 text-sm'>
           <p className='mb-3'>{t('Unable to load challenges.')}</p>
           <Button variant='outline' onClick={() => void query.refetch()}>
             {t('Retry')}
           </Button>
         </div>
       ) : challenges.length === 0 ? (
-        <div className='border border-[#141413]/30 px-5 py-8 text-sm'>
+        <div className='border-foreground/30 border px-5 py-8 text-sm'>
           {t('You have not accepted a challenge')}
         </div>
       ) : (
@@ -215,7 +215,7 @@ export function AcceptedChallengeList() {
             return (
               <article
                 key={challenge.id}
-                className='border border-[#141413]/30 bg-[#FAF9F5] p-5'
+                className='border-foreground/30 bg-background border p-5'
               >
                 <div className='mb-4 flex items-start justify-between gap-3'>
                   <div>
@@ -284,7 +284,7 @@ export function AcceptedChallengeList() {
                   </div>
                 ) : null}
                 {challenge.dispute ? (
-                  <div className='mb-4 border-y border-[#141413]/20 py-3 text-sm'>
+                  <div className='border-foreground/20 mb-4 border-y py-3 text-sm'>
                     <div className='flex flex-wrap items-center justify-between gap-2'>
                       <span className='font-semibold'>
                         {t('Dispute status')}

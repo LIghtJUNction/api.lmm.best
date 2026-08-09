@@ -148,6 +148,48 @@ function setSetupStatusCache(value: boolean): void {
 // 内存中的标记，避免同一会话中重复检查
 let setupStatusChecked = getSetupStatusFromCache()
 
+const NON_BLOCKING_PUBLIC_PATHS = [
+  '/',
+  '/challenges',
+  '/pricing',
+  '/privacy-policy',
+  '/user-agreement',
+  '/terms',
+  '/terms-of-service',
+  '/sign-in',
+  '/sign-up',
+  '/signup',
+  '/register',
+  '/forgot-password',
+  '/reset',
+  '/otp',
+  '/oauth',
+] as const
+
+function isNonBlockingPublicPath(pathname: string): boolean {
+  return NON_BLOCKING_PUBLIC_PATHS.some(
+    (path) =>
+      pathname === path || (path !== '/' && pathname.startsWith(`${path}/`))
+  )
+}
+
+async function resolveWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number
+): Promise<T | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
+  }
+}
+
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient
 }>()({
@@ -161,11 +203,14 @@ export const Route = createRootRouteWithContext<{
     const pathname = location?.pathname || ''
     const needsSetupCheck =
       !setupStatusChecked && !pathname.startsWith('/setup')
-    const authBootstrap = bootstrapAuthentication()
+    const nonBlockingPublicPath = isNonBlockingPublicPath(pathname)
+    const authBootstrap = nonBlockingPublicPath
+      ? null
+      : bootstrapAuthentication()
 
     // 只检查 setup 状态（如果需要）
     if (needsSetupCheck) {
-      const [status] = await Promise.all([
+      const status = await resolveWithTimeout(
         getSetupStatus().catch((error) => {
           if (import.meta.env.DEV) {
             // eslint-disable-next-line no-console
@@ -173,16 +218,23 @@ export const Route = createRootRouteWithContext<{
           }
           return null
         }),
-        authBootstrap,
-      ])
+        2_000
+      )
 
       if (status?.success && status.data && !status.data.status) {
         throw redirect({ to: '/setup' })
       }
       setupStatusChecked = true
       setSetupStatusCache(true)
+    }
+
+    if (authBootstrap) {
+      await resolveWithTimeout(authBootstrap, 2_500)
     } else {
-      await authBootstrap
+      // Public pages should paint even while an unavailable API is recovering.
+      // The store will update the header and CTA when a session eventually
+      // resolves, without holding the router's first render hostage.
+      void bootstrapAuthentication().catch(() => undefined)
     }
 
     if (

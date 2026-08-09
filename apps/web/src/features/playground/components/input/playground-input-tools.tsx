@@ -94,7 +94,7 @@ export function PlaygroundInputTools({
 
   return (
     <>
-      <PromptInputTools className='bg-background/70 border-border/60 rounded-lg border p-1 shadow-xs'>
+      <PromptInputTools className='playground-input-tools p-1'>
         <Tooltip>
           <DropdownMenu>
             <TooltipTrigger

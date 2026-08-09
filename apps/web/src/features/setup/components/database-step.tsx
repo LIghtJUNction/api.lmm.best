@@ -82,7 +82,7 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
 
   return (
     <div className='space-y-4'>
-      <div className='bg-card flex items-center justify-between rounded-lg border p-4'>
+      <div className='bg-card flex items-center justify-between rounded-none border p-4'>
         <div className='space-y-1'>
           <p className='text-muted-foreground text-sm font-medium'>
             {t('Detected database')}
@@ -100,16 +100,16 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
         <StatusBadge
           label={meta?.label ?? t('Unknown')}
           variant={meta?.variant ?? 'info'}
-          className='cursor-default'
+          className='setup-editorial-database-badge cursor-default'
           copyable={false}
           icon={Database}
         />
       </div>
 
       {status?.database_type === 'sqlite' && (
-        <Alert className='border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/40'>
+        <Alert className='console-status-warning'>
           <AlertTitle className='flex items-center gap-2'>
-            <HardDrive className='size-4 text-amber-500' />
+            <HardDrive className='console-status-warning-icon size-4' />
             {t('Persist your data file')}
           </AlertTitle>
           <AlertDescription>
@@ -119,7 +119,7 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
               )}
             </p>
             {isElectron && electronDataDir && (
-              <p className='mt-3 rounded-md bg-amber-100/70 px-3 py-2 font-mono text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-200'>
+              <p className='console-status-warning-code mt-3 rounded-md px-3 py-2 font-mono text-xs'>
                 {t('Data directory:')} {electronDataDir}
               </p>
             )}
@@ -135,9 +135,9 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
       )}
 
       {status?.database_type === 'mysql' && (
-        <Alert className='border-emerald-200 bg-emerald-50 dark:border-emerald-900/60 dark:bg-emerald-950/40'>
+        <Alert className='console-status-success-surface'>
           <AlertTitle className='flex items-center gap-2'>
-            <Server className='size-4 text-emerald-500' />
+            <Server className='console-status-success-icon size-4' />
             {t('MySQL detected')}
           </AlertTitle>
           <AlertDescription>
@@ -149,9 +149,9 @@ export function DatabaseStep({ status }: DatabaseStepProps) {
       )}
 
       {status?.database_type === 'postgres' && (
-        <Alert className='border-sky-200 bg-sky-50 dark:border-sky-900/60 dark:bg-sky-950/40'>
+        <Alert className='console-status-info-surface'>
           <AlertTitle className='flex items-center gap-2'>
-            <Server className='size-4 text-sky-500' />
+            <Server className='console-status-info-icon size-4' />
             {t('PostgreSQL detected')}
           </AlertTitle>
           <AlertDescription>

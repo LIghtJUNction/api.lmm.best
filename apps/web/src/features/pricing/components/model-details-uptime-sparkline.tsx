@@ -165,13 +165,11 @@ export function UptimeStatusRow(props: {
         : AlertCircle
 
   const statusColour =
-    status === 'operational'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : status === 'minor'
-        ? 'text-emerald-600 dark:text-emerald-400'
-        : status === 'degraded'
-          ? 'text-amber-600 dark:text-amber-400'
-          : 'text-rose-600 dark:text-rose-400'
+    status === 'operational' || status === 'minor'
+      ? 'forge-price-success-text'
+      : status === 'degraded'
+        ? 'forge-price-warning-text'
+        : 'forge-price-danger-text'
 
   const statusLabel =
     status === 'operational'

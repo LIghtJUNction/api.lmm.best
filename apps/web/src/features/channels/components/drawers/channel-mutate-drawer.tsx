@@ -490,7 +490,7 @@ function ChannelEditorNav(props: {
   return (
     <aside className='hidden self-start lg:sticky lg:top-4 lg:z-20 lg:block'>
       <div className='flex max-h-[calc(100dvh-12rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-1'>
-        <div className='border-border/60 bg-muted/20 rounded-lg border p-3'>
+        <div className='border-border/60 bg-muted/20 rounded-none border p-3'>
           <div className='flex min-w-0 items-center gap-2'>
             <span className='bg-background flex size-8 shrink-0 items-center justify-center rounded-md border'>
               {props.providerLogo}
@@ -1900,7 +1900,7 @@ export function ChannelMutateDrawer({
           </SheetHeader>
 
           {sensitiveLocked && (
-            <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+            <Alert className='console-status-warning'>
               <AlertDescription>
                 {t(
                   'Sensitive channel settings are read-only for your account.'
@@ -2118,14 +2118,14 @@ export function ChannelMutateDrawer({
                         )}
 
                         {sensitiveLocked && (
-                          <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                          <Alert className='console-status-warning'>
                             <AlertDescription>
                               {t('No permission to perform this action')}
                             </AlertDescription>
                           </Alert>
                         )}
 
-                        <div className='border-border/60 bg-muted/10 rounded-lg border p-4'>
+                        <div className='border-border/60 bg-muted/10 rounded-none border p-4'>
                           <fieldset
                             disabled={sensitiveLocked}
                             className='space-y-4 disabled:opacity-60'
@@ -3109,7 +3109,7 @@ export function ChannelMutateDrawer({
                                       )}
                                     </div>
                                   </div>
-                                  <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                                  <Alert className='console-status-warning'>
                                     <AlertDescription>
                                       {t(
                                         "Disclaimer: Personal use only. Do not distribute or share any credentials. This channel has prerequisites and requires prior setup; use it only if you understand the flow and risks, and comply with OpenAI's terms and policies. Credentials and configuration are for Codex CLI integration only, and are not intended for any other client, platform, or channel."
@@ -3250,7 +3250,7 @@ export function ChannelMutateDrawer({
                     >
                       <ChannelModelsSection>
                         <div className='space-y-5'>
-                          <div className='border-border/60 bg-muted/10 rounded-lg border p-4'>
+                          <div className='border-border/60 bg-muted/10 rounded-none border p-4'>
                             <FormField
                               control={form.control}
                               name='models'
@@ -3285,7 +3285,7 @@ export function ChannelMutateDrawer({
                                   </FormControl>
                                   {modelMappingGuardrail.exposedTargetModels
                                     .length > 0 && (
-                                    <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                                    <Alert className='console-status-warning'>
                                       <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                                         <span>
                                           {t('The mapped upstream model(s)')}{' '}
@@ -3436,7 +3436,7 @@ export function ChannelMutateDrawer({
                             </div>
                           </div>
 
-                          <div className='border-border/60 rounded-lg border p-4'>
+                          <div className='border-border/60 rounded-none border p-4'>
                             <FormField
                               control={form.control}
                               name='model_mapping'
@@ -3542,7 +3542,7 @@ export function ChannelMutateDrawer({
                                   )}
                                   {modelMappingGuardrail.missingSourceModels
                                     .length > 0 && (
-                                    <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                                    <Alert className='console-status-warning'>
                                       <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
                                         <span>
                                           {t('Add')}{' '}
@@ -3575,7 +3575,7 @@ export function ChannelMutateDrawer({
                             />
                           </div>
 
-                          <div className='border-border/60 rounded-lg border p-4'>
+                          <div className='border-border/60 rounded-none border p-4'>
                             <FormField
                               control={form.control}
                               name='group'
@@ -4056,7 +4056,7 @@ export function ChannelMutateDrawer({
                             iconTone='chart-3'
                           />
                           {sensitiveLocked && (
-                            <Alert className='border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-50'>
+                            <Alert className='console-status-warning'>
                               <AlertDescription>
                                 {t('No permission to perform this action')}
                               </AlertDescription>

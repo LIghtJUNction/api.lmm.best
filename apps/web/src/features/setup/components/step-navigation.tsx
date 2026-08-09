@@ -46,7 +46,12 @@ export function StepNavigation({
     <div className='flex w-full flex-col gap-3 sm:flex-row sm:items-center'>
       <div className='flex justify-end gap-2 sm:justify-start'>
         {!isFirstStep && (
-          <Button type='button' variant='outline' onClick={onBack}>
+          <Button
+            type='button'
+            variant='outline'
+            className='setup-editorial-secondary'
+            onClick={onBack}
+          >
             {t('Back')}
           </Button>
         )}
@@ -54,13 +59,22 @@ export function StepNavigation({
 
       <div className='flex flex-1 justify-end gap-2'>
         {!isLastStep && (
-          <Button type='button' onClick={onNext}>
+          <Button
+            type='button'
+            className='setup-editorial-primary'
+            onClick={onNext}
+          >
             {t('Next')}
           </Button>
         )}
 
         {isLastStep && (
-          <Button type='button' onClick={onSubmit} disabled={isSubmitting}>
+          <Button
+            type='button'
+            className='setup-editorial-primary'
+            onClick={onSubmit}
+            disabled={isSubmitting}
+          >
             {isSubmitting ? (
               <>
                 <Loader2 className='mr-2 size-4 animate-spin' />

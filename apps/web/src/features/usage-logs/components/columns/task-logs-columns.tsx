@@ -273,7 +273,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
               onClick={() => setDialogOpen(true)}
               title={t('Click to view full error message')}
             >
-              <span className='truncate leading-snug text-red-600 group-hover:underline dark:text-red-400'>
+              <span className='console-status-danger-text truncate leading-snug group-hover:underline'>
                 {failReason}
               </span>
             </button>

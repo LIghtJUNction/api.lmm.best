@@ -1,0 +1,231 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
+
+/*
+ * The overview is the first authenticated surface a user sees. Keep its
+ * visual language editorial and flat, while leaving the configurable admin
+ * sections on their existing theme. All color values come from the shared
+ * Forge token source; components only consume these semantic variables.
+ */
+.dashboard-editorial {
+  --background: var(--forge-paper-light);
+  --foreground: var(--forge-ink-light);
+  --card: var(--forge-card-light);
+  --card-foreground: var(--forge-ink-light);
+  --popover: var(--forge-paper-light);
+  --popover-foreground: var(--forge-ink-light);
+  --primary: var(--forge-ink-light);
+  --primary-foreground: var(--forge-paper-light);
+  --secondary: var(--forge-secondary-light);
+  --secondary-foreground: var(--forge-ink-light);
+  --muted: var(--forge-muted-light);
+  --muted-foreground: var(--forge-muted-ink-light);
+  --accent: var(--forge-cactus-light);
+  --accent-foreground: var(--forge-ink-light);
+  --border: color-mix(in oklch, var(--forge-ink-light) 18%, transparent);
+  --input: color-mix(in oklch, var(--forge-ink-light) 24%, transparent);
+  --ring: var(--forge-ink-light);
+  --overview-accent-1: var(--forge-ink-light);
+  --overview-accent-2: var(--forge-clay-light);
+  --overview-accent-3: var(--forge-sage-light);
+  --forge-model-1: var(--forge-ink-light);
+  --forge-model-2: var(--forge-cactus-light);
+  --forge-model-3: var(--forge-clay-light);
+  --forge-model-4: var(--forge-sage-light);
+  --forge-model-5: var(--forge-secondary-light);
+  --forge-chart-text: color-mix(
+    in oklch,
+    var(--forge-ink-light) 62%,
+    transparent
+  );
+  --forge-chart-grid: color-mix(
+    in oklch,
+    var(--forge-ink-light) 16%,
+    transparent
+  );
+  --dashboard-clay: var(--forge-clay-light);
+  --dashboard-wash: color-mix(
+    in oklch,
+    var(--forge-cactus-light) 32%,
+    var(--forge-paper-light)
+  );
+  --dashboard-mark-paper: var(--forge-paper-light);
+  --dashboard-mark-ink: var(--forge-ink-light);
+  --dashboard-mark-muted: color-mix(
+    in oklch,
+    var(--forge-ink-light) 58%,
+    transparent
+  );
+  color-scheme: light;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.dark .dashboard-editorial {
+  --background: var(--forge-surface-dark);
+  --foreground: var(--forge-foreground-dark);
+  --card: var(--forge-card-dark);
+  --card-foreground: var(--forge-foreground-dark);
+  --popover: var(--forge-card-dark);
+  --popover-foreground: var(--forge-foreground-dark);
+  --primary: var(--forge-foreground-dark);
+  --primary-foreground: var(--forge-surface-dark);
+  --secondary: var(--forge-secondary-dark);
+  --secondary-foreground: var(--forge-foreground-dark);
+  --muted: var(--forge-muted-dark);
+  --muted-foreground: var(--forge-muted-ink-dark);
+  --accent: var(--forge-stage-dark);
+  --accent-foreground: var(--forge-foreground-dark);
+  --border: color-mix(in oklch, var(--forge-foreground-dark) 18%, transparent);
+  --input: color-mix(in oklch, var(--forge-foreground-dark) 26%, transparent);
+  --ring: var(--forge-foreground-dark);
+  --overview-accent-1: var(--forge-foreground-dark);
+  --overview-accent-2: var(--forge-clay-dark);
+  --overview-accent-3: var(--forge-sage-dark);
+  --forge-model-1: var(--forge-foreground-dark);
+  --forge-model-2: var(--forge-cactus-dark);
+  --forge-model-3: var(--forge-clay-dark);
+  --forge-model-4: var(--forge-sage-dark);
+  --forge-model-5: var(--forge-secondary-dark);
+  --forge-chart-text: color-mix(
+    in oklch,
+    var(--forge-foreground-dark) 72%,
+    transparent
+  );
+  --forge-chart-grid: color-mix(
+    in oklch,
+    var(--forge-foreground-dark) 16%,
+    transparent
+  );
+  --dashboard-clay: var(--forge-clay-dark);
+  --dashboard-wash: color-mix(
+    in oklch,
+    var(--forge-stage-dark) 54%,
+    var(--forge-surface-dark)
+  );
+  --dashboard-mark-paper: var(--forge-surface-dark);
+  --dashboard-mark-ink: var(--forge-foreground-dark);
+  --dashboard-mark-muted: color-mix(
+    in oklch,
+    var(--forge-foreground-dark) 62%,
+    transparent
+  );
+  color-scheme: dark;
+}
+
+.dashboard-editorial :where(h1, h2, h3) {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+
+.dashboard-editorial :where(a, button, input, textarea, select):focus-visible {
+  outline: 2px solid var(--dashboard-clay);
+  outline-offset: 3px;
+}
+
+.dashboard-editorial-panel {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.dashboard-editorial :where(.shadow-xs, .shadow-sm, .shadow-md) {
+  box-shadow: none;
+}
+
+.dashboard-editorial :where([data-slot='card'], .rounded-xl, .rounded-2xl) {
+  border-radius: 0;
+}
+
+.dashboard-editorial :where(.backdrop-blur, .backdrop-blur-sm) {
+  backdrop-filter: none;
+}
+
+.dashboard-editorial-mark {
+  color: var(--dashboard-mark-ink);
+  opacity: 0.92;
+}
+
+.dashboard-editorial-mark-carrier {
+  fill: var(--dashboard-mark-paper);
+  stroke: var(--dashboard-mark-ink);
+  stroke-width: 1.5;
+}
+
+.dashboard-editorial-mark-gesture {
+  fill: none;
+  stroke: var(--dashboard-mark-ink);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 11;
+}
+
+.dashboard-editorial-mark-contour {
+  fill: none;
+  stroke: var(--dashboard-mark-muted);
+  stroke-linecap: round;
+  stroke-width: 1.25;
+}
+
+.dashboard-editorial-mark-accent {
+  fill: var(--dashboard-clay);
+}
+
+.dashboard-analytics-art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 8rem;
+  background: var(--dashboard-wash);
+}
+
+.dashboard-analytics-art-carrier {
+  fill: var(--dashboard-mark-paper);
+}
+
+.dashboard-analytics-art-gesture {
+  fill: none;
+  stroke: var(--dashboard-mark-ink);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 18;
+}
+
+.dashboard-analytics-art-contour {
+  fill: none;
+  stroke: var(--dashboard-mark-muted);
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+.dashboard-analytics-art-accent {
+  fill: var(--dashboard-clay);
+}
+
+.dashboard-editorial-code {
+  background: color-mix(in oklch, var(--foreground) 5%, transparent);
+}
+
+.dashboard-editorial-rule {
+  border-color: color-mix(in oklch, var(--foreground) 18%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-editorial * {
+    scroll-behavior: auto !important;
+  }
+}

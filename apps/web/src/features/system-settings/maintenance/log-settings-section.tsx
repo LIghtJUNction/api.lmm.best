@@ -442,7 +442,7 @@ export function LogSettingsSection({
         {serverLogInfo !== null &&
           (serverLogInfo.enabled ? (
             <div className='space-y-4'>
-              <div className='rounded-lg border p-4'>
+              <div className='rounded-none border p-4'>
                 <div className='grid grid-cols-2 gap-2 text-sm md:grid-cols-4'>
                   <div>
                     <span className='text-muted-foreground'>

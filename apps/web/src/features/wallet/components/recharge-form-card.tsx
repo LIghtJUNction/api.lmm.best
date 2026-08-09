@@ -230,7 +230,7 @@ export function RechargeFormCard({
         <CardContent className='space-y-4 p-3 sm:space-y-6 sm:p-5'>
           <div className='space-y-4 sm:space-y-6'>
             {/* ASCII Banner Skeleton */}
-            <div className='bg-primary/5 rounded-xl border p-4 text-center font-mono'>
+            <div className='bg-primary/5 rounded-none border p-4 text-center font-mono'>
               <Skeleton className='mx-auto h-16 w-3/4' />
             </div>
             {/* Preset Amounts Skeleton */}

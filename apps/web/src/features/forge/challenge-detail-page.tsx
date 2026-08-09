@@ -143,13 +143,13 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
 
   return (
     <ForgePublicShell>
-      <main className='bg-[#FAF9F5] pt-16 text-[#141413]'>
-        <section className='border-y border-[#141413] bg-[#CBCADB]'>
+      <main className='bg-background text-foreground pt-16'>
+        <section className='border-foreground text-foreground border-y bg-[var(--forge-clay)]'>
           <div className='mx-auto grid max-w-7xl gap-10 px-5 py-14 md:grid-cols-[minmax(0,1fr)_300px] md:px-10 md:py-20'>
             <div>
               <Link
                 to='/challenges'
-                className='mb-8 inline-flex items-center gap-2 border-b border-[#141413] pb-1 text-xs font-bold uppercase'
+                className='border-foreground mb-8 inline-flex items-center gap-2 border-b pb-1 text-xs font-bold uppercase'
               >
                 <HugeiconsIcon
                   icon={ArrowLeft01Icon}
@@ -169,7 +169,7 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
                 {project.description}
               </p>
             </div>
-            <aside className='border-t-2 border-[#141413] pt-5 md:border-t-0 md:border-l-2 md:pt-0 md:pl-7'>
+            <aside className='border-foreground border-t-2 pt-5 md:border-t-0 md:border-l-2 md:pt-0 md:pl-7'>
               <p className='text-xs font-bold uppercase'>{t('Reward')}</p>
               <p className='my-3 font-serif text-4xl tabular-nums'>
                 {formatQuota(project.net_reward_quota || project.reward_quota)}
@@ -177,7 +177,7 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
               <p className='mb-7 text-sm'>{t('per approved delivery')}</p>
               {acceptanceState === 'active' ||
               acceptanceState === 'completed' ? (
-                <div className='flex items-center gap-2 border border-[#141413] px-4 py-3 text-sm font-semibold'>
+                <div className='border-foreground flex items-center gap-2 border px-4 py-3 text-sm font-semibold'>
                   <HugeiconsIcon
                     icon={CheckmarkCircle02Icon}
                     className='size-4'
@@ -193,19 +193,19 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
                   )}
                 </div>
               ) : !canAccept ? (
-                <div className='border border-[#141413] px-4 py-3 text-sm font-semibold'>
+                <div className='border-foreground border px-4 py-3 text-sm font-semibold'>
                   {t(project.status === 'paused' ? 'Paused' : project.status)}
                 </div>
               ) : user ? (
                 <Button
-                  className='w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+                  className='bg-primary text-primary-foreground hover:bg-primary/85 w-full rounded-sm'
                   onClick={() => setAcceptOpen(true)}
                 >
                   {t(isRetry ? 'Retry challenge' : 'Accept challenge')}
                 </Button>
               ) : (
                 <Button
-                  className='w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+                  className='bg-primary text-primary-foreground hover:bg-primary/85 w-full rounded-sm'
                   render={
                     <Link
                       to='/sign-in'
@@ -225,14 +225,14 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
             <h2 className='mb-7 font-serif text-3xl font-normal'>
               {t('Acceptance rules')}
             </h2>
-            <div className='border-t-2 border-[#141413] py-6 text-sm leading-7 whitespace-pre-wrap'>
+            <div className='border-foreground border-t-2 py-6 text-sm leading-7 whitespace-pre-wrap'>
               {project.rules}
             </div>
             <a
               href={project.repository_url}
               target='_blank'
               rel='noreferrer'
-              className='inline-flex items-center gap-2 border-b border-[#141413] pb-1 text-sm font-semibold'
+              className='border-foreground inline-flex items-center gap-2 border-b pb-1 text-sm font-semibold'
             >
               {t('Open repository')}
               <HugeiconsIcon
@@ -247,14 +247,14 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
             <h2 className='mb-7 font-serif text-3xl font-normal'>
               {t('Delivery evidence')}
             </h2>
-            <div className='border-t-2 border-[#141413]'>
+            <div className='border-foreground border-t-2'>
               {detail.challenges.length === 0 && (
                 <p className='py-6 text-sm'>{t('No delivery evidence yet.')}</p>
               )}
               {detail.challenges.map((challenge) => (
                 <article
                   key={challenge.id}
-                  className='border-b border-[#141413]/25 py-5'
+                  className='border-foreground/25 border-b py-5'
                 >
                   <div className='mb-3 flex items-center justify-between gap-4'>
                     <span className='text-sm font-semibold'>
@@ -304,19 +304,19 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
           </div>
         </section>
 
-        <section className='border-t border-[#141413] bg-[#CBCADB]'>
+        <section className='border-foreground text-foreground border-t bg-[var(--forge-cactus)]'>
           <div className='mx-auto max-w-7xl px-5 py-16 md:px-10 md:py-20'>
             <h2 className='mb-7 font-serif text-3xl font-normal'>
               {t('Settlement ledger')}
             </h2>
-            <div className='border-t-2 border-[#141413]'>
+            <div className='border-foreground border-t-2'>
               {detail.ledger.length === 0 && (
                 <p className='py-6 text-sm'>{t('No settlement events yet.')}</p>
               )}
               {detail.ledger.map((entry) => (
                 <div
                   key={entry.id}
-                  className='grid gap-2 border-b border-[#141413]/30 py-5 sm:grid-cols-[150px_minmax(0,1fr)_140px] sm:items-center'
+                  className='border-foreground/30 grid gap-2 border-b py-5 sm:grid-cols-[150px_minmax(0,1fr)_140px] sm:items-center'
                 >
                   <span className='text-xs font-bold uppercase'>
                     {entry.kind.replaceAll('_', ' ')}

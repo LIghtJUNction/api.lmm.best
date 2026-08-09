@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Dialog } from '@/components/dialog'
@@ -86,6 +86,9 @@ export function PublicHeader(props: PublicHeaderProps) {
     useState<AuthPromptTarget | null>(null)
   const [authPromptSecondsLeft, setAuthPromptSecondsLeft] =
     useState(AUTH_PROMPT_SECONDS)
+  const mobileMenuRef = useRef<HTMLDivElement>(null)
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const scrolledRef = useRef(false)
   const { auth } = useAuthStore()
   const {
     systemName,
@@ -99,6 +102,7 @@ export function PublicHeader(props: PublicHeaderProps) {
   const pathname = routerState.location.pathname
 
   const user = auth.user
+  const editorialHeader = props.className?.includes('forge-public-header')
   const isAuthenticated = !!user
   const usesDefaultBrand = !customLogo && systemLogo === DEFAULT_LOGO
   const displaySiteName =
@@ -108,19 +112,67 @@ export function PublicHeader(props: PublicHeaderProps) {
       : systemName)
   const links =
     useDynamicNavLinks && dynamicLinks.length > 0 ? dynamicLinks : navLinks
+  const mobileNavigationLinks = props.mobileLinks ?? links
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 20)
+    const onScroll = () => {
+      const nextScrolled = window.scrollY > 20
+      if (scrolledRef.current === nextScrolled) return
+      scrolledRef.current = nextScrolled
+      setScrolled(nextScrolled)
+    }
     onScroll()
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
   }, [])
 
   useEffect(() => {
-    document.body.style.overflow = mobileOpen ? 'hidden' : ''
+    const previousOverflow = document.body.style.overflow
+    if (mobileOpen) document.body.style.overflow = 'hidden'
     return () => {
-      document.body.style.overflow = ''
+      document.body.style.overflow = previousOverflow
     }
+  }, [mobileOpen])
+
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [pathname])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+
+    const menu = mobileMenuRef.current
+    const focusable = menu
+      ? Array.from(
+          menu.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        )
+      : []
+    const firstFocusable = focusable[0]
+    firstFocusable?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileOpen(false)
+        mobileMenuButtonRef.current?.focus()
+        return
+      }
+      if (event.key !== 'Tab' || focusable.length === 0) return
+
+      const activeIndex = focusable.indexOf(
+        document.activeElement as HTMLElement
+      )
+      if (event.shiftKey && (activeIndex <= 0 || activeIndex === -1)) {
+        event.preventDefault()
+        focusable.at(-1)?.focus()
+      } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
+        event.preventDefault()
+        focusable[0]?.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
   }, [mobileOpen])
 
   useEffect(() => {
@@ -205,7 +257,10 @@ export function PublicHeader(props: PublicHeaderProps) {
     desktopAuthContent = (
       <Button
         size='sm'
-        className='h-8 rounded-lg px-3.5 text-xs font-medium'
+        className={cn(
+          'h-8 rounded-lg px-3.5 text-xs font-medium',
+          editorialHeader && 'forge-public-sign-in'
+        )}
         render={<Link to='/sign-in' />}
       >
         {t('Sign in')}
@@ -217,7 +272,7 @@ export function PublicHeader(props: PublicHeaderProps) {
     <>
       <header
         className={cn(
-          'pointer-events-none fixed inset-x-0 top-0 z-50',
+          'public-header pointer-events-none fixed inset-x-0 top-0 z-50',
           props.className
         )}
       >
@@ -229,10 +284,19 @@ export function PublicHeader(props: PublicHeaderProps) {
         >
           <nav
             className={cn(
-              'flex items-center justify-between text-[#141413] transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)] dark:text-[#FAF9F5]',
+              'flex items-center justify-between transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
+              editorialHeader ? 'forge-public-nav' : 'text-foreground',
               scrolled
-                ? 'h-12 rounded-2xl border border-[#141413]/25 bg-[#FAF9F5]/92 pr-1.5 pl-4 backdrop-blur-xl dark:border-[#FAF9F5]/25 dark:bg-[#141413]/92'
-                : 'h-16 border-b border-[#141413]/15 px-2 dark:border-[#FAF9F5]/15'
+                ? cn(
+                    'h-12 rounded-sm pr-1.5 pl-4',
+                    editorialHeader
+                      ? 'forge-public-nav-scrolled'
+                      : 'border-border bg-background shadow-md'
+                  )
+                : cn(
+                    'h-16 border-b px-2',
+                    editorialHeader ? 'forge-public-nav-top' : 'border-border'
+                  )
             )}
           >
             {/* Logo */}
@@ -263,7 +327,10 @@ export function PublicHeader(props: PublicHeaderProps) {
                       tabIndex={link.disabled ? -1 : undefined}
                       onClick={(event) => handleNavLinkClick(event, link)}
                       className={cn(
-                        'rounded-lg px-3 py-1.5 text-[13px] font-medium text-[#141413]/68 transition-colors duration-200 hover:text-[#141413] dark:text-[#FAF9F5]/68 dark:hover:text-[#FAF9F5]',
+                        'rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
+                        editorialHeader
+                          ? 'forge-public-nav-link'
+                          : 'text-foreground/68 hover:text-foreground',
                         link.disabled && 'pointer-events-none opacity-50'
                       )}
                     >
@@ -280,8 +347,12 @@ export function PublicHeader(props: PublicHeaderProps) {
                     className={cn(
                       'rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
                       isActive
-                        ? 'text-[#141413] dark:text-[#FAF9F5]'
-                        : 'text-[#141413]/68 hover:text-[#141413] dark:text-[#FAF9F5]/68 dark:hover:text-[#FAF9F5]',
+                        ? editorialHeader
+                          ? 'forge-public-nav-link-active'
+                          : 'text-foreground'
+                        : editorialHeader
+                          ? 'forge-public-nav-link'
+                          : 'text-foreground/68 hover:text-foreground',
                       link.disabled && 'pointer-events-none opacity-50'
                     )}
                   >
@@ -323,7 +394,7 @@ export function PublicHeader(props: PublicHeaderProps) {
             </div>
 
             {/* Mobile: compact actions + hamburger */}
-            <div className='flex items-center gap-2 sm:hidden'>
+            <div className='public-header-mobile-actions flex items-center gap-2 sm:hidden'>
               {showThemeSwitch && <ThemeSwitch />}
               {showAuthButtons && !loading && isAuthenticated && (
                 <ProfileDropdown />
@@ -332,9 +403,12 @@ export function PublicHeader(props: PublicHeaderProps) {
                 type='button'
                 variant='ghost'
                 size='icon'
-                className='size-9'
+                className='size-11'
+                ref={mobileMenuButtonRef}
                 onClick={() => setMobileOpen((v) => !v)}
                 aria-label={t('Toggle navigation menu')}
+                aria-expanded={mobileOpen}
+                aria-controls='public-mobile-navigation'
               >
                 <div className='relative size-4'>
                   <span
@@ -365,22 +439,39 @@ export function PublicHeader(props: PublicHeaderProps) {
       {/* Mobile full-screen overlay */}
       <div
         className={cn(
-          'bg-background/98 fixed inset-0 z-40 backdrop-blur-2xl transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] sm:pointer-events-none sm:hidden',
+          'fixed inset-0 z-40 transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] sm:pointer-events-none sm:hidden',
+          editorialHeader
+            ? 'forge-public-mobile-overlay'
+            : 'bg-background text-foreground',
           mobileOpen
             ? 'pointer-events-auto opacity-100'
             : 'pointer-events-none opacity-0'
         )}
       >
-        <div className='flex h-full flex-col justify-between px-8 pt-20 pb-10'>
+        <div
+          id='public-mobile-navigation'
+          ref={mobileMenuRef}
+          role='dialog'
+          aria-modal='true'
+          aria-label={t('Toggle navigation menu')}
+          aria-hidden={!mobileOpen}
+          className='public-mobile-navigation flex h-full flex-col justify-between px-8 pt-[calc(5rem+env(safe-area-inset-top))] pb-[max(2.5rem,env(safe-area-inset-bottom))]'
+        >
           <nav className='flex flex-col gap-1'>
-            {links.map((link, i) => {
+            {mobileNavigationLinks.map((link, i) => {
               const isActive = pathname === link.href
               const linkClassName = cn(
                 'flex items-center gap-3 py-3 text-base font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
                 mobileOpen
                   ? 'translate-y-0 opacity-100'
                   : 'translate-y-4 opacity-0',
-                isActive ? 'text-foreground' : 'text-muted-foreground',
+                editorialHeader
+                  ? isActive
+                    ? 'forge-public-mobile-link-active'
+                    : 'forge-public-mobile-link'
+                  : isActive
+                    ? 'text-foreground'
+                    : 'text-muted-foreground',
                 link.disabled && 'pointer-events-none opacity-50'
               )
               const transitionStyle = {
@@ -394,7 +485,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                     target='_blank'
                     rel='noopener noreferrer'
                     aria-disabled={link.disabled}
-                    tabIndex={link.disabled ? -1 : undefined}
+                    tabIndex={!mobileOpen || link.disabled ? -1 : undefined}
                     onClick={(event) => handleNavLinkClick(event, link, true)}
                     className={linkClassName}
                     style={transitionStyle}
@@ -411,6 +502,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                   onClick={(event) => handleNavLinkClick(event, link, true)}
                   className={linkClassName}
                   style={transitionStyle}
+                  tabIndex={link.disabled || !mobileOpen ? -1 : undefined}
                 >
                   {t(link.title)}
                 </Link>
@@ -435,7 +527,13 @@ export function PublicHeader(props: PublicHeaderProps) {
                     : '/sign-in'
                 }
                 onClick={() => setMobileOpen(false)}
-                className='bg-foreground text-background inline-flex h-10 items-center justify-center rounded-lg text-sm font-medium transition-opacity hover:opacity-90 active:opacity-80'
+                className={cn(
+                  'inline-flex h-10 items-center justify-center rounded-lg text-sm font-medium transition-opacity hover:opacity-90 active:opacity-80',
+                  editorialHeader
+                    ? 'forge-public-mobile-action'
+                    : 'bg-foreground text-background'
+                )}
+                tabIndex={mobileOpen ? undefined : -1}
               >
                 {isAuthenticated ? t('Open workspace') : t('Sign in')}
               </Link>

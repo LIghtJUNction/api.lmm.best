@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -279,73 +279,109 @@ export function SetupWizard() {
     mutation.mutate(payload)
   }
 
+  let setupBody: ReactNode
+  if (isLoading) {
+    setupBody = <LoadingState message={t('Loading setup status…')} />
+  } else if (isError) {
+    setupBody = (
+      <ErrorState
+        title={t('We could not load the setup status.')}
+        onRetry={() => refetch()}
+      />
+    )
+  } else {
+    setupBody = (
+      <Form {...form}>
+        <form
+          className='space-y-6'
+          onSubmit={(event) => event.preventDefault()}
+        >
+          {currentStepComponent}
+        </form>
+      </Form>
+    )
+  }
+
   return (
-    <div className='bg-muted/40 relative min-h-svh py-10'>
-      <div className='absolute top-4 right-4 sm:top-6 sm:right-6'>
+    <div className='setup-editorial relative min-h-svh px-4 py-6 sm:px-8 sm:py-10'>
+      <div className='absolute top-4 right-4 sm:top-8 sm:right-8'>
         <LanguageSwitcher />
       </div>
-      <div className='container mx-auto flex max-w-5xl flex-col gap-8 px-4 sm:px-6'>
-        <div className='flex flex-col items-center gap-3'>
-          <div className='relative h-12 w-12'>
-            {systemConfigLoading ? (
-              <Skeleton className='absolute inset-0 rounded-full' />
-            ) : (
-              <BrandLogo
-                src={logo}
-                className='h-12 w-12 object-contain shadow-sm'
-              />
-            )}
+      <div className='mx-auto flex max-w-6xl flex-col gap-8 sm:gap-10'>
+        <header className='setup-editorial-masthead flex flex-col gap-6 pr-12 sm:flex-row sm:items-end sm:justify-between sm:gap-10 sm:pr-0'>
+          <div className='flex items-center gap-3 sm:gap-4'>
+            <div className='relative h-10 w-10 shrink-0 sm:h-12 sm:w-12'>
+              {systemConfigLoading ? (
+                <Skeleton className='absolute inset-0 rounded-full' />
+              ) : (
+                <BrandLogo
+                  src={logo}
+                  className='h-10 w-10 object-contain sm:h-12 sm:w-12'
+                />
+              )}
+            </div>
+            <div className='space-y-1'>
+              <p className='setup-editorial-kicker'>LMM API / INITIALIZATION</p>
+              {systemConfigLoading ? (
+                <Skeleton className='h-8 w-48' />
+              ) : (
+                <h1 className='font-serif text-2xl leading-none tracking-tight sm:text-3xl'>
+                  {t('Initialize')} {systemName}
+                </h1>
+              )}
+            </div>
           </div>
-          {systemConfigLoading ? (
-            <Skeleton className='h-7 w-40' />
-          ) : (
-            <h1 className='text-2xl font-semibold tracking-tight'>
-              {t('Initialize')} {systemName}
-            </h1>
-          )}
-          <p className='text-muted-foreground text-center text-sm sm:text-base'>
+          <p className='setup-editorial-lede max-w-md text-sm sm:text-right sm:text-base'>
             {t(
               'Follow the guided steps to prepare your workspace before the first login.'
             )}
           </p>
+        </header>
+
+        <div className='setup-editorial-index flex items-center justify-between border-y py-2 text-xs'>
+          <span>SETUP / {String(currentStep + 1).padStart(2, '0')}</span>
+          <span>{String(STEPS.length).padStart(2, '0')} STEPS</span>
         </div>
 
-        <Card className='shadow-lg'>
-          <CardHeader className='space-y-2'>
-            <CardTitle className='text-xl font-semibold'>
+        <Card className='setup-editorial-frame'>
+          <CardHeader className='setup-editorial-frame-header space-y-2'>
+            <p className='setup-editorial-kicker'>SYSTEM / SETUP</p>
+            <CardTitle className='font-serif text-2xl font-normal tracking-tight sm:text-3xl'>
               {t('System setup wizard')}
             </CardTitle>
-            <CardDescription>
+            <CardDescription className='max-w-xl'>
               {t('Complete these steps to finish the initial installation.')}
             </CardDescription>
           </CardHeader>
 
-          <CardContent className='space-y-6'>
-            <ol className='grid gap-3 sm:grid-cols-4'>
+          <CardContent className='setup-editorial-frame-content space-y-8'>
+            <ol className='setup-editorial-step-list grid sm:grid-cols-4'>
               {STEPS.map((step, index) => {
                 const isActive = currentStep === index
                 const isCompleted = currentStep > index
+                let stepState: 'active' | 'complete' | 'idle' = 'idle'
+                if (isActive) {
+                  stepState = 'active'
+                } else if (isCompleted) {
+                  stepState = 'complete'
+                }
                 return (
                   <li
                     key={step.titleKey}
                     className={cn(
-                      'rounded-xl border p-3',
-                      isActive
-                        ? 'border-primary ring-primary/20 ring-2'
-                        : isCompleted
-                          ? 'border-primary/40 bg-primary/5'
-                          : 'border-muted bg-card'
+                      'setup-editorial-step border-b p-4 sm:border-r sm:border-b-0',
+                      index === STEPS.length - 1 && 'sm:border-r-0',
+                      isActive && 'is-active',
+                      isCompleted && 'is-complete'
                     )}
+                    data-state={stepState}
                   >
                     <div className='flex items-start gap-3'>
                       <span
                         className={cn(
-                          'flex size-6 items-center justify-center rounded-md border text-xs font-semibold',
-                          isActive
-                            ? 'border-primary bg-primary text-primary-foreground'
-                            : isCompleted
-                              ? 'border-primary bg-primary text-primary-foreground'
-                              : 'border-muted-foreground/40 text-muted-foreground'
+                          'setup-editorial-step-number flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold',
+                          isActive && 'is-active',
+                          isCompleted && 'is-complete'
                         )}
                       >
                         {index + 1}
@@ -364,27 +400,11 @@ export function SetupWizard() {
               })}
             </ol>
 
-            {isLoading ? (
-              <LoadingState message={t('Loading setup status…')} />
-            ) : isError ? (
-              <ErrorState
-                title={t('We could not load the setup status.')}
-                onRetry={() => refetch()}
-              />
-            ) : (
-              <Form {...form}>
-                <form
-                  className='space-y-6'
-                  onSubmit={(event) => event.preventDefault()}
-                >
-                  {currentStepComponent}
-                </form>
-              </Form>
-            )}
+            {setupBody}
           </CardContent>
 
           {!isLoading && !isError && (
-            <CardFooter className='w-full justify-end border-t'>
+            <CardFooter className='setup-editorial-frame-footer w-full justify-end border-t'>
               <StepNavigation
                 currentStep={currentStep}
                 totalSteps={STEPS.length}

@@ -116,7 +116,10 @@ export type ThemeCustomization = {
 }
 
 export const DEFAULT_THEME_CUSTOMIZATION: ThemeCustomization = {
-  preset: 'default',
+  // The shipped experience is the warm editorial system. `default` remains
+  // available as an explicit neutral fallback, but new users should see the
+  // Anthropic-art palette without needing to open the configuration drawer.
+  preset: 'anthropic',
   font: 'default',
   radius: 'default',
   scale: 'default',
