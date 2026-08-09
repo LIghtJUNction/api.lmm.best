@@ -357,7 +357,7 @@ impl StatusData {
     fn from_snapshot(snapshot: StatusSnapshot, version: &str, start_time: i64) -> Self {
         let options = Options(snapshot.options);
         let server_address = options.string("ServerAddress", DEFAULT_SERVER_ADDRESS);
-        let quota_display_type = options.string("general_setting.quota_display_type", "USD");
+        let quota_display_type = options.quota_display_type();
         let api_info_enabled = options.boolean("console_setting.api_info_enabled", true);
         let docs_link = options.string("general_setting.docs_link", DEFAULT_DOCS_LINK);
         let announcements_enabled = options.boolean("console_setting.announcements_enabled", true);
@@ -479,6 +479,21 @@ impl Options {
 
     fn string(&self, key: &str, default: &str) -> String {
         self.raw(key).unwrap_or(default).to_owned()
+    }
+
+    /// Go maps the legacy `DisplayInCurrencyEnabled` option into the
+    /// registered `general_setting.quota_display_type` during startup. Keep
+    /// that behavior for old databases while making the registered dotted
+    /// value authoritative whenever it is present.
+    fn quota_display_type(&self) -> String {
+        match self.raw("general_setting.quota_display_type") {
+            Some(value) => value.to_owned(),
+            None => self
+                .raw("DisplayInCurrencyEnabled")
+                .map(|value| if value == "true" { "USD" } else { "TOKENS" })
+                .unwrap_or("USD")
+                .to_owned(),
+        }
     }
 
     fn boolean(&self, key: &str, default: bool) -> bool {
@@ -654,6 +669,42 @@ mod tests {
                 .get("client_secret")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn legacy_display_option_falls_back_only_without_registered_value() {
+        let legacy = StatusData::from_snapshot(
+            StatusSnapshot {
+                options: BTreeMap::from([(
+                    "DisplayInCurrencyEnabled".to_owned(),
+                    "false".to_owned(),
+                )]),
+                custom_oauth_providers: Vec::new(),
+                setup: false,
+            },
+            DEFAULT_VERSION,
+            42,
+        );
+        assert_eq!(legacy.quota_display_type, "TOKENS");
+        assert!(!legacy.display_in_currency);
+
+        let dotted = StatusData::from_snapshot(
+            StatusSnapshot {
+                options: BTreeMap::from([
+                    ("DisplayInCurrencyEnabled".to_owned(), "false".to_owned()),
+                    (
+                        "general_setting.quota_display_type".to_owned(),
+                        "USD".to_owned(),
+                    ),
+                ]),
+                custom_oauth_providers: Vec::new(),
+                setup: false,
+            },
+            DEFAULT_VERSION,
+            42,
+        );
+        assert_eq!(dotted.quota_display_type, "USD");
+        assert!(dotted.display_in_currency);
     }
 
     #[tokio::test]
