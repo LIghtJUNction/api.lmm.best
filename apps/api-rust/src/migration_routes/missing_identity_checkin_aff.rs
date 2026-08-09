@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
 use crate::auth::{
-    AuthErrorKind, DashboardAuth, DashboardUser, UserAuthPolicyError, enforce_user_auth,
-    user_auth_message,
+    AuthErrorKind, DashboardAuth, DashboardUser, DashboardUserView, UserAuthPolicyError,
+    enforce_user_auth, enforce_user_auth_view, user_auth_message,
 };
 
 const DEFAULT_QUOTA_PER_UNIT: i64 = 500_000;
@@ -246,6 +246,14 @@ fn checkin_status_ok(data: Value) -> Response {
     Json(json!({"success":true,"data":data})).into_response()
 }
 
+fn discovery_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({"message": "Not Found"})),
+    )
+        .into_response()
+}
+
 async fn user(
     state: &IdentityCheckinAffState,
     headers: &HeaderMap,
@@ -258,6 +266,36 @@ async fn user(
     {
         Ok(user) => enforce_user_auth(&user)
             .map(|()| user)
+            .map_err(|error| user_auth_error(headers, error)),
+        Err(e) if e.kind == AuthErrorKind::UserDisabled => {
+            Err(user_auth_error(headers, UserAuthPolicyError::UserDisabled))
+        }
+        Err(e)
+            if matches!(
+                e.kind,
+                AuthErrorKind::Unauthorized
+                    | AuthErrorKind::TokenExpired
+                    | AuthErrorKind::SessionRevoked
+            ) =>
+        {
+            Err(auth_error(StatusCode::UNAUTHORIZED))
+        }
+        Err(_) => Err(auth_error(StatusCode::INTERNAL_SERVER_ERROR)),
+    }
+}
+
+async fn activated_user(
+    state: &IdentityCheckinAffState,
+    headers: &HeaderMap,
+) -> Result<DashboardUserView, Response> {
+    let token = dashboard_token(headers).ok_or_else(|| auth_error(StatusCode::UNAUTHORIZED))?;
+    match state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token.to_owned()))
+        .await
+    {
+        Ok(view) => enforce_user_auth_view(&view)
+            .map(|()| view)
             .map_err(|error| user_auth_error(headers, error)),
         Err(e) if e.kind == AuthErrorKind::UserDisabled => {
             Err(user_auth_error(headers, UserAuthPolicyError::UserDisabled))
@@ -415,10 +453,13 @@ async fn checkin_status(
     headers: HeaderMap,
     Query(query): Query<Month>,
 ) -> Response {
-    let actor = match user(&state, &headers).await {
+    let actor = match activated_user(&state, &headers).await {
         Ok(v) => v,
         Err(v) => return v,
     };
+    if !actor.developer_access_granted {
+        return discovery_not_found();
+    }
     let (enabled, min, max) = match checkin_config(&state.pg).await {
         Ok(v) => v,
         Err(_) => return fail("系统错误"),
