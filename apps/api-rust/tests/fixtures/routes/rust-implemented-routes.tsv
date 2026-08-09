@@ -26,6 +26,7 @@ GET	/api/open-source-bounties/projects/:id	lmm_api_rs::migration_routes::open_so
 GET	/api/open-source-bounties/config	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/mine	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/accepted	lmm_api_rs::migration_routes::open_source_bounties::router
+GET	/api/open-source-bounties/disputes/mine	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/log/	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/log/channel_affinity_usage_cache	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/log/search	lmm_api_rs::migration_routes::observability::observability_read_router
