@@ -108,3 +108,7 @@ GET	/v1/models	lmm_api_rs::models::list_models
 GET	/v1/models/:model	lmm_api_rs::migration_routes::missing_relay_models_billing::model_lookup_router
 GET	/v1beta/models	lmm_api_rs::models::list_gemini_models
 GET	/v1beta/openai/models	lmm_api_rs::models::list_gemini_openai_models
+GET	/api/user/:id/oauth/bindings	lmm_api_rs::migration_routes::identity_federation::bindings_router
+DELETE	/api/user/:id/oauth/bindings/:provider_id	lmm_api_rs::migration_routes::identity_federation::bindings_router
+GET	/api/user/oauth/bindings	lmm_api_rs::migration_routes::identity_federation::bindings_router
+DELETE	/api/user/oauth/bindings/:provider_id	lmm_api_rs::migration_routes::identity_federation::bindings_router
