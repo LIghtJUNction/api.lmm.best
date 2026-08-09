@@ -1557,6 +1557,45 @@ mod tests {
         ModelsHttpState::new(Arc::new(UnavailableModels), "v0.0.0")
     }
 
+    #[tokio::test]
+    async fn final_candidate_listener_keeps_both_topup_reads_reachable() {
+        let pg = PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(10))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("a lazy test pool is valid");
+        let valkey =
+            redis::Client::open("redis://127.0.0.1:1").expect("a lazy Valkey client is valid");
+        let auth: Arc<dyn DashboardAuth> = Arc::new(UnavailableAuth);
+        let app_state = state(None);
+        let candidates = migration_candidate_test_surface(
+            &app_state,
+            crate::test_instance::safe_candidate_surface(pg, valkey, Arc::clone(&auth)),
+        );
+        let app = router_with_api_token_and_extra(
+            app_state,
+            AuthHttpState::new(auth, false).with_version("v0.0.0"),
+            models_state(),
+            None,
+            Some(candidates),
+        );
+        for path in ["/api/user/topup/info", "/api/user/topup/self"] {
+            let mut request = Request::get(path)
+                .body(Body::empty())
+                .expect("request is valid");
+            request.extensions_mut().insert(ConnectInfo(
+                "127.0.0.1:12345"
+                    .parse::<SocketAddr>()
+                    .expect("test socket address is valid"),
+            ));
+            let response = app
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("router is infallible");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
+    }
+
     fn dashboard_user(id: i64, role: i64, status: i64) -> DashboardUser {
         DashboardUser {
             id,

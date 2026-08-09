@@ -130,10 +130,18 @@ valkey-server --bind 127.0.0.1 --port "$oracle_valkey_port" --save '' --appendon
 record_pid go_valkey_pid "$!"
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$oracle_valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$oracle_valkey_port" ping >/dev/null
+
+# Redis is optional in the frozen Go oracle.  The default keeps the two
+# listeners on separate Valkey instances; disabling it is useful for a
+# transport-only replay when the host cannot sustain the second cache process.
+go_redis_conn="redis://127.0.0.1:$oracle_valkey_port"
+if [[ ${LMM_MISSING_ROUTES_GO_REDIS_ENABLED:-1} != 1 ]]; then
+  go_redis_conn=
+fi
 env \
   SQLITE_PATH="$runtime/oracle.db" \
   PORT="$oracle_port" \
-  REDIS_CONN_STRING="redis://127.0.0.1:$oracle_valkey_port" \
+  REDIS_CONN_STRING="$go_redis_conn" \
   SESSION_SECRET='MissingRoutes-2026!SyntheticOnly' \
   GLOBAL_API_RATE_LIMIT_ENABLE=false \
   TRUSTED_PROXIES=none \
@@ -156,6 +164,7 @@ database_url="postgresql://$role@127.0.0.1:$pg_port/$database?options=-csearch_p
 env \
   LMM_RS_TEST_INSTANCE=1 \
   LMM_RS_SLOT=single \
+  LMM_RS_TEST_VALKEY_PORT="$valkey_port" \
   LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
   DATABASE_URL="$database_url" \
   VALKEY_URL="redis://127.0.0.1:$valkey_port" \
@@ -177,7 +186,6 @@ if [[ $(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.
   sed -n '1,240p' "$runtime/rust.log" >&2
   exit 1
 fi
-
 GO_BASE_URL="http://127.0.0.1:$oracle_port" RUST_BASE_URL="http://127.0.0.1:$rust_port" \
   MISSING_ROUTES_MODE=transport \
   MISSING_ROUTES_INCLUDE_CLASSES="$include_classes" \

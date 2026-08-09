@@ -424,10 +424,40 @@ async fn forbidden_or_unauthorized(state: &IdentityTopupState, headers: &HeaderM
     }
 }
 
+enum TopupListError {
+    InvalidSearch(String),
+    Database,
+}
+
+impl From<sqlx::Error> for TopupListError {
+    fn from(_: sqlx::Error) -> Self {
+        Self::Database
+    }
+}
+
+/// Matches the frozen Go `sanitizeLikePattern` contract used by top-up
+/// searches. `%` remains a caller-supplied wildcard; `!` and `_` are escaped
+/// for PostgreSQL's explicit `ESCAPE '!'` clause.
+fn like_pattern(input: &str) -> Result<String, String> {
+    let escaped = input.replace('!', "!!").replace('_', "!_");
+    if escaped.contains("%%") {
+        return Err("搜索模式中不允许包含连续的 % 通配符".to_owned());
+    }
+    let wildcard_count = escaped.matches('%').count();
+    if wildcard_count > 2 {
+        return Err("搜索模式中最多允许包含 2 个 % 通配符".to_owned());
+    }
+    if wildcard_count > 0 && escaped.replace('%', "").len() < 2 {
+        return Err("使用模糊搜索时，关键词长度至少为 2 个字符".to_owned());
+    }
+    Ok(escaped)
+}
+
 async fn list_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>) -> Response {
     match fetch_topups(pool, query, user_id).await {
         Ok(page) => ok(page),
-        Err(_) => fail("系统错误"),
+        Err(TopupListError::InvalidSearch(message)) => fail(message),
+        Err(TopupListError::Database) => fail("系统错误"),
     }
 }
 
@@ -448,7 +478,8 @@ async fn list_self_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>
                 items,
             })
         }
-        Err(_) => fail("系统错误"),
+        Err(TopupListError::InvalidSearch(message)) => fail(message),
+        Err(TopupListError::Database) => fail("系统错误"),
     }
 }
 
@@ -456,9 +487,9 @@ async fn fetch_topups(
     pool: &PgPool,
     query: &PageQuery,
     user_id: Option<i64>,
-) -> Result<Page<TopupRecord>, sqlx::Error> {
+) -> Result<Page<TopupRecord>, TopupListError> {
     let keyword = query.keyword.as_deref().unwrap_or("");
-    let pattern = format!("%{}%", keyword.replace('%', "!%").replace('_', "!_"));
+    let pattern = like_pattern(keyword).map_err(TopupListError::InvalidSearch)?;
     let cutoff = unix_now().saturating_sub(TOPUP_QUERY_WINDOW_SECONDS);
     let where_sql = if user_id.is_some() {
         "user_id = $1 AND create_time >= $2 AND ($3 = '' OR trade_no LIKE $4 ESCAPE '!')"
@@ -1534,6 +1565,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn topup_search_pattern_matches_go_wildcard_contract() {
+        assert_eq!(like_pattern("trade-42").unwrap(), "trade-42");
+        assert_eq!(like_pattern("%trade-%").unwrap(), "%trade-%");
+        assert_eq!(like_pattern("a_b").unwrap(), "a!_b");
+        assert_eq!(like_pattern("%_").unwrap(), "%!_");
+        assert_eq!(like_pattern("%!").unwrap(), "%!!");
+        assert_eq!(
+            like_pattern("a%%b").unwrap_err(),
+            "搜索模式中不允许包含连续的 % 通配符"
+        );
+        assert_eq!(
+            like_pattern("%a%b%").unwrap_err(),
+            "搜索模式中最多允许包含 2 个 % 通配符"
+        );
+        assert_eq!(
+            like_pattern("%a").unwrap_err(),
+            "使用模糊搜索时，关键词长度至少为 2 个字符"
+        );
+    }
+
     #[tokio::test]
     async fn redemption_failure_uses_user_language_then_header_then_english_default() {
         let auth = StaticAuth { role: 1 };
@@ -1710,7 +1762,12 @@ mod tests {
             response_json(list_topups(&pool, &PageQuery::from_raw(None), None).await).await;
         assert_eq!(ordinary_history["data"]["total"], 10_003);
         let searched_history = response_json(
-            list_topups(&pool, &PageQuery::from_raw(Some("keyword=bulk-")), None).await,
+            list_topups(
+                &pool,
+                &PageQuery::from_raw(Some("keyword=%25bulk-%25")),
+                None,
+            )
+            .await,
         )
         .await;
         assert_eq!(searched_history["data"]["total"], SEARCH_COUNT_HARD_LIMIT);
