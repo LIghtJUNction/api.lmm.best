@@ -29,6 +29,8 @@ GET	/api/open-source-bounties/accepted	lmm_api_rs::migration_routes::open_source
 GET	/api/open-source-bounties/disputes/mine	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/disputes/admin	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/mcp-token	lmm_api_rs::migration_routes::open_source_bounties::router
+POST	/api/open-source-bounties/mcp-token	lmm_api_rs::migration_routes::open_source_bounties::router
+DELETE	/api/open-source-bounties/mcp-token	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/notifications	lmm_api_rs::migration_routes::open_source_bounties::router
 POST	/api/open-source-bounties/notifications/read	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/tips/received	lmm_api_rs::migration_routes::open_source_bounties::router

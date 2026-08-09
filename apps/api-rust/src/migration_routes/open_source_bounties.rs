@@ -8,22 +8,26 @@
 //! and MCP operations remain Go-owned until their transaction and provider
 //! evidence is migrated.
 
+use crate::{ClientIpKey, legacy_empty_response};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lmm_contracts::LegacySuccessEnvelope;
+use rand::RngCore;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row, postgres::PgRow};
 use std::sync::Arc;
 
-use crate::auth::{AuthErrorKind, DashboardAuth};
+use crate::auth::{AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth};
 
 const MAX_PAGE_SIZE: i64 = 50;
 const DEFAULT_PAGE_SIZE: i64 = 20;
@@ -31,6 +35,7 @@ const ENABLED_USER_STATUS: i64 = 1;
 const ROLE_ADMIN: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+const MCP_TOKEN_PREFIX: &str = "lmm_mcp_";
 
 /// PostgreSQL and dashboard-auth dependencies for the public bounty slice.
 #[derive(Clone)]
@@ -66,7 +71,12 @@ pub fn router(state: OpenSourceBountyState) -> Router {
             "/api/open-source-bounties/disputes/admin",
             get(admin_disputes),
         )
-        .route("/api/open-source-bounties/mcp-token", get(mcp_token_status))
+        .route(
+            "/api/open-source-bounties/mcp-token",
+            get(mcp_token_status)
+                .post(rotate_mcp_token)
+                .delete(revoke_mcp_token),
+        )
         .route(
             "/api/open-source-bounties/notifications",
             get(list_notifications),
@@ -87,6 +97,7 @@ pub fn router(state: OpenSourceBountyState) -> Router {
             "/api/open-source-bounties/tips/{tip_id}/thank",
             post(thank_tip),
         )
+        .layer(middleware::from_fn(disable_mcp_cache))
         .with_state(state)
 }
 
@@ -249,6 +260,14 @@ struct BountyMcpTokenStatus {
 
 #[derive(Debug, Serialize)]
 struct BountyMcpTokenStatusPayload {
+    status: BountyMcpTokenStatus,
+    endpoint: &'static str,
+    protocol_version: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyMcpTokenStatusPayloadWithSecret {
+    token: String,
     status: BountyMcpTokenStatus,
     endpoint: &'static str,
     protocol_version: &'static str,
@@ -641,21 +660,12 @@ async fn mcp_token_status(
         }
     };
     let status = match row {
-        Some(row) => BountyMcpTokenStatus {
-            configured: true,
-            token_hint: row.try_get("token_hint").ok(),
-            created_at: row
-                .try_get::<i64, _>("created_at")
-                .ok()
-                .filter(|value| *value != 0),
-            updated_at: row
-                .try_get::<i64, _>("updated_at")
-                .ok()
-                .filter(|value| *value != 0),
-            last_used_at: row
-                .try_get::<i64, _>("last_used_at")
-                .ok()
-                .filter(|value| *value != 0),
+        Some(row) => match mcp_token_status_from_row(&row) {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::error!(error = %error, viewer_id, "failed to decode open-source bounty MCP token status");
+                return internal_failure();
+            }
         },
         None => BountyMcpTokenStatus {
             configured: false,
@@ -679,6 +689,189 @@ async fn mcp_token_status(
         .headers_mut()
         .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
     response
+}
+
+async fn rotate_mcp_token(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+    client_ip: Option<Extension<ClientIpKey>>,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    if let Some(response) = critical_mcp_rate_limit(&state, client_ip.as_ref()).await {
+        return response;
+    }
+    let now = chrono::Utc::now().timestamp();
+    let rotated = {
+        let mut rotated = None;
+        for _ in 0..3 {
+            let token = new_mcp_token();
+            let result = sqlx::query(
+                "INSERT INTO open_source_bounty_mcp_tokens \
+                 (user_id, token_hash, token_hint, created_at, updated_at, last_used_at) \
+                 VALUES ($1, $2, $3, $4, $4, 0) \
+                 ON CONFLICT (user_id) DO UPDATE SET \
+                   token_hash = EXCLUDED.token_hash, token_hint = EXCLUDED.token_hint, \
+                   updated_at = EXCLUDED.updated_at, last_used_at = 0 \
+                 RETURNING token_hint, created_at, updated_at, last_used_at",
+            )
+            .bind(viewer_id)
+            .bind(mcp_token_hash(&token))
+            .bind(mcp_token_hint(&token))
+            .bind(now)
+            .fetch_one(&state.pg)
+            .await;
+            match result {
+                Ok(row) => {
+                    rotated = Some((token, row));
+                    break;
+                }
+                Err(error)
+                    if error
+                        .as_database_error()
+                        .is_some_and(|database| database.code().as_deref() == Some("23505")) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    tracing::error!(error = %error, viewer_id, "failed to rotate open-source bounty MCP token");
+                    return internal_failure();
+                }
+            }
+        }
+        rotated
+    };
+    let Some((token, row)) = rotated else {
+        tracing::error!(
+            viewer_id,
+            "failed to generate a unique open-source bounty MCP token"
+        );
+        return internal_failure();
+    };
+    let status = match mcp_token_status_from_row(&row) {
+        Ok(status) => status,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to decode rotated open-source bounty MCP token");
+            return internal_failure();
+        }
+    };
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: BountyMcpTokenStatusPayloadWithSecret {
+            token,
+            status,
+            endpoint: "/mcp",
+            protocol_version: MCP_PROTOCOL_VERSION,
+        },
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+async fn revoke_mcp_token(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+    client_ip: Option<Extension<ClientIpKey>>,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    if let Some(response) = critical_mcp_rate_limit(&state, client_ip.as_ref()).await {
+        return response;
+    }
+    if let Err(error) = sqlx::query("DELETE FROM open_source_bounty_mcp_tokens WHERE user_id = $1")
+        .bind(viewer_id)
+        .execute(&state.pg)
+        .await
+    {
+        tracing::error!(error = %error, viewer_id, "failed to revoke open-source bounty MCP token");
+        return internal_failure();
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: Value::Null,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+async fn critical_mcp_rate_limit(
+    state: &OpenSourceBountyState,
+    client_ip: Option<&Extension<ClientIpKey>>,
+) -> Option<Response> {
+    let client_ip = client_ip
+        .map(|extension| extension.0.0.as_str())
+        .unwrap_or("unknown");
+    match state.auth.check_critical_rate_limit(client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => None,
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => Some(legacy_empty_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            Some(retry_after_seconds),
+        )),
+        Err(_) => Some(legacy_empty_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        )),
+    }
+}
+
+async fn disable_mcp_cache(request: Request, next: Next) -> Response {
+    if request.uri().path() != "/api/open-source-bounties/mcp-token" {
+        return next.run(request).await;
+    }
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
+    response
+}
+
+fn new_mcp_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    format!("{MCP_TOKEN_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn mcp_token_hash(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+fn mcp_token_hint(token: &str) -> String {
+    format!("{MCP_TOKEN_PREFIX}••••{}", &token[token.len() - 8..])
+}
+
+fn mcp_token_status_from_row(row: &PgRow) -> Result<BountyMcpTokenStatus, sqlx::Error> {
+    let token_hint = row.try_get::<String, _>("token_hint")?;
+    let created_at = row.try_get::<i64, _>("created_at")?;
+    let updated_at = row.try_get::<i64, _>("updated_at")?;
+    let last_used_at = row.try_get::<i64, _>("last_used_at")?;
+    Ok(BountyMcpTokenStatus {
+        configured: true,
+        token_hint: (!token_hint.is_empty()).then_some(token_hint),
+        created_at: (created_at != 0).then_some(created_at),
+        updated_at: (updated_at != 0).then_some(updated_at),
+        last_used_at: (last_used_at != 0).then_some(last_used_at),
+    })
 }
 
 async fn required_viewer_id(
