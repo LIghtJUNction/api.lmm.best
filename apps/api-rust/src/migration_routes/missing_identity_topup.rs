@@ -55,22 +55,22 @@ impl IdentityTopupState {
 
 /// Routes retained under the legacy `/api/user` namespace.
 pub fn router(state: IdentityTopupState) -> Router {
-    Router::new()
+    topup_read_routes()
         .route("/api/user/topup", get(all_topups).post(redeem))
-        .route("/api/user/topup/self", get(user_topups))
         .route("/api/user/topup/complete", post(complete_topup))
-        .merge(topup_info_route())
         .with_state(state)
 }
 
 /// Normal-listener read-only mount. Redemption and manual completion remain
 /// isolated until their Go write-side transaction differential is complete.
 pub fn read_router(state: IdentityTopupState) -> Router {
-    topup_info_route().with_state(state)
+    topup_read_routes().with_state(state)
 }
 
-fn topup_info_route() -> Router<IdentityTopupState> {
-    Router::new().route("/api/user/topup/info", get(topup_info))
+fn topup_read_routes() -> Router<IdentityTopupState> {
+    Router::new()
+        .route("/api/user/topup/info", get(topup_info))
+        .route("/api/user/topup/self", get(user_topups))
 }
 
 #[derive(Serialize)]
@@ -327,6 +327,35 @@ struct TopupRecord {
     status: String,
 }
 
+#[derive(Serialize)]
+struct TopupSelfRecord {
+    id: i64,
+    user_id: i64,
+    amount: i64,
+    money: Value,
+    trade_no: String,
+    payment_method: String,
+    create_time: i64,
+    complete_time: i64,
+    status: String,
+}
+
+impl From<TopupRecord> for TopupSelfRecord {
+    fn from(record: TopupRecord) -> Self {
+        Self {
+            id: record.id,
+            user_id: record.user_id,
+            amount: record.amount,
+            money: record.money,
+            trade_no: record.trade_no,
+            payment_method: record.payment_method,
+            create_time: record.create_time,
+            complete_time: record.complete_time,
+            status: record.status,
+        }
+    }
+}
+
 fn topup_record(row: &sqlx::postgres::PgRow) -> Result<TopupRecord, sqlx::Error> {
     let money_text: String = row.try_get("money")?;
     let money = money_text
@@ -379,7 +408,7 @@ async fn user_topups(
         Ok(user) => user,
         Err(response) => return response,
     };
-    list_topups(
+    list_self_topups(
         &state.pool,
         &PageQuery::from_raw(raw_query.as_deref()),
         Some(user.id),
@@ -396,6 +425,38 @@ async fn forbidden_or_unauthorized(state: &IdentityTopupState, headers: &HeaderM
 }
 
 async fn list_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>) -> Response {
+    match fetch_topups(pool, query, user_id).await {
+        Ok(page) => ok(page),
+        Err(_) => fail("系统错误"),
+    }
+}
+
+async fn list_self_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>) -> Response {
+    match fetch_topups(pool, query, user_id).await {
+        Ok(page) => {
+            let Page {
+                page,
+                page_size,
+                total,
+                items,
+            } = page;
+            let items = items.into_iter().map(TopupSelfRecord::from).collect();
+            ok(Page {
+                page,
+                page_size,
+                total,
+                items,
+            })
+        }
+        Err(_) => fail("系统错误"),
+    }
+}
+
+async fn fetch_topups(
+    pool: &PgPool,
+    query: &PageQuery,
+    user_id: Option<i64>,
+) -> Result<Page<TopupRecord>, sqlx::Error> {
     let keyword = query.keyword.as_deref().unwrap_or("");
     let pattern = format!("%{}%", keyword.replace('%', "!%").replace('_', "!_"));
     let cutoff = unix_now().saturating_sub(TOPUP_QUERY_WINDOW_SECONDS);
@@ -418,10 +479,7 @@ async fn list_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>) -> 
         if user_id.is_some() { 5 } else { 3 },
         if user_id.is_some() { 6 } else { 4 }
     );
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(_) => return fail("系统错误"),
-    };
+    let mut tx = pool.begin().await?;
     let count_result = if let Some(id) = user_id {
         sqlx::query_scalar::<_, i64>(&count_sql)
             .bind(id)
@@ -437,10 +495,7 @@ async fn list_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>) -> 
             .fetch_one(&mut *tx)
             .await
     };
-    let total = match count_result {
-        Ok(value) => value,
-        Err(_) => return fail("系统错误"),
-    };
+    let total = count_result?;
     let rows = if let Some(id) = user_id {
         sqlx::query(&list_sql)
             .bind(id)
@@ -460,18 +515,13 @@ async fn list_topups(pool: &PgPool, query: &PageQuery, user_id: Option<i64>) -> 
             .fetch_all(&mut *tx)
             .await
     };
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(_) => return fail("系统错误"),
-    };
-    let items = match rows.iter().map(topup_record).collect::<Result<Vec<_>, _>>() {
-        Ok(items) => items,
-        Err(_) => return fail("系统错误"),
-    };
-    if tx.commit().await.is_err() {
-        return fail("系统错误");
-    }
-    ok(Page {
+    let rows = rows?;
+    let items = rows
+        .iter()
+        .map(topup_record)
+        .collect::<Result<Vec<_>, _>>()?;
+    tx.commit().await?;
+    Ok(Page {
         page: query.page(),
         page_size: query.page_size(),
         total,
@@ -1598,6 +1648,27 @@ mod tests {
         assert_eq!(production_waffo["enable_waffo_topup"], true);
         options.insert("WaffoEnabled".into(), "1".into());
         assert_eq!(topup_info_data(&options)["enable_waffo_topup"], false);
+    }
+
+    #[test]
+    fn self_topup_record_keeps_the_go_public_shape() {
+        let value = serde_json::to_value(TopupSelfRecord::from(TopupRecord {
+            id: 7,
+            user_id: 11,
+            amount: 20,
+            money: json!(20.0),
+            trade_no: "trade-7".into(),
+            payment_method: "stripe".into(),
+            payment_provider: "stripe".into(),
+            create_time: 100,
+            complete_time: 200,
+            status: "success".into(),
+        }))
+        .expect("serialize self top-up record");
+        assert_eq!(value["id"], 7);
+        assert_eq!(value["money"], 20.0);
+        assert_eq!(value["payment_method"], "stripe");
+        assert!(value.get("payment_provider").is_none());
     }
 
     #[tokio::test]
