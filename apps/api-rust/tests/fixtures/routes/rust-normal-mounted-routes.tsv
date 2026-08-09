@@ -22,6 +22,7 @@ GET	/api/subscription/self	apps/api-rust/src/main.rs
 PUT	/api/subscription/self/preference	apps/api-rust/src/main.rs
 GET	/api/home_page_content	apps/api-rust/src/http.rs:195
 GET	/api/open-source-bounties	apps/api-rust/src/main.rs
+GET	/api/open-source-bounties/projects/:id	apps/api-rust/src/main.rs
 GET	/api/log/	apps/api-rust/src/main.rs:190
 GET	/api/log/channel_affinity_usage_cache	apps/api-rust/src/main.rs:190
 GET	/api/log/search	apps/api-rust/src/main.rs:190

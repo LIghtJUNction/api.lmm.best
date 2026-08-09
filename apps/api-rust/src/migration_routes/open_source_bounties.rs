@@ -9,7 +9,7 @@
 
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -49,6 +49,10 @@ impl OpenSourceBountyState {
 pub fn router(state: OpenSourceBountyState) -> Router {
     Router::new()
         .route("/api/open-source-bounties", get(list_bounties))
+        .route(
+            "/api/open-source-bounties/projects/{id}",
+            get(detail_bounty),
+        )
         .with_state(state)
 }
 
@@ -140,6 +144,102 @@ struct ListPayload {
     total: i64,
     page: i64,
     page_size: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyProjectDetail {
+    project: BountyProjectView,
+    challenges: Vec<BountyChallengeView>,
+    ledger: Vec<BountyLedger>,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyChallengeView {
+    #[serde(flatten)]
+    challenge: BountyChallenge,
+    participant_username: String,
+    project_title: String,
+    repository_url: String,
+    owner_username: String,
+    participant_rating_average: f64,
+    participant_rating_count: i64,
+    owner_rating_average: f64,
+    owner_rating_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dispute: Option<BountyDisputeView>,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyLedger {
+    id: i64,
+    project_id: i64,
+    challenge_id: i64,
+    user_id: i64,
+    counterparty_user_id: i64,
+    kind: String,
+    quota: i64,
+    note: String,
+    recipient_read_at: i64,
+    thanked_at: i64,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyDispute {
+    id: i64,
+    challenge_id: i64,
+    project_id: i64,
+    opened_by_user_id: i64,
+    against_user_id: i64,
+    reason: String,
+    statement: String,
+    project_title_snapshot: String,
+    repository_url_snapshot: String,
+    project_rules_snapshot: String,
+    project_escrow_quota_snapshot: i64,
+    challenge_status_snapshot: String,
+    issue_url_snapshot: String,
+    pull_request_url_snapshot: String,
+    submission_note_snapshot: String,
+    review_note_snapshot: String,
+    reward_quota_snapshot: i64,
+    tip_quota_snapshot: i64,
+    owner_rating_score_snapshot: i64,
+    owner_rating_comment_snapshot: String,
+    contributor_rating_score_snapshot: i64,
+    contributor_rating_comment_snapshot: String,
+    status: String,
+    resolution: String,
+    resolved_by_user_id: i64,
+    created_at: i64,
+    updated_at: i64,
+    resolved_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyDisputeView {
+    #[serde(flatten)]
+    dispute: BountyDispute,
+    project_title: String,
+    repository_url: String,
+    project_rules: String,
+    challenge_status: String,
+    current_project_escrow_quota: i64,
+    issue_url: String,
+    pull_request_url: String,
+    submission_note: String,
+    review_note: String,
+    reward_quota: i64,
+    tip_quota: i64,
+    owner_rating_score: i64,
+    owner_rating_comment: String,
+    contributor_rating_score: i64,
+    contributor_rating_comment: String,
+    owner_username: String,
+    participant_username: String,
+    opened_by_username: String,
+    against_username: String,
+    live_evidence_changed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -389,6 +489,101 @@ fn challenge_from_row(row: &PgRow) -> Result<BountyChallenge, sqlx::Error> {
     })
 }
 
+fn challenge_view_select() -> &'static str {
+    "SELECT c.id::BIGINT AS id, c.project_id::BIGINT AS project_id, c.participant_user_id::BIGINT AS participant_user_id, c.github_handle, c.status, c.issue_url, c.pull_request_url, c.submission_note, c.review_note, c.reward_quota::BIGINT AS reward_quota, c.tip_quota::BIGINT AS tip_quota, c.owner_rating_score::BIGINT AS owner_rating_score, c.owner_rating_comment, c.owner_rated_at::BIGINT AS owner_rated_at, c.contributor_rating_score::BIGINT AS contributor_rating_score, c.contributor_rating_comment, c.contributor_rated_at::BIGINT AS contributor_rated_at, c.owner_rating_overturned, c.accepted_at::BIGINT AS accepted_at, c.submitted_at::BIGINT AS submitted_at, c.reviewed_at::BIGINT AS reviewed_at, c.rejected_at::BIGINT AS rejected_at, c.paid_at::BIGINT AS paid_at, c.created_at::BIGINT AS created_at, c.updated_at::BIGINT AS updated_at, participant.username AS participant_username, p.title AS project_title, p.repository_url AS repository_url, owner.username AS owner_username, COALESCE((SELECT AVG(history.owner_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = FALSE), 0)::DOUBLE PRECISION AS participant_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = FALSE) AS participant_rating_count, COALESCE((SELECT AVG(history.contributor_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges history JOIN open_source_bounty_projects history_project ON history_project.id = history.project_id WHERE history_project.owner_user_id = p.owner_user_id AND history.contributor_rating_score > 0), 0)::DOUBLE PRECISION AS owner_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges history JOIN open_source_bounty_projects history_project ON history_project.id = history.project_id WHERE history_project.owner_user_id = p.owner_user_id AND history.contributor_rating_score > 0) AS owner_rating_count FROM open_source_bounty_challenges c JOIN users participant ON participant.id = c.participant_user_id JOIN open_source_bounty_projects p ON p.id = c.project_id JOIN users owner ON owner.id = p.owner_user_id"
+}
+
+fn challenge_view_from_row(row: &PgRow) -> Result<BountyChallengeView, sqlx::Error> {
+    Ok(BountyChallengeView {
+        challenge: challenge_from_row(row)?,
+        participant_username: row.try_get("participant_username")?,
+        project_title: row.try_get("project_title")?,
+        repository_url: row.try_get("repository_url")?,
+        owner_username: row.try_get("owner_username")?,
+        participant_rating_average: row.try_get("participant_rating_average")?,
+        participant_rating_count: row.try_get("participant_rating_count")?,
+        owner_rating_average: row.try_get("owner_rating_average")?,
+        owner_rating_count: row.try_get("owner_rating_count")?,
+        dispute: None,
+    })
+}
+
+fn ledger_from_row(row: &PgRow) -> Result<BountyLedger, sqlx::Error> {
+    Ok(BountyLedger {
+        id: row.try_get("id")?,
+        project_id: row.try_get("project_id")?,
+        challenge_id: row.try_get("challenge_id")?,
+        user_id: row.try_get("user_id")?,
+        counterparty_user_id: row.try_get("counterparty_user_id")?,
+        kind: row.try_get("kind")?,
+        quota: row.try_get("quota")?,
+        note: row.try_get("note")?,
+        recipient_read_at: row.try_get("recipient_read_at")?,
+        thanked_at: row.try_get("thanked_at")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn dispute_view_select() -> &'static str {
+    "SELECT d.id::BIGINT AS id, d.challenge_id::BIGINT AS challenge_id, d.project_id::BIGINT AS project_id, d.opened_by_user_id::BIGINT AS opened_by_user_id, d.against_user_id::BIGINT AS against_user_id, d.reason, d.statement, d.project_title_snapshot, d.repository_url_snapshot, d.project_rules_snapshot, d.project_escrow_quota_snapshot::BIGINT AS project_escrow_quota_snapshot, d.challenge_status_snapshot, d.issue_url_snapshot, d.pull_request_url_snapshot, d.submission_note_snapshot, d.review_note_snapshot, d.reward_quota_snapshot::BIGINT AS reward_quota_snapshot, d.tip_quota_snapshot::BIGINT AS tip_quota_snapshot, d.owner_rating_score_snapshot::BIGINT AS owner_rating_score_snapshot, d.owner_rating_comment_snapshot, d.contributor_rating_score_snapshot::BIGINT AS contributor_rating_score_snapshot, d.contributor_rating_comment_snapshot, d.status, d.resolution, d.resolved_by_user_id::BIGINT AS resolved_by_user_id, d.created_at::BIGINT AS created_at, d.updated_at::BIGINT AS updated_at, d.resolved_at::BIGINT AS resolved_at, p.title AS project_title, p.repository_url AS repository_url, p.rules AS project_rules, c.status AS challenge_status, p.escrow_quota::BIGINT AS current_project_escrow_quota, c.issue_url AS issue_url, c.pull_request_url AS pull_request_url, c.submission_note AS submission_note, c.review_note AS review_note, c.reward_quota::BIGINT AS reward_quota, c.tip_quota::BIGINT AS tip_quota, c.owner_rating_score::BIGINT AS owner_rating_score, c.owner_rating_comment AS owner_rating_comment, c.contributor_rating_score::BIGINT AS contributor_rating_score, c.contributor_rating_comment AS contributor_rating_comment, owner.username AS owner_username, participant.username AS participant_username, opener.username AS opened_by_username, against_user.username AS against_username, CASE WHEN p.title <> d.project_title_snapshot OR p.repository_url <> d.repository_url_snapshot OR p.rules <> d.project_rules_snapshot OR c.status <> d.challenge_status_snapshot OR c.issue_url <> d.issue_url_snapshot OR c.pull_request_url <> d.pull_request_url_snapshot OR c.submission_note <> d.submission_note_snapshot OR c.review_note <> d.review_note_snapshot OR c.reward_quota <> d.reward_quota_snapshot OR c.tip_quota <> d.tip_quota_snapshot OR c.owner_rating_score <> d.owner_rating_score_snapshot OR c.owner_rating_comment <> d.owner_rating_comment_snapshot OR c.contributor_rating_score <> d.contributor_rating_score_snapshot OR c.contributor_rating_comment <> d.contributor_rating_comment_snapshot THEN TRUE ELSE FALSE END AS live_evidence_changed FROM open_source_bounty_disputes d JOIN open_source_bounty_challenges c ON c.id = d.challenge_id JOIN open_source_bounty_projects p ON p.id = d.project_id JOIN users owner ON owner.id = p.owner_user_id JOIN users participant ON participant.id = c.participant_user_id JOIN users opener ON opener.id = d.opened_by_user_id JOIN users against_user ON against_user.id = d.against_user_id"
+}
+
+fn dispute_view_from_row(row: &PgRow) -> Result<BountyDisputeView, sqlx::Error> {
+    Ok(BountyDisputeView {
+        dispute: BountyDispute {
+            id: row.try_get("id")?,
+            challenge_id: row.try_get("challenge_id")?,
+            project_id: row.try_get("project_id")?,
+            opened_by_user_id: row.try_get("opened_by_user_id")?,
+            against_user_id: row.try_get("against_user_id")?,
+            reason: row.try_get("reason")?,
+            statement: row.try_get("statement")?,
+            project_title_snapshot: row.try_get("project_title_snapshot")?,
+            repository_url_snapshot: row.try_get("repository_url_snapshot")?,
+            project_rules_snapshot: row.try_get("project_rules_snapshot")?,
+            project_escrow_quota_snapshot: row.try_get("project_escrow_quota_snapshot")?,
+            challenge_status_snapshot: row.try_get("challenge_status_snapshot")?,
+            issue_url_snapshot: row.try_get("issue_url_snapshot")?,
+            pull_request_url_snapshot: row.try_get("pull_request_url_snapshot")?,
+            submission_note_snapshot: row.try_get("submission_note_snapshot")?,
+            review_note_snapshot: row.try_get("review_note_snapshot")?,
+            reward_quota_snapshot: row.try_get("reward_quota_snapshot")?,
+            tip_quota_snapshot: row.try_get("tip_quota_snapshot")?,
+            owner_rating_score_snapshot: row.try_get("owner_rating_score_snapshot")?,
+            owner_rating_comment_snapshot: row.try_get("owner_rating_comment_snapshot")?,
+            contributor_rating_score_snapshot: row.try_get("contributor_rating_score_snapshot")?,
+            contributor_rating_comment_snapshot: row
+                .try_get("contributor_rating_comment_snapshot")?,
+            status: row.try_get("status")?,
+            resolution: row.try_get("resolution")?,
+            resolved_by_user_id: row.try_get("resolved_by_user_id")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+            resolved_at: row.try_get("resolved_at")?,
+        },
+        project_title: row.try_get("project_title")?,
+        repository_url: row.try_get("repository_url")?,
+        project_rules: row.try_get("project_rules")?,
+        challenge_status: row.try_get("challenge_status")?,
+        current_project_escrow_quota: row.try_get("current_project_escrow_quota")?,
+        issue_url: row.try_get("issue_url")?,
+        pull_request_url: row.try_get("pull_request_url")?,
+        submission_note: row.try_get("submission_note")?,
+        review_note: row.try_get("review_note")?,
+        reward_quota: row.try_get("reward_quota")?,
+        tip_quota: row.try_get("tip_quota")?,
+        owner_rating_score: row.try_get("owner_rating_score")?,
+        owner_rating_comment: row.try_get("owner_rating_comment")?,
+        contributor_rating_score: row.try_get("contributor_rating_score")?,
+        contributor_rating_comment: row.try_get("contributor_rating_comment")?,
+        owner_username: row.try_get("owner_username")?,
+        participant_username: row.try_get("participant_username")?,
+        opened_by_username: row.try_get("opened_by_username")?,
+        against_username: row.try_get("against_username")?,
+        live_evidence_changed: row.try_get("live_evidence_changed")?,
+    })
+}
+
 fn challenge_priority(status: &str) -> i64 {
     match status {
         "approved" => 4,
@@ -436,6 +631,168 @@ async fn attach_viewer_challenges(
         view.viewer_challenge = selected.remove(&view.id);
     }
     Ok(())
+}
+
+async fn attach_disputes(
+    state: &OpenSourceBountyState,
+    views: &mut [BountyChallengeView],
+) -> Result<(), sqlx::Error> {
+    if views.is_empty() {
+        return Ok(());
+    }
+    let challenge_ids = views
+        .iter()
+        .map(|view| view.challenge.id)
+        .collect::<Vec<_>>();
+    let query = format!(
+        "{} WHERE d.challenge_id = ANY($1) ORDER BY d.created_at DESC, d.id DESC",
+        dispute_view_select()
+    );
+    let rows = sqlx::query(&query)
+        .bind(&challenge_ids)
+        .fetch_all(&state.pg)
+        .await?;
+    let mut selected = std::collections::HashMap::<i64, BountyDisputeView>::new();
+    for row in rows {
+        let dispute = dispute_view_from_row(&row)?;
+        selected
+            .entry(dispute.dispute.challenge_id)
+            .or_insert(dispute);
+    }
+    for view in views {
+        view.dispute = selected.remove(&view.challenge.id);
+    }
+    Ok(())
+}
+
+async fn detail_bounty(
+    State(state): State<OpenSourceBountyState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let project_id = match project_id.parse::<i64>() {
+        Ok(project_id) if project_id > 0 => project_id,
+        _ => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let viewer_id = match optional_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let now = chrono::Utc::now().timestamp();
+    let query = format!("{} WHERE p.id = $2", project_select());
+    let row = match sqlx::query(&query)
+        .bind(now - 7 * 24 * 60 * 60)
+        .bind(project_id)
+        .fetch_optional(&state.pg)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(error = %error, project_id, "failed to load public open-source bounty detail");
+            return internal_failure();
+        }
+    };
+    let Some(row) = row else {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+            "bounty project was not found",
+        );
+    };
+    let mut project = match project_from_row(&row) {
+        Ok(project) => project,
+        Err(error) => {
+            tracing::error!(error = %error, project_id, "failed to decode open-source bounty detail");
+            return internal_failure();
+        }
+    };
+    if matches!(project.status.as_str(), "draft" | "closed")
+        && viewer_id != Some(project.owner_user_id)
+    {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+            "bounty project was not found",
+        );
+    }
+    if let Err(error) =
+        attach_viewer_challenges(&state, std::slice::from_mut(&mut project), viewer_id).await
+    {
+        tracing::error!(error = %error, project_id, "failed to attach bounty viewer challenge");
+        return internal_failure();
+    }
+    let mut challenges = Vec::new();
+    let mut ledger = Vec::new();
+    if viewer_id == Some(project.owner_user_id) {
+        let challenge_query = format!(
+            "{} WHERE c.project_id = $1 ORDER BY c.created_at DESC, c.id DESC",
+            challenge_view_select()
+        );
+        let rows = match sqlx::query(&challenge_query)
+            .bind(project_id)
+            .fetch_all(&state.pg)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(error = %error, project_id, "failed to load bounty challenges");
+                return internal_failure();
+            }
+        };
+        for row in rows {
+            match challenge_view_from_row(&row) {
+                Ok(challenge) => challenges.push(challenge),
+                Err(error) => {
+                    tracing::error!(error = %error, project_id, "failed to decode bounty challenge");
+                    return internal_failure();
+                }
+            }
+        }
+        if let Err(error) = attach_disputes(&state, &mut challenges).await {
+            tracing::error!(error = %error, project_id, "failed to attach bounty disputes");
+            return internal_failure();
+        }
+        let ledger_query = "SELECT id::BIGINT AS id, project_id::BIGINT AS project_id, challenge_id::BIGINT AS challenge_id, user_id::BIGINT AS user_id, counterparty_user_id::BIGINT AS counterparty_user_id, kind, quota::BIGINT AS quota, note, recipient_read_at::BIGINT AS recipient_read_at, thanked_at::BIGINT AS thanked_at, created_at::BIGINT AS created_at FROM open_source_bounty_ledgers WHERE project_id = $1 ORDER BY created_at DESC, id DESC";
+        let rows = match sqlx::query(ledger_query)
+            .bind(project_id)
+            .fetch_all(&state.pg)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(error = %error, project_id, "failed to load bounty ledger");
+                return internal_failure();
+            }
+        };
+        for row in rows {
+            match ledger_from_row(&row) {
+                Ok(entry) => ledger.push(entry),
+                Err(error) => {
+                    tracing::error!(error = %error, project_id, "failed to decode bounty ledger");
+                    return internal_failure();
+                }
+            }
+        }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: BountyProjectDetail {
+            project,
+            challenges,
+            ledger,
+        },
+    })
+    .into_response();
+    if viewer_id.is_some() {
+        response
+            .headers_mut()
+            .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    }
+    response
 }
 
 async fn list_bounties(
