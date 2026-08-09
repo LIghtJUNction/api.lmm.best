@@ -200,11 +200,26 @@ impl IdentityCheckinAffState {
 }
 
 pub fn router(state: IdentityCheckinAffState) -> Router {
-    Router::new()
-        .route("/api/user/checkin", get(checkin_status).post(checkin))
+    checkin_read_routes()
+        .route("/api/user/checkin", post(checkin))
         .route("/api/user/aff_transfer", post(aff_transfer))
         .route("/api/user/amount", post(amount))
         .with_state(state)
+}
+
+/// Read-only normal-listener slice for the Go `GET /api/user/checkin` route.
+///
+/// Keep the quota-changing check-in and affiliate routes on the isolated
+/// candidate surface until their side effects have independent differential
+/// evidence.  Sharing this route builder with [`router`] prevents the two
+/// mounts from drifting while ensuring the normal listener cannot accidentally
+/// expose a write method.
+pub fn read_router(state: IdentityCheckinAffState) -> Router {
+    checkin_read_routes().with_state(state)
+}
+
+fn checkin_read_routes() -> Router<IdentityCheckinAffState> {
+    Router::new().route("/api/user/checkin", get(checkin_status))
 }
 
 #[derive(Serialize)]
@@ -842,6 +857,13 @@ mod tests {
         ))
     }
 
+    fn read_app() -> Router {
+        read_router(IdentityCheckinAffState::new(
+            PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap(),
+            Arc::new(RejectingAuth),
+        ))
+    }
+
     #[tokio::test]
     async fn every_checkin_and_affiliate_public_seam_requires_a_dashboard_credential() {
         for (method, uri) in [
@@ -873,6 +895,27 @@ mod tests {
                 json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Invalid Access Token"}),
                 "{method} {uri}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn read_router_does_not_expose_quota_changing_methods() {
+        for (method, uri, expected_status) in [
+            ("POST", "/api/user/checkin", StatusCode::METHOD_NOT_ALLOWED),
+            ("POST", "/api/user/aff_transfer", StatusCode::NOT_FOUND),
+            ("POST", "/api/user/amount", StatusCode::NOT_FOUND),
+        ] {
+            let response = read_app()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status, "{method} {uri}");
         }
     }
 
