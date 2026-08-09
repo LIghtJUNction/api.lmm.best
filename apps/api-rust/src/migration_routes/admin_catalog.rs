@@ -477,27 +477,59 @@ impl AdminCatalogProvider for PgCatalogProvider {
     }
 }
 
+fn is_zero_i64(value: &i64) -> bool {
+    *value == 0
+}
+
+fn is_empty_vec<T>(value: &[T]) -> bool {
+    value.is_empty()
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct CatalogBoundChannel {
+    name: String,
+    #[serde(rename = "type")]
+    channel_type: i64,
+}
+
 #[derive(Serialize)]
 struct CatalogModel {
     id: i64,
     model_name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     description: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     icon: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     tags: String,
+    #[serde(skip_serializing_if = "is_zero_i64")]
     vendor_id: i64,
+    #[serde(skip_serializing_if = "String::is_empty")]
     endpoints: String,
     status: i64,
     sync_official: i64,
     created_time: i64,
     updated_time: i64,
     name_rule: i64,
+    #[serde(skip_serializing_if = "is_empty_vec")]
+    bound_channels: Vec<CatalogBoundChannel>,
+    #[serde(skip_serializing_if = "is_empty_vec")]
+    enable_groups: Vec<String>,
+    #[serde(skip_serializing_if = "is_empty_vec")]
+    quota_types: Vec<i64>,
+    #[serde(skip_serializing_if = "is_empty_vec")]
+    matched_models: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero_i64")]
+    matched_count: i64,
 }
 
 #[derive(Serialize)]
 struct CatalogVendor {
     id: i64,
     name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     description: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     icon: String,
     status: i64,
     created_time: i64,
@@ -511,6 +543,7 @@ struct CatalogPrefillGroup {
     #[serde(rename = "type")]
     group_type: String,
     items: Value,
+    #[serde(skip_serializing_if = "String::is_empty")]
     description: String,
     created_time: i64,
     updated_time: i64,
@@ -524,6 +557,7 @@ struct CatalogRedemption {
     status: i64,
     name: String,
     quota: i64,
+    count: i64,
     created_time: i64,
     redeemed_time: i64,
     used_user_id: i64,
@@ -544,6 +578,11 @@ fn model_from_row(row: &sqlx::postgres::PgRow) -> Result<CatalogModel, CatalogEr
         created_time: row.try_get("created_time").map_err(database_error)?,
         updated_time: row.try_get("updated_time").map_err(database_error)?,
         name_rule: row.try_get("name_rule").map_err(database_error)?,
+        bound_channels: Vec::new(),
+        enable_groups: Vec::new(),
+        quota_types: Vec::new(),
+        matched_models: Vec::new(),
+        matched_count: 0,
     })
 }
 
@@ -581,6 +620,7 @@ fn redemption_from_row(row: &sqlx::postgres::PgRow) -> Result<CatalogRedemption,
         status: row.try_get("status").map_err(database_error)?,
         name: row.try_get("name").map_err(database_error)?,
         quota: row.try_get("quota").map_err(database_error)?,
+        count: 0,
         created_time: row.try_get("created_time").map_err(database_error)?,
         redeemed_time: row.try_get("redeemed_time").map_err(database_error)?,
         used_user_id: row.try_get("used_user_id").map_err(database_error)?,
@@ -623,26 +663,57 @@ fn integer(input: &Value, name: &str, default: i64) -> i64 {
 }
 
 fn page(input: &Value) -> (i64, i64, i64) {
-    let number = text(input, "p")
-        .parse::<i64>()
-        .map_or(1, |value| value)
-        .max(1);
-    let size = text(input, "page_size")
-        .parse::<i64>()
-        .map_or(10, |value| value)
-        .clamp(1, 100);
-    (number, size, (number - 1) * size)
+    // Match common.GetPageQuery: a zero/invalid page becomes one, while a
+    // non-zero negative page is preserved for the response (GORM simply
+    // omits its negative OFFSET clause).
+    let raw_page = text(input, "p").parse::<i64>().unwrap_or(0);
+    let number = if raw_page < 1 {
+        if raw_page == 0 { 1 } else { raw_page }
+    } else {
+        raw_page
+    };
+
+    // The legacy dashboard accepts page_size first, then the historical ps
+    // and token-size aliases. A negative size is intentional: GORM treats it
+    // as an unlimited query rather than emitting LIMIT -1.
+    let mut size = text(input, "page_size").parse::<i64>().unwrap_or(0);
+    if size == 0 {
+        size = text(input, "ps").parse::<i64>().unwrap_or(0);
+    }
+    if size == 0 {
+        size = text(input, "size").parse::<i64>().unwrap_or(0);
+    }
+    if size == 0 {
+        size = 10;
+    }
+    if size > 100 {
+        size = 100;
+    }
+    let offset = number.wrapping_sub(1).wrapping_mul(size);
+    (number, size, offset)
 }
 
 fn normalize_status_filter(value: &str) -> String {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "all" => String::new(),
-        // Keep the legacy `parseModel*Filter` vocabulary exact. In
-        // particular, `yes` and `no` are not aliases in the Go handler and
-        // must remain unfiltered instead of being silently remapped.
-        "enabled" => "1".to_owned(),
-        "disabled" => "0".to_owned(),
-        other => other.to_owned(),
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "all" => String::new(),
+        "enabled" | "1" => "1".to_owned(),
+        "disabled" | "0" => "0".to_owned(),
+        _ if normalized.parse::<i64>().is_ok() => normalized,
+        // Go ignores unknown status values instead of passing them to a
+        // numeric SQL predicate (notably, yes/no are sync-only aliases).
+        _ => String::new(),
+    }
+}
+
+fn normalize_sync_filter(value: &str) -> String {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "all" => String::new(),
+        "yes" | "1" => "1".to_owned(),
+        "no" | "0" => "0".to_owned(),
+        _ if normalized.parse::<i64>().is_ok() => normalized,
+        _ => String::new(),
     }
 }
 
@@ -674,26 +745,40 @@ async fn list_models_pg(pg: &PgPool, input: &Value, search: bool) -> Result<Valu
         vendor
     };
     let status = normalize_status_filter(&text(input, "status"));
-    let sync = normalize_status_filter(&text(input, "sync_official"));
+    let sync = normalize_sync_filter(&text(input, "sync_official"));
+    let pagination = if page_size < 0 {
+        if offset > 0 {
+            format!(" OFFSET {offset}")
+        } else {
+            String::new()
+        }
+    } else if offset > 0 {
+        " OFFSET $6 LIMIT $7".to_owned()
+    } else {
+        " LIMIT $6".to_owned()
+    };
     let query = format!(
-        "SELECT {MODEL_COLUMNS} FROM models WHERE deleted_at IS NULL AND ($1 = '' OR model_name ILIKE '%' || $1 || '%' OR COALESCE(description, '') ILIKE '%' || $1 || '%' OR COALESCE(tags, '') ILIKE '%' || $1 || '%') AND ($2::bigint IS NULL OR vendor_id = $2) AND ($3 = '' OR EXISTS (SELECT 1 FROM vendors v WHERE v.id = models.vendor_id AND v.deleted_at IS NULL AND v.name ILIKE '%' || $3 || '%')) AND ($4 = '' OR status = $4::bigint) AND ($5 = '' OR sync_official = $5::bigint) ORDER BY id DESC OFFSET $6 LIMIT $7"
+        "SELECT {MODEL_COLUMNS} FROM models WHERE deleted_at IS NULL AND ($1 = '' OR model_name LIKE '%' || $1 || '%' OR COALESCE(description, '') LIKE '%' || $1 || '%' OR COALESCE(tags, '') LIKE '%' || $1 || '%') AND ($2::bigint IS NULL OR vendor_id = $2) AND ($3 = '' OR EXISTS (SELECT 1 FROM vendors v WHERE v.id = models.vendor_id AND v.deleted_at IS NULL AND v.name LIKE '%' || $3 || '%')) AND ($4 = '' OR status = $4::bigint) AND ($5 = '' OR sync_official = $5::bigint) ORDER BY id DESC{pagination}"
     );
-    let rows = sqlx::query(&query)
+    let mut request = sqlx::query(&query)
         .bind(&keyword)
         .bind(vendor_id)
         .bind(&vendor_name)
         .bind(&status)
-        .bind(&sync)
-        .bind(offset)
-        .bind(page_size)
-        .fetch_all(pg)
-        .await
-        .map_err(database_error)?;
+        .bind(&sync);
+    if page_size >= 0 {
+        if offset > 0 {
+            request = request.bind(offset).bind(page_size);
+        } else {
+            request = request.bind(page_size);
+        }
+    }
+    let rows = request.fetch_all(pg).await.map_err(database_error)?;
     let items = rows
         .iter()
         .map(model_from_row)
         .collect::<Result<Vec<_>, _>>()?;
-    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM models WHERE deleted_at IS NULL AND ($1 = '' OR model_name ILIKE '%' || $1 || '%' OR COALESCE(description, '') ILIKE '%' || $1 || '%' OR COALESCE(tags, '') ILIKE '%' || $1 || '%') AND ($2::bigint IS NULL OR vendor_id = $2) AND ($3 = '' OR EXISTS (SELECT 1 FROM vendors v WHERE v.id = models.vendor_id AND v.deleted_at IS NULL AND v.name ILIKE '%' || $3 || '%')) AND ($4 = '' OR status = $4::bigint) AND ($5 = '' OR sync_official = $5::bigint)").bind(keyword).bind(vendor_id).bind(vendor_name).bind(status).bind(sync).fetch_one(pg).await.map_err(database_error)?;
+    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM models WHERE deleted_at IS NULL AND ($1 = '' OR model_name LIKE '%' || $1 || '%' OR COALESCE(description, '') LIKE '%' || $1 || '%' OR COALESCE(tags, '') LIKE '%' || $1 || '%') AND ($2::bigint IS NULL OR vendor_id = $2) AND ($3 = '' OR EXISTS (SELECT 1 FROM vendors v WHERE v.id = models.vendor_id AND v.deleted_at IS NULL AND v.name LIKE '%' || $3 || '%')) AND ($4 = '' OR status = $4::bigint) AND ($5 = '' OR sync_official = $5::bigint)").bind(keyword).bind(vendor_id).bind(vendor_name).bind(status).bind(sync).fetch_one(pg).await.map_err(database_error)?;
     let count_rows = sqlx::query("SELECT COALESCE(vendor_id, 0) AS vendor_id, COUNT(*) AS count FROM models WHERE deleted_at IS NULL GROUP BY vendor_id").fetch_all(pg).await.map_err(database_error)?;
     let vendor_counts = count_rows
         .into_iter()
@@ -776,12 +861,34 @@ async fn list_vendors_pg(pg: &PgPool, input: &Value, search: bool) -> Result<Val
     // `GetAllVendors` uses GORM's default primary-key order, whereas
     // `SearchVendors` explicitly uses `id DESC`.
     let order = if search { "DESC" } else { "ASC" };
-    let rows = sqlx::query(&format!("SELECT {VENDOR_COLUMNS} FROM vendors WHERE deleted_at IS NULL AND ($1 = '' OR name ILIKE '%' || $1 || '%' OR COALESCE(description, '') ILIKE '%' || $1 || '%') ORDER BY id {order} OFFSET $2 LIMIT $3")).bind(&keyword).bind(offset).bind(page_size).fetch_all(pg).await.map_err(database_error)?;
+    let pagination = if page_size < 0 {
+        if offset > 0 {
+            format!(" OFFSET {offset}")
+        } else {
+            String::new()
+        }
+    } else if offset > 0 {
+        " OFFSET $2 LIMIT $3".to_owned()
+    } else {
+        " LIMIT $2".to_owned()
+    };
+    let query = format!(
+        "SELECT {VENDOR_COLUMNS} FROM vendors WHERE deleted_at IS NULL AND ($1 = '' OR name LIKE '%' || $1 || '%' OR COALESCE(description, '') LIKE '%' || $1 || '%') ORDER BY id {order}{pagination}"
+    );
+    let mut request = sqlx::query(&query).bind(&keyword);
+    if page_size >= 0 {
+        if offset > 0 {
+            request = request.bind(offset).bind(page_size);
+        } else {
+            request = request.bind(page_size);
+        }
+    }
+    let rows = request.fetch_all(pg).await.map_err(database_error)?;
     let items = rows
         .iter()
         .map(vendor_from_row)
         .collect::<Result<Vec<_>, _>>()?;
-    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM vendors WHERE deleted_at IS NULL AND ($1 = '' OR name ILIKE '%' || $1 || '%' OR COALESCE(description, '') ILIKE '%' || $1 || '%')").bind(keyword).fetch_one(pg).await.map_err(database_error)?;
+    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM vendors WHERE deleted_at IS NULL AND ($1 = '' OR name LIKE '%' || $1 || '%' OR COALESCE(description, '') LIKE '%' || $1 || '%')").bind(keyword).fetch_one(pg).await.map_err(database_error)?;
     Ok(json!({"items":items,"total":total,"page":page_number,"page_size":page_size}))
 }
 
@@ -881,12 +988,37 @@ async fn list_redemptions_pg(
         String::new()
     };
     let now = unix_now()?;
-    let rows=sqlx::query(&format!("SELECT {REDEMPTION_COLUMNS} FROM redemptions WHERE deleted_at IS NULL AND ($1='' OR name ILIKE $1 || '%' OR CAST(id AS TEXT)=$1) AND ($2='' OR ($2='expired' AND status=1 AND expired_time<>0 AND expired_time<$3) OR ($2='1' AND status=1 AND (expired_time=0 OR expired_time>=$3)) OR ($2='0' AND status=0) OR ($2='2' AND status=2)) ORDER BY id DESC OFFSET $4 LIMIT $5")).bind(keyword.clone()).bind(status.clone()).bind(now).bind(offset).bind(page_size).fetch_all(pg).await.map_err(database_error)?;
+    let pagination = if page_size < 0 {
+        if offset > 0 {
+            format!(" OFFSET {offset}")
+        } else {
+            String::new()
+        }
+    } else if offset > 0 {
+        " OFFSET $4 LIMIT $5".to_owned()
+    } else {
+        " LIMIT $4".to_owned()
+    };
+    let query = format!(
+        "SELECT {REDEMPTION_COLUMNS} FROM redemptions WHERE deleted_at IS NULL AND ($1='' OR name LIKE $1 || '%' OR CAST(id AS TEXT)=$1) AND ($2='' OR ($2='expired' AND status=1 AND expired_time<>0 AND expired_time<$3) OR ($2='1' AND status=1 AND (expired_time=0 OR expired_time>=$3)) OR ($2='0' AND status=0) OR ($2='2' AND status=2)) ORDER BY id DESC{pagination}"
+    );
+    let mut request = sqlx::query(&query)
+        .bind(keyword.clone())
+        .bind(status.clone())
+        .bind(now);
+    if page_size >= 0 {
+        if offset > 0 {
+            request = request.bind(offset).bind(page_size);
+        } else {
+            request = request.bind(page_size);
+        }
+    }
+    let rows = request.fetch_all(pg).await.map_err(database_error)?;
     let items = rows
         .iter()
         .map(redemption_from_row)
         .collect::<Result<Vec<_>, _>>()?;
-    let total=sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM redemptions WHERE deleted_at IS NULL AND ($1='' OR name ILIKE $1 || '%' OR CAST(id AS TEXT)=$1) AND ($2='' OR ($2='expired' AND status=1 AND expired_time<>0 AND expired_time<$3) OR ($2='1' AND status=1 AND (expired_time=0 OR expired_time>=$3)) OR ($2='0' AND status=0) OR ($2='2' AND status=2))").bind(keyword).bind(status).bind(now).fetch_one(pg).await.map_err(database_error)?;
+    let total=sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM redemptions WHERE deleted_at IS NULL AND ($1='' OR name LIKE $1 || '%' OR CAST(id AS TEXT)=$1) AND ($2='' OR ($2='expired' AND status=1 AND expired_time<>0 AND expired_time<$3) OR ($2='1' AND status=1 AND (expired_time=0 OR expired_time>=$3)) OR ($2='0' AND status=0) OR ($2='2' AND status=2))").bind(keyword).bind(status).bind(now).fetch_one(pg).await.map_err(database_error)?;
     Ok(json!({"items":items,"total":total,"page":page_number,"page_size":page_size}))
 }
 
@@ -1787,4 +1919,109 @@ async fn search_redemptions(
         query.into_value(),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CatalogModel, CatalogRedemption, CatalogVendor, normalize_status_filter,
+        normalize_sync_filter, page,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn page_query_preserves_legacy_aliases_and_negative_gorm_controls() {
+        assert_eq!(page(&json!({})), (1, 10, 0));
+        assert_eq!(page(&json!({"p": "2", "ps": "7"})), (2, 7, 7));
+        assert_eq!(page(&json!({"p": "2", "size": "8"})), (2, 8, 8));
+        assert_eq!(page(&json!({"p": "wat", "page_size": "101"})), (1, 100, 0));
+        assert_eq!(page(&json!({"p": "-1", "page_size": "-1"})), (-1, -1, 2));
+    }
+
+    #[test]
+    fn model_filters_match_go_status_and_sync_vocabularies() {
+        assert_eq!(normalize_status_filter("enabled"), "1");
+        assert_eq!(normalize_status_filter("disabled"), "0");
+        assert_eq!(normalize_status_filter("2"), "2");
+        assert_eq!(normalize_status_filter("yes"), "");
+        assert_eq!(normalize_status_filter("unknown"), "");
+
+        assert_eq!(normalize_sync_filter("yes"), "1");
+        assert_eq!(normalize_sync_filter("no"), "0");
+        assert_eq!(normalize_sync_filter("2"), "2");
+        assert_eq!(normalize_sync_filter("unknown"), "");
+    }
+
+    #[test]
+    fn catalog_wire_omits_go_omitempty_fields_and_keeps_redemption_count() {
+        let model = serde_json::to_value(CatalogModel {
+            id: 1,
+            model_name: "fixture".to_owned(),
+            description: String::new(),
+            icon: String::new(),
+            tags: String::new(),
+            vendor_id: 0,
+            endpoints: String::new(),
+            status: 1,
+            sync_official: 1,
+            created_time: 10,
+            updated_time: 11,
+            name_rule: 0,
+            bound_channels: Vec::new(),
+            enable_groups: Vec::new(),
+            quota_types: Vec::new(),
+            matched_models: Vec::new(),
+            matched_count: 0,
+        })
+        .expect("model JSON");
+        assert_eq!(
+            model,
+            json!({
+                "id": 1,
+                "model_name": "fixture",
+                "status": 1,
+                "sync_official": 1,
+                "created_time": 10,
+                "updated_time": 11,
+                "name_rule": 0
+            })
+        );
+
+        let vendor = serde_json::to_value(CatalogVendor {
+            id: 2,
+            name: "vendor".to_owned(),
+            description: String::new(),
+            icon: String::new(),
+            status: 1,
+            created_time: 10,
+            updated_time: 11,
+        })
+        .expect("vendor JSON");
+        assert_eq!(
+            vendor,
+            json!({
+                "id": 2,
+                "name": "vendor",
+                "status": 1,
+                "created_time": 10,
+                "updated_time": 11
+            })
+        );
+
+        let redemption = serde_json::to_value(CatalogRedemption {
+            id: 3,
+            user_id: 4,
+            key: "key".to_owned(),
+            status: 1,
+            name: "trial".to_owned(),
+            quota: 100,
+            count: 0,
+            created_time: 10,
+            redeemed_time: 0,
+            used_user_id: 0,
+            expired_time: 0,
+        })
+        .expect("redemption JSON");
+        assert_eq!(redemption["count"], 0);
+    }
 }
