@@ -53,6 +53,7 @@ type postgresConstraintSpec struct {
 }
 
 type postgresSchemaInventory struct {
+	Schema      string
 	Objects     []postgresSchemaObject
 	Indexes     []postgresIndexSpec
 	Constraints []postgresConstraintSpec
@@ -68,8 +69,11 @@ type postgresCatalogSnapshot struct {
 	Constraints map[postgresCatalogKey]postgresConstraintSpec
 }
 
-func buildPostgresSchemaInventory(db *gorm.DB, models []interface{}) (postgresSchemaInventory, error) {
-	inventory := postgresSchemaInventory{}
+func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface{}) (postgresSchemaInventory, error) {
+	if !isSafePostgresApplicationSchema(schema) {
+		return postgresSchemaInventory{}, fmt.Errorf("unsafe PostgreSQL application schema %q", schema)
+	}
+	inventory := postgresSchemaInventory{Schema: schema}
 	for _, model := range models {
 		statement := &gorm.Statement{DB: db}
 		if err := statement.Parse(model); err != nil {
@@ -172,7 +176,7 @@ func buildPostgresSchemaInventory(db *gorm.DB, models []interface{}) (postgresSc
 			}
 			inventory.Constraints = append(inventory.Constraints, postgresConstraintSpec{
 				Table: table, Names: []string{constraint.Name}, Kind: postgresForeignConstraint,
-				Columns: columns, ReferenceSchema: "public",
+				Columns: columns, ReferenceSchema: schema,
 				ReferenceTable: constraint.ReferenceSchema.Table, ReferenceCols: referenceColumns,
 				OnUpdate:  normalizePostgresAction(constraint.OnUpdate),
 				OnDelete:  normalizePostgresAction(constraint.OnDelete),
@@ -239,7 +243,7 @@ func verifyPostgresSchemaInventoryAgainstCatalog(db *gorm.DB, inventory postgres
 			return fmt.Errorf("required PostgreSQL column %s.%s is missing", object.table, object.column)
 		}
 	}
-	snapshot, err := loadPostgresCatalogSnapshot(db)
+	snapshot, err := loadPostgresCatalogSnapshot(db, inventory.Schema)
 	if err != nil {
 		return err
 	}
@@ -404,7 +408,7 @@ func hasSingleOuterParentheses(value string) bool {
 const postgresIndexesCatalogQuery = `
 SELECT table_rel.relname, index_rel.relname, access_method.amname,
        index_meta.indisunique, index_meta.indisprimary, index_meta.indisvalid,
-       pg_catalog.coalesce((
+       COALESCE((
          SELECT pg_catalog.json_agg(CASE WHEN key_part.attnum OPERATOR(pg_catalog.=) 0
                               THEN pg_catalog.pg_get_indexdef(index_meta.indexrelid, key_part.ordinality::pg_catalog.int4, false)
                               ELSE key_attribute.attname END ORDER BY key_part.ordinality)::text
@@ -414,7 +418,7 @@ SELECT table_rel.relname, index_rel.relname, access_method.amname,
           AND key_attribute.attnum OPERATOR(pg_catalog.=) key_part.attnum
          WHERE key_part.ordinality OPERATOR(pg_catalog.<=) index_meta.indnkeyatts
        ), '[]'),
-       pg_catalog.coalesce((
+       COALESCE((
          SELECT pg_catalog.json_agg(include_attribute.attname ORDER BY include_part.ordinality)::text
          FROM pg_catalog.unnest(index_meta.indkey::pg_catalog.int2[]) WITH ORDINALITY AS include_part(attnum, ordinality)
          JOIN pg_catalog.pg_attribute AS include_attribute
@@ -422,7 +426,7 @@ SELECT table_rel.relname, index_rel.relname, access_method.amname,
           AND include_attribute.attnum OPERATOR(pg_catalog.=) include_part.attnum
          WHERE include_part.ordinality OPERATOR(pg_catalog.>) index_meta.indnkeyatts
        ), '[]'),
-       pg_catalog.coalesce(pg_catalog.pg_get_expr(index_meta.indpred, index_meta.indrelid, true), '')
+       COALESCE(pg_catalog.pg_get_expr(index_meta.indpred, index_meta.indrelid, true), '')
 FROM pg_catalog.pg_index AS index_meta
 JOIN pg_catalog.pg_class AS index_rel
   ON index_rel.oid OPERATOR(pg_catalog.=) index_meta.indexrelid
@@ -432,22 +436,22 @@ JOIN pg_catalog.pg_namespace AS table_namespace
   ON table_namespace.oid OPERATOR(pg_catalog.=) table_rel.relnamespace
 JOIN pg_catalog.pg_am AS access_method
   ON access_method.oid OPERATOR(pg_catalog.=) index_rel.relam
-WHERE table_namespace.nspname OPERATOR(pg_catalog.=) 'public'
+WHERE table_namespace.nspname OPERATOR(pg_catalog.=) $1
   AND table_rel.relkind OPERATOR(pg_catalog.=) ANY (
     ARRAY['r'::pg_catalog."char", 'p'::pg_catalog."char"]
   )`
 
 const postgresConstraintsCatalogQuery = `
 SELECT table_rel.relname, constraint_meta.conname, constraint_meta.contype::text,
-       pg_catalog.coalesce((
+       COALESCE((
          SELECT pg_catalog.json_agg(source_attribute.attname ORDER BY source_key.ordinality)::text
          FROM pg_catalog.unnest(constraint_meta.conkey) WITH ORDINALITY AS source_key(attnum, ordinality)
          JOIN pg_catalog.pg_attribute AS source_attribute
            ON source_attribute.attrelid OPERATOR(pg_catalog.=) table_rel.oid
           AND source_attribute.attnum OPERATOR(pg_catalog.=) source_key.attnum
        ), '[]'),
-       pg_catalog.coalesce(reference_namespace.nspname, ''), pg_catalog.coalesce(reference_rel.relname, ''),
-       pg_catalog.coalesce((
+       COALESCE(reference_namespace.nspname, ''), COALESCE(reference_rel.relname, ''),
+       COALESCE((
          SELECT pg_catalog.json_agg(reference_attribute.attname ORDER BY reference_key.ordinality)::text
          FROM pg_catalog.unnest(constraint_meta.confkey) WITH ORDINALITY AS reference_key(attnum, ordinality)
          JOIN pg_catalog.pg_attribute AS reference_attribute
@@ -455,7 +459,7 @@ SELECT table_rel.relname, constraint_meta.conname, constraint_meta.contype::text
           AND reference_attribute.attnum OPERATOR(pg_catalog.=) reference_key.attnum
        ), '[]'),
        constraint_meta.confupdtype::text, constraint_meta.confdeltype::text,
-       pg_catalog.coalesce(pg_catalog.pg_get_expr(constraint_meta.conbin, constraint_meta.conrelid, true), ''),
+       COALESCE(pg_catalog.pg_get_expr(constraint_meta.conbin, constraint_meta.conrelid, true), ''),
        constraint_meta.convalidated
 FROM pg_catalog.pg_constraint AS constraint_meta
 JOIN pg_catalog.pg_class AS table_rel
@@ -466,13 +470,16 @@ LEFT JOIN pg_catalog.pg_class AS reference_rel
   ON reference_rel.oid OPERATOR(pg_catalog.=) constraint_meta.confrelid
 LEFT JOIN pg_catalog.pg_namespace AS reference_namespace
   ON reference_namespace.oid OPERATOR(pg_catalog.=) reference_rel.relnamespace
-WHERE table_namespace.nspname OPERATOR(pg_catalog.=) 'public'
+WHERE table_namespace.nspname OPERATOR(pg_catalog.=) $1
   AND constraint_meta.contype OPERATOR(pg_catalog.=) ANY (
     ARRAY['p'::pg_catalog."char", 'u'::pg_catalog."char",
           'f'::pg_catalog."char", 'c'::pg_catalog."char"]
   )`
 
-func loadPostgresCatalogSnapshot(db *gorm.DB) (postgresCatalogSnapshot, error) {
+func loadPostgresCatalogSnapshot(db *gorm.DB, schema string) (postgresCatalogSnapshot, error) {
+	if !isSafePostgresApplicationSchema(schema) {
+		return postgresCatalogSnapshot{}, fmt.Errorf("unsafe PostgreSQL application schema %q", schema)
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		return postgresCatalogSnapshot{}, fmt.Errorf("open PostgreSQL catalog connection: %w", err)
@@ -481,7 +488,7 @@ func loadPostgresCatalogSnapshot(db *gorm.DB) (postgresCatalogSnapshot, error) {
 		Indexes:     make(map[postgresCatalogKey]postgresIndexSpec),
 		Constraints: make(map[postgresCatalogKey]postgresConstraintSpec),
 	}
-	indexRows, err := sqlDB.QueryContext(context.Background(), postgresIndexesCatalogQuery)
+	indexRows, err := sqlDB.QueryContext(context.Background(), postgresIndexesCatalogQuery, schema)
 	if err != nil {
 		return postgresCatalogSnapshot{}, fmt.Errorf("query PostgreSQL index catalog: %w", err)
 	}
@@ -513,7 +520,7 @@ func loadPostgresCatalogSnapshot(db *gorm.DB) (postgresCatalogSnapshot, error) {
 		return postgresCatalogSnapshot{}, fmt.Errorf("close PostgreSQL index catalog: %w", err)
 	}
 
-	constraintRows, err := sqlDB.QueryContext(context.Background(), postgresConstraintsCatalogQuery)
+	constraintRows, err := sqlDB.QueryContext(context.Background(), postgresConstraintsCatalogQuery, schema)
 	if err != nil {
 		return postgresCatalogSnapshot{}, fmt.Errorf("query PostgreSQL constraint catalog: %w", err)
 	}

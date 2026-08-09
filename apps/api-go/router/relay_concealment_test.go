@@ -19,7 +19,7 @@ func TestExternalFrontendDoesNotRevealRelayRoutes(t *testing.T) {
 	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example")
 
 	engine := gin.New()
-	SetRouter(engine)
+	require.NoError(t, SetRouter(engine))
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		t.Run(method, func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestExternalFrontendKeepsEveryBackendFamilyOffThePublicSurface(t *testing.T
 	t.Setenv("FRONTEND_BASE_URL", "https://frontend.example")
 
 	engine := gin.New()
-	SetRouter(engine)
+	require.NoError(t, SetRouter(engine))
 
 	backendPaths := []string{
 		"/api/not-a-route",

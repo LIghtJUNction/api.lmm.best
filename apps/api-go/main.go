@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/internal/appcli"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -41,6 +42,43 @@ import (
 )
 
 func main() {
+	dispatch := appcli.Dispatch(os.Args[1:], common.Version, os.Stdout, os.Stderr)
+	switch dispatch.Mode {
+	case appcli.ModeServe:
+		// common.InitEnv owns the server flag set. Remove the optional serve word so
+		// `lmm-api-go serve --port ...` and `lmm-api-go --port ...` share one parser.
+		os.Args = append([]string{os.Args[0]}, dispatch.ServeArgs...)
+		runServer()
+	case appcli.ModeMigrateApply:
+		runMigrationCommand(model.DBMigrationModeApply)
+	case appcli.ModeMigrateVerify:
+		runMigrationCommand(model.DBMigrationModeVerify)
+	default:
+		if dispatch.ExitCode != appcli.ExitOK {
+			os.Exit(dispatch.ExitCode)
+		}
+	}
+}
+
+func runMigrationCommand(mode model.DBMigrationMode) {
+	if err := os.Setenv("LMM_DB_MIGRATION_MODE", string(mode)); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s migrate: set migration mode: %v\n", appcli.ProgramName, err)
+		os.Exit(appcli.ExitError)
+	}
+	// Do not pass the migration subcommand to the server flag parser.
+	os.Args = []string{os.Args[0]}
+	if err := InitResources(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s migrate --%s: %v\n", appcli.ProgramName, mode, err)
+		os.Exit(appcli.ExitError)
+	}
+	if err := model.CloseDB(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%s migrate --%s: close database: %v\n", appcli.ProgramName, mode, err)
+		os.Exit(appcli.ExitError)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "database migration %s completed\n", mode)
+}
+
+func runServer() {
 	startTime := time.Now()
 	kitutil.SetLogging(common.SysLog, func(message string) {
 		logger.LogError(nil, message)
@@ -186,7 +224,10 @@ func main() {
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
 	// 设置路由
-	router.SetRouter(server)
+	if err := router.SetRouter(server); err != nil {
+		common.FatalLog("failed to configure routes: " + err.Error())
+		return
+	}
 	port := resolvePort(os.Getenv("PORT"), os.Getenv("LMM_API_PORT"), *common.Port)
 	listenAddress, err := buildListenAddress(os.Getenv("LMM_API_BIND_ADDRESS"), port)
 	if err != nil {

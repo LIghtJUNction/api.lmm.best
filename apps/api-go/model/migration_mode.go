@@ -313,34 +313,42 @@ type postgresRuntimeIdentity struct {
 }
 
 func verifyPostgresRuntimeAndSchema(db *gorm.DB) error {
-	var identity postgresRuntimeIdentity
-	if err := db.Raw(`SELECT pg_catalog.current_database() AS database_name,
-		pg_catalog.current_schema() AS schema_name, CURRENT_USER AS database_user,
-		pg_catalog.current_setting('server_version_num')::pg_catalog.int8 AS server_version,
-		pg_catalog.current_setting('search_path') AS configured_search_path,
-		pg_catalog.array_to_string(pg_catalog.current_schemas(true), ',') AS effective_search_path`).Scan(&identity).Error; err != nil {
-		return fmt.Errorf("verify PostgreSQL runtime identity: %w", err)
+	identity, err := loadPostgresRuntimeIdentity(db)
+	if err != nil {
+		return err
 	}
 	if err := verifyPostgresRuntimeIdentity(identity); err != nil {
 		return err
 	}
 	requiredModels := append(mainMigrationModels(), &SubscriptionPlan{})
-	inventory, err := buildPostgresSchemaInventory(db, requiredModels)
+	inventory, err := buildPostgresSchemaInventory(db, identity.SchemaName, requiredModels)
 	if err != nil {
 		return err
 	}
 	if err := verifyPostgresSchemaInventory(db, inventory); err != nil {
 		return err
 	}
-	return verifyPostgresMigrationPostconditions(db)
+	return verifyPostgresMigrationPostconditions(db, identity.SchemaName)
+}
+
+func loadPostgresRuntimeIdentity(db *gorm.DB) (postgresRuntimeIdentity, error) {
+	var identity postgresRuntimeIdentity
+	if err := db.Raw(`SELECT pg_catalog.current_database() AS database_name,
+		pg_catalog.current_schema() AS schema_name, CURRENT_USER AS database_user,
+		pg_catalog.current_setting('server_version_num')::pg_catalog.int8 AS server_version,
+		pg_catalog.current_setting('search_path') AS configured_search_path,
+		pg_catalog.array_to_string(pg_catalog.current_schemas(true), ',') AS effective_search_path`).Scan(&identity).Error; err != nil {
+		return postgresRuntimeIdentity{}, fmt.Errorf("verify PostgreSQL runtime identity: %w", err)
+	}
+	return identity, nil
 }
 
 func verifyPostgresRuntimeIdentity(identity postgresRuntimeIdentity) error {
 	if identity.DatabaseName == "" || identity.SchemaName == "" || identity.DatabaseUser == "" || identity.ServerVersion <= 0 {
 		return errors.New("PostgreSQL runtime identity is incomplete")
 	}
-	if identity.SchemaName != "public" {
-		return fmt.Errorf("PostgreSQL application schema is %q, expected public", identity.SchemaName)
+	if !isSafePostgresApplicationSchema(identity.SchemaName) {
+		return fmt.Errorf("PostgreSQL application schema %q is not a safe unquoted identifier", identity.SchemaName)
 	}
 	configured, err := normalizePostgresSearchPath(identity.ConfiguredSearchPath)
 	if err != nil {
@@ -350,15 +358,29 @@ func verifyPostgresRuntimeIdentity(identity postgresRuntimeIdentity) error {
 	if err != nil {
 		return fmt.Errorf("normalize effective PostgreSQL search_path: %w", err)
 	}
-	expectedConfigured := []string{"public"}
+	expectedConfigured := []string{identity.SchemaName}
 	if !equalPostgresSearchPath(configured, expectedConfigured) {
-		return fmt.Errorf("configured PostgreSQL search_path must be exactly public, got %q", identity.ConfiguredSearchPath)
+		return fmt.Errorf("configured PostgreSQL search_path must be exactly %q, got %q", identity.SchemaName, identity.ConfiguredSearchPath)
 	}
-	expectedEffective := []string{"pg_catalog", "public"}
+	expectedEffective := []string{"pg_catalog", identity.SchemaName}
 	if !equalPostgresSearchPath(effective, expectedEffective) {
-		return fmt.Errorf("effective PostgreSQL search_path must be exactly pg_catalog, public, got %q", identity.EffectiveSearchPath)
+		return fmt.Errorf("effective PostgreSQL search_path must be exactly pg_catalog, %s, got %q", identity.SchemaName, identity.EffectiveSearchPath)
 	}
 	return nil
+}
+
+func isSafePostgresApplicationSchema(schema string) bool {
+	if schema == "" || len(schema) > 63 || strings.HasPrefix(schema, "pg_") || schema == "information_schema" {
+		return false
+	}
+	for index := 0; index < len(schema); index++ {
+		char := schema[index]
+		if (char >= 'a' && char <= 'z') || char == '_' || (index > 0 && char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func normalizePostgresSearchPath(value string) ([]string, error) {
@@ -423,21 +445,24 @@ func verifyPostgresSchemaInventory(db *gorm.DB, inventory postgresSchemaInventor
 	return verifyPostgresSchemaInventoryAgainstCatalog(db, inventory)
 }
 
-func verifyPostgresMigrationPostconditions(db *gorm.DB) error {
+func verifyPostgresMigrationPostconditions(db *gorm.DB, schema string) error {
+	if !isSafePostgresApplicationSchema(schema) {
+		return fmt.Errorf("unsafe PostgreSQL application schema %q", schema)
+	}
 	var tokenType, priceType string
 	if err := db.Raw(`SELECT columns.data_type FROM information_schema.columns AS columns
-		WHERE columns.table_schema OPERATOR(pg_catalog.=) 'public'
+		WHERE columns.table_schema OPERATOR(pg_catalog.=) ?
 		  AND columns.table_name OPERATOR(pg_catalog.=) 'tokens'
-		  AND columns.column_name OPERATOR(pg_catalog.=) 'model_limits'`).Scan(&tokenType).Error; err != nil {
+		  AND columns.column_name OPERATOR(pg_catalog.=) 'model_limits'`, schema).Scan(&tokenType).Error; err != nil {
 		return err
 	}
 	if tokenType != "text" {
 		return fmt.Errorf("tokens.model_limits type is %q, expected text", tokenType)
 	}
 	if err := db.Raw(`SELECT columns.data_type FROM information_schema.columns AS columns
-		WHERE columns.table_schema OPERATOR(pg_catalog.=) 'public'
+		WHERE columns.table_schema OPERATOR(pg_catalog.=) ?
 		  AND columns.table_name OPERATOR(pg_catalog.=) 'subscription_plans'
-		  AND columns.column_name OPERATOR(pg_catalog.=) 'price_amount'`).Scan(&priceType).Error; err != nil {
+		  AND columns.column_name OPERATOR(pg_catalog.=) 'price_amount'`, schema).Scan(&priceType).Error; err != nil {
 		return err
 	}
 	if priceType != "numeric" {
@@ -445,8 +470,8 @@ func verifyPostgresMigrationPostconditions(db *gorm.DB) error {
 	}
 	var legacyIndex bool
 	if err := db.Raw(`SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_indexes AS indexes
-		WHERE indexes.schemaname OPERATOR(pg_catalog.=) 'public'
-		  AND indexes.indexname OPERATOR(pg_catalog.=) ?)`, legacyOpenSourceBountyParticipantIndex).
+		WHERE indexes.schemaname OPERATOR(pg_catalog.=) ?
+		  AND indexes.indexname OPERATOR(pg_catalog.=) ?)`, schema, legacyOpenSourceBountyParticipantIndex).
 		Scan(&legacyIndex).Error; err != nil {
 		return err
 	}
@@ -457,14 +482,14 @@ func verifyPostgresMigrationPostconditions(db *gorm.DB) error {
 		name  string
 		query string
 	}{
-		{"user auth-version backfill", `SELECT pg_catalog.count(*) FROM public.users
+		{"user auth-version backfill", `SELECT pg_catalog.count(*) FROM users
 			WHERE auth_version IS NULL OR auth_version OPERATOR(pg_catalog.<) 1`},
-		{"external identity backfill", `SELECT pg_catalog.count(*) FROM public.users AS users
+		{"external identity backfill", `SELECT pg_catalog.count(*) FROM users AS users
 			WHERE users.telegram_id OPERATOR(pg_catalog.<>) '' AND NOT EXISTS (
-				SELECT 1 FROM public.external_identity_claims AS claims
+				SELECT 1 FROM external_identity_claims AS claims
 				WHERE claims.provider OPERATOR(pg_catalog.=) 'telegram'
 				  AND claims.user_id OPERATOR(pg_catalog.=) users.id)`},
-		{"retired frontend options", `SELECT pg_catalog.count(*) FROM public.options
+		{"retired frontend options", `SELECT pg_catalog.count(*) FROM options
 			WHERE (key OPERATOR(pg_catalog.=) 'theme.frontend' AND value OPERATOR(pg_catalog.<>) 'default')
 			   OR key OPERATOR(pg_catalog.=) ANY (ARRAY['ApiInfo','Announcements','FAQ','UptimeKumaUrl','UptimeKumaSlug'])`},
 	}
@@ -478,7 +503,7 @@ func verifyPostgresMigrationPostconditions(db *gorm.DB) error {
 		}
 	}
 	var normalizedThemeCount int64
-	if err := db.Raw(`SELECT pg_catalog.count(*) FROM public.options
+	if err := db.Raw(`SELECT pg_catalog.count(*) FROM options
 		WHERE key OPERATOR(pg_catalog.=) 'theme.frontend'
 		  AND value OPERATOR(pg_catalog.=) 'default'`).Scan(&normalizedThemeCount).Error; err != nil {
 		return err
@@ -501,7 +526,14 @@ func verifyLogDatabaseSchema(db *gorm.DB, databaseType common.DatabaseType) erro
 		return nil
 	}
 	if databaseType == common.DatabaseTypePostgreSQL {
-		inventory, err := buildPostgresSchemaInventory(db, []interface{}{&Log{}})
+		identity, err := loadPostgresRuntimeIdentity(db)
+		if err != nil {
+			return err
+		}
+		if err := verifyPostgresRuntimeIdentity(identity); err != nil {
+			return err
+		}
+		inventory, err := buildPostgresSchemaInventory(db, identity.SchemaName, []interface{}{&Log{}})
 		if err != nil {
 			return err
 		}
