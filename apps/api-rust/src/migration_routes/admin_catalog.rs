@@ -2066,7 +2066,7 @@ mod tests {
         CatalogModel, CatalogRedemption, CatalogVendor, normalize_status_filter,
         normalize_sync_filter, page,
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn page_query_preserves_legacy_aliases_and_negative_gorm_controls() {
