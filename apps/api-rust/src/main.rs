@@ -17,6 +17,7 @@ use lmm_api_rs::{
             ControlPublicHttpState, PgControlPublicRepository, ReqwestUptimeKumaClient,
             control_public_router,
         },
+        identity_admin::{IdentityAdminState, router as identity_admin_router},
         identity_profile::{ProfileState, router as identity_profile_router},
         identity_security::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
@@ -187,6 +188,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let identity_profile = identity_profile_router(
             ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
         );
+        // Administrator user-management routes use the same PostgreSQL and
+        // Valkey-backed auth/session fences as the isolated candidate surface.
+        // Keep them a Rust candidate while Go retains production ownership.
+        let identity_admin = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_admin_router(IdentityAdminState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+            )),
+        );
         // The helper owns the exact anonymous mount: .route("/api/user/register", post(register)).
         // Keep this evidence beside the normal-listener wiring so the route
         // ledger cannot mistake the frozen security candidates for ownership.
@@ -224,6 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         };
         let mut extra_surface = identity_profile
+            .merge(identity_admin)
             .merge(registration)
             .merge(billing_subscriptions)
             .merge(observability)
