@@ -67,6 +67,7 @@ for literal in \
   'controller_transaction_lock_owned=1' \
   'activation dispatch failed; transaction lock retained for audit' \
   'observation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)' \
+  'nginx_observation_is_clean' \
   'production observation detected an anomaly; rollback timer remains armed' \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
@@ -83,6 +84,9 @@ if grep -Fq 'old_version=$(ssh -o BatchMode=yes "$HOST" jq' "$here/deploy-go.sh"
 fi
 if grep -Fq 'activation_epoch' "$here/deploy-go.sh"; then
   fail 'stable observation still includes the activation transition window'
+fi
+if grep -Fq '[[ -z $(journalctl --quiet -u nginx.service' "$here/deploy-go.sh"; then
+  fail 'stable observation still treats every public static-file miss as an application failure'
 fi
 if grep -Fq '| pg_restore --list' "$here/deploy-go.sh" || \
   grep -Fq '| tar -tf -' "$here/deploy-go.sh"; then

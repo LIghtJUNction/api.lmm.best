@@ -264,6 +264,20 @@ cli="$workspace/staging/lmm-api-go"
 state="$workspace/state"
 token="$state/probe-token"
 timer="lmm-api-go-rollback-$deployment_id.timer"
+nginx_observation_is_clean() {
+  local log_line
+  while IFS= read -r log_line; do
+    case $log_line in
+      '') continue ;;
+      # Public scanners probe unrelated static paths continuously. The release
+      # assets are validated by native CLI probes and package integrity, so
+      # only these explicit file-miss lines are observation noise.
+      *'open() "'*' failed (2: No such file or directory)'*'request: "'*' /static/'*) continue ;;
+      *) printf 'actionable nginx error: %s\n' "$log_line" >&2; return 1 ;;
+    esac
+  done < <(journalctl --quiet -u nginx.service --since "@$observation_epoch" \
+    --priority=err --no-pager --output=cat)
+}
 systemctl is-active --quiet lmm-api-go.service
 systemctl is-active --quiet "$timer"
 [[ $(systemctl show lmm-api-go.service -p NRestarts --value) == 0 ]]
@@ -284,7 +298,7 @@ jq -e '.success == true and .live == true' "$state/observe-live.json" >/dev/null
   --token-file "$token" --output "$state/observe-models.json"
 jq -e '.data | type == "array"' "$state/observe-models.json" >/dev/null
 [[ -z $(journalctl --quiet -u lmm-api-go.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
-[[ -z $(journalctl --quiet -u nginx.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
+nginx_observation_is_clean
 REMOTE
   then
     die 'production observation detected an anomaly; rollback timer remains armed'
