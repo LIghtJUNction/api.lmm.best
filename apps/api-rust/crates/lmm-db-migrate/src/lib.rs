@@ -2,6 +2,8 @@
 
 pub mod canonical;
 pub mod contract;
+pub mod forward;
+pub mod forward_schema;
 pub mod inspect;
 pub mod manifest;
 pub mod migrate;

@@ -81,6 +81,8 @@ done
 contains 'post_install()' "$INSTALL_TEMPLATE"
 contains 'post_upgrade()' "$INSTALL_TEMPLATE"
 contains 'fallback-target-guard.sh' "$INSTALL_TEMPLATE"
+contains '0002_open_source_bounty_schema.sql' "$PKGBUILD"
+contains 'apps/api-rust/migrations/0002_open_source_bounty_schema.sql' "$BUILD_SCRIPT"
 if grep -Eiq 'machine-id|machine_binding_check|pre_install\(\)|pre_upgrade\(\)' "$INSTALL_TEMPLATE"; then
   die 'install scriptlet must not bind a package installation to the build machine'
 fi

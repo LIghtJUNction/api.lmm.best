@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 use lmm_db_migrate::{
     MigrationError,
+    forward::{ForwardOptions, forward},
     inspect::inspect_sqlite,
     manifest::Manifest,
     migrate::{RehearseOptions, VerifyOptions, rehearse, verify},
@@ -148,6 +149,17 @@ enum Command {
         #[command(flatten)]
         release: ReleaseArguments,
     },
+    /// Apply one reviewed forward-only schema contract to an existing PostgreSQL schema.
+    Forward {
+        #[arg(long)]
+        schema: String,
+        #[arg(long)]
+        contract_migration: PathBuf,
+        #[arg(long)]
+        report: PathBuf,
+        #[command(flatten)]
+        release: ReleaseArguments,
+    },
 }
 
 impl Command {
@@ -159,6 +171,7 @@ impl Command {
             Self::Inspect { .. } => "inspect",
             Self::Rehearse { .. } => "rehearse",
             Self::Verify { .. } => "verify",
+            Self::Forward { .. } => "forward",
         }
     }
 }
@@ -283,6 +296,27 @@ fn run(cli: Cli) -> Result<(), MigrationError> {
             })();
             publish_audited(&report, "verify", outcome)?;
             println!("verification valid");
+        }
+        Command::Forward {
+            schema,
+            contract_migration,
+            report,
+            release,
+        } => {
+            let outcome = (|| {
+                let database_url = std::env::var("LMM_MIGRATE_DATABASE_URL").map_err(|_| {
+                    MigrationError::Manifest("LMM_MIGRATE_DATABASE_URL must be set".into())
+                })?;
+                let release = release.binding()?;
+                forward(&ForwardOptions {
+                    database_url: &database_url,
+                    schema: &schema,
+                    contract_migration: &contract_migration,
+                    release: &release,
+                })
+            })();
+            publish_audited(&report, "forward", outcome)?;
+            println!("forward migration verified");
         }
     }
     Ok(())

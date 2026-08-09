@@ -6,7 +6,7 @@ production cutover. Production may already be running Go with PostgreSQL after
 a historical coordinator run, but that runtime fact does not replace current
 boundary, schema, canary, backup, and operator evidence.
 
-The fresh contract-1 PostgreSQL baseline requires `users.console_activated_at BIGINT NOT NULL DEFAULT 0`. This fresh-schema contract does not upgrade an existing PostgreSQL schema; contract-2 apply remains blocked until a separately reviewed forward migration exists and passes an isolated rehearsal.
+The fresh contract-1 PostgreSQL baseline requires `users.console_activated_at BIGINT NOT NULL DEFAULT 0`. This fresh-schema contract does not upgrade an existing PostgreSQL schema. Contract 2 is the separately reviewed, forward-only expand step for the eight open-source-bounty tables used by the mounted Rust routes; it never changes the frozen 34-table manifest.
 
 ## Evidence and scope
 
@@ -42,6 +42,28 @@ cargo run -p lmm-db-migrate -- verify \
   --manifest crates/lmm-db-migrate/schema/table-map.json \
   --schema lmm_rehearsal_20260801 \
   --report /path/to/audit/verify.json
+
+# Only after contract 1 is installed in the existing target schema:
+export LMM_MIGRATE_DATABASE_URL='postgresql://migration-role@/database?host=/run/postgresql'
+cargo run -p lmm-db-migrate -- forward \
+  --schema lmm_rehearsal_20260801 \
+  --contract-migration migrations/0002_open_source_bounty_schema.sql \
+  --report /path/to/audit/forward.json \
+  --contract-id 2 \
+  --contract-sha256 "$(sha256sum migrations/0002_open_source_bounty_schema.sql | awk '{print $1}')" \
+  --min-reader-version 1 --max-reader-version 2 \
+  --min-writer-version 1 --max-writer-version 2 \
+  --release-id release-contract-2 \
+  --release-sha256 SHA256_RELEASE_ARTIFACT \
+  --component-sha256 api-server-binary=SHA256 \
+  --component-sha256 api-server-revision=SHA256 \
+  --component-sha256 db-migrator-binary=SHA256 \
+  --component-sha256 postgresql-baseline=SHA256 \
+  --component-sha256 table-manifest=SHA256 \
+  --component-sha256 postgres-catalog-exporter=SHA256 \
+  --component-sha256 platform-contract-sql=SHA256 \
+  --component-sha256 migration-provenance=SHA256 \
+  --component-sha256 legacy-route-oracle=SHA256
 
 bash crates/lmm-db-migrate/scripts/rehearse-postgres.sh
 crates/lmm-db-migrate/scripts/verify-provenance.sh
@@ -81,8 +103,9 @@ environment only before the boundary; marker-, journal-, or candidate-hash
 evidence of possible PostgreSQL activation permits only forward reconciliation.
 
 The migration CLI still only creates a fresh isolated/versioned schema or
-verifies one; it does not stop a service, publish configuration, or switch
-traffic without the separate cutover coordinator. If a live target is already
+verifies one, or applies an explicitly bound forward contract step; it does not
+stop a service, publish configuration, or switch traffic without the separate
+cutover coordinator. If a live target is already
 PostgreSQL-backed, first verify the active schema, durable `PG_WRITE_BOUNDARY`,
 candidate/environment hashes, and authenticated canaries. A missing boundary or
 failed post-cutover verification is an unverified state that must be reconciled
