@@ -472,6 +472,91 @@ async fn create_missing_and_explicit_zero_fields_use_go_model_defaults() {
 }
 
 #[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18 and Valkey; use tests/scripts/run-real-integration-gates.sh"]
+async fn create_token_activation_is_one_time_and_transactional() {
+    let database_url = env::var("LMM_API_TOKEN_TEST_DATABASE_URL")
+        .expect("set LMM_API_TOKEN_TEST_DATABASE_URL for the isolated PostgreSQL 18 harness");
+    let valkey_url = env::var("LMM_API_TOKEN_TEST_VALKEY_URL")
+        .expect("set LMM_API_TOKEN_TEST_VALKEY_URL for the isolated Valkey harness");
+    let pool = PgPoolOptions::new()
+        .max_connections(3)
+        .connect(&database_url)
+        .await
+        .expect("isolated PostgreSQL 18");
+    reset(&pool).await;
+    let router = router_for(pool.clone(), &valkey_url);
+    let user_seven = ApiTokenPrincipal {
+        user_id: 7,
+        role: 1,
+        preferred_language: None,
+    };
+
+    assert_eq!(console_activated_at(&pool, 7).await, 0);
+    let first = body(
+        call(
+            &router,
+            "POST",
+            "/api/token/",
+            Some(json!({"name":"first-activation"})),
+            user_seven,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(first["success"], true);
+    assert!(console_activated_at(&pool, 7).await > 0);
+
+    sqlx::query("UPDATE users SET console_activated_at = 123 WHERE id = 7")
+        .execute(&pool)
+        .await
+        .expect("set preserved activation timestamp");
+    let subsequent = body(
+        call(
+            &router,
+            "POST",
+            "/api/token/",
+            Some(json!({"name":"subsequent-token"})),
+            user_seven,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(subsequent["success"], true);
+    assert_eq!(console_activated_at(&pool, 7).await, 123);
+
+    sqlx::query(
+        "ALTER TABLE tokens ADD CONSTRAINT reject_activation_test CHECK (name <> 'reject-activation')",
+    )
+    .execute(&pool)
+    .await
+    .expect("install rejected token fixture");
+    let rejected = body(
+        call(
+            &router,
+            "POST",
+            "/api/token/",
+            Some(json!({"name":"reject-activation"})),
+            ApiTokenPrincipal {
+                user_id: 8,
+                role: 1,
+                preferred_language: None,
+            },
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(rejected["success"], false);
+    assert_eq!(console_activated_at(&pool, 8).await, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tokens WHERE user_id = 8")
+            .fetch_one(&pool)
+            .await
+            .expect("rejected token count"),
+        0
+    );
+}
+
+#[tokio::test]
 async fn api_token_router_disables_axum_default_body_limit_for_legacy_handler() {
     let padding = "x".repeat(2 * 1024 * 1024 + 1);
     let payload = format!(r#"{{"name":"oversized","padding":"{padding}"}}"#);
@@ -1529,6 +1614,13 @@ async fn assert_active_token_row(
     assert!(!row.9);
     assert_eq!(row.10, None);
 }
+async fn console_activated_at(pool: &PgPool, user_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT console_activated_at FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .expect("console activation timestamp")
+}
 async fn reset(pool: &PgPool) {
     sqlx::query("DROP TABLE IF EXISTS options")
         .execute(pool)
@@ -1549,7 +1641,7 @@ async fn reset(pool: &PgPool) {
     sqlx::query(
         "CREATE TABLE users (
             id BIGINT PRIMARY KEY,
-            console_activated_at BIGINT,
+            console_activated_at BIGINT NOT NULL DEFAULT 0,
             deleted_at TIMESTAMPTZ
         )",
     )

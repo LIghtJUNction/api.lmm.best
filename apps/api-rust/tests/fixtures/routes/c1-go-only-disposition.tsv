@@ -1,0 +1,53 @@
+category	method	path	production_owner	rust_status	disposition	differential_verified	notes
+new	DELETE	/api/user/bindings/:binding_type	go	unimplemented	keep-go-owner	false	Go-only OAuth unlink registration at apps/api-go/router/api-router.go:134; no Rust production route.
+new	GET	/v1/responses	go	unimplemented	keep-go-owner	false	Go Responses WebSocket registration at apps/api-go/router/relay-router.go:76; Rust has no production GET route.
+bounty	GET	/api/open-source-bounties	go	unimplemented	keep-go-owner	false	Go bounty public listing; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/projects/:id	go	unimplemented	keep-go-owner	false	Go bounty public detail; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/config	go	unimplemented	keep-go-owner	false	Go bounty configuration route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token status route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token rotation route; Rust candidate absent and route is not production-mounted.
+bounty	DELETE	/api/open-source-bounties/mcp-token	go	unimplemented	keep-go-owner	false	Go personal MCP-token revocation route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties	go	unimplemented	keep-go-owner	false	Go bounty draft creation route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/mine	go	unimplemented	keep-go-owner	false	Go owned-bounties listing route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/accepted	go	unimplemented	keep-go-owner	false	Go accepted-challenges listing route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/notifications	go	unimplemented	keep-go-owner	false	Go bounty settlement-notifications listing route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/notifications/read	go	unimplemented	keep-go-owner	false	Go bounty settlement-notifications acknowledgement route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/tips/received	go	unimplemented	keep-go-owner	false	Go received-tip notifications listing route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/tips/received/read	go	unimplemented	keep-go-owner	false	Go received-tip notifications acknowledgement route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/tips/:tip_id/thank	go	unimplemented	keep-go-owner	false	Go received-tip thank-you route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/disputes/mine	go	unimplemented	keep-go-owner	false	Go own-disputes listing route; Rust candidate absent and route is not production-mounted.
+bounty	GET	/api/open-source-bounties/disputes/admin	go	unimplemented	keep-go-owner	false	Go administrator dispute queue route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/disputes/:dispute_id/resolve	go	unimplemented	keep-go-owner	false	Go administrator dispute resolution route; Rust candidate absent and route is not production-mounted.
+bounty	PUT	/api/open-source-bounties/projects/:id	go	unimplemented	keep-go-owner	false	Go bounty draft update route; Rust candidate absent and route is not production-mounted.
+bounty	DELETE	/api/open-source-bounties/projects/:id	go	unimplemented	keep-go-owner	false	Go bounty draft deletion route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/publish	go	unimplemented	keep-go-owner	false	Go bounty publish-and-fund route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/pause	go	unimplemented	keep-go-owner	false	Go bounty pause route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/resume	go	unimplemented	keep-go-owner	false	Go bounty resume route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/close	go	unimplemented	keep-go-owner	false	Go bounty close-and-refund route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/accept	go	unimplemented	keep-go-owner	false	Go bounty challenge acceptance route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/submit	go	unimplemented	keep-go-owner	false	Go bounty submission route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/withdraw	go	unimplemented	keep-go-owner	false	Go bounty challenge withdrawal route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/cancel	go	unimplemented	keep-go-owner	false	Go bounty challenge cancellation route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/approve	go	unimplemented	keep-go-owner	false	Go bounty approval-and-settlement route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/reject	go	unimplemented	keep-go-owner	false	Go bounty rejection-and-rating route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/tip	go	unimplemented	keep-go-owner	false	Go bounty contributor-tip route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/rate-owner	go	unimplemented	keep-go-owner	false	Go publisher/verifier rating route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/challenges/:challenge_id/disputes	go	unimplemented	keep-go-owner	false	Go bounty dispute-opening route; Rust candidate absent and route is not production-mounted.
+mcp	GET	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	POST	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	PUT	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	PATCH	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	HEAD	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	OPTIONS	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	DELETE	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	CONNECT	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	TRACE	/mcp	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	GET	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	POST	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	PUT	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	PATCH	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	HEAD	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	OPTIONS	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	DELETE	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	CONNECT	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.
+mcp	TRACE	/mcp/	go	unimplemented	keep-go-owner	false	Gin Any route; current Go source exposes 22 MCP tools versus the attachment inventory of 18.

@@ -37,10 +37,9 @@ export function AccessRestrictionNotice(props: AccessRestrictionNoticeProps) {
     >
       <span className='font-semibold'>
         {t(
-          'Service availability and permitted use vary by location. Confirm that access, registration, and payment comply with applicable local law.'
+          'Service access notice: This notice refers only to ISO 3166-1 alpha-2 CN (Mainland China). It does not state service availability for any other location.'
         )}
-      </span>{' '}
-      {t('Regional access statement')}
+      </span>
     </aside>
   )
 }

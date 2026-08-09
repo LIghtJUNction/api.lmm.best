@@ -1,10 +1,10 @@
 use super::token::{AuthIdentity, LegacyTokenCodec, random_refresh_secret, split_refresh_token};
 use super::{
     AuthBundle, AuthError, AuthErrorKind, AuthResponseData, CriticalRateLimitOutcome,
-    DashboardAuth, DashboardUser, LOGIN_SESSION_TTL_SECONDS, LoginOutcome, LoginRequest,
-    LoginSessionView, LogoutRequest, LogoutResult, REFRESH_REPLAY_WINDOW_SECONDS, RequestMetadata,
-    SecuritySessionRotationRequest, TWO_FACTOR_FLOW_TTL_SECONDS, TwoFactorChallenge,
-    TwoFactorLoginRequest,
+    DashboardAuth, DashboardSelfUserFacts, DashboardUser, DashboardUserView,
+    LOGIN_SESSION_TTL_SECONDS, LoginOutcome, LoginRequest, LoginSessionView, LogoutRequest,
+    LogoutResult, REFRESH_REPLAY_WINDOW_SECONDS, RequestMetadata, SecuritySessionRotationRequest,
+    TWO_FACTOR_FLOW_TTL_SECONDS, TwoFactorChallenge, TwoFactorLoginRequest,
 };
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -63,6 +63,7 @@ pub struct PgValkeyDashboardAuth {
     codec: LegacyTokenCodec,
     session_cache_key: SecretSlice<u8>,
     config: AuthConfig,
+    local_acceptance: bool,
 }
 
 impl PgValkeyDashboardAuth {
@@ -92,7 +93,18 @@ impl PgValkeyDashboardAuth {
             codec,
             session_cache_key,
             config,
+            local_acceptance: false,
         })
+    }
+
+    /// Enables the explicitly loopback-scoped local acceptance policy.
+    ///
+    /// The normal listener supplies the validated configuration value. Frozen
+    /// test instances leave this disabled.
+    #[must_use]
+    pub fn with_local_acceptance(mut self, enabled: bool) -> Self {
+        self.local_acceptance = enabled;
+        self
     }
 
     async fn connection(&self) -> Result<MultiplexedConnection, AuthError> {
@@ -372,6 +384,9 @@ impl PgValkeyDashboardAuth {
             return Err(AuthError::new(AuthErrorKind::SessionRevoked));
         }
         let user = self.user_by_id(identity.user_id).await?;
+        if user.status != ENABLED {
+            return Err(AuthError::new(AuthErrorKind::UserDisabled));
+        }
         if user.auth_version != identity.user_auth_version {
             return Err(AuthError::new(AuthErrorKind::SessionRevoked));
         }
@@ -518,13 +533,14 @@ impl PgValkeyDashboardAuth {
             refresh_secret.expose_secret()
         ));
         let capabilities = self.capabilities(user.id, user.role).await?;
+        let user = self.dashboard_user_view(user, capabilities).await;
         Ok(AuthBundle {
             data: AuthResponseData {
                 access_token,
                 token_type: "Bearer",
                 access_expires_at,
                 session: session.view(),
-                user: user.safe(capabilities),
+                user,
             },
             refresh_token,
         })
@@ -582,6 +598,72 @@ impl PgValkeyDashboardAuth {
             }
         }
         Ok(json!({"channel": channel}))
+    }
+
+    async fn dashboard_user_view(
+        &self,
+        user: UserRecord,
+        capabilities: Value,
+    ) -> DashboardUserView {
+        let facts = self.dashboard_self_user_facts(&user).await;
+        DashboardUserView::build(user.dashboard_user(capabilities), facts)
+    }
+
+    async fn dashboard_self_user_facts(&self, user: &UserRecord) -> DashboardSelfUserFacts {
+        let now = unix_now();
+        if user.role >= 10 {
+            return DashboardSelfUserFacts {
+                local_acceptance: self.local_acceptance,
+                now,
+                ..DashboardSelfUserFacts::default()
+            };
+        }
+
+        let payment = if user.trust_level_override.is_none() {
+            self.current_user_payment_snapshot(user.id)
+                .await
+                .unwrap_or_default()
+        } else {
+            PaymentSnapshot::default()
+        };
+        let credential_complete = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM tokens WHERE user_id = $1 AND status = 1 AND deleted_at IS NULL)",
+        )
+        .bind(user.id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap_or(false);
+        let activity_anchor = user
+            .created_at
+            .max(user.last_api_activity_at)
+            .max(payment.last_paid_complete_at);
+
+        DashboardSelfUserFacts {
+            trust_level_override: user.trust_level_override,
+            paid_amount: payment.paid_amount,
+            paid_activation_complete: payment.paid_activation_complete,
+            local_acceptance: self.local_acceptance,
+            activity_anchor,
+            last_api_activity_at: user.last_api_activity_at,
+            now,
+            credential_complete,
+        }
+    }
+
+    async fn current_user_payment_snapshot(
+        &self,
+        user_id: i64,
+    ) -> Result<PaymentSnapshot, AuthError> {
+        let row = sqlx::query(CURRENT_USER_PAYMENT_SNAPSHOT)
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(internal)?;
+        Ok(PaymentSnapshot {
+            paid_amount: row.try_get("paid_amount").map_err(internal)?,
+            last_paid_complete_at: row.try_get("last_paid_complete_at").map_err(internal)?,
+            paid_activation_complete: row.try_get("paid_activation_complete").map_err(internal)?,
+        })
     }
 
     async fn write_session_cache(
@@ -1119,7 +1201,7 @@ return {0, ttl}
             user
         };
         let capabilities = self.capabilities(user.id, user.role).await?;
-        Ok(user.safe(capabilities))
+        Ok(user.dashboard_user(capabilities))
     }
 
     async fn self_user_for_optional(
@@ -1135,10 +1217,37 @@ return {0, ttl}
             if raw.is_empty() {
                 return Err(AuthError::new(AuthErrorKind::Unauthorized));
             }
-            self.user_by_personal_access_token(raw).await?
+            let user = self.user_by_personal_access_token(raw).await?;
+            if user.status != ENABLED {
+                return Err(AuthError::new(AuthErrorKind::UserDisabled));
+            }
+            user
         };
         let capabilities = self.capabilities(user.id, user.role).await?;
-        Ok(user.safe(capabilities))
+        Ok(user.dashboard_user(capabilities))
+    }
+
+    async fn self_user_view_for_optional(
+        &self,
+        access_token: SecretString,
+    ) -> Result<DashboardUserView, AuthError> {
+        let user = if self.codec.is_dashboard_token_candidate(&access_token) {
+            let identity = self.codec.parse(&access_token)?;
+            let (_, user) = self.validate_identity_for_optional(&identity).await?;
+            user
+        } else {
+            let raw = access_token.expose_secret().trim();
+            if raw.is_empty() {
+                return Err(AuthError::new(AuthErrorKind::Unauthorized));
+            }
+            let user = self.user_by_personal_access_token(raw).await?;
+            if user.status != ENABLED {
+                return Err(AuthError::new(AuthErrorKind::UserDisabled));
+            }
+            user
+        };
+        let capabilities = self.capabilities(user.id, user.role).await?;
+        Ok(self.dashboard_user_view(user, capabilities).await)
     }
 
     async fn logout(&self, request: LogoutRequest) -> Result<LogoutResult, AuthError> {
@@ -1227,9 +1336,12 @@ COALESCE("group", 'default') AS user_group, COALESCE(quota, 0) AS quota, COALESC
 COALESCE(aff_code, '') AS aff_code, COALESCE(aff_count, 0) AS aff_count, COALESCE(aff_quota, 0) AS aff_quota, COALESCE(aff_history, 0) AS aff_history_quota,
 COALESCE(inviter_id, 0) AS inviter_id, COALESCE(linux_do_id, '') AS linux_do_id, COALESCE(setting, '') AS setting,
 COALESCE(stripe_customer, '') AS stripe_customer, auth_version,
-CASE WHEN to_jsonb(users) ? 'console_activated_at'
-  THEN COALESCE((to_jsonb(users)->>'console_activated_at')::BIGINT, 0)
-  ELSE 1 END AS console_activated_at
+CASE WHEN COALESCE(to_jsonb(users)->>'created_at', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'created_at')::BIGINT ELSE 0 END AS created_at,
+CASE WHEN COALESCE(to_jsonb(users)->>'last_api_activity_at', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'last_api_activity_at')::BIGINT ELSE 0 END AS last_api_activity_at,
+CASE WHEN COALESCE(to_jsonb(users)->>'trust_level_override', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'trust_level_override')::BIGINT ELSE NULL END AS trust_level_override
 FROM users WHERE (username = $1 OR email = $1) AND deleted_at IS NULL LIMIT 1"#
 );
 
@@ -1243,9 +1355,12 @@ COALESCE("group", 'default') AS user_group, COALESCE(quota, 0) AS quota, COALESC
 COALESCE(aff_code, '') AS aff_code, COALESCE(aff_count, 0) AS aff_count, COALESCE(aff_quota, 0) AS aff_quota, COALESCE(aff_history, 0) AS aff_history_quota,
 COALESCE(inviter_id, 0) AS inviter_id, COALESCE(linux_do_id, '') AS linux_do_id, COALESCE(setting, '') AS setting,
 COALESCE(stripe_customer, '') AS stripe_customer, auth_version,
-CASE WHEN to_jsonb(users) ? 'console_activated_at'
-  THEN COALESCE((to_jsonb(users)->>'console_activated_at')::BIGINT, 0)
-  ELSE 1 END AS console_activated_at
+CASE WHEN COALESCE(to_jsonb(users)->>'created_at', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'created_at')::BIGINT ELSE 0 END AS created_at,
+CASE WHEN COALESCE(to_jsonb(users)->>'last_api_activity_at', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'last_api_activity_at')::BIGINT ELSE 0 END AS last_api_activity_at,
+CASE WHEN COALESCE(to_jsonb(users)->>'trust_level_override', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'trust_level_override')::BIGINT ELSE NULL END AS trust_level_override
 FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1"#
 );
 
@@ -1262,11 +1377,67 @@ COALESCE("group", 'default') AS user_group, COALESCE(quota, 0) AS quota, COALESC
 COALESCE(aff_code, '') AS aff_code, COALESCE(aff_count, 0) AS aff_count, COALESCE(aff_quota, 0) AS aff_quota, COALESCE(aff_history, 0) AS aff_history_quota,
 COALESCE(inviter_id, 0) AS inviter_id, COALESCE(linux_do_id, '') AS linux_do_id, COALESCE(setting, '') AS setting,
 COALESCE(stripe_customer, '') AS stripe_customer, auth_version,
-CASE WHEN to_jsonb(users) ? 'console_activated_at'
-  THEN COALESCE((to_jsonb(users)->>'console_activated_at')::BIGINT, 0)
-  ELSE 1 END AS console_activated_at
+CASE WHEN COALESCE(to_jsonb(users)->>'created_at', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'created_at')::BIGINT ELSE 0 END AS created_at,
+CASE WHEN COALESCE(to_jsonb(users)->>'last_api_activity_at', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'last_api_activity_at')::BIGINT ELSE 0 END AS last_api_activity_at,
+CASE WHEN COALESCE(to_jsonb(users)->>'trust_level_override', '') ~ '^-?[0-9]+$'
+  THEN (to_jsonb(users)->>'trust_level_override')::BIGINT ELSE NULL END AS trust_level_override
 FROM users WHERE access_token = $1 AND deleted_at IS NULL LIMIT 1"#
 );
+
+const CURRENT_USER_PAYMENT_SNAPSHOT: &str = r#"
+WITH parsed AS (
+    SELECT
+        COALESCE(row_data->>'status', '') AS status,
+        COALESCE(row_data->>'payment_method', '') AS payment_method,
+        COALESCE(row_data->>'payment_provider', '') AS payment_provider,
+        CASE WHEN COALESCE(row_data->>'money', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+            THEN (row_data->>'money')::DOUBLE PRECISION ELSE 0 END AS money,
+        CASE WHEN COALESCE(row_data->>'amount', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'amount')::BIGINT ELSE 0 END AS amount,
+        CASE WHEN COALESCE(row_data->>'credited_quota', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'credited_quota')::BIGINT ELSE 0 END AS credited_quota,
+        CASE WHEN COALESCE(row_data->>'settled_amount_micros', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'settled_amount_micros')::BIGINT ELSE 0 END AS settled_amount_micros,
+        CASE WHEN COALESCE(row_data->>'create_time', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'create_time')::BIGINT ELSE 0 END AS create_time,
+        CASE WHEN COALESCE(row_data->>'complete_time', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'complete_time')::BIGINT ELSE 0 END AS complete_time
+    FROM (
+        SELECT to_jsonb(top_ups) AS row_data
+        FROM top_ups
+        WHERE user_id = $1
+    ) rows
+), qualified AS (
+    SELECT *,
+        status = 'success'
+        AND payment_method <> 'balance'
+        AND payment_provider <> 'balance'
+        AND (settled_amount_micros > 0 OR (settled_amount_micros = 0 AND money > 0))
+        AND (credited_quota > 0 OR amount > 0)
+        AND (
+            payment_provider IN ('epay', 'stripe', 'creem', 'fastpay', 'waffo', 'waffo_pancake')
+            OR (
+                payment_provider = ''
+                AND payment_method IN ('stripe', 'creem', 'waffo', 'waffo_pancake', 'alipay', 'wxpay')
+            )
+        ) AS qualifies
+    FROM parsed
+)
+SELECT
+    (
+        COALESCE(SUM(CASE WHEN qualifies AND settled_amount_micros > 0
+            THEN settled_amount_micros ELSE 0 END), 0)::DOUBLE PRECISION
+        + ROUND(COALESCE(SUM(CASE WHEN qualifies AND settled_amount_micros = 0
+            THEN money ELSE 0 END), 0) * 1000000.0)
+    ) / 1000000.0 AS paid_amount,
+    COALESCE(MAX(CASE WHEN qualifies THEN
+        CASE WHEN complete_time > 0 THEN complete_time ELSE create_time END
+        ELSE 0 END), 0)::BIGINT AS last_paid_complete_at,
+    COALESCE(BOOL_OR(qualifies), FALSE) AS paid_activation_complete
+FROM qualified
+"#;
 
 const SESSION_SELECT: &str = r#"
 SELECT sid, user_id, version, user_auth_version, status,
@@ -1313,14 +1484,28 @@ struct UserRecord {
     setting: String,
     stripe_customer: String,
     auth_version: i64,
-    console_activated_at: i64,
+    created_at: i64,
+    last_api_activity_at: i64,
+    trust_level_override: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PaymentSnapshot {
+    paid_amount: f64,
+    last_paid_complete_at: i64,
+    paid_activation_complete: bool,
 }
 
 impl UserRecord {
-    fn safe(self, admin_permissions: Value) -> DashboardUser {
+    fn dashboard_user(self, admin_permissions: Value) -> DashboardUser {
         let sidebar_modules = serde_json::from_str::<Value>(&self.setting)
             .ok()
-            .and_then(|value| value.get("sidebar_modules").cloned())
+            .and_then(|value| {
+                value
+                    .get("sidebar_modules")
+                    .and_then(Value::as_str)
+                    .map(|modules| json!(modules))
+            })
             // Legacy `UserSetting.SidebarModules` is a string, including the
             // empty-string zero value when no setting has been saved.
             .unwrap_or_else(|| json!(""));
@@ -1349,7 +1534,7 @@ impl UserRecord {
             setting: self.setting,
             stripe_customer: self.stripe_customer,
             sidebar_modules,
-            permissions: permissions(self.role, self.console_activated_at, admin_permissions),
+            permissions: permissions(self.role, admin_permissions),
         }
     }
 }
@@ -1445,7 +1630,9 @@ fn user_from_row(row: &sqlx::postgres::PgRow) -> Result<UserRecord, AuthError> {
         setting: row.try_get("setting").map_err(internal)?,
         stripe_customer: row.try_get("stripe_customer").map_err(internal)?,
         auth_version: row.try_get("auth_version").map_err(internal)?,
-        console_activated_at: row.try_get("console_activated_at").map_err(internal)?,
+        created_at: row.try_get("created_at").map_err(internal)?,
+        last_api_activity_at: row.try_get("last_api_activity_at").map_err(internal)?,
+        trust_level_override: row.try_get("trust_level_override").map_err(internal)?,
     })
 }
 
@@ -1470,7 +1657,7 @@ fn session_from_row(row: &sqlx::postgres::PgRow) -> Result<SessionRecord, AuthEr
     })
 }
 
-fn permissions(role: i64, console_activated_at: i64, admin_permissions: Value) -> Value {
+fn permissions(role: i64, admin_permissions: Value) -> Value {
     let (sidebar_settings, sidebar_modules) = if role == 100 {
         (false, json!({}))
     } else if role == 10 {
@@ -1482,14 +1669,6 @@ fn permissions(role: i64, console_activated_at: i64, admin_permissions: Value) -
     result.insert("sidebar_settings".to_owned(), json!(sidebar_settings));
     result.insert("sidebar_modules".to_owned(), sidebar_modules);
     result.insert("admin_permissions".to_owned(), admin_permissions);
-    result.insert(
-        "console_activated_at".to_owned(),
-        json!(if role >= 10 && console_activated_at == 0 {
-            1
-        } else {
-            console_activated_at
-        }),
-    );
     Value::Object(result)
 }
 
@@ -1580,6 +1759,20 @@ mod tests {
     fn metadata_is_bounded_like_the_go_service() {
         assert_eq!(truncate(" x ".to_owned(), 64), "x");
         assert_eq!(truncate("x".repeat(70), 64).len(), 64);
+    }
+
+    #[test]
+    fn login_user_permissions_do_not_expose_console_activation_timestamp() {
+        let value = permissions(1, json!({"read": true}));
+        assert!(
+            value
+                .get("admin_permissions")
+                .and_then(Value::as_object)
+                .and_then(|admin| admin.get("read"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        );
+        assert!(value.get("console_activated_at").is_none());
     }
 
     #[test]

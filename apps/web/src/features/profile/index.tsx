@@ -35,9 +35,24 @@ import { SidebarModulesCard } from './components/sidebar-modules-card'
 import { TwoFACard } from './components/two-fa-card'
 import { useProfile } from './hooks'
 
+interface ProfilePasskeyCapabilityProps {
+  capabilitiesReady: boolean
+  passkeyLogin: boolean
+  loading: boolean
+}
+
+export function ProfilePasskeyCapability({
+  capabilitiesReady,
+  passkeyLogin,
+  loading,
+}: ProfilePasskeyCapabilityProps) {
+  if (!capabilitiesReady || !passkeyLogin) return null
+  return <PasskeyCard loading={loading} />
+}
+
 export function Profile() {
   const { profile, loading, refreshProfile } = useProfile()
-  const { status } = useStatus()
+  const { status, capabilitiesReady } = useStatus()
   const permissions = useAuthStore((s) => s.auth.user?.permissions)
 
   const checkinEnabled = status?.checkin_enabled === true
@@ -80,7 +95,11 @@ export function Profile() {
                   />
                 )}
                 {canConfigureSidebar && <SidebarModulesCard />}
-                <PasskeyCard loading={loading} />
+                <ProfilePasskeyCapability
+                  capabilitiesReady={capabilitiesReady}
+                  passkeyLogin={status?.passkey_login === true}
+                  loading={loading}
+                />
                 <TwoFACard loading={loading} />
               </div>
             </div>

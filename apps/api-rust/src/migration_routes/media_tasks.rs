@@ -24,6 +24,7 @@ use crate::{
     RequestContext,
     migration_routes::media_midjourney::{
         ImageReply, MidjourneyBackend, MidjourneyFailure, PgMidjourneyBackend,
+        image_signing_secret_from_env, signed_image_owner,
     },
 };
 
@@ -136,6 +137,7 @@ impl TaskRelayProvider for UnconfiguredTaskRelayProvider {
 pub struct MidjourneyMediaTaskService<B = PgMidjourneyBackend> {
     backend: Arc<B>,
     task_relay: Arc<dyn TaskRelayProvider>,
+    image_signing_secret: Option<Arc<[u8]>>,
 }
 
 /// Production static-Midjourney service.  It is generic only so contract tests
@@ -155,6 +157,7 @@ impl<B> MidjourneyMediaTaskService<B> {
         Self {
             backend,
             task_relay,
+            image_signing_secret: image_signing_secret_from_env(),
         }
     }
 
@@ -164,6 +167,15 @@ impl<B> MidjourneyMediaTaskService<B> {
     #[must_use]
     pub fn with_task_relay(mut self, task_relay: Arc<dyn TaskRelayProvider>) -> Self {
         self.task_relay = task_relay;
+        self
+    }
+
+    /// Overrides the deployment-wide image-signing secret for an isolated
+    /// listener or deterministic contract test.
+    #[must_use]
+    pub fn with_image_signing_secret(mut self, secret: impl AsRef<[u8]>) -> Self {
+        self.image_signing_secret = (!secret.as_ref().is_empty())
+            .then(|| Arc::from(secret.as_ref().to_vec().into_boxed_slice()));
         self
     }
 }
@@ -269,12 +281,23 @@ where
         }
     }
 
-    async fn public_image(&self, task_id: String, _request: Request) -> Response {
-        let stored = match self.backend.image_for(&task_id).await {
+    async fn public_image(&self, task_id: String, request: Request) -> Response {
+        let Some(user_id) = signed_image_owner(
+            request.uri(),
+            &task_id,
+            self.image_signing_secret.as_deref(),
+        ) else {
+            return (
+                StatusCode::UNAUTHORIZED,
+                axum::Json(json!({"error":"midjourney_image_signature_invalid"})),
+            )
+                .into_response();
+        };
+        let stored = match self.backend.image_for_owned(user_id, &task_id).await {
             Ok(stored) => stored,
             Err(MidjourneyFailure::NotFound) => {
                 return (
-                    StatusCode::BAD_REQUEST,
+                    StatusCode::NOT_FOUND,
                     axum::Json(json!({"error":"midjourney_task_not_found"})),
                 )
                     .into_response();

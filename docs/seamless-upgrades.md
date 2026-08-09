@@ -4,6 +4,18 @@ The installed package exposes one public operator CLI: `/usr/bin/lmm-api`.
 Serving and deployment are subcommands of that CLI; source-tree deployment
 helpers and a second public deploy command are not supported.
 
+## Current production boundary
+
+The 2026-08-09 read-only audit found `api.lmm.best` running the Go backend with
+PostgreSQL and the dedicated Valkey listener on port `6380`. The frontend still
+points at the existing versioned release, while Rust blue/green slots are
+internal-probe state only and do not own business traffic. A historical
+PostgreSQL cutover result exists, but its post-cutover verification was marked
+`failed/contract` and no current forward-only boundary was present; treat the
+database state as unverified until a fresh coordinator audit proves the active
+schema, boundary, and canaries. Do not copy the older “production is still
+Go/SQLite” statement into a new runbook.
+
 ## Frontend: zero-downtime static releases
 
 Build the frontend into an immutable `apps/web/dist` directory in CI or a
@@ -78,6 +90,15 @@ considered complete. The transaction continues without the initiating shell
 or API connection, but restarting the only process creates a bounded
 interruption. It is not a zero-downtime or blue/green deployment.
 
+Before invoking a subcommand on an existing target, verify that the installed
+core package actually provides this launcher protocol and that systemd uses
+`ExecStart=/usr/bin/lmm-api serve`. Legacy provider binaries may start the
+backend when given an unknown command, so `status`, `deploy`, and `--help` are
+not safe inspection commands until the protocol is proven. Use systemd/package
+metadata, the running PID, sanitized process-environment scheme checks, and
+explicit HTTP probes for a legacy target; upgrade the core package through the
+guarded transaction before using deployment phases.
+
 Always read `apps/api-rust/tests/fixtures/routes/migration-gate.tsv` for the
 current route ownership and approval state; prose is not an authority for
 route counts.
@@ -96,16 +117,21 @@ This foundation is not a production API cutover. Production business routes
 remain on the approved backend until every route passes independent
 differential gates and the PostgreSQL cutover is approved.
 
-## PostgreSQL production migration prerequisite
+## PostgreSQL production migration and reconciliation prerequisite
 
-The verified SQLite-to-PostgreSQL copier and autonomous coordinator exist, but
-production migration and Rust business-routing activation remain prohibited.
-The coordinator stops the Go writer, backs up and verifies SQLite, copies into
-a fresh versioned schema, durably marks the forward-only boundary before
-publishing PostgreSQL and Valkey configuration, and runs public plus
-authenticated canaries. The strict journal, immutable candidate hash,
-`--reconcile-only` path, and systemd boot gate make process death and reboot
-idempotently recoverable.
+The verified SQLite-to-PostgreSQL copier and autonomous coordinator remain the
+only approved path for a new migration or reconciliation. A live target may
+already run Go on PostgreSQL and dedicated Valkey after a historical cutover;
+that runtime fact does not prove that the current boundary, schema contract,
+or authenticated canaries were accepted. When the active process is PostgreSQL
+but the current `PG_WRITE_BOUNDARY`/journal is absent or post-cutover
+verification failed, stop and reconcile before changing backend ownership.
+The coordinator stops the Go writer when a SQLite source is still involved,
+backs up and verifies the source, copies into a fresh versioned schema, durably
+marks the forward-only boundary before publishing PostgreSQL and Valkey
+configuration, and runs public plus authenticated canaries. The strict journal,
+immutable candidate hash, `--reconcile-only` path, and systemd boot gate make
+process death and reboot idempotently recoverable.
 
 The one-time database cutover is not zero downtime: the SQLite freeze stops
 the sole Go process and disconnects active HTTP, SSE, and WebSocket
@@ -117,3 +143,9 @@ parity, expand/contract migrations compatible with N and N-1, singleton
 background-job ownership, authenticated canaries, and graceful SSE/WebSocket
 draining and reconnection remain mandatory. Nginx must not automatically retry
 non-idempotent requests.
+
+The recommended release order is frontend-only publication (only when its API
+requests remain Go-compatible), observation and human confirmation, then Rust
+internal probes, Rust business canaries, and finally the guarded backend
+switch. A mounted Rust slot, a successful `/readyz`, or an old blue/green
+rehearsal is never a substitute for the route gate and paired listener evidence.

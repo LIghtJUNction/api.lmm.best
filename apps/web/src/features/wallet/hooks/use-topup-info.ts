@@ -181,14 +181,22 @@ export function useTopupInfo() {
   const [topupInfo, setTopupInfo] = useState<TopupInfo | null>(null)
   const [presetAmounts, setPresetAmounts] = useState<PresetAmount[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<Error | null>(null)
 
   const fetchTopupInfo = useCallback(async () => {
     try {
       setLoading(true)
+      setError(null)
 
       const response = await getTopupInfo()
 
       if (!response.success || !response.data) {
+        const nextError = new Error(
+          response.message || 'Failed to fetch topup info'
+        )
+        setTopupInfo(null)
+        setPresetAmounts([])
+        setError(nextError)
         // eslint-disable-next-line no-console
         console.error('Failed to fetch topup info:', response.message)
         return
@@ -226,6 +234,11 @@ export function useTopupInfo() {
         setPresetAmounts(defaultPresets)
       }
     } catch (err) {
+      setTopupInfo(null)
+      setPresetAmounts([])
+      setError(
+        err instanceof Error ? err : new Error('Failed to fetch topup info')
+      )
       // eslint-disable-next-line no-console
       console.error('Failed to fetch topup info:', err)
     } finally {
@@ -249,6 +262,7 @@ export function useTopupInfo() {
     topupInfo,
     presetAmounts,
     loading,
+    error,
     refetch: fetchTopupInfo,
   }
 }

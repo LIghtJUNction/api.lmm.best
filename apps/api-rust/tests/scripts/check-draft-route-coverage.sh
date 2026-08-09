@@ -439,7 +439,7 @@ if ($outside_allowlist_path ne '') {
             my ($method, $path, $category, $source_path, $rationale) = @fields;
             my $normalized = normalize_path($path);
             if ($method !~ /^(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)$/ || !defined $normalized
-                || $category !~ /^(?:health|internal|test|fixture)$/
+                || $category !~ /^(?:health|internal|test|fixture|compatibility)$/
                 || $source_path !~ m{^apps/api-rust/[A-Za-z0-9_./-]+\.rs$}
                 || $source_path =~ m{(?:^|/)\.\.?/}
                 || !-f "$repo_root/$source_path"

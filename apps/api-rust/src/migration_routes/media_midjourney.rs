@@ -17,12 +17,14 @@ use axum::{
     Extension, Json, Router,
     body::{Body, Bytes, to_bytes},
     extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::Sha256;
 use sqlx::{PgPool, Row};
 
 use crate::RequestContext;
@@ -190,8 +192,22 @@ pub trait MidjourneyBackend: Send + Sync {
         headers: &HeaderMap,
         body: Option<Value>,
     ) -> Result<BufferedJsonReply, MidjourneyFailure>;
-    /// Finds a public image reference without authenticating the requester.
+    /// Legacy unscoped image lookup retained for source compatibility only.
+    ///
+    /// HTTP image routes never call this method. Implementations that expose
+    /// image data must implement [`Self::image_for_owned`] instead.
     async fn image_for(&self, task_id: &str) -> Result<StoredImage, MidjourneyFailure>;
+    /// Finds a public image reference scoped to the signed URL owner.
+    ///
+    /// The default is deliberately fail-closed so an adapter cannot expose an
+    /// image merely by implementing the legacy unscoped hook.
+    async fn image_for_owned(
+        &self,
+        _user_id: i64,
+        _task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure> {
+        Err(MidjourneyFailure::NotFound)
+    }
     /// Fetches a previously validated image URL.
     async fn fetch_image(&self, url: &str) -> Result<ImageReply, MidjourneyFailure>;
 }
@@ -200,13 +216,25 @@ pub trait MidjourneyBackend: Send + Sync {
 #[derive(Clone)]
 pub struct MidjourneyHttpState {
     backend: Arc<dyn MidjourneyBackend>,
+    image_signing_secret: Option<Arc<[u8]>>,
 }
 
 impl MidjourneyHttpState {
     /// Creates state from an application-owned backend.
     #[must_use]
     pub fn new(backend: Arc<dyn MidjourneyBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            image_signing_secret: image_signing_secret_from_env(),
+        }
+    }
+
+    /// Overrides the deployment-wide image-signing secret for an isolated
+    /// listener or deterministic contract test.
+    #[must_use]
+    pub fn with_image_signing_secret(mut self, secret: impl AsRef<[u8]>) -> Self {
+        self.image_signing_secret = image_signing_secret_from_bytes(secret.as_ref());
+        self
     }
 }
 
@@ -399,12 +427,16 @@ async fn task_read(
 async fn image(
     State(state): State<MidjourneyHttpState>,
     Path((_, id)): Path<(String, String)>,
+    uri: Uri,
 ) -> Response {
-    let stored = match state.backend.image_for(&id).await {
+    let Some(user_id) = signed_image_owner(&uri, &id, state.image_signing_secret.as_deref()) else {
+        return invalid_image_signature_response();
+    };
+    let stored = match state.backend.image_for_owned(user_id, &id).await {
         Ok(stored) => stored,
         Err(MidjourneyFailure::NotFound) => {
             return (
-                StatusCode::BAD_REQUEST,
+                StatusCode::NOT_FOUND,
                 Json(json!({"error":"midjourney_task_not_found"})),
             )
                 .into_response();
@@ -447,6 +479,53 @@ async fn image(
         )
             .into_response(),
     }
+}
+
+fn invalid_image_signature_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({"error":"midjourney_image_signature_invalid"})),
+    )
+        .into_response()
+}
+
+type HmacSha256 = Hmac<Sha256>;
+
+pub(crate) fn image_signing_secret_from_env() -> Option<Arc<[u8]>> {
+    std::env::var("SESSION_SECRET")
+        .ok()
+        .and_then(|secret| image_signing_secret_from_bytes(secret.as_bytes()))
+}
+
+fn image_signing_secret_from_bytes(secret: &[u8]) -> Option<Arc<[u8]>> {
+    (!secret.is_empty()).then(|| Arc::from(secret.to_vec().into_boxed_slice()))
+}
+
+/// Returns the owner encoded by a Go-compatible Midjourney image URL.
+///
+/// Go signs `midjourney-image-v1:<uid>:<task-id>` with `SESSION_SECRET` and
+/// hex-encodes the HMAC-SHA256 output. Missing, malformed, or mismatched
+/// values return `None` so callers can use one fail-closed response path.
+pub(crate) fn signed_image_owner(uri: &Uri, task_id: &str, secret: Option<&[u8]>) -> Option<i64> {
+    let secret = secret.filter(|secret| !secret.is_empty())?;
+    let mut uid = None;
+    let mut signature = None;
+    for (key, value) in form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes()) {
+        match key.as_ref() {
+            "uid" if uid.is_none() => uid = Some(value.into_owned()),
+            "sig" if signature.is_none() => signature = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    let user_id = uid?.parse::<i64>().ok().filter(|user_id| *user_id > 0)?;
+    if task_id.is_empty() {
+        return None;
+    }
+    let provided = hex::decode(signature?).ok()?;
+    let mut mac = HmacSha256::new_from_slice(secret).ok()?;
+    mac.update(format!("midjourney-image-v1:{user_id}:{task_id}").as_bytes());
+    mac.verify_slice(&provided).ok()?;
+    Some(user_id)
 }
 
 fn request_client_ip(context: Option<Extension<RequestContext>>) -> Option<IpAddr> {
@@ -1351,10 +1430,19 @@ impl MidjourneyBackend for PgMidjourneyBackend {
         .await
     }
 
-    async fn image_for(&self, task_id: &str) -> Result<StoredImage, MidjourneyFailure> {
+    async fn image_for(&self, _task_id: &str) -> Result<StoredImage, MidjourneyFailure> {
+        Err(MidjourneyFailure::NotFound)
+    }
+
+    async fn image_for_owned(
+        &self,
+        user_id: i64,
+        task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure> {
         let url = sqlx::query_scalar::<_, String>(
-            "SELECT image_url FROM midjourneys WHERE mj_id=$1 AND COALESCE(image_url,'')<>'' ORDER BY id DESC LIMIT 1",
+            "SELECT image_url FROM midjourneys WHERE user_id=$1 AND mj_id=$2 AND COALESCE(image_url,'')<>'' ORDER BY id DESC LIMIT 1",
         )
+        .bind(user_id)
         .bind(task_id)
         .fetch_optional(&self.pg)
         .await

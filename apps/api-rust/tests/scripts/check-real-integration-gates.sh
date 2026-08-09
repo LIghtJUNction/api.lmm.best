@@ -13,7 +13,7 @@ isolated_runner="$repo_root/apps/api-rust/tests/scripts/run-isolated-real-integr
 declare -A requirements=(
   [auth_pg_valkey.rs]='auth_routes_preserve_postgres_and_valkey_control_plane|LMM_AUTH_TEST_DATABASE_URL|LMM_AUTH_TEST_VALKEY_URL'
   [models_pg_valkey.rs]='models_route_uses_authoritative_postgres_and_tolerates_valkey_failure|LMM_MODELS_TEST_DATABASE_URL|LMM_MODELS_TEST_VALKEY_URL'
-  [migration_api_token.rs]='api_token_mutations_invalidate_cached_credentials_and_keep_listings_masked,api_token_delete_is_idempotent_under_replay_and_competing_requests,api_token_token_limit_and_owner_scope_use_postgres_authority,api_token_batch_key_database_fault_is_not_silently_downgraded_to_an_empty_map|LMM_API_TOKEN_TEST_DATABASE_URL|LMM_API_TOKEN_TEST_VALKEY_URL'
+  [migration_api_token.rs]='create_token_activation_is_one_time_and_transactional,api_token_mutations_invalidate_cached_credentials_and_keep_listings_masked,api_token_delete_is_idempotent_under_replay_and_competing_requests,api_token_token_limit_and_owner_scope_use_postgres_authority,api_token_batch_key_database_fault_is_not_silently_downgraded_to_an_empty_map|LMM_API_TOKEN_TEST_DATABASE_URL|LMM_API_TOKEN_TEST_VALKEY_URL'
 )
 
 for file in "${!requirements[@]}"; do
@@ -75,4 +75,4 @@ for suite in auth models api-token; do
   fi
 done
 
-echo "real integration gates valid: 6 ignored tests across 3 modules; missing environment hard-fails"
+echo "real integration gates valid: 7 ignored tests across 3 modules; missing environment hard-fails"

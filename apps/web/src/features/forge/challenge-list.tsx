@@ -32,12 +32,14 @@ import { useStatus } from '@/hooks/use-status'
 import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
 
 type ChallengeListProps = {
   limit?: number
   className?: string
   showHeading?: boolean
+  hideWhenUnavailable?: boolean
+  heading?: string
+  description?: string
 }
 
 function repositoryName(url: string): string {
@@ -54,26 +56,41 @@ function repositoryName(url: string): string {
 export function ChallengeList(props: ChallengeListProps) {
   const { t } = useTranslation()
   const limit = props.limit ?? 50
-  const user = useAuthStore((state) => state.auth.user)
-  const { status, capabilitiesReady } = useStatus()
+  const { status, capabilitiesReady, error: capabilitiesError } = useStatus()
   const canReadPublicBounties =
     getBackendCapabilities(status).bounty_public_read
   const query = useQuery({
     queryKey: ['forge-challenges'],
     queryFn: listBounties,
-    enabled: Boolean(user) || (capabilitiesReady && canReadPublicBounties),
+    enabled: capabilitiesReady && canReadPublicBounties,
   })
   const items = (query.data?.items ?? []).slice(0, limit)
+  const capabilitiesLoading = !capabilitiesReady && !capabilitiesError
+  const capabilitiesUnavailable =
+    Boolean(capabilitiesError) || (capabilitiesReady && !canReadPublicBounties)
+  const loading = capabilitiesLoading || query.isLoading
+
+  if (
+    props.hideWhenUnavailable &&
+    (!capabilitiesReady || !canReadPublicBounties)
+  ) {
+    return null
+  }
 
   return (
     <section className={cn('min-w-0', props.className)}>
       {props.showHeading !== false && (
-        <div className='mb-6 flex items-end justify-between gap-5 border-b border-[#141413]/30 pb-5'>
+        <div className='border-border mb-6 flex items-end justify-between gap-5 border-b pb-5'>
           <div>
             <p className='mb-2 text-xs font-bold uppercase'>{t('Open work')}</p>
             <h2 className='font-serif text-3xl font-normal'>
-              {t('Challenges')}
+              {props.heading ?? t('Challenges')}
             </h2>
+            {props.description ? (
+              <p className='text-muted-foreground mt-2 max-w-2xl text-sm'>
+                {props.description}
+              </p>
+            ) : null}
           </div>
           <span className='text-sm tabular-nums'>
             {query.data?.total ?? 0} {t('published')}
@@ -81,12 +98,12 @@ export function ChallengeList(props: ChallengeListProps) {
         </div>
       )}
 
-      <div className='border-t-2 border-[#141413]'>
-        {query.isLoading &&
+      <div className='border-foreground border-t-2'>
+        {loading &&
           Array.from({ length: Math.min(limit, 3) }, (_, index) => (
             <div
               key={index}
-              className='grid min-h-24 grid-cols-[1fr_auto] items-center gap-5 border-b border-[#141413]/25 py-5'
+              className='border-border grid min-h-24 grid-cols-[1fr_auto] items-center gap-5 border-b py-5'
             >
               <div className='flex flex-col gap-3'>
                 <Skeleton className='h-5 w-2/3' />
@@ -96,9 +113,9 @@ export function ChallengeList(props: ChallengeListProps) {
             </div>
           ))}
 
-        {!query.isLoading && items.length === 0 && (
-          <div className='border-b border-[#141413]/25 py-10 text-sm'>
-            {query.isError
+        {!loading && items.length === 0 && (
+          <div className='border-border border-b py-10 text-sm'>
+            {capabilitiesUnavailable || query.isError
               ? t('Challenges are temporarily unavailable.')
               : t('No open challenges yet.')}
           </div>
@@ -109,7 +126,7 @@ export function ChallengeList(props: ChallengeListProps) {
             key={challenge.id}
             to='/challenges/$challengeId'
             params={{ challengeId: String(challenge.id) }}
-            className='group grid min-h-24 grid-cols-[minmax(0,1fr)_auto] items-center gap-5 border-b border-[#141413]/25 py-4 transition-colors hover:bg-[#BCD1CA]/35 md:grid-cols-[minmax(280px,1fr)_150px_190px_28px] md:px-3'
+            className='border-border group hover:bg-muted grid min-h-24 grid-cols-[minmax(0,1fr)_auto] items-center gap-5 border-b py-4 transition-colors md:grid-cols-[minmax(280px,1fr)_150px_190px_28px] md:px-3'
           >
             <div className='min-w-0'>
               <h3 className='mb-1 truncate font-serif text-lg font-medium'>

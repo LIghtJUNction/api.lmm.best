@@ -75,14 +75,18 @@ normal, _ = balanced_block(source, after_test_instance + else_match.end())
 candidate_args = call_arguments(
     test_instance, "router_with_api_token_and_extra"
 )
-normal_args = call_arguments(normal, "router_with_api_token")
-if not re.search(r"\bSome\s*\(\s*api_token\s*\)", candidate_args):
+normal_function = (
+    "router_with_api_token_and_extra"
+    if "router_with_api_token_and_extra" in normal
+    else "router_with_api_token"
+)
+normal_args = call_arguments(normal, normal_function)
+if not re.search(r"\bSome\s*\(\s*api_token\b", candidate_args):
     raise AssertionError("test-instance candidate no longer mounts API-token routes")
-if not re.search(
-    r"\bapp_state\s*,\s*auth_http\s*,\s*models_http\s*,\s*None\s*(?:,|$)",
-    normal_args,
-):
+if not re.search(r"\bSome\s*\(\s*api_token\b", normal_args):
     raise AssertionError("normal listener can mount API-token routes")
+if "with_current_dashboard_discovery_policy" not in normal:
+    raise AssertionError("normal listener is missing the current API-token policy")
 PY
 
 CARGO_TARGET_DIR="$target_dir" cargo test --offline --locked \

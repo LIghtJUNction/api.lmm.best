@@ -48,10 +48,10 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
       headerProps={{
         useDynamicNavLinks: false,
         className:
-          '[&>div>nav]:!border-[#141413]/20 [&>div>nav]:!bg-[#FAF9F5] [&>div>nav]:!text-[#141413] [&>div>nav_a]:!text-[#141413] [&>div>nav_a:hover]:!text-[#141413] [&>div>nav>div]:!text-[#141413] [&>div>nav>div_a]:!text-[#141413] [&>div>nav>div_a:hover]:!text-[#141413] [&>div>nav>div_button]:!text-[#141413]',
+          '[&>div>nav]:!border-border [&>div>nav]:!bg-background [&>div>nav]:!text-foreground [&>div>nav_a]:!text-foreground [&>div>nav_a:hover]:!text-foreground [&>div>nav>div]:!text-foreground [&>div>nav>div_a]:!text-foreground [&>div>nav>div_a:hover]:!text-foreground [&>div>nav>div_button]:!text-foreground',
       }}
     >
-      <div className='min-h-svh bg-[#FAF9F5] text-[#141413]'>
+      <div className='bg-background text-foreground min-h-svh'>
         {props.children}
       </div>
     </PublicLayout>

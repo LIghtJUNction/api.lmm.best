@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -32,6 +31,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -142,11 +142,21 @@ func main() {
 	}
 
 	if os.Getenv("ENABLE_PPROF") == "true" {
+		pprofAddress, err := pprofListenAddress(
+			os.Getenv("PPROF_BIND_ADDRESS"),
+			os.Getenv("PPROF_PORT"),
+		)
+		if err != nil {
+			common.FatalLog("failed to configure pprof listen address: " + err.Error())
+			return
+		}
 		gopool.Go(func() {
-			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
+			if err := http.ListenAndServe(pprofAddress, nil); err != nil {
+				common.SysError(fmt.Sprintf("pprof server stopped: %v", err))
+			}
 		})
 		go common.Monitor()
-		common.SysLog("pprof enabled")
+		common.SysLog("pprof enabled on " + pprofAddress)
 	}
 
 	err = common.StartPyroScope()
@@ -177,10 +187,7 @@ func main() {
 	middleware.SetUpLogger(server)
 	// 设置路由
 	router.SetRouter(server)
-	var port = os.Getenv("PORT")
-	if port == "" {
-		port = strconv.Itoa(*common.Port)
-	}
+	port := resolvePort(os.Getenv("PORT"), os.Getenv("LMM_API_PORT"), *common.Port)
 	listenAddress, err := buildListenAddress(os.Getenv("LMM_API_BIND_ADDRESS"), port)
 	if err != nil {
 		common.FatalLog("failed to configure HTTP listen address: " + err.Error())
@@ -292,6 +299,9 @@ func InitResources() (returnErr error) {
 
 	// 加载环境变量
 	common.InitEnv()
+	if err := system_setting.InitServerAddressFromEnv(); err != nil {
+		return fmt.Errorf("failed to configure server address: %w", err)
+	}
 
 	logger.SetupLogger()
 
@@ -367,4 +377,33 @@ func InitResources() (returnErr error) {
 	service.StartAuthArtifactCleanup()
 
 	return nil
+}
+
+const (
+	defaultPprofBindAddress = "127.0.0.1"
+	defaultPprofPort        = "8005"
+)
+
+func resolvePort(primary, compatibility string, fallback int) string {
+	for _, value := range []string{primary, compatibility} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return strconv.Itoa(fallback)
+}
+
+func pprofListenAddress(bindAddress, port string) (string, error) {
+	if strings.TrimSpace(bindAddress) == "" {
+		bindAddress = defaultPprofBindAddress
+	}
+	if strings.TrimSpace(port) == "" {
+		port = defaultPprofPort
+	}
+	port = strings.TrimSpace(port)
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("PPROF_PORT must be a numeric TCP port between 1 and 65535")
+	}
+	return buildListenAddress(bindAddress, port)
 }

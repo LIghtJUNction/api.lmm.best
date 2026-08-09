@@ -11,7 +11,12 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
-legacy_root="$repo_root/legacy-go-backup/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9"
+legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 pg_port=${LMM_RATIO_SYNC_PG_PORT:-55487}
 go_port=${LMM_RATIO_SYNC_GO_PORT:-13087}
 rust_port=${LMM_RATIO_SYNC_RUST_PORT:-33087}
@@ -66,12 +71,20 @@ go_role=lmm_test_ratio_sync_go
 rust_role=lmm_test_ratio_sync_rust
 go_schema=lmm_test_ratio_sync_go
 rust_schema=lmm_test_ratio_sync_rust
+go_pid=
+rust_pid=
+provider_pid=
+go_valkey_pid=
+rust_valkey_pid=
+go_pid_start=
+rust_pid_start=
+provider_pid_start=
+go_valkey_pid_start=
+rust_valkey_pid_start=
 
 cleanup() {
-  for pid in "${go_pid:-}" "${rust_pid:-}" "${provider_pid:-}" "${go_valkey_pid:-}" "${rust_valkey_pid:-}"; do
-    [[ -n $pid ]] || continue
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
+  for pid_name in go_pid rust_pid provider_pid go_valkey_pid rust_valkey_pid; do
+    stop_owned_process "$pid_name" || true
   done
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
@@ -100,6 +113,10 @@ wait_for_http() {
   done
   return 1
 }
+pid_start_time() { [[ -r /proc/$1/stat ]] || return 1; awk '{print $22}' "/proc/$1/stat"; }
+record_pid() { local pid_name=$1 pid=$2 start; printf -v "$pid_name" '%s' "$pid"; start=$(pid_start_time "$pid") || { echo "failed to record pid $pid" >&2; wait "$pid" 2>/dev/null || true; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; return 1; }; printf -v "${pid_name}_start" '%s' "$start"; }
+owned_pid_is_live() { local pid_name=$1 pid start_name expected; pid=${!pid_name:-}; start_name="${pid_name}_start"; expected=${!start_name:-}; [[ -n $pid && -n $expected ]] && kill -0 "$pid" 2>/dev/null && [[ $(pid_start_time "$pid" 2>/dev/null || true) == "$expected" ]]; }
+stop_owned_process() { local pid_name=$1 pid; pid=${!pid_name:-}; if [[ -n $pid ]]; then if owned_pid_is_live "$pid_name"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; else echo "refusing to signal unowned or recycled PID $pid ($pid_name)" >&2; fi; fi; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; }
 
 initdb -D "$runtime/pg" --no-locale --encoding=UTF8 >/dev/null
 pg_ctl -D "$runtime/pg" -l "$runtime/postgres.log" -o "-h 127.0.0.1 -p $pg_port -k $runtime" -w start >/dev/null
@@ -129,10 +146,8 @@ INSERT INTO $schema.channels (id, name, base_url, key, status, type)
 SQL
 done
 
-valkey-server --bind 127.0.0.1 --port "$go_valkey_port" --protected-mode yes --save '' --appendonly no --requirepass "$valkey_password" >"$runtime/go-valkey.log" 2>&1 &
-go_valkey_pid=$!
-valkey-server --bind 127.0.0.1 --port "$rust_valkey_port" --protected-mode yes --save '' --appendonly no --requirepass "$valkey_password" >"$runtime/rust-valkey.log" 2>&1 &
-rust_valkey_pid=$!
+valkey-server --bind 127.0.0.1 --port "$go_valkey_port" --protected-mode yes --save '' --appendonly no --requirepass "$valkey_password" >"$runtime/go-valkey.log" 2>&1 & record_pid go_valkey_pid "$!" || exit 1
+valkey-server --bind 127.0.0.1 --port "$rust_valkey_port" --protected-mode yes --save '' --appendonly no --requirepass "$valkey_password" >"$runtime/rust-valkey.log" 2>&1 & record_pid rust_valkey_pid "$!" || exit 1
 wait_for_valkey "$go_valkey_pid" "$go_valkey_port"
 wait_for_valkey "$rust_valkey_pid" "$rust_valkey_port"
 
@@ -152,18 +167,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(404); self.end_headers()
     def log_message(self, *_): pass
 socketserver.TCPServer(("127.0.0.1", int(os.environ["PROVIDER_PORT"])), Handler).serve_forever()
-' >"$runtime/provider.log" 2>&1 &
-provider_pid=$!
+' >"$runtime/provider.log" 2>&1 & record_pid provider_pid "$!" || exit 1
 wait_for_http "$provider_pid" "http://127.0.0.1:$provider_port/health"
 
 go_dsn="postgresql://$go_role@127.0.0.1:$pg_port/$go_database?options=-csearch_path%3D$go_schema"
 rust_dsn="postgresql://$rust_role@127.0.0.1:$pg_port/$rust_database?options=-csearch_path%3D$rust_schema"
 env DATABASE_URL="$go_dsn" VALKEY_URL="redis://:$valkey_password@127.0.0.1:$go_valkey_port" PORT="$go_port" \
   LMM_RATIO_SYNC_PROVIDER_LOOPBACK="http://127.0.0.1:$provider_port" LMM_RATIO_SYNC_TEST_SECRET="$valkey_password" "$go_listener" >"$runtime/go.log" 2>&1 &
-go_pid=$!
+record_pid go_pid "$!" || exit 1
 env DATABASE_URL="$rust_dsn" VALKEY_URL="redis://:$valkey_password@127.0.0.1:$rust_valkey_port" PORT="$rust_port" \
   LMM_RATIO_SYNC_PROVIDER_LOOPBACK="http://127.0.0.1:$provider_port" LMM_RATIO_SYNC_TEST_SECRET="$valkey_password" "$rust_listener" >"$runtime/rust.log" 2>&1 &
-rust_pid=$!
+record_pid rust_pid "$!" || exit 1
 wait_for_http "$go_pid" "http://127.0.0.1:$go_port/livez"
 wait_for_http "$rust_pid" "http://127.0.0.1:$rust_port/livez"
 

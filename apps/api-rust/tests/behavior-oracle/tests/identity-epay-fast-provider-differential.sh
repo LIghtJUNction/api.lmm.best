@@ -9,7 +9,12 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
-legacy_root="$repo_root/legacy-go-backup/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9"
+legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 pg_port=${LMM_IDENTITY_EPAY_FAST_PG_PORT:-55472}
 go_port=${LMM_IDENTITY_EPAY_FAST_GO_PORT:-13072}
 rust_port=${LMM_IDENTITY_EPAY_FAST_RUST_PORT:-33072}
@@ -68,12 +73,20 @@ go_schema=lmm_test_identity_epay_fast_go
 rust_schema=lmm_test_identity_epay_fast_rust
 go_role=lmm_test_identity_epay_fast_go
 rust_role=lmm_test_identity_epay_fast_rust
+go_pid=
+rust_pid=
+provider_pid=
+go_valkey_pid=
+rust_valkey_pid=
+go_pid_start=
+rust_pid_start=
+provider_pid_start=
+go_valkey_pid_start=
+rust_valkey_pid_start=
 
 cleanup() {
-  for pid in "${go_pid:-}" "${rust_pid:-}" "${provider_pid:-}" "${go_valkey_pid:-}" "${rust_valkey_pid:-}"; do
-    [[ -n $pid ]] || continue
-    kill "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
+  for pid_name in go_pid rust_pid provider_pid go_valkey_pid rust_valkey_pid; do
+    stop_owned_process "$pid_name" || true
   done
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
@@ -110,6 +123,10 @@ assert_owned_pid() {
     return 1
   }
 }
+pid_start_time() { [[ -r /proc/$1/stat ]] || return 1; awk '{print $22}' "/proc/$1/stat"; }
+record_pid() { local pid_name=$1 pid=$2 start; printf -v "$pid_name" '%s' "$pid"; start=$(pid_start_time "$pid") || { echo "failed to record pid $pid" >&2; wait "$pid" 2>/dev/null || true; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; return 1; }; printf -v "${pid_name}_start" '%s' "$start"; }
+owned_pid_is_live() { local pid_name=$1 pid start_name expected; pid=${!pid_name:-}; start_name="${pid_name}_start"; expected=${!start_name:-}; [[ -n $pid && -n $expected ]] && kill -0 "$pid" 2>/dev/null && [[ $(pid_start_time "$pid" 2>/dev/null || true) == "$expected" ]]; }
+stop_owned_process() { local pid_name=$1 pid; pid=${!pid_name:-}; if [[ -n $pid ]]; then if owned_pid_is_live "$pid_name"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; else echo "refusing to signal unowned or recycled PID $pid ($pid_name)" >&2; fi; fi; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; }
 
 start_valkey() {
   local name=$1 port=$2 pid_name=$3
@@ -123,8 +140,7 @@ start_valkey() {
     'appendonly no' \
     "requirepass $valkey_password" >"$config"
   chmod 600 "$config"
-  valkey-server "$config" >"$runtime/$name-valkey.log" 2>&1 &
-  printf -v "$pid_name" '%s' "$!"
+  valkey-server "$config" >"$runtime/$name-valkey.log" 2>&1 & record_pid "$pid_name" "$!" || return 1
 }
 
 initdb -D "$runtime/pg" --no-locale --encoding=UTF8 >/dev/null
@@ -165,8 +181,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200 if self.path in ("/epay", "/fastpay") else 404); self.end_headers()
     def log_message(self, *_): pass
 socketserver.TCPServer(("127.0.0.1", int(os.environ["PROVIDER_PORT"])), Handler).serve_forever()
-' >"$runtime/provider.log" 2>&1 &
-provider_pid=$!
+  ' >"$runtime/provider.log" 2>&1 & record_pid provider_pid "$!" || exit 1
 assert_owned_pid "$provider_pid"
 wait_for_pid_http "$provider_pid" "http://127.0.0.1:$provider_port/health"
 
@@ -178,16 +193,14 @@ rust_dsn="postgresql://$rust_role@127.0.0.1:$pg_port/$rust_database?options=-cse
 env -i PATH="$PATH" HOME="$runtime" TMPDIR="$runtime" LANG=C \
   SQL_DSN="$go_dsn" REDIS_CONN_STRING="redis://:$valkey_password@127.0.0.1:$go_valkey_port" PORT="$go_port" \
   LMM_TEST_PROVIDER_BASE_URL="http://127.0.0.1:$provider_port" LMM_TEST_PAYMENT_SECRET="$valkey_password" \
-  "$go_namespace_exec" "$go_listener" >"$runtime/go.log" 2>&1 &
-go_pid=$!
+  "$go_namespace_exec" "$go_listener" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!" || exit 1
 assert_owned_pid "$go_pid"
 env -i PATH="$PATH" HOME="$runtime" TMPDIR="$runtime" LANG=C \
   DATABASE_URL="$rust_dsn" VALKEY_URL="redis://:$valkey_password@127.0.0.1:$rust_valkey_port" \
   LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT="identity-epay-fast-test" \
   LMM_SCHEMA_CONTRACT="$rust_schema" LMM_RS_TEST_INSTANCE=1 \
   LMM_TEST_PROVIDER_BASE_URL="http://127.0.0.1:$provider_port" LMM_TEST_PAYMENT_SECRET="$valkey_password" \
-  "$rust_listener" >"$runtime/rust.log" 2>&1 &
-rust_pid=$!
+  "$rust_listener" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!" || exit 1
 assert_owned_pid "$rust_pid"
 wait_for_pid_http "$go_pid" "http://127.0.0.1:$go_port/livez"
 wait_for_pid_http "$rust_pid" "http://127.0.0.1:$rust_port/livez"

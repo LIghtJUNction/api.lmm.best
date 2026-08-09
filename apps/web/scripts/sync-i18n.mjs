@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-// This script is executed from the web/ package root (see package.json script).
+// This script is executed from the apps/web package root (see package.json script).
 const LOCALES_DIR = path.resolve('src/i18n/locales')
 const FALLBACK_COMPARE_LOCALE = 'en' // used for "still English" detection only
 const OBFUSCATED_KEYS = [

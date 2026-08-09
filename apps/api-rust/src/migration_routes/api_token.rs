@@ -433,10 +433,9 @@ return 1
         .bind(user_id).bind(&key).bind(input.name).bind(now).bind(expired_time).bind(input.remain_quota).bind(input.unlimited_quota).bind(input.model_limits_enabled).bind(input.model_limits).bind(input.allow_ips.unwrap_or_default()).bind(input.group).bind(input.cross_group_retry)
             .execute(&mut *tx).await.map_err(TokenError::db)?;
         sqlx::query(
-            "UPDATE users SET console_activated_at = CASE WHEN COALESCE(console_activated_at, 0) = 0 THEN $2 ELSE console_activated_at END WHERE id = $1 AND deleted_at IS NULL",
+            "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
         )
         .bind(user_id)
-        .bind(now)
         .execute(&mut *tx)
         .await
         .map_err(TokenError::db)?;

@@ -21,6 +21,9 @@ import { useEffect } from 'react'
 
 import { AccessRestrictionNotice } from '@/components/access-restriction-notice'
 import { LmmBrandMark } from '@/components/lmm-brand-mark'
+import { ThemeSwitch } from '@/components/theme-switch'
+
+import { AuthArtPanel } from './components/auth-art-panel'
 
 type AuthLayoutProps = {
   children: React.ReactNode
@@ -36,20 +39,28 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   }, [])
 
   return (
-    <div className='relative grid min-h-svh max-w-none grid-rows-[1fr_auto]'>
-      <Link
-        to='/'
-        className='absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity hover:opacity-80 sm:top-8 sm:left-8'
-      >
-        <LmmBrandMark className='size-8' title='LMM Forge' />
-        <h1 className='text-xl font-medium'>LMM Forge</h1>
-      </Link>
-      <div className='container flex items-center pt-16 sm:pt-0'>
-        <div className='mx-auto flex w-full flex-col justify-center space-y-2 px-4 py-8 sm:w-[480px] sm:p-8'>
-          {children}
+    <div className='relative min-h-svh max-w-none lg:grid lg:grid-cols-[minmax(31rem,0.92fr)_minmax(31rem,1.08fr)]'>
+      <header className='absolute inset-x-0 top-0 z-20 flex min-h-20 items-center justify-between px-4 sm:min-h-24 sm:px-8'>
+        <Link
+          to='/'
+          className='flex items-center gap-2 transition-opacity hover:opacity-80'
+        >
+          <LmmBrandMark className='size-8' title='LMM Forge' />
+          <h1 className='text-xl font-medium'>LMM Forge</h1>
+        </Link>
+        <ThemeSwitch />
+      </header>
+      <div className='grid min-h-svh grid-rows-[1fr_auto] lg:col-start-1'>
+        <div className='container flex items-start pt-20 sm:pt-24'>
+          <div className='mx-auto flex w-full flex-col justify-center space-y-2 px-4 py-8 sm:w-[480px] sm:px-8 sm:py-12'>
+            {children}
+          </div>
         </div>
+        <AccessRestrictionNotice />
       </div>
-      <AccessRestrictionNotice />
+      <div className='hidden lg:sticky lg:top-0 lg:col-start-2 lg:row-start-1 lg:block lg:h-svh lg:min-h-[42rem] lg:p-3 lg:pl-0'>
+        <AuthArtPanel />
+      </div>
     </div>
   )
 }

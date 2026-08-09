@@ -5,6 +5,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
 };
+use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::{
     media_midjourney::{
         BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyFailure, MidjourneyIdentity,
@@ -13,6 +14,10 @@ use lmm_api_rs::migration_routes::{
     media_tasks::{MediaTaskOperation, MediaTaskService, MidjourneyMediaTaskService},
 };
 use serde_json::{Value, json};
+use sha2::Sha256;
+
+const IMAGE_SECRET: &[u8] = b"image-signing-contract-secret";
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Default)]
 struct MockBackend {
@@ -103,6 +108,17 @@ impl MidjourneyBackend for MockBackend {
         })
     }
 
+    async fn image_for_owned(
+        &self,
+        user_id: i64,
+        task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure> {
+        if user_id != 7 || task_id != "task-1" {
+            return Err(MidjourneyFailure::NotFound);
+        }
+        self.image_for(task_id).await
+    }
+
     async fn fetch_image(&self, _url: &str) -> Result<ImageReply, MidjourneyFailure> {
         Ok(ImageReply::Stream {
             content_type: HeaderValue::from_static("image/png"),
@@ -117,6 +133,15 @@ fn request(path: &str, body: Body) -> Request<Body> {
         .header(header::AUTHORIZATION, "Bearer token")
         .body(body)
         .expect("request")
+}
+
+fn signed_image_path(task_id: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(IMAGE_SECRET).expect("HMAC key");
+    mac.update(format!("midjourney-image-v1:7:{task_id}").as_bytes());
+    format!(
+        "/mj/image/{task_id}?uid=7&sig={}",
+        hex::encode(mac.finalize().into_bytes())
+    )
 }
 
 #[tokio::test]
@@ -177,11 +202,12 @@ async fn concrete_static_mj_read_scopes_the_task_id_before_backend_dispatch() {
 #[tokio::test]
 async fn concrete_static_mj_public_image_preserves_stream_without_task_writes() {
     let backend = Arc::new(MockBackend::default());
-    let service = MidjourneyMediaTaskService::new(Arc::clone(&backend));
+    let service = MidjourneyMediaTaskService::new(Arc::clone(&backend))
+        .with_image_signing_secret(IMAGE_SECRET);
     let response = service
         .public_image(
             "task-1".to_owned(),
-            request("/mj/image/task-1", Body::empty()),
+            request(&signed_image_path("task-1"), Body::empty()),
         )
         .await;
 

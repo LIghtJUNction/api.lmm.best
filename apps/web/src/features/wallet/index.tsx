@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -47,7 +47,7 @@ import {
   useWaffoPancakePayment,
 } from './hooks'
 import {
-  getDefaultPaymentType,
+  getTopupAvailability,
   getMinTopupAmount,
   isPaymentMethodCurrencySupported,
   dispatchSelectedPayment,
@@ -96,7 +96,16 @@ export function Wallet(props: WalletProps) {
   >(null)
 
   const { status } = useStatus()
-  const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
+  const {
+    topupInfo,
+    presetAmounts,
+    loading: topupLoading,
+    error: topupError,
+  } = useTopupInfo()
+  const topupAvailability = useMemo(
+    () => getTopupAvailability(topupInfo),
+    [topupInfo]
+  )
   const {
     amount: paymentAmount,
     calculating,
@@ -182,33 +191,37 @@ export function Wallet(props: WalletProps) {
   const topupAmountInitializedRef = useRef(false)
   useEffect(() => {
     if (topupInfo && !topupAmountInitializedRef.current) {
+      const defaultPaymentType = topupAvailability.defaultQuotedType
+      if (!defaultPaymentType) return
+
       topupAmountInitializedRef.current = true
       const minTopup = getMinTopupAmount(topupInfo)
       setTopupAmount(minTopup)
 
       // Calculate initial payment amount with default payment type
-      const defaultPaymentType = getDefaultPaymentType(topupInfo)
       calculatePaymentAmount(minTopup, defaultPaymentType)
     }
-  }, [topupInfo, calculatePaymentAmount])
+  }, [topupInfo, topupAvailability, calculatePaymentAmount])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {
-    return selectedPaymentMethod?.type || getDefaultPaymentType(topupInfo)
-  }, [selectedPaymentMethod, topupInfo])
+    return selectedPaymentMethod?.type || topupAvailability.defaultQuotedType
+  }, [selectedPaymentMethod, topupAvailability])
 
   // Handle preset selection
   const handleSelectPreset = (preset: PresetAmount) => {
     setTopupAmount(preset.value)
     setSelectedPreset(preset.value)
-    calculatePaymentAmount(preset.value, getCurrentPaymentType())
+    const paymentType = getCurrentPaymentType()
+    if (paymentType) calculatePaymentAmount(preset.value, paymentType)
   }
 
   // Handle topup amount change
   const handleTopupAmountChange = (amount: number) => {
     setTopupAmount(amount)
     setSelectedPreset(null)
-    calculatePaymentAmount(amount, getCurrentPaymentType())
+    const paymentType = getCurrentPaymentType()
+    if (paymentType) calculatePaymentAmount(amount, paymentType)
   }
 
   // Handle payment method selection
@@ -402,6 +415,7 @@ export function Wallet(props: WalletProps) {
               <div id='wallet-add-funds' className='scroll-mt-4'>
                 <RechargeFormCard
                   topupInfo={topupInfo}
+                  topupAvailability={topupAvailability}
                   presetAmounts={presetAmounts}
                   selectedPreset={selectedPreset}
                   onSelectPreset={handleSelectPreset}
@@ -418,18 +432,11 @@ export function Wallet(props: WalletProps) {
                   redeeming={redeeming}
                   topupLink={topupInfo?.topup_link}
                   loading={topupLoading}
+                  error={topupError}
                   priceRatio={(status?.price as number) || 1}
                   onOpenBilling={() => setBillingDialogOpen(true)}
-                  creemProducts={topupInfo?.creem_products}
-                  enableCreemTopup={topupInfo?.enable_creem_topup}
                   onCreemProductSelect={handleCreemProductSelect}
-                  enableWaffoTopup={topupInfo?.enable_waffo_topup}
-                  waffoPayMethods={topupInfo?.waffo_pay_methods}
-                  waffoMinTopup={topupInfo?.waffo_min_topup}
                   onWaffoMethodSelect={handleWaffoMethodSelect}
-                  enableWaffoPancakeTopup={
-                    topupInfo?.enable_waffo_pancake_topup
-                  }
                   neutralMode={!developerAccessGranted}
                 />
               </div>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 ledger="${TEST_INSTANCE_RUNTIME_BLOCKERS_LEDGER:-$repo_root/apps/api-rust/tests/fixtures/routes/test-instance-runtime-blockers.tsv}"
 legacy="$repo_root/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv"
 

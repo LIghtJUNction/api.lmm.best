@@ -255,10 +255,31 @@ fn request_id(request: &Request) -> String {
 }
 
 fn auth_failure(error: ModelsError, version: &str, request_id: &str) -> Response {
+    if matches!(
+        error.kind,
+        ModelsErrorKind::MissingToken
+            | ModelsErrorKind::InvalidToken
+            | ModelsErrorKind::DiscoveryHidden
+    ) {
+        return compat_response(
+            (
+                StatusCode::NOT_FOUND,
+                Json(DiscoveryNotFoundEnvelope {
+                    message: "Not Found",
+                }),
+            )
+                .into_response(),
+            version,
+            request_id,
+        );
+    }
+
     let status = match error.kind {
-        ModelsErrorKind::MissingToken | ModelsErrorKind::InvalidToken => StatusCode::UNAUTHORIZED,
         ModelsErrorKind::AccessDenied | ModelsErrorKind::UserBanned => StatusCode::FORBIDDEN,
         ModelsErrorKind::Database => StatusCode::INTERNAL_SERVER_ERROR,
+        ModelsErrorKind::MissingToken
+        | ModelsErrorKind::InvalidToken
+        | ModelsErrorKind::DiscoveryHidden => unreachable!("handled above"),
     };
     compat_response(
         (
@@ -329,6 +350,11 @@ struct AuthorizationError {
     #[serde(rename = "type")]
     kind: &'static str,
     code: &'static str,
+}
+
+#[derive(Serialize)]
+struct DiscoveryNotFoundEnvelope {
+    message: &'static str,
 }
 
 #[cfg(test)]
@@ -449,12 +475,44 @@ mod tests {
         .await
         .expect("router responds");
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(
-            json_body(response).await["error"]["message"]
-                .as_str()
-                .expect("message")
-                .contains("Invalid token")
-        );
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(json_body(response).await, json!({"message":"Not Found"}));
+    }
+
+    #[tokio::test]
+    async fn missing_token_is_hidden_as_generic_not_found() {
+        let response = app(
+            Err(ModelsErrorKind::MissingToken),
+            Some(ModelView::new("must-not-leak", "openai")),
+        )
+        .oneshot(
+            HttpRequest::get("/v1/models/must-not-leak")
+                .body(Body::empty())
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(json_body(response).await, json!({"message":"Not Found"}));
+    }
+
+    #[tokio::test]
+    async fn discovery_hidden_token_is_not_leaked_as_auth_error() {
+        let response = app(
+            Err(ModelsErrorKind::DiscoveryHidden),
+            Some(ModelView::new("must-not-leak", "openai")),
+        )
+        .oneshot(
+            HttpRequest::get("/v1/models/must-not-leak")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(json_body(response).await, json!({"message":"Not Found"}));
     }
 }

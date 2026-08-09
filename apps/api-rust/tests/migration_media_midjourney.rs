@@ -9,18 +9,23 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::media_midjourney::{
     BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyChannel, MidjourneyFailure,
     MidjourneyHttpState, MidjourneyIdentity, PgMidjourneyBackend, StoredImage, SubmitReply,
     TaskEffect, media_midjourney_router,
 };
 use serde_json::json;
+use sha2::Sha256;
 use sqlx::PgPool;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
 use tower::ServiceExt;
+
+const IMAGE_SECRET: &[u8] = b"image-signing-contract-secret";
+type HmacSha256 = Hmac<Sha256>;
 
 struct TestMidjourneyBackend {
     accepted_tokens: BTreeSet<String>,
@@ -168,6 +173,17 @@ impl MidjourneyBackend for TestMidjourneyBackend {
             .ok_or(MidjourneyFailure::NotFound)
     }
 
+    async fn image_for_owned(
+        &self,
+        user_id: i64,
+        task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure> {
+        if user_id != 1 {
+            return Err(MidjourneyFailure::NotFound);
+        }
+        self.image_for(task_id).await
+    }
+
     async fn fetch_image(&self, _: &str) -> Result<ImageReply, MidjourneyFailure> {
         *self.image_fetches.lock().expect("image fetches lock") += 1;
         let target = self
@@ -198,7 +214,18 @@ impl MidjourneyBackend for TestMidjourneyBackend {
 }
 
 fn app(backend: Arc<TestMidjourneyBackend>) -> axum::Router {
-    media_midjourney_router(MidjourneyHttpState::new(backend))
+    media_midjourney_router(
+        MidjourneyHttpState::new(backend).with_image_signing_secret(IMAGE_SECRET),
+    )
+}
+
+fn signed_image_path(prefix: &str, user_id: i64, task_id: &str) -> String {
+    let mut mac = HmacSha256::new_from_slice(IMAGE_SECRET).expect("HMAC key");
+    mac.update(format!("midjourney-image-v1:{user_id}:{task_id}").as_bytes());
+    format!(
+        "{prefix}/{task_id}?uid={user_id}&sig={}",
+        hex::encode(mac.finalize().into_bytes())
+    )
 }
 
 async fn spawn_tcp_router(router: axum::Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -310,7 +337,7 @@ async fn public_image_should_stream_exact_binary_without_token() {
     let response = app(backend)
         .oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/task-1")
+                .uri(signed_image_path("/proxy/mj/image", 1, "task-1"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -357,7 +384,7 @@ async fn public_image_returns_headers_before_the_upstream_stream_finishes() {
         Duration::from_secs(3),
         app(backend).oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/task-stream")
+                .uri(signed_image_path("/proxy/mj/image", 1, "task-stream"))
                 .body(Body::empty())
                 .expect("request"),
         ),
@@ -387,7 +414,7 @@ async fn public_image_rejects_ipv6_loopback_before_any_upstream_fetch() {
     let response = app(Arc::clone(&backend))
         .oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/task-1")
+                .uri(signed_image_path("/proxy/mj/image", 1, "task-1"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -446,13 +473,13 @@ async fn unknown_public_image_uses_the_frozen_not_found_envelope() {
     let response = app(Arc::clone(&backend))
         .oneshot(
             Request::builder()
-                .uri("/proxy/mj/image/missing")
+                .uri(signed_image_path("/proxy/mj/image", 1, "missing"))
                 .body(Body::empty())
                 .expect("request"),
         )
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body = serde_json::from_slice::<serde_json::Value>(
         &to_bytes(response.into_body(), usize::MAX)
             .await
@@ -494,11 +521,14 @@ async fn dynamic_midjourney_auth_and_route_status_contract_holds_over_a_real_tcp
     let client = reqwest::Client::new();
 
     let public_image = client
-        .get(format!("{base_url}/proxy/mj/image/missing"))
+        .get(format!(
+            "{base_url}{}",
+            signed_image_path("/proxy/mj/image", 1, "missing")
+        ))
         .send()
         .await
         .expect("public-image response");
-    assert_eq!(public_image.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(public_image.status(), reqwest::StatusCode::NOT_FOUND);
     assert_eq!(
         public_image
             .json::<serde_json::Value>()

@@ -5,7 +5,6 @@ use lmm_application::{
 use lmm_domain::PublicContentKind;
 use redis::AsyncCommands;
 use sqlx::PgPool;
-use std::time::Duration;
 
 pub struct PgPublicContentRepository {
     pg: PgPool,
@@ -36,12 +35,11 @@ impl PublicContentRepository for PgPublicContentRepository {
 
 pub struct ValkeyPublicContentCache {
     client: redis::Client,
-    ttl: Duration,
 }
 
 impl ValkeyPublicContentCache {
-    pub fn new(client: redis::Client, ttl: Duration) -> Self {
-        Self { client, ttl }
+    pub fn new(client: redis::Client) -> Self {
+        Self { client }
     }
 }
 
@@ -58,22 +56,6 @@ impl PublicContentCache for ValkeyPublicContentCache {
             .map_err(|_| PublicContentCacheError)?;
         connection
             .get(cache_key(kind))
-            .await
-            .map_err(|_| PublicContentCacheError)
-    }
-
-    async fn put(
-        &self,
-        kind: PublicContentKind,
-        value: &str,
-    ) -> Result<(), PublicContentCacheError> {
-        let mut connection = self
-            .client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|_| PublicContentCacheError)?;
-        connection
-            .set_ex(cache_key(kind), value, self.ttl.as_secs())
             .await
             .map_err(|_| PublicContentCacheError)
     }

@@ -15,7 +15,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 import assert from 'node:assert/strict'
-import { after, describe, test } from 'node:test'
+import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 import type React from 'react'
@@ -49,6 +49,8 @@ for (const key of domGlobals) {
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { QueryClient, QueryClientProvider } =
+  await import('@tanstack/react-query')
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 
@@ -62,6 +64,10 @@ await i18n.use(initReactI18next).init({
 })
 
 const { RechargeFormCard } = await import('./recharge-form-card')
+const { Wallet } = await import('../index')
+const { useTopupInfo } = await import('../hooks/use-topup-info')
+const { api } = await import('@/lib/api')
+const { useAuthStore } = await import('@/stores/auth-store')
 const { PaymentConfirmDialog } =
   await import('./dialogs/payment-confirm-dialog')
 const { formatCreditBalance, formatPaymentAmount } = await import('../lib')
@@ -72,6 +78,28 @@ const reactTestGlobals = globalThis as typeof globalThis & {
 reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
 
 const originalConfig = useSystemConfigStore.getState().config
+const originalGet = api.get
+const originalPost = api.post
+
+async function flushEffects() {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+
+let latestTopupState: ReturnType<typeof useTopupInfo> | null = null
+
+function TopupInfoProbe() {
+  latestTopupState = useTopupInfo()
+  const state = latestTopupState
+  return (
+    <div>
+      {state.loading
+        ? 'loading'
+        : state.error
+          ? `error:${state.topupInfo ? 1 : 0}:${state.presetAmounts.length}`
+          : `ready:${state.topupInfo ? 1 : 0}:${state.presetAmounts.length}`}
+    </div>
+  )
+}
 
 function setCnyBillingCurrency() {
   useSystemConfigStore.setState((state) => ({
@@ -120,6 +148,13 @@ async function unmount(rendered: Rendered) {
   rendered.container.remove()
 }
 
+afterEach(() => {
+  api.get = originalGet
+  api.post = originalPost
+  useAuthStore.getState().auth.reset('complete')
+  latestTopupState = null
+})
+
 after(() => {
   useSystemConfigStore.setState((state) => ({
     ...state,
@@ -139,6 +174,115 @@ const topupInfo = {
 }
 
 describe('wallet payment clarity', () => {
+  test('clears stale top-up configuration and presets when a refresh fails', async () => {
+    let calls = 0
+    api.get = (async (url) => {
+      if (url !== '/api/user/topup/info') {
+        return { data: { success: true, data: [] } }
+      }
+      calls += 1
+      if (calls === 1) {
+        return {
+          data: {
+            success: true,
+            data: {
+              ...topupInfo,
+              amount_options: [10],
+            },
+          },
+        }
+      }
+      return { data: { success: false, message: 'offline' } }
+    }) as typeof api.get
+
+    const rendered = await render(<TopupInfoProbe />)
+    await act(flushEffects)
+    assert.equal(rendered.container.textContent, 'ready:1:1')
+
+    await act(async () => {
+      await latestTopupState?.refetch()
+    })
+    assert.equal(rendered.container.textContent, 'error:0:0')
+    assert.equal(calls, 2)
+    await unmount(rendered)
+  })
+
+  test('renders Creem-only top-up without requesting a generic amount quote', async () => {
+    const user = {
+      id: 7,
+      username: 'creem-user',
+      role: 1,
+      developer_access_granted: false,
+    }
+    useAuthStore.getState().auth.setUser(user)
+    const posts: string[] = []
+    api.get = (async (url) => {
+      if (url === '/api/status') {
+        return { data: { success: true, data: {} } }
+      }
+      if (url === '/api/user/self') {
+        return { data: { success: true, data: user } }
+      }
+      if (url === '/api/user/topup/info') {
+        return {
+          data: {
+            success: true,
+            data: {
+              ...topupInfo,
+              enable_online_topup: false,
+              pay_methods: [],
+              amount_options: [],
+              enable_creem_topup: true,
+              creem_products: [
+                {
+                  name: 'Starter pack',
+                  productId: 'starter',
+                  price: 5,
+                  quota: 10,
+                  currency: 'USD',
+                },
+              ],
+            },
+          },
+        }
+      }
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+    api.post = (async (url) => {
+      posts.push(url)
+      return { data: { success: true, data: '1' } }
+    }) as typeof api.post
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const rendered = await render(
+      <QueryClientProvider client={queryClient}>
+        <Wallet />
+      </QueryClientProvider>
+    )
+    await act(flushEffects)
+
+    assert.equal(
+      rendered.container.textContent?.includes('Payment option 1'),
+      true
+    )
+    assert.deepEqual(
+      posts.filter((url) =>
+        [
+          '/api/user/amount',
+          '/api/user/stripe/amount',
+          '/api/user/waffo/amount',
+          '/api/user/waffo-pancake/amount',
+        ].includes(url)
+      ),
+      []
+    )
+
+    await unmount(rendered)
+    queryClient.clear()
+  })
+
   test('distinguishes USD API credits from CNY payment amounts', () => {
     setCnyBillingCurrency()
 
@@ -463,7 +607,6 @@ describe('wallet payment clarity', () => {
     setCnyBillingCurrency()
     const rendered = await render(
       <RechargeFormCard
-        topupInfo={{ ...topupInfo, discount: { 50: 0.95, 100: 0.8, 500: 0.7 } }}
         presetAmounts={[1, 2, 5, 10, 20, 50, 100, 500].map((value) => ({
           value,
         }))}
@@ -479,7 +622,15 @@ describe('wallet payment clarity', () => {
         onRedemptionCodeChange={() => undefined}
         onRedeem={() => undefined}
         redeeming={false}
-        enableWaffoPancakeTopup
+        topupInfo={{
+          ...topupInfo,
+          discount: { 50: 0.95, 100: 0.8, 500: 0.7 },
+          enable_waffo_pancake_topup: true,
+          pay_methods: [
+            ...topupInfo.pay_methods,
+            { name: 'Waffo Pancake', type: 'waffo_pancake' },
+          ],
+        }}
         priceRatio={1}
       />
     )

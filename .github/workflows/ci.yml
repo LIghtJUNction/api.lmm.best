@@ -137,6 +137,81 @@ jobs:
         working-directory: apps/api-rust
         run: cargo test --workspace --all-targets --all-features --locked
 
+  route-coverage-contract:
+    name: Complete route coverage contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go for route manifest checks
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: apps/api-go/go.sum
+
+      - name: Run route coverage and fixture contracts
+        id: route-coverage
+        shell: bash
+        run: |
+          set -uo pipefail
+          artifact_dir="$RUNNER_TEMP/route-coverage-contract"
+          mkdir -p "$artifact_dir"
+          summary="$artifact_dir/results.jsonl"
+          : > "$summary"
+          overall_status=0
+
+          run_check() {
+            local name=$1
+            shift
+            local output="$artifact_dir/$name.log"
+            local exit_code
+
+            set +e
+            "$@" >"$output" 2>&1
+            exit_code=$?
+            set -e
+            cat "$output"
+
+            if (( exit_code == 0 )); then
+              printf '{"check":"%s","exit_code":0,"status":"passed"}\n' "$name" >> "$summary"
+            else
+              printf '{"check":"%s","exit_code":%d,"status":"failed"}\n' "$name" "$exit_code" >> "$summary"
+              overall_status=1
+            fi
+          }
+
+          run_check complete-route-coverage \
+            bash apps/api-rust/tests/scripts/check-complete-route-coverage.sh
+          run_check complete-route-coverage-tests \
+            bash apps/api-rust/tests/scripts/test-check-complete-route-coverage.sh
+          run_check fixture-contract \
+            bash apps/api-rust/tests/behavior-oracle/tests/check-fixtures.sh
+          run_check behavior-deviations \
+            bash apps/api-rust/tests/scripts/check-behavior-deviations.sh
+
+          {
+            echo "route coverage contract status: $([[ $overall_status == 0 ]] && echo passed || echo failed)"
+            echo "results: $summary"
+          } | tee "$artifact_dir/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+
+          cp "$summary" route-coverage-results.jsonl
+          cp "$artifact_dir/summary.txt" route-coverage-summary.txt
+          cp -r "$artifact_dir" route-coverage-logs
+          exit "$overall_status"
+
+      - name: Upload route coverage evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: route-coverage-contract-${{ github.run_id }}
+          path: |
+            route-coverage-results.jsonl
+            route-coverage-summary.txt
+            route-coverage-logs/
+          if-no-files-found: error
+
   electron-retirement:
     name: Electron embedded-backend retirement guard
     runs-on: ubuntu-latest

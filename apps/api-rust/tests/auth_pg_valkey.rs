@@ -946,7 +946,8 @@ async fn reset_schema(pool: &PgPool) {
             aff_code VARCHAR(32), aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0,
             aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ,
             linux_do_id TEXT, setting TEXT, stripe_customer VARCHAR(64),
-            last_login_at BIGINT DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1
+            last_login_at BIGINT DEFAULT 0, console_activated_at BIGINT NOT NULL DEFAULT 0,
+            auth_version BIGINT NOT NULL DEFAULT 1
         )"#,
         r#"CREATE TABLE two_fas (
             id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY, user_id BIGINT NOT NULL,

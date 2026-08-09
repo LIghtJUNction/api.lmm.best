@@ -8,12 +8,17 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 fixture_test="$repo_root/apps/api-rust/tests/behavior-oracle/tests/test-missing-routes-transaction-fixtures.sh"
 fixtures="$repo_root/apps/api-rust/tests/behavior-oracle/tests/missing-routes-transaction-fixtures.json"
-legacy_root="$repo_root/legacy-go-backup/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9"
+legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
 pg_port=${LMM_TRANSACTION_PG_PORT:-55467}
 go_port=${LMM_TRANSACTION_GO_PORT:-13037}
 rust_port=${LMM_TRANSACTION_RUST_PORT:-33067}
-# The Rust test-instance validates its isolated Valkey endpoint at 6380; DBs
-# 5/6 below are separate namespaces within this disposable process.
+# Default Valkey endpoint for the Rust test-instance is 6380, but the script
+# now falls back to a random free port if that port is occupied.
 valkey_port=${LMM_TRANSACTION_VALKEY_PORT:-6380}
 runtime_base=${LMM_TRANSACTION_RUNTIME_BASE:-/tmp}
 [[ -d $runtime_base && -w $runtime_base ]] || { echo "transaction runtime base is not writable: $runtime_base" >&2; exit 1; }
@@ -30,10 +35,16 @@ database=lmm_test_transaction
 passed=0
 route_filter=${LMM_TRANSACTION_ROUTE_FILTER:-}
 [[ -n $route_filter ]] && expected_phase_total=4 || expected_phase_total=28
+go_pid=
+rust_pid=
+valkey_pid=
+go_pid_start=
+rust_pid_start=
+valkey_pid_start=
 
 cleanup() {
   stop_listeners || true
-  if [[ -n ${valkey_pid:-} ]]; then kill "$valkey_pid" 2>/dev/null || true; wait "$valkey_pid" 2>/dev/null || true; fi
+  stop_owned_process valkey_pid || true
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   if [[ $keep_runtime == 1 ]]; then
     echo "preserved transaction runtime: $runtime" >&2
@@ -50,6 +61,23 @@ done
 [[ $(postgres --version) == *"PostgreSQL) 18."* ]] || { echo "requires PostgreSQL 18" >&2; exit 1; }
 [[ -d $legacy_root ]] || { echo "missing frozen Go listener: $legacy_root" >&2; exit 1; }
 "$fixture_test" --contract-only "$fixtures"
+pid_start_time() { [[ -r /proc/$1/stat ]] || return 1; awk '{print $22}' "/proc/$1/stat"; }
+record_pid() { local pid_name=$1 pid=$2 start; printf -v "$pid_name" '%s' "$pid"; start=$(pid_start_time "$pid") || { echo "failed to record pid $pid" >&2; wait "$pid" 2>/dev/null || true; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; return 1; }; printf -v "${pid_name}_start" '%s' "$start"; }
+owned_pid_is_live() { local pid_name=$1 pid start_name expected; pid=${!pid_name:-}; start_name="${pid_name}_start"; expected=${!start_name:-}; [[ -n $pid && -n $expected ]] && kill -0 "$pid" 2>/dev/null && [[ $(pid_start_time "$pid" 2>/dev/null || true) == "$expected" ]]; }
+stop_owned_process() { local pid_name=$1 pid; pid=${!pid_name:-}; if [[ -n $pid ]]; then if owned_pid_is_live "$pid_name"; then kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; else echo "refusing to signal unowned or recycled PID $pid ($pid_name)" >&2; fi; fi; printf -v "$pid_name" ''; printf -v "${pid_name}_start" ''; }
+port_free() { [[ -z $(ss -H -ltn "sport = :$1" 2>/dev/null) ]]; }
+random_free_port() { local p; while :; do p=$((20000 + 0x$(od -An -N2 -tx2 /dev/urandom | tr -d ' ') % 35000)); [[ -z $(ss -H -ltn "sport = :$p" 2>/dev/null) ]] && { echo "$p"; return; }; done; }
+select_unused_port() {
+  local requested=$1 candidate
+  if port_free "$requested"; then echo "$requested"; return 0; fi
+  echo "requested valkey port $requested is occupied, selecting a free port" >&2
+  for _ in {1..200}; do
+    candidate=$(random_free_port)
+    if port_free "$candidate"; then echo "$candidate"; return 0; fi
+  done
+  return 1
+}
+valkey_port=$(select_unused_port "$valkey_port") || { echo "unable to allocate an unused valkey port" >&2; exit 1; }
 for port in "$pg_port" "$go_port" "$rust_port" "$valkey_port"; do
   if ss -ltn "sport = :$port" | grep -q LISTEN; then
     echo "refusing occupied loopback test port: $port" >&2; exit 1
@@ -127,10 +155,8 @@ canonical_json_self_test() {
 selected_headers() { awk 'BEGIN{IGNORECASE=1} /^[^:]+:/{n=tolower($1);sub(/:$/,"",n); if(n=="content-type"||n=="cache-control"||n=="pragma"||n=="expires") {v=$0;sub(/\r$/,"",v);print tolower(v)}}' "$1" | sort; }
 
 stop_listeners() {
-  for pid in ${go_pid:-} ${rust_pid:-}; do kill "$pid" 2>/dev/null || true; done
-  [[ -z ${go_pid:-} ]] || wait "$go_pid" 2>/dev/null || true
-  [[ -z ${rust_pid:-} ]] || wait "$rust_pid" 2>/dev/null || true
-  unset go_pid rust_pid
+  stop_owned_process go_pid || true
+  stop_owned_process rust_pid || true
 }
 if [[ ${LMM_TRANSACTION_CANONICAL_JSON_SELF_TEST:-0} == 1 ]]; then
   canonical_json_self_test
@@ -149,13 +175,13 @@ start_listeners() {
   SQL_DSN="$go_dsn" PORT="$go_port" REDIS_CONN_STRING="redis://127.0.0.1:$valkey_port/5" \
     SESSION_SECRET='TransactionOracle-2026!SyntheticOnly' CRYPTO_SECRET='TransactionOracle-Crypto-2026!SyntheticOnly' \
     PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false GIN_MODE=release \
-    "$go_build/legacy-go" >"$runtime/go.log" 2>&1 & go_pid=$!
+    "$go_build/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"
   if ! wait_for "$go_port" /api/status; then sed -n '1,220p' "$runtime/go.log" >&2; return 1; fi
   LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=blue LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
     DATABASE_URL="$rust_dsn" VALKEY_URL="redis://127.0.0.1:$valkey_port/6" LMM_SCHEMA_CONTRACT=1 \
     SESSION_SECRET='TransactionOracle-2026!SyntheticOnly' CRYPTO_SECRET='TransactionOracle-Crypto-2026!SyntheticOnly' \
     PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none VERSION=v0.0.0 \
-    "$rust_binary" >"$runtime/rust.log" 2>&1 & rust_pid=$!
+    "$rust_binary" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!"
   if ! wait_for "$rust_port" /readyz; then sed -n '1,220p' "$runtime/rust.log" >&2; return 1; fi
 }
 login() {
@@ -315,7 +341,7 @@ for owner_pair in "$go_schema:$go_role" "$rust_schema:$rust_role"; do
     END LOOP;
   END \$\$; ALTER SCHEMA $schema OWNER TO $role;"
 done
-valkey-server --bind 127.0.0.1 --port "$valkey_port" --save '' --appendonly no --dir "$runtime" --logfile "$runtime/valkey.log" > /dev/null 2>&1 & valkey_pid=$!
+valkey-server --bind 127.0.0.1 --port "$valkey_port" --save '' --appendonly no --dir "$runtime" --logfile "$runtime/valkey.log" > /dev/null 2>&1 & record_pid valkey_pid "$!"
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 

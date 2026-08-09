@@ -7449,6 +7449,17 @@
           "converter": "identity"
         },
         {
+          "name": "console_activated_at",
+          "sqlite_type": "integer",
+          "sqlite_not_null": true,
+          "sqlite_default": "0",
+          "pk_position": 0,
+          "postgres_type": "bigint",
+          "postgres_not_null": true,
+          "postgres_default": "0",
+          "converter": "identity"
+        },
+        {
           "name": "auth_version",
           "sqlite_type": "bigint",
           "sqlite_not_null": true,

@@ -72,12 +72,6 @@ pub trait PublicContentCache: Send + Sync {
     /// Returns a cached value or `None` on a cache miss.
     async fn get(&self, kind: PublicContentKind)
     -> Result<Option<String>, PublicContentCacheError>;
-    /// Stores a value with the adapter's bounded TTL.
-    async fn put(
-        &self,
-        kind: PublicContentKind,
-        value: &str,
-    ) -> Result<(), PublicContentCacheError>;
 }
 
 /// Read-only public-content use case.
@@ -112,7 +106,6 @@ impl PublicContentService {
             .await
             .map_err(|_| PublicContentError)??
             .unwrap_or_default();
-        let _ = tokio::time::timeout(self.dependency_timeout, self.cache.put(kind, &value)).await;
         Ok(value)
     }
 }
@@ -291,7 +284,7 @@ mod tests {
 
     struct PendingGetCache;
 
-    struct PendingPutCache;
+    struct RecordingMissCache;
 
     struct PendingRepository;
 
@@ -308,14 +301,6 @@ mod tests {
         ) -> Result<Option<String>, PublicContentCacheError> {
             Ok(None)
         }
-
-        async fn put(
-            &self,
-            _kind: PublicContentKind,
-            _value: &str,
-        ) -> Result<(), PublicContentCacheError> {
-            Ok(())
-        }
     }
 
     #[async_trait]
@@ -325,14 +310,6 @@ mod tests {
             _kind: PublicContentKind,
         ) -> Result<Option<String>, PublicContentCacheError> {
             Ok(Some(self.0.to_owned()))
-        }
-
-        async fn put(
-            &self,
-            _kind: PublicContentKind,
-            _value: &str,
-        ) -> Result<(), PublicContentCacheError> {
-            Ok(())
         }
     }
 
@@ -344,31 +321,15 @@ mod tests {
         ) -> Result<Option<String>, PublicContentCacheError> {
             future::pending().await
         }
-
-        async fn put(
-            &self,
-            _kind: PublicContentKind,
-            _value: &str,
-        ) -> Result<(), PublicContentCacheError> {
-            Ok(())
-        }
     }
 
     #[async_trait]
-    impl PublicContentCache for PendingPutCache {
+    impl PublicContentCache for RecordingMissCache {
         async fn get(
             &self,
             _kind: PublicContentKind,
         ) -> Result<Option<String>, PublicContentCacheError> {
             Ok(None)
-        }
-
-        async fn put(
-            &self,
-            _kind: PublicContentKind,
-            _value: &str,
-        ) -> Result<(), PublicContentCacheError> {
-            future::pending().await
         }
     }
 
@@ -497,21 +458,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_put_timeout_should_not_change_success() {
+    async fn cache_miss_should_not_write_back_to_cache() {
+        let cache = Arc::new(RecordingMissCache);
         let service = PublicContentService::new(
             Arc::new(MockContentRepository(Some("postgres".to_owned()))),
-            Arc::new(PendingPutCache),
+            cache.clone(),
             TEST_DEPENDENCY_TIMEOUT,
         );
-        let result = tokio::time::timeout(
-            Duration::from_millis(20),
-            service.read(PublicContentKind::Notice),
-        )
-        .await;
         assert_eq!(
-            result
-                .expect("the use case applies a shorter dependency timeout")
-                .expect("best-effort cache put cannot fail the read"),
+            service.read(PublicContentKind::Notice).await.unwrap(),
             "postgres"
         );
     }

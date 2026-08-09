@@ -13,7 +13,7 @@ const AUTH_SCHEMA_SELECTS: &[&str] = &[
     r#"SELECT id, username, password, display_name, role, status, email, github_id,
 discord_id, oidc_id, wechat_id, telegram_id, "group", quota, used_quota,
 request_count, aff_code, aff_count, aff_quota, aff_history, inviter_id,
-linux_do_id, setting, stripe_customer, auth_version, access_token, deleted_at
+linux_do_id, setting, stripe_customer, auth_version, console_activated_at, access_token, deleted_at
 FROM users WHERE FALSE"#,
     r#"SELECT sid, user_id, version, user_auth_version, status, refresh_hash,
 previous_refresh_hash, previous_valid_until, login_method, ip, user_agent,
@@ -41,6 +41,7 @@ VALUES (DEFAULT, 0, 'readiness-capability-check', 1, '', 0, 0, -1, 0, FALSE, FAL
 remain_quota = 0, unlimited_quota = FALSE, model_limits_enabled = FALSE, model_limits = '',
 allow_ips = '', "group" = '', cross_group_retry = FALSE, deleted_at = NULL WHERE FALSE"#,
     "EXPLAIN (COSTS FALSE) DELETE FROM tokens WHERE FALSE",
+    "EXPLAIN (COSTS FALSE) UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE FALSE",
 ];
 
 pub struct InfrastructureProbe {

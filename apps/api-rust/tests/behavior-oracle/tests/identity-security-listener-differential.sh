@@ -3,6 +3,14 @@
 # because it creates disposable PG18 clusters and local Valkey children.
 set -euo pipefail
 
+repo_root=$(git rev-parse --show-toplevel)
+legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+legacy_root=${LMM_GO_ORACLE_ROOT:-}
+[[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
+[[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
+legacy_root=$(realpath -e -- "$legacy_root")
+case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
+
 if [[ ${LMM_RUN_IDENTITY_SECURITY_DIFFERENTIAL:-0} != 1 ]]; then
   cat >&2 <<'EOF'
 identity-security listener differential is opt-in.
@@ -13,8 +21,6 @@ EOF
   exit 2
 fi
 
-repo_root=$(git rev-parse --show-toplevel)
-legacy_root="$repo_root/legacy-go-backup/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9"
 pg_port=${LMM_IDENTITY_SECURITY_PG_PORT:-55459}
 go_port=${LMM_IDENTITY_SECURITY_GO_PORT:-13019}
 rust_port=${LMM_IDENTITY_SECURITY_RUST_PORT:-33049}

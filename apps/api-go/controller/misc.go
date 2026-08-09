@@ -65,8 +65,6 @@ func GetStatus(c *gin.Context) {
 	defer common.OptionMapRWMutex.RUnlock()
 
 	passkeySetting := system_setting.GetPasskeySettings()
-	legalSetting := system_setting.GetLegalSettings()
-
 	data := gin.H{
 		"version":                     common.Version,
 		"start_time":                  common.StartTime,
@@ -144,8 +142,8 @@ func GetStatus(c *gin.Context) {
 		"passkey_user_verification":   passkeySetting.UserVerification,
 		"passkey_attachment":          passkeySetting.AttachmentPreference,
 		"setup":                       constant.Setup,
-		"user_agreement_enabled":      legalSetting.UserAgreement != "",
-		"privacy_policy_enabled":      legalSetting.PrivacyPolicy != "",
+		"user_agreement_enabled":      system_setting.UserAgreementPublished(),
+		"privacy_policy_enabled":      system_setting.PrivacyPolicyPublished(),
 		"checkin_enabled":             operation_setting.GetCheckinSetting().Enabled,
 	}
 

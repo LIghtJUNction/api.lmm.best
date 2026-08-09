@@ -664,6 +664,7 @@ CREATE TABLE public.users (
     stripe_customer character varying(64),
     created_at bigint,
     last_login_at bigint DEFAULT 0,
+    console_activated_at bigint DEFAULT 0 NOT NULL,
     auth_version bigint DEFAULT 1 NOT NULL
 );
 CREATE SEQUENCE public.users_id_seq

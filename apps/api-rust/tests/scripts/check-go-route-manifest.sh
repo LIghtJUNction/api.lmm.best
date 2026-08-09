@@ -6,6 +6,7 @@ routes_dir="${repo_root}/apps/api-rust/tests/fixtures/routes"
 golden_hash_file="${repo_root}/apps/api-rust/tests/fixtures/routes/go-routes.sha256"
 legacy_manifest="${routes_dir}/legacy-go-routes.tsv"
 rust_manifest="${routes_dir}/rust-implemented-routes.tsv"
+current_manifest_source="${repo_root}/apps/api-go/cmd/route-manifest/main.go"
 
 for required_file in "${golden_hash_file}" "${legacy_manifest}" "${rust_manifest}" \
   "${routes_dir}/ownership.tsv"; do
@@ -14,6 +15,39 @@ for required_file in "${golden_hash_file}" "${legacy_manifest}" "${rust_manifest
     exit 1
   fi
 done
+
+[[ -f "${current_manifest_source}" ]] || {
+  echo "missing current Go route manifest command: ${current_manifest_source}" >&2
+  exit 1
+}
+current_runtime="$(mktemp -d "${TMPDIR:-/tmp}/lmm-current-go-route.XXXXXX")"
+trap 'rm -rf -- "$current_runtime"' EXIT
+current_manifest="${current_runtime}/route-manifest.tsv"
+(
+  cd "${repo_root}/apps/api-go"
+  GIN_MODE=release go run ./cmd/route-manifest >"${current_manifest}"
+)
+[[ -s "${current_manifest}" ]] || {
+  echo "current Go route manifest is empty" >&2
+  exit 1
+}
+LC_ALL=C awk -F '\t' '
+  NF != 3 || $1 == "" || $2 == "" || $3 == "" {
+    print "malformed current Go route at line " FNR > "/dev/stderr"
+    failures++
+    next
+  }
+  {
+    identity = $1 SUBSEP $2
+    if (seen[identity]++) {
+      print "duplicate current Go route: " $1 " " $2 > "/dev/stderr"
+      failures++
+    }
+  }
+  END { exit failures != 0 }
+' "${current_manifest}"
+cut -f1-2 "${current_manifest}" | LC_ALL=C sort -u >"${current_runtime}/identities.tsv"
+current_route_count="$(wc -l <"${current_runtime}/identities.tsv" | tr -d ' ')"
 
 expected_hash="$(awk 'NR == 1 { print $1 }' "${golden_hash_file}")"
 actual_hash="$(sed 's/\r$//' "${legacy_manifest}" | sha256sum | awk '{ print $1 }')"
@@ -120,7 +154,14 @@ awk -F '\t' '
   }
 ' expected="${route_count}" "${routes_dir}/ownership.tsv" "${legacy_manifest}"
 
-rust_count="$(awk -F '\t' '
+rust_report="$(awk -F '\t' -v current_routes="${current_runtime}/identities.tsv" '
+  BEGIN {
+    while ((getline line < current_routes) > 0) {
+      split(line, fields, "\t")
+      current[fields[1] SUBSEP fields[2]] = 1
+    }
+    close(current_routes)
+  }
   FNR == NR {
     legacy[$1 SUBSEP $2] = 1
     next
@@ -137,17 +178,21 @@ rust_count="$(awk -F '\t' '
       print "duplicate Rust implementation route: " $1 " " $2 > "/dev/stderr"
       failures++
     }
-    if (!(identity in legacy)) {
-      print "Rust implementation is absent from frozen legacy baseline: " $1 " " $2 > "/dev/stderr"
+    if (!(identity in legacy) && !(identity in current)) {
+      print "Rust implementation is absent from frozen and current Go route inventories: " $1 " " $2 > "/dev/stderr"
       failures++
     }
+    if (identity in legacy) frozen_count++
+    else current_only_count++
     count++
   }
   END {
     if (failures) exit 1
-    print count + 0
+    printf "%d\t%d\t%d\n", count, frozen_count, current_only_count
   }
 ' "${legacy_manifest}" "${rust_manifest}")"
+IFS=$'\t' read -r rust_count frozen_implementation_count current_only_count <<<"${rust_report}"
 
 echo "verified immutable legacy Go route baseline: ${route_count} routes (${actual_hash})"
-echo "Rust implementation coverage: ${rust_count}/${route_count} routes; implementation does not imply production ownership"
+echo "current Go route inventory: ${current_route_count} identities"
+echo "Rust implementation coverage: ${rust_count} routes (${frozen_implementation_count}/${route_count} frozen + ${current_only_count} current-only); implementation does not imply production ownership"

@@ -44,12 +44,12 @@ export function PublicAccessPricing() {
   return (
     <ForgePublicShell>
       <main>
-        <section className='border-b border-[#141413] bg-[#FAF9F5] pt-28 pb-16 md:pt-36 md:pb-24'>
+        <section className='border-border bg-background border-b pt-28 pb-16 md:pt-36 md:pb-24'>
           <div className='mx-auto max-w-7xl px-5 md:px-10'>
             <div className='max-w-3xl'>
               <Badge
                 variant='outline'
-                className='mb-5 rounded-sm border-[#141413]/35'
+                className='border-border mb-5 rounded-sm'
               >
                 {t('Pay as you go')}
               </Badge>
@@ -64,7 +64,7 @@ export function PublicAccessPricing() {
               <div className='mt-8 flex flex-col gap-3 sm:flex-row'>
                 <Button
                   size='lg'
-                  className='rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+                  className='rounded-sm'
                   render={<Link to='/sign-up' />}
                 >
                   {t('Create account')}
@@ -78,7 +78,7 @@ export function PublicAccessPricing() {
                 <Button
                   size='lg'
                   variant='outline'
-                  className='rounded-sm border-[#141413] bg-[#FAF9F5] hover:bg-[#FAF9F5]/80'
+                  className='rounded-sm'
                   render={<Link to='/sign-in' />}
                 >
                   {t('Sign in')}
@@ -88,7 +88,7 @@ export function PublicAccessPricing() {
           </div>
         </section>
 
-        <section className='border-b border-[#141413] bg-[#E4DED0] py-12 md:py-16'>
+        <section className='border-border bg-muted/60 border-b py-12 md:py-16'>
           <div className='mx-auto grid max-w-7xl gap-4 px-5 sm:grid-cols-3 md:px-10'>
             <div className='flex items-start gap-3'>
               <HugeiconsIcon
@@ -99,7 +99,7 @@ export function PublicAccessPricing() {
               />
               <div>
                 <p className='font-medium'>{t('No monthly commitment')}</p>
-                <p className='mt-1 text-sm leading-6 opacity-75'>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
                   {t('Add credit when a project needs it.')}
                 </p>
               </div>
@@ -113,7 +113,7 @@ export function PublicAccessPricing() {
               />
               <div>
                 <p className='font-medium'>{t('Trust and volume benefits')}</p>
-                <p className='mt-1 text-sm leading-6 opacity-75'>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
                   {t(
                     'Consistent, verified activity can improve value over time.'
                   )}
@@ -129,7 +129,7 @@ export function PublicAccessPricing() {
               />
               <div>
                 <p className='font-medium'>{t('Top up after sign-up')}</p>
-                <p className='mt-1 text-sm leading-6 opacity-75'>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
                   {t('Review the available options inside your workspace.')}
                 </p>
               </div>
@@ -137,7 +137,7 @@ export function PublicAccessPricing() {
           </div>
         </section>
 
-        <section className='border-b border-[#141413] py-16 md:py-24'>
+        <section className='border-border border-b py-16 md:py-24'>
           <div className='mx-auto max-w-7xl px-5 md:px-10'>
             <div className='mb-10 max-w-2xl'>
               <p className='mb-3 text-xs font-bold uppercase'>
@@ -146,7 +146,7 @@ export function PublicAccessPricing() {
               <h2 className='font-serif text-4xl leading-tight font-normal md:text-5xl'>
                 {t('Three ways to begin')}
               </h2>
-              <p className='mt-4 text-sm leading-6 text-[#141413]/70 md:text-base'>
+              <p className='text-muted-foreground mt-4 text-sm leading-6 md:text-base'>
                 {t(
                   'Each option uses the same pay-as-you-go balance. Start with the level of commitment that matches your work.'
                 )}
@@ -154,16 +154,16 @@ export function PublicAccessPricing() {
             </div>
 
             <div className='grid gap-4 lg:grid-cols-3'>
-              <Card className='border-[#141413]/25 bg-[#FAF9F5] text-[#141413]'>
+              <Card className='border-border border'>
                 <CardHeader>
-                  <CardTitle className='font-serif text-2xl font-normal text-[#141413]'>
+                  <CardTitle className='font-serif text-2xl font-normal'>
                     {t('Start small')}
                   </CardTitle>
-                  <CardDescription className='text-[#141413]/75'>
+                  <CardDescription>
                     {t('For trying the service')}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className='flex-1 text-sm leading-6 text-[#141413]/85'>
+                <CardContent className='flex-1 text-sm leading-6'>
                   {t(
                     'Create your account, add a small balance, and begin when you are ready.'
                   )}
@@ -171,7 +171,7 @@ export function PublicAccessPricing() {
                 <CardFooter>
                   <Button
                     variant='outline'
-                    className='w-full rounded-sm border-[#141413]/50 bg-[#FAF9F5] text-[#141413] hover:bg-[#141413] hover:text-[#FAF9F5]'
+                    className='w-full rounded-sm'
                     render={<Link to='/sign-up' />}
                   >
                     {t('Create account')}
@@ -179,23 +179,23 @@ export function PublicAccessPricing() {
                 </CardFooter>
               </Card>
 
-              <Card className='border-[#141413] bg-[#BCD1CA] text-[#141413]'>
+              <Card className='border-primary bg-accent text-accent-foreground border'>
                 <CardHeader>
-                  <CardTitle className='font-serif text-2xl font-normal text-[#141413]'>
+                  <CardTitle className='font-serif text-2xl font-normal'>
                     {t('Ongoing work')}
                   </CardTitle>
-                  <CardDescription className='text-[#141413]/75'>
+                  <CardDescription className='text-accent-foreground/75'>
                     {t('For regular development')}
                   </CardDescription>
                 </CardHeader>
-                <CardContent className='flex-1 text-sm leading-6 text-[#141413]/85'>
+                <CardContent className='flex-1 text-sm leading-6'>
                   {t(
                     'Keep a reusable balance and add more credit as your work grows.'
                   )}
                 </CardContent>
-                <CardFooter className='bg-[#FAF9F5]/45'>
+                <CardFooter className='bg-muted/60'>
                   <Button
-                    className='w-full rounded-sm bg-[#141413] text-[#FAF9F5] hover:bg-[#141413]/85'
+                    className='w-full rounded-sm'
                     render={<Link to='/sign-up' />}
                   >
                     {t('Create account')}
@@ -203,16 +203,14 @@ export function PublicAccessPricing() {
                 </CardFooter>
               </Card>
 
-              <Card className='border-[#141413]/25 bg-[#FAF9F5] text-[#141413]'>
+              <Card className='border-border border'>
                 <CardHeader>
-                  <CardTitle className='font-serif text-2xl font-normal text-[#141413]'>
+                  <CardTitle className='font-serif text-2xl font-normal'>
                     {t('Higher volume')}
                   </CardTitle>
-                  <CardDescription className='text-[#141413]/75'>
-                    {t('For sustained usage')}
-                  </CardDescription>
+                  <CardDescription>{t('For sustained usage')}</CardDescription>
                 </CardHeader>
-                <CardContent className='flex-1 text-sm leading-6 text-[#141413]/85'>
+                <CardContent className='flex-1 text-sm leading-6'>
                   {t(
                     'Verified top-ups can raise your trust level and improve value over time.'
                   )}
@@ -220,7 +218,7 @@ export function PublicAccessPricing() {
                 <CardFooter>
                   <Button
                     variant='outline'
-                    className='w-full rounded-sm border-[#141413]/50 bg-[#FAF9F5] text-[#141413] hover:bg-[#141413] hover:text-[#FAF9F5]'
+                    className='w-full rounded-sm'
                     render={<Link to='/sign-up' />}
                   >
                     {t('Create account')}
@@ -229,7 +227,7 @@ export function PublicAccessPricing() {
               </Card>
             </div>
 
-            <p className='mt-8 text-sm leading-6 text-[#141413]/65'>
+            <p className='text-muted-foreground mt-8 text-sm leading-6'>
               {t(
                 'Current usage rates and available amounts are shown after access is activated.'
               )}

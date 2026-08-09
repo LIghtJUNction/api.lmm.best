@@ -67,6 +67,7 @@ function heightFor(uptime: number): string {
 export function UptimeSparkline(props: UptimeSparklineProps) {
   const size = props.size ?? 'md'
   const showOverall = props.showOverall ?? true
+  const { t } = useTranslation()
 
   if (props.series.length === 0) {
     return (
@@ -118,7 +119,7 @@ export function UptimeSparkline(props: UptimeSparklineProps) {
               <div>{day.uptime_pct.toFixed(2)}%</div>
               {day.outage_minutes > 0 && (
                 <div className='text-muted-foreground'>
-                  {day.outage_minutes} min outage
+                  {day.outage_minutes} {t('min outage')}
                 </div>
               )}
             </TooltipContent>

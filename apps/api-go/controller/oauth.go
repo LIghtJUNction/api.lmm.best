@@ -21,13 +21,15 @@ import (
 const oauthAuthFlowTTL = 10 * time.Minute
 
 type oauthStateRequest struct {
-	Provider string `json:"provider"`
-	Intent   string `json:"intent"`
-	Aff      string `json:"aff,omitempty"`
+	Provider      string `json:"provider"`
+	Intent        string `json:"intent"`
+	Aff           string `json:"aff,omitempty"`
+	AcceptedLegal bool   `json:"accepted_legal"`
 }
 
 type oauthFlowPayload struct {
 	AffiliateCode string `json:"affiliate_code,omitempty"`
+	AcceptedLegal bool   `json:"accepted_legal,omitempty"`
 }
 
 // providerParams returns map with Provider key for i18n templates
@@ -63,7 +65,10 @@ func GenerateOAuthCode(c *gin.Context) {
 		userID = identity.UserID
 		sessionID = identity.SessionID
 	}
-	payload, err := common.Marshal(oauthFlowPayload{AffiliateCode: request.Aff})
+	payload, err := common.Marshal(oauthFlowPayload{
+		AffiliateCode: request.Aff,
+		AcceptedLegal: request.Intent == model.AuthFlowIntentLogin && request.AcceptedLegal,
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -211,8 +216,13 @@ func HandleOAuth(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user, err := findOrCreateOAuthUser(c, provider, oauthUser, payload.AffiliateCode)
+	user, err := findOrCreateOAuthUser(c, provider, oauthUser, payload.AffiliateCode, payload.AcceptedLegal)
 	if err != nil {
+		var gateErr *registrationGateError
+		if errors.As(err, &gateErr) {
+			writeRegistrationGateError(c, gateErr)
+			return
+		}
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 			return
@@ -312,7 +322,7 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 }
 
 // findOrCreateOAuthUser finds existing user or creates new user
-func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, affiliateCode string) (*model.User, error) {
+func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, affiliateCode string, acceptedLegal bool) (*model.User, error) {
 	user := &model.User{}
 
 	// Check if user already exists with new ID
@@ -351,6 +361,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	// User doesn't exist, create new user if registration is enabled
 	if !common.RegisterEnabled {
 		return nil, &OAuthRegistrationDisabledError{}
+	}
+	if err := publicRegistrationGateFailure(acceptedLegal); err != nil {
+		return nil, err
 	}
 
 	// Set up new user

@@ -68,9 +68,23 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
-	user := model.User{
-		WeChatId: wechatId,
+	user, ok := findOrCreateWeChatUser(c, wechatId, c.Query("accepted_legal") == "true")
+	if !ok {
+		return
 	}
+
+	if user.Status != common.UserStatusEnabled {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "用户已被封禁",
+			"success": false,
+		})
+		return
+	}
+	setupLogin(user, c)
+}
+
+func findOrCreateWeChatUser(c *gin.Context, wechatId string, acceptedLegal bool) (*model.User, bool) {
+	user := &model.User{WeChatId: wechatId}
 	if model.IsWeChatIdAlreadyTaken(wechatId) {
 		err := user.FillUserByWeChatId()
 		if err != nil {
@@ -78,17 +92,20 @@ func WeChatAuth(c *gin.Context) {
 				"success": false,
 				"message": err.Error(),
 			})
-			return
+			return nil, false
 		}
 		if user.Id == 0 {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "用户已注销",
 			})
-			return
+			return nil, false
 		}
 	} else {
 		if common.RegisterEnabled {
+			if !requirePublicRegistrationLegal(c, acceptedLegal) {
+				return nil, false
+			}
 			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
 			user.DisplayName = "WeChat User"
 			user.Role = common.RoleCommonUser
@@ -99,25 +116,17 @@ func WeChatAuth(c *gin.Context) {
 					"success": false,
 					"message": err.Error(),
 				})
-				return
+				return nil, false
 			}
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "管理员关闭了新用户注册",
 			})
-			return
+			return nil, false
 		}
 	}
-
-	if user.Status != common.UserStatusEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "用户已被封禁",
-			"success": false,
-		})
-		return
-	}
-	setupLogin(&user, c)
+	return user, true
 }
 
 type wechatBindRequest struct {
