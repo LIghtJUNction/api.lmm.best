@@ -177,7 +177,7 @@ start_listeners() {
     PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false GIN_MODE=release \
     "$go_build/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"
   if ! wait_for "$go_port" /api/status; then sed -n '1,220p' "$runtime/go.log" >&2; return 1; fi
-  LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=blue LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
+  LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=single LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
     DATABASE_URL="$rust_dsn" VALKEY_URL="redis://127.0.0.1:$valkey_port/6" LMM_SCHEMA_CONTRACT=1 \
     SESSION_SECRET='TransactionOracle-2026!SyntheticOnly' CRYPTO_SECRET='TransactionOracle-Crypto-2026!SyntheticOnly' \
     PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none VERSION=v0.0.0 \
