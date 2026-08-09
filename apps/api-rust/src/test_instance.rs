@@ -122,6 +122,7 @@ use lmm_api_rs::{
             PgReadOnlyObservabilityTokenAuthorizer, UnavailableObservabilityMaintenance,
             UnavailableObservabilityMetrics, observability_router,
         },
+        open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
         relay_anthropic_gemini::{
             RelayBackend, RelayChannel, RelayFailure, RelayHttpState, RelayIdentity, RelayOutcome,
             RelayProtocol, UpstreamReply, UpstreamRequest, router_with_model_lookup,
@@ -294,6 +295,10 @@ pub fn safe_candidate_surface(
                 Arc::clone(&auth),
                 Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
             )),
+        )))
+        .merge(open_source_bounty_router(OpenSourceBountyState::new(
+            pg.clone(),
+            Arc::clone(&auth),
         )))
         .merge(relay_media_router(RelayMediaHttpState::new(Arc::new(DenyRelayMedia))))
         .merge(openai_relay_router(OpenAiRelayHttpState::new(

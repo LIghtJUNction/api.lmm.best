@@ -1,0 +1,586 @@
+//! Read-only public open-source bounty discovery.
+//!
+//! The Go service exposes the public bounty list through `TryUserAuth`: an
+//! anonymous visitor may browse published/paused projects, while a valid
+//! dashboard credential receives the current user's challenge for each
+//! project.  This slice deliberately owns only that read path.  Mutating
+//! escrow, challenge, notification, and MCP operations remain Go-owned until
+//! their transaction and provider evidence is migrated.
+
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::get,
+};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use lmm_contracts::LegacySuccessEnvelope;
+use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sqlx::{PgPool, Row, postgres::PgRow};
+use std::sync::Arc;
+
+use crate::auth::{AuthErrorKind, DashboardAuth};
+
+const MAX_PAGE_SIZE: i64 = 50;
+const DEFAULT_PAGE_SIZE: i64 = 20;
+const ENABLED_USER_STATUS: i64 = 1;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+
+/// PostgreSQL and dashboard-auth dependencies for the public bounty slice.
+#[derive(Clone)]
+pub struct OpenSourceBountyState {
+    pg: PgPool,
+    auth: Arc<dyn DashboardAuth>,
+}
+
+impl OpenSourceBountyState {
+    /// Creates the public bounty state from the listener's shared authorities.
+    #[must_use]
+    pub fn new(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Self {
+        Self { pg, auth }
+    }
+}
+
+/// Public read-only bounty routes.  Authenticated writes are intentionally not
+/// mounted here; their Go ownership remains explicit in the route ledgers.
+pub fn router(state: OpenSourceBountyState) -> Router {
+    Router::new()
+        .route("/api/open-source-bounties", get(list_bounties))
+        .with_state(state)
+}
+
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    page: Option<String>,
+    page_size: Option<String>,
+}
+
+impl ListQuery {
+    fn normalized(&self) -> (i64, i64) {
+        let page = self
+            .page
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|page| *page >= 1)
+            .unwrap_or(1);
+        let page_size = self
+            .page_size
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| (1..=MAX_PAGE_SIZE).contains(value))
+            .unwrap_or(DEFAULT_PAGE_SIZE);
+        (page, page_size)
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct BountyProjectView {
+    id: i64,
+    owner_user_id: i64,
+    repository_url: String,
+    title: String,
+    description: String,
+    rules: String,
+    reward_quota: i64,
+    net_reward_quota: i64,
+    reward_slots: i64,
+    escrow_quota: i64,
+    platform_fee_rate_bps: i64,
+    platform_fee_quota: i64,
+    status: String,
+    created_at: i64,
+    updated_at: i64,
+    published_at: i64,
+    closed_at: i64,
+    owner_username: String,
+    active_challenge_count: i64,
+    approved_challenge_count: i64,
+    owner_rating_average: f64,
+    owner_rating_count: i64,
+    owner_thank_heart_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    viewer_challenge: Option<BountyChallenge>,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyChallenge {
+    id: i64,
+    project_id: i64,
+    participant_user_id: i64,
+    github_handle: String,
+    status: String,
+    issue_url: String,
+    pull_request_url: String,
+    submission_note: String,
+    review_note: String,
+    reward_quota: i64,
+    tip_quota: i64,
+    owner_rating_score: i64,
+    owner_rating_comment: String,
+    owner_rated_at: i64,
+    contributor_rating_score: i64,
+    contributor_rating_comment: String,
+    contributor_rated_at: i64,
+    owner_rating_overturned: bool,
+    accepted_at: i64,
+    submitted_at: i64,
+    reviewed_at: i64,
+    rejected_at: i64,
+    paid_at: i64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ListPayload {
+    items: Vec<BountyProjectView>,
+    total: i64,
+    page: i64,
+    page_size: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct FailureEnvelope {
+    success: bool,
+    code: &'static str,
+    message: &'static str,
+}
+
+fn business_failure(code: &'static str, message: &'static str) -> Response {
+    Json(FailureEnvelope {
+        success: false,
+        code,
+        message,
+    })
+    .into_response()
+}
+
+fn auth_failure(error: AuthErrorKind) -> Response {
+    let (status, code, message) = match error {
+        AuthErrorKind::TokenExpired => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_TOKEN_EXPIRED",
+            "Unauthorized, not logged in and no access token provided",
+        ),
+        AuthErrorKind::SessionRevoked => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_SESSION_REVOKED",
+            "Unauthorized, not logged in and no access token provided",
+        ),
+        AuthErrorKind::UserDisabled => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_USER_DISABLED",
+            "User has been banned",
+        ),
+        AuthErrorKind::Internal => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AUTH_INTERNAL_ERROR",
+            "Database error, please contact the administrator",
+        ),
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_UNAUTHORIZED",
+            "Unauthorized, invalid access token",
+        ),
+    };
+    (
+        status,
+        Json(FailureEnvelope {
+            success: false,
+            code,
+            message,
+        }),
+    )
+        .into_response()
+}
+
+fn internal_failure() -> Response {
+    business_failure(
+        "OPEN_SOURCE_BOUNTY_INTERNAL_ERROR",
+        "open-source bounty operation failed",
+    )
+}
+
+fn authorization_token(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let mut parts = raw.split_ascii_whitespace();
+    let first = parts.next()?;
+    let second = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    match second {
+        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
+            Some(token.to_owned())
+        }
+        None if !first.is_empty() => Some(first.to_owned()),
+        _ => None,
+    }
+}
+
+/// Mirrors Go's unverified dashboard-JWT classification boundary.  A token
+/// that declares the dashboard issuer/audience/use is never allowed to fall
+/// through to opaque PAT lookup when its signature or session is invalid.
+fn dashboard_token_candidate(raw: &str) -> bool {
+    let mut segments = raw.trim().split('.');
+    let (Some(header), Some(payload), Some(_signature), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return false;
+    };
+    let Ok(header) = URL_SAFE_NO_PAD.decode(header) else {
+        return false;
+    };
+    let Ok(payload) = URL_SAFE_NO_PAD.decode(payload) else {
+        return false;
+    };
+    let Ok(header) = serde_json::from_slice::<Value>(&header) else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_slice::<Value>(&payload) else {
+        return false;
+    };
+    let audience_matches = payload.get("aud").is_some_and(|audience| match audience {
+        Value::String(value) => value == "new-api-dashboard",
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value.as_str() == Some("new-api-dashboard")),
+        _ => false,
+    });
+    let algorithm_registered = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .is_some_and(|algorithm| {
+            matches!(
+                algorithm,
+                "none"
+                    | "HS256"
+                    | "HS384"
+                    | "HS512"
+                    | "RS256"
+                    | "RS384"
+                    | "RS512"
+                    | "PS256"
+                    | "PS384"
+                    | "PS512"
+                    | "ES256"
+                    | "ES384"
+                    | "ES512"
+                    | "EdDSA"
+            )
+        });
+    algorithm_registered
+        && payload.get("iss").and_then(Value::as_str) == Some("new-api")
+        && matches!(
+            payload.get("token_use").and_then(Value::as_str),
+            Some("access" | "security_proof")
+        )
+        && audience_matches
+}
+
+async fn optional_viewer_id(
+    state: &OpenSourceBountyState,
+    headers: &HeaderMap,
+) -> Result<Option<i64>, Response> {
+    let Some(token) = authorization_token(headers) else {
+        return Ok(None);
+    };
+
+    // Go's TryUserAuth treats an unknown opaque token as anonymous.  Querying
+    // the durable PAT index first preserves that distinction while keeping the
+    // shared auth service authoritative for valid credentials and disabled
+    // users.
+    if !dashboard_token_candidate(&token) {
+        let pat_owner = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM users WHERE access_token = $1 AND deleted_at IS NULL",
+        )
+        .bind(&token)
+        .fetch_optional(&state.pg)
+        .await
+        .map_err(|_| internal_failure())?;
+        if pat_owner.is_none() {
+            return Ok(None);
+        }
+    }
+
+    let user = state
+        .auth
+        .self_user_for_optional(SecretString::from(token))
+        .await
+        .map_err(|error| auth_failure(error.kind))?;
+    if user.id <= 0 || user.status != ENABLED_USER_STATUS {
+        return Err(auth_failure(AuthErrorKind::Unauthorized));
+    }
+    Ok(Some(user.id))
+}
+
+fn project_select() -> &'static str {
+    // Keep casts explicit: Go's integer fields are persisted differently by
+    // historical PostgreSQL migrations, while the wire contract is numeric.
+    "SELECT p.id::BIGINT AS id, p.owner_user_id::BIGINT AS owner_user_id, p.repository_url, p.title, p.description, p.rules, p.reward_quota::BIGINT AS reward_quota, p.net_reward_quota::BIGINT AS net_reward_quota, p.reward_slots::BIGINT AS reward_slots, p.escrow_quota::BIGINT AS escrow_quota, p.platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, p.platform_fee_quota::BIGINT AS platform_fee_quota, p.status, p.created_at::BIGINT AS created_at, p.updated_at::BIGINT AS updated_at, p.published_at::BIGINT AS published_at, p.closed_at::BIGINT AS closed_at, u.username AS owner_username, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND (c.status IN ('accepted','submitted') OR (c.status = 'rejected' AND c.rejected_at > $1 AND NOT EXISTS (SELECT 1 FROM open_source_bounty_disputes resolved_dispute WHERE resolved_dispute.challenge_id = c.id AND resolved_dispute.status IN ('resolved_paid','resolved_denied'))) OR EXISTS (SELECT 1 FROM open_source_bounty_disputes dispute WHERE dispute.challenge_id = c.id AND dispute.status = 'open'))) AS active_challenge_count, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND c.status = 'approved') AS approved_challenge_count, COALESCE((SELECT AVG(c.contributor_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0), 0)::DOUBLE PRECISION AS owner_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0) AS owner_rating_count, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_ledgers heart WHERE heart.user_id = p.owner_user_id AND heart.kind = 'tip_transfer' AND heart.thanked_at > 0) AS owner_thank_heart_count FROM open_source_bounty_projects p JOIN users u ON u.id = p.owner_user_id AND u.deleted_at IS NULL"
+}
+
+fn project_from_row(row: &PgRow) -> Result<BountyProjectView, sqlx::Error> {
+    Ok(BountyProjectView {
+        id: row.try_get("id")?,
+        owner_user_id: row.try_get("owner_user_id")?,
+        repository_url: row.try_get("repository_url")?,
+        title: row.try_get("title")?,
+        description: row.try_get("description")?,
+        rules: row.try_get("rules")?,
+        reward_quota: row.try_get("reward_quota")?,
+        net_reward_quota: row.try_get("net_reward_quota")?,
+        reward_slots: row.try_get("reward_slots")?,
+        escrow_quota: row.try_get("escrow_quota")?,
+        platform_fee_rate_bps: row.try_get("platform_fee_rate_bps")?,
+        platform_fee_quota: row.try_get("platform_fee_quota")?,
+        status: row.try_get("status")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        published_at: row.try_get("published_at")?,
+        closed_at: row.try_get("closed_at")?,
+        owner_username: row.try_get("owner_username")?,
+        active_challenge_count: row.try_get("active_challenge_count")?,
+        approved_challenge_count: row.try_get("approved_challenge_count")?,
+        owner_rating_average: row.try_get("owner_rating_average")?,
+        owner_rating_count: row.try_get("owner_rating_count")?,
+        owner_thank_heart_count: row.try_get("owner_thank_heart_count")?,
+        viewer_challenge: None,
+    })
+}
+
+fn challenge_select() -> &'static str {
+    "SELECT id::BIGINT AS id, project_id::BIGINT AS project_id, participant_user_id::BIGINT AS participant_user_id, github_handle, status, issue_url, pull_request_url, submission_note, review_note, reward_quota::BIGINT AS reward_quota, tip_quota::BIGINT AS tip_quota, owner_rating_score::BIGINT AS owner_rating_score, owner_rating_comment, owner_rated_at::BIGINT AS owner_rated_at, contributor_rating_score::BIGINT AS contributor_rating_score, contributor_rating_comment, contributor_rated_at::BIGINT AS contributor_rated_at, owner_rating_overturned, accepted_at::BIGINT AS accepted_at, submitted_at::BIGINT AS submitted_at, reviewed_at::BIGINT AS reviewed_at, rejected_at::BIGINT AS rejected_at, paid_at::BIGINT AS paid_at, created_at::BIGINT AS created_at, updated_at::BIGINT AS updated_at FROM open_source_bounty_challenges"
+}
+
+fn challenge_from_row(row: &PgRow) -> Result<BountyChallenge, sqlx::Error> {
+    Ok(BountyChallenge {
+        id: row.try_get("id")?,
+        project_id: row.try_get("project_id")?,
+        participant_user_id: row.try_get("participant_user_id")?,
+        github_handle: row.try_get("github_handle")?,
+        status: row.try_get("status")?,
+        issue_url: row.try_get("issue_url")?,
+        pull_request_url: row.try_get("pull_request_url")?,
+        submission_note: row.try_get("submission_note")?,
+        review_note: row.try_get("review_note")?,
+        reward_quota: row.try_get("reward_quota")?,
+        tip_quota: row.try_get("tip_quota")?,
+        owner_rating_score: row.try_get("owner_rating_score")?,
+        owner_rating_comment: row.try_get("owner_rating_comment")?,
+        owner_rated_at: row.try_get("owner_rated_at")?,
+        contributor_rating_score: row.try_get("contributor_rating_score")?,
+        contributor_rating_comment: row.try_get("contributor_rating_comment")?,
+        contributor_rated_at: row.try_get("contributor_rated_at")?,
+        owner_rating_overturned: row.try_get("owner_rating_overturned")?,
+        accepted_at: row.try_get("accepted_at")?,
+        submitted_at: row.try_get("submitted_at")?,
+        reviewed_at: row.try_get("reviewed_at")?,
+        rejected_at: row.try_get("rejected_at")?,
+        paid_at: row.try_get("paid_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn challenge_priority(status: &str) -> i64 {
+    match status {
+        "approved" => 4,
+        "accepted" | "submitted" => 3,
+        "rejected" => 2,
+        "withdrawn" | "cancelled" => 1,
+        _ => 0,
+    }
+}
+
+async fn attach_viewer_challenges(
+    state: &OpenSourceBountyState,
+    views: &mut [BountyProjectView],
+    viewer_id: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let Some(viewer_id) = viewer_id else {
+        return Ok(());
+    };
+    if views.is_empty() {
+        return Ok(());
+    }
+    let project_ids = views.iter().map(|view| view.id).collect::<Vec<_>>();
+    let query = format!(
+        "{} WHERE participant_user_id = $1 AND project_id = ANY($2)",
+        challenge_select()
+    );
+    let rows = sqlx::query(&query)
+        .bind(viewer_id)
+        .bind(&project_ids)
+        .fetch_all(&state.pg)
+        .await?;
+    let mut selected = std::collections::HashMap::<i64, BountyChallenge>::new();
+    for row in rows {
+        let challenge = challenge_from_row(&row)?;
+        let replace = selected.get(&challenge.project_id).is_none_or(|current| {
+            challenge_priority(&challenge.status) > challenge_priority(&current.status)
+                || (challenge_priority(&challenge.status) == challenge_priority(&current.status)
+                    && challenge.id > current.id)
+        });
+        if replace {
+            selected.insert(challenge.project_id, challenge);
+        }
+    }
+    for view in views {
+        view.viewer_challenge = selected.remove(&view.id);
+    }
+    Ok(())
+}
+
+async fn list_bounties(
+    State(state): State<OpenSourceBountyState>,
+    Query(query): Query<ListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let (page, page_size) = query.normalized();
+    let viewer_id = match optional_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let total = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM open_source_bounty_projects WHERE status IN ('published', 'paused')",
+    )
+    .fetch_one(&state.pg)
+    .await
+    {
+        Ok(total) => total,
+        Err(error) => {
+            tracing::error!(error = %error, "failed to count public open-source bounties");
+            return internal_failure();
+        }
+    };
+    let now = chrono::Utc::now().timestamp();
+    let query_sql = format!(
+        "{} WHERE p.status IN ('published', 'paused') ORDER BY p.reward_quota DESC, CASE WHEN p.status = 'published' THEN 0 ELSE 1 END ASC, p.published_at ASC, p.id ASC OFFSET $2 LIMIT $3",
+        project_select()
+    );
+    let rows = match sqlx::query(&query_sql)
+        .bind(now - 7 * 24 * 60 * 60)
+        .bind((page - 1).saturating_mul(page_size))
+        .bind(page_size)
+        .fetch_all(&state.pg)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, "failed to list public open-source bounties");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match project_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, "failed to decode public open-source bounty");
+                return internal_failure();
+            }
+        }
+    }
+    if let Err(error) = attach_viewer_challenges(&state, &mut items, viewer_id).await {
+        tracing::error!(error = %error, "failed to attach public bounty viewer challenge");
+        return internal_failure();
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: ListPayload {
+            items,
+            total,
+            page,
+            page_size,
+        },
+    })
+    .into_response();
+    if viewer_id.is_some() {
+        response
+            .headers_mut()
+            .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    }
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+
+    use super::{
+        DEFAULT_PAGE_SIZE, ListQuery, MAX_PAGE_SIZE, challenge_priority, dashboard_token_candidate,
+    };
+
+    #[test]
+    fn list_query_matches_go_defaults_and_bounds() {
+        assert_eq!(
+            ListQuery {
+                page: None,
+                page_size: None
+            }
+            .normalized(),
+            (1, DEFAULT_PAGE_SIZE)
+        );
+        assert_eq!(
+            ListQuery {
+                page: Some("0".to_owned()),
+                page_size: Some("0".to_owned())
+            }
+            .normalized(),
+            (1, DEFAULT_PAGE_SIZE)
+        );
+        assert_eq!(
+            ListQuery {
+                page: Some("3".to_owned()),
+                page_size: Some(MAX_PAGE_SIZE.to_string())
+            }
+            .normalized(),
+            (3, MAX_PAGE_SIZE)
+        );
+        assert_eq!(
+            ListQuery {
+                page: Some("-4".to_owned()),
+                page_size: Some((MAX_PAGE_SIZE + 1).to_string())
+            }
+            .normalized(),
+            (1, DEFAULT_PAGE_SIZE)
+        );
+    }
+
+    #[test]
+    fn only_dashboard_access_tokens_are_classified_as_internal() {
+        let encode = |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value);
+        let header = encode(r#"{"alg":"HS256"}"#);
+        let dashboard =
+            encode(r#"{"iss":"new-api","aud":["new-api-dashboard"],"token_use":"access"}"#);
+        let proof =
+            encode(r#"{"iss":"new-api","aud":["new-api-dashboard"],"token_use":"security_proof"}"#);
+        let external = encode(r#"{"iss":"external","aud":["other"],"token_use":"access"}"#);
+        assert!(dashboard_token_candidate(&format!(
+            "{header}.{dashboard}.sig"
+        )));
+        assert!(dashboard_token_candidate(&format!("{header}.{proof}.sig")));
+        assert!(!dashboard_token_candidate(&format!(
+            "{header}.{external}.sig"
+        )));
+    }
+
+    #[test]
+    fn viewer_challenge_priority_matches_go() {
+        assert_eq!(challenge_priority("approved"), 4);
+        assert_eq!(challenge_priority("accepted"), 3);
+        assert_eq!(challenge_priority("submitted"), 3);
+        assert_eq!(challenge_priority("rejected"), 2);
+        assert_eq!(challenge_priority("withdrawn"), 1);
+        assert_eq!(challenge_priority("cancelled"), 1);
+        assert_eq!(challenge_priority("draft"), 0);
+    }
+}
