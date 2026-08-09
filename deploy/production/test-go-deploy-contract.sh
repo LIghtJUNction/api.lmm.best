@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # Literal source snippets are intentional contract assertions.
 set -Eeuo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
@@ -68,6 +69,10 @@ for literal in \
 done
 if grep -Fq 'old_version=$(ssh -o BatchMode=yes "$HOST" jq' "$here/deploy-go.sh"; then
   fail 'pre-cutover version parsing still sends a jq filter through the remote shell'
+fi
+if grep -Fq '| pg_restore --list' "$here/deploy-go.sh" || \
+  grep -Fq '| tar -tf -' "$here/deploy-go.sh"; then
+  fail 'encrypted backup verification still risks truncating the age stream'
 fi
 
 if grep -R -nE '(^|[^[:alnum:]_])(curl|wget)([^[:alnum:]_]|$)|SIGKILL|mktemp[^\n]*(/tmp|TMPDIR:-/tmp)' \
