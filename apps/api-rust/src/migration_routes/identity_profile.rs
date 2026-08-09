@@ -13,6 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, put},
 };
+use rand::distr::{Alphanumeric, SampleString};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -432,7 +433,7 @@ async fn get_aff_code(
     if let Some(code) = existing {
         return Ok(success(Some(code)));
     }
-    let generated = format!("{:08x}", rand::random::<u32>());
+    let generated = generate_aff_code();
     let assigned = sqlx::query_scalar::<_, String>("UPDATE users SET aff_code = $1 WHERE id = $2 AND (aff_code IS NULL OR aff_code = '') RETURNING aff_code")
         .bind(&generated)
         .bind(identity.user_id)
@@ -452,6 +453,13 @@ async fn get_aff_code(
     };
     clear_user_cache(&state, identity.user_id).await;
     Ok(success(Some(code)))
+}
+
+const AFF_CODE_LENGTH: usize = 4;
+
+/// Match Go's `common.GetRandomString(4)`: four ASCII alphanumeric characters.
+fn generate_aff_code() -> String {
+    Alphanumeric.sample_string(&mut rand::rng(), AFF_CODE_LENGTH)
 }
 
 async fn update_setting(
@@ -754,7 +762,7 @@ fn update_success(request_locale: LegacyLocale) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::self_oauth_binding_column;
+    use super::{AFF_CODE_LENGTH, generate_aff_code, self_oauth_binding_column};
     use serde_json::{Map, Value};
 
     #[test]
@@ -781,6 +789,15 @@ mod tests {
         }
         for binding_type in ["", "email", "github_id", "password", "../github"] {
             assert!(self_oauth_binding_column(binding_type).is_none());
+        }
+    }
+
+    #[test]
+    fn generated_aff_code_matches_go_length_and_charset() {
+        for _ in 0..128 {
+            let code = generate_aff_code();
+            assert_eq!(code.len(), AFF_CODE_LENGTH);
+            assert!(code.bytes().all(|byte| byte.is_ascii_alphanumeric()));
         }
     }
 }
