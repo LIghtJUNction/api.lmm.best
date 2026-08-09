@@ -165,10 +165,9 @@ for encrypted_copy in "$controller_backup" "$WORKSPACE/staging/backup-off-host-$
     die 'encrypted configuration backup is missing'
   [[ -f $encrypted_copy/database.age && ! -L $encrypted_copy/database.age ]] || \
     die 'encrypted database backup is missing'
-  "$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
-    "$encrypted_copy/configuration.age" | tar -tf - >/dev/null
-  "$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
-    "$encrypted_copy/database.age" | pg_restore --list >/dev/null
+  # The target archives above are structurally validated. Consume each decrypted
+  # stream completely before comparing its digest: archive listing commands can
+  # stop before EOF and make age fail with SIGPIPE under pipefail.
   decrypted_configuration_sha256=$("$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
     "$encrypted_copy/configuration.age" | sha256sum | awk '{print $1}')
   decrypted_database_sha256=$("$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
