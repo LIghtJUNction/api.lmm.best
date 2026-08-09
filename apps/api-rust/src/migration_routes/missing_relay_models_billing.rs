@@ -38,7 +38,7 @@ struct FrozenModel {
     id: String,
     owned_by: String,
     #[serde(default)]
-    supported_endpoint_types: Vec<String>,
+    supported_endpoint_types: Option<Vec<String>>,
 }
 
 fn static_catalog() -> &'static HashMap<String, ModelView> {
@@ -54,7 +54,7 @@ fn static_catalog() -> &'static HashMap<String, ModelView> {
                     object: "model",
                     created: 1_626_777_600,
                     owned_by: model.owned_by,
-                    supported_endpoint_types: model.supported_endpoint_types,
+                    supported_endpoint_types: model.supported_endpoint_types.unwrap_or_default(),
                 };
                 (id, view)
             })
