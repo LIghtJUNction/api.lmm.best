@@ -376,12 +376,12 @@ impl SecurityError {
             ),
             Self::RegistrationLegalUnavailable => failure(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "注册暂不可用：用户协议和隐私政策尚未发布",
+                "Registration is unavailable until the user agreement and privacy policy are published.",
                 Some("REGISTRATION_LEGAL_UNAVAILABLE"),
             ),
             Self::LegalConsentRequired => failure(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "注册前必须同意用户协议和隐私政策",
+                "You must accept the user agreement and privacy policy to register.",
                 Some("LEGAL_CONSENT_REQUIRED"),
             ),
             Self::InvalidRegistration => failure(StatusCode::OK, locale.invalid_params(), None),
@@ -576,8 +576,25 @@ impl PgValkeySecurityProvider {
             return Err(SecurityError::PasswordRegistrationDisabled);
         }
 
+        // Go decodes into an embedded zero-valued User before applying the
+        // public legal gate. Keep this order so malformed-but-decodable input
+        // cannot bypass the operator's registration stop.
         let request: RegistrationInput =
             serde_json::from_value(input).map_err(|_| SecurityError::InvalidRegistration)?;
+        let agreement = self.option("legal.user_agreement").await?;
+        let privacy = self.option("legal.privacy_policy").await?;
+        if agreement
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+            || privacy
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(SecurityError::RegistrationLegalUnavailable);
+        }
+        if !request.accepted_legal {
+            return Err(SecurityError::LegalConsentRequired);
+        }
         let username = request.username.trim().to_owned();
         let password = request.password;
         let email = request
@@ -593,21 +610,6 @@ impl PgValkeySecurityProvider {
             || (!email.is_empty() && email.chars().count() > 50)
         {
             return Err(SecurityError::InvalidRegistration);
-        }
-
-        let agreement = self.option("legal.user_agreement").await?;
-        let privacy = self.option("legal.privacy_policy").await?;
-        if agreement
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
-            || privacy
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err(SecurityError::RegistrationLegalUnavailable);
-        }
-        if !request.accepted_legal {
-            return Err(SecurityError::LegalConsentRequired);
         }
         if self.option_bool("EmailVerificationEnabled", false).await? {
             // Verification-code delivery/confirmation is not part of this mounted
@@ -684,7 +686,9 @@ impl PgValkeySecurityProvider {
 
 #[derive(Debug, Deserialize)]
 struct RegistrationInput {
+    #[serde(default)]
     username: String,
+    #[serde(default)]
     password: String,
     #[serde(default)]
     email: Option<String>,
@@ -776,6 +780,14 @@ mod provider_tests {
             .expect("valid lazy PostgreSQL URL");
         let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid Valkey URL");
         PgValkeySecurityProvider::new(pool, valkey)
+    }
+
+    #[test]
+    fn registration_input_defaults_missing_credentials_like_go() {
+        let request: RegistrationInput = serde_json::from_value(json!({}))
+            .expect("Go decodes an empty object into zero-valued registration fields");
+        assert!(request.username.is_empty());
+        assert!(request.password.is_empty());
     }
 
     #[tokio::test]
