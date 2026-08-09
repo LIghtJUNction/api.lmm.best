@@ -657,6 +657,27 @@ pub fn router(state: FederationState) -> Router {
         .with_state(state)
 }
 
+/// Builds only the durable custom-OAuth binding management routes.
+///
+/// The OAuth callback and provider-exchange routes remain on the candidate
+/// router until their external-provider and login-issuer evidence is complete.
+/// These four routes are PostgreSQL/session-authority operations and can be
+/// mounted independently without exposing a half-configured provider flow.
+pub fn bindings_router(state: FederationState) -> Router {
+    Router::new()
+        .route("/api/user/oauth/bindings", get(list_self_bindings))
+        .route(
+            "/api/user/oauth/bindings/{provider_id}",
+            delete(unbind_self),
+        )
+        .route("/api/user/{id}/oauth/bindings", get(list_admin_bindings))
+        .route(
+            "/api/user/{id}/oauth/bindings/{provider_id}",
+            delete(unbind_admin),
+        )
+        .with_state(state)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum FederationError {
     #[error("unauthorized")]

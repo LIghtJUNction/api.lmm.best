@@ -23,6 +23,10 @@ use lmm_api_rs::{
             control_public_router,
         },
         identity_admin::{IdentityAdminState, router as identity_admin_router},
+        identity_federation::{
+            bindings_router as identity_federation_bindings_router, DashboardFederationIdentity,
+            DisabledEmailCodeVerifier, FederationState,
+        },
         identity_profile::{ProfileState, router as identity_profile_router},
         identity_security::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
@@ -254,6 +258,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let federation_identity = Arc::new(
+            DashboardFederationIdentity::new(
+                Arc::clone(&auth),
+                pg.clone(),
+                &config.auth_session_secret,
+                Arc::new(DisabledEmailCodeVerifier),
+            )
+            .map_err(|_| io::Error::other("failed to initialize federation identity"))?,
+        );
+        let identity_federation_bindings = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_federation_bindings_router(FederationState::new(
+                pg.clone(),
+                federation_identity,
+                config.auth_session_secret.expose_secret(),
+            )),
+        );
         // The helper owns the exact anonymous mount: .route("/api/user/register", post(register)).
         // Keep this evidence beside the normal-listener wiring so the route
         // ledger cannot mistake the frozen security candidates for ownership.
@@ -309,6 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(identity_admin)
             .merge(identity_topup)
             .merge(identity_checkin)
+            .merge(identity_federation_bindings)
             .merge(registration)
             .merge(billing_subscriptions)
             .merge(observability)
