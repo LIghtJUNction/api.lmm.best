@@ -48,6 +48,7 @@ PUT	/api/user/setting	lmm_api_rs::migration_routes::identity_profile::router
 POST	/api/user/auth/logout	lmm_api_rs::auth::http::logout
 POST	/api/user/auth/refresh	lmm_api_rs::auth::http::refresh
 POST	/api/user/login	lmm_api_rs::auth::http::login
+POST	/api/user/register	lmm_api_rs::migration_routes::identity_security::registration_router
 GET	/v1/models	lmm_api_rs::models::list_models
 GET	/v1beta/models	lmm_api_rs::models::list_gemini_models
 GET	/v1beta/openai/models	lmm_api_rs::models::list_gemini_openai_models

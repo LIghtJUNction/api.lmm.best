@@ -1,38 +1,38 @@
-# 隐私政策（同步说明）
+# LMM API 隐私政策
 
-本文档用于同步前后端展示中的“隐私政策”内容来源。
+生效日期：2026 年 8 月 9 日；最后更新：2026 年 8 月 9 日
 
-## 当前后端默认文本（系统默认）
+本政策说明 LIghtJUNction（以下简称“我们”）在您使用 LMM API、LMM Forge、网站、控制台及开放源代码悬赏服务时如何处理个人信息。注册或使用服务即表示您已阅读本政策。您可以通过 support@lmm.best 联系我们提出隐私请求或安全问题。
 
-当未在配置中覆盖时，`/api/privacy-policy` 返回的正文来自 `apps/api-go/setting/system_setting/legal.go`，对应 `defaultLegalSettings.PrivacyPolicy`：
+## 1. 我们收集的信息
 
-```text
-# Privacy Policy
+- **账户信息**：用户名、邮箱、登录凭据的加密摘要、登录方式、账户状态和安全设置。
+- **服务与计费信息**：API 密钥的必要标识、请求时间、模型和用量、余额、订单、充值、退款及悬赏结算记录。
+- **设备与安全信息**：IP 地址、浏览器或客户端标识、会话、错误日志、风控信号和必要的审计记录。
+- **您主动提交的内容**：悬赏描述、代码交付证据、工单、反馈以及您在 API 请求中提交的输入和附件。
 
-We process account, usage, support, and payment-related information needed to provide and secure the service.
+我们只收集提供服务、保障安全、完成结算和履行法律义务所需的信息；不会要求您提交与服务无关的敏感信息。
 
-## Third-party processing
+## 2. 使用目的与法律依据
 
-Inputs and related request information may be sent to third-party AI service providers. Those providers may process or retain information under their own terms and privacy policies. Review their terms before submitting sensitive information.
+我们使用信息来创建和保护账户、认证请求、提供模型和悬赏服务、计量及扣费、处理退款、检测滥用、响应支持、改进可靠性，以及遵守税务、反欺诈和其他适用法律义务。对于需要同意的处理，我们会在相应页面请求您的明确同意；您可以撤回同意，但可能无法继续使用依赖该处理的功能。
 
-## Retention and security
+## 3. 第三方处理与跨境传输
 
-We retain information only as needed for service operation, security, support, legal compliance, and financial records, subject to applicable requirements. No online service can guarantee absolute security or uninterrupted availability.
+为完成您发起的请求，输入、必要的请求元数据或交付内容可能发送给您选择的模型、支付、代码托管、身份验证、邮件或基础设施服务商。第三方按照其自身条款和隐私政策处理信息。跨境传输仅在提供服务、履行合同或法律允许的其他基础上进行，并采取访问控制、传输加密和最小化措施。请勿提交您无权分享的个人、机密或受监管数据。
 
-## Payments and legal compliance
+## 4. 保存期限
 
-Payment processors may receive the information necessary to complete or verify a transaction. Prices, credits, limits, refunds, and payment availability may vary by location. Confirm that access, registration, payment, and use comply with applicable local law.
-```
+账户、用量、订单和安全审计记录通常在账户存续期间保存；注销后，我们会在完成结算、处理争议、欺诈防范和法律义务所需期限内保留必要记录，随后删除或匿名化。请求内容按功能、故障排查和上游服务商的保留设置处理。具体期限会因记录类型、法律要求和安全需要而不同。
 
-## 同步链路
+## 5. 安全措施
 
-- 前端展示路径：`/privacy-policy`
-- API 入口：`GET /api/privacy-policy`
-- 前端实现：`apps/web/src/features/legal/privacy-policy.tsx` → `apps/web/src/features/legal/api.ts`
-- 路由控制：`apps/web/src/routes/privacy-policy.tsx`
-- 后端来源：`apps/api-go/setting/system_setting/legal.go` 中的 `legal.privacy_policy` 默认值（`PrivacyPolicy`）
+我们采用访问分级、凭据哈希、密钥隔离、传输加密、审计和异常检测等措施保护信息。没有任何在线服务可以保证绝对安全；如果发现可能影响您账户的事件，我们会在法律要求的范围内通知并采取补救措施。
 
-## 维护要求
+## 6. 您的权利
 
-- 要在管理后台更新隐私政策，请修改 `legal.privacy_policy` 配置项并确保前后端配置一致后再发布。
-- Rust 迁移候选路径为 `apps/api-rust/src/migration_routes/control_public.rs`，读取 `legal.privacy_policy` 选项；当候选路径未挂载时不影响现有 Go 生产行为。
+在适用法律范围内，您可以请求访问、更正、删除、限制或导出个人信息，反对特定处理，或撤回同意。请使用账户邮箱联系 support@lmm.best，并说明请求范围；我们可能要求验证身份。删除账户前请先处理未结算订单、退款和悬赏义务。
+
+## 7. Cookie、未成年人和政策更新
+
+我们使用维持登录、安全和偏好所需的 Cookie 或类似技术，不以其建立与服务无关的画像。服务不面向未满适用法定年龄的人员；如监护人发现未成年人未经许可提供信息，请联系我们。政策更新会在本页面公布新的生效日期；重大变化会通过站内提示或账户可用的联系方式通知。

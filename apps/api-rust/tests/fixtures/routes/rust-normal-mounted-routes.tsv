@@ -48,6 +48,7 @@ PUT	/api/user/setting	apps/api-rust/src/main.rs
 POST	/api/user/auth/logout	apps/api-rust/src/auth/http.rs
 POST	/api/user/auth/refresh	apps/api-rust/src/auth/http.rs
 POST	/api/user/login	apps/api-rust/src/auth/http.rs
+POST	/api/user/register	apps/api-rust/src/main.rs
 GET	/v1/models	apps/api-rust/src/models.rs
 GET	/v1beta/models	apps/api-rust/src/models.rs
 GET	/v1beta/openai/models	apps/api-rust/src/models.rs

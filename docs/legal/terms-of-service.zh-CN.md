@@ -1,6 +1,6 @@
 # LMM API 服务条款
 
-> 法务内容同步说明：用户协议与隐私政策的系统来源见 [user-agreement.md](./user-agreement.md) 与 [privacy-policy.md](./privacy-policy.md)。
+本条款适用于 LMM API、LMM Forge、开放源代码悬赏及相关网站与控制台服务。隐私处理请参阅[隐私政策](/privacy-policy)。
 
 生效日期：2026 年 7 月 31 日
 

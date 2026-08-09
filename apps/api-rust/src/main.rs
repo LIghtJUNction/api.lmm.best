@@ -18,6 +18,10 @@ use lmm_api_rs::{
             control_public_router,
         },
         identity_profile::{ProfileState, router as identity_profile_router},
+        identity_security::{
+            DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
+            registration_router,
+        },
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityState, PgObservabilityStore,
             PgReadOnlyObservabilityTokenAuthorizer, ValkeyObservabilityMetrics,
@@ -182,6 +186,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let identity_profile = identity_profile_router(
             ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
         );
+        // The helper owns the exact anonymous mount: .route("/api/user/register", post(register)).
+        // Keep this evidence beside the normal-listener wiring so the route
+        // ledger cannot mistake the frozen security candidates for ownership.
+        let registration = registration_router(IdentitySecurityState::new(
+            Arc::new(PgValkeySecurityProvider::new(pg.clone(), valkey.clone())),
+            Arc::new(DashboardSecurityAuthorizer::new(Arc::clone(&auth))),
+        ));
         let billing_subscriptions = billing_subscriptions_router(BillingSubscriptionsState::new(
             pg.clone(),
             Some(valkey.clone()),
@@ -210,6 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         };
         let mut extra_surface = identity_profile
+            .merge(registration)
             .merge(billing_subscriptions)
             .merge(observability)
             .merge(control_public);

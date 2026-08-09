@@ -1,38 +1,37 @@
-# 用户协议（同步说明）
+# LMM API 用户协议
 
-本文档用于同步前后端展示中的“用户协议”内容来源。
+生效日期：2026 年 8 月 9 日；最后更新：2026 年 8 月 9 日
 
-## 当前后端默认文本（系统默认）
+本协议由 LIghtJUNction（以下简称“我们”）与使用 LMM API、LMM Forge 及相关网站、控制台和开放源代码悬赏功能的用户（以下简称“您”）订立。注册、登录、充值、发布或接受悬赏、创建凭证，或继续使用服务，即表示您已阅读、理解并同意本协议和《隐私政策》。不同意时请停止注册或使用。
 
-当未在配置中覆盖时，`/api/user-agreement` 返回的正文来自 `apps/api-go/setting/system_setting/legal.go`，对应 `defaultLegalSettings.UserAgreement`：
+## 1. 服务范围
 
-```text
-# User Agreement
+我们提供账户、开发者控制台、模型 API、用量记录、开放源代码悬赏、交付证据、验收及结算等在线服务。具体功能、可用地区、模型、额度、价格和第三方能力可能变化；以您操作前页面展示的说明为准。第三方模型、支付、代码托管和身份验证服务受其自身条款约束。
 
-You may use this service only for lawful purposes and only when you have the authorization required for the content and services you use.
+## 2. 账户与凭证
 
-## Third-party services
+您应提供真实、准确、完整的信息，妥善保管密码、访问令牌和 API 密钥，并对账户下的活动负责。不得出租、转让、共享账户或向无权人员披露凭据。发现未授权访问、异常扣费或安全事件，请立即联系 support@lmm.best；邮件中不要发送密码或完整密钥。
 
-Requests and other inputs may be processed or retained by third-party AI service providers under their own terms and privacy policies. Their availability, terms, safeguards, and retention practices apply. Do not submit sensitive information or information that you are not authorized to share.
+## 3. 合法使用
 
-## Accounts and payments
+您只能在有权使用输入、输出和相关数据的前提下使用服务，并应遵守适用法律、出口管制、制裁规定及所选模型提供方的使用政策。不得进行欺诈、侵权、恶意软件传播、绕过访问控制、攻击或压垮平台、未经授权的抓取或转售，也不得提交您无权处理的个人或机密信息。
 
-Keep your account credentials secure. Usage limits, availability, pricing, credits, refunds, and payment methods may vary. A displayed balance or limit is not a guarantee of availability or a promise of future service.
+## 4. 计费、余额与悬赏
 
-## Compliance and availability
+模型用量、充值金额、币种、悬赏奖励、平台费用、退款条件和结算时间以实际确认前展示的价格与订单信息为准。充值不自动续费；请求会按当时公示的计价规则结算。悬赏资金按挑战状态、验收、取消和争议处理规则结算。除法律强制规定、重复扣款、已确认计费错误或服务未交付等情况外，已使用的数字服务余额通常不予退款。
 
-You are responsible for confirming that your access, registration, payment, and use comply with applicable law and third-party terms in your location. Service availability may vary by location. We may restrict or suspend access when required for security, compliance, or third-party obligations.
-```
+## 5. 内容与知识产权
 
-## 同步链路
+您保留对合法提交内容的权利，并授权我们仅在提供、保障、审计和改进服务所需范围内处理这些内容。您应确保输入及输出的使用不侵犯第三方权利。平台软件、界面、文档、商标和标识归其各自权利人所有。
 
-- 前端展示路径：`/user-agreement`
-- API 入口：`GET /api/user-agreement`
-- 前端实现：`apps/web/src/features/legal/user-agreement.tsx` → `apps/web/src/features/legal/api.ts`
-- 路由控制：`apps/web/src/routes/user-agreement.tsx`
-- 后端来源：`apps/api-go/setting/system_setting/legal.go` 中的 `legal.user_agreement` 默认值（`UserAgreement`）
+## 6. 可用性与 AI 输出
 
-## 维护要求
+服务依赖网络及第三方组件，可能维护、中断、变更或下线。AI 输出可能不准确、不完整、过时或与他人相似，不构成法律、医疗、金融或其他专业建议；在依赖前请自行核验。除法律不得限制的责任外，服务按“现状”和“可用”状态提供。
 
-- 要在管理后台更新用户协议，请修改 `legal.user_agreement` 配置项并确保前后端配置一致后再发布。
-- Rust 迁移候选路径为 `apps/api-rust/src/migration_routes/control_public.rs`，读取 `legal.user_agreement` 选项；当候选路径未挂载时不影响现有 Go 生产行为。
+## 7. 暂停、终止与责任
+
+如发生违法、欺诈、滥用、攻击、拒付或重大安全风险，我们可在法律允许范围内限制接口、冻结相关余额、暂停或终止账户，并保留必要记录。因您违反本协议造成我们、其他用户或第三方损失的，您应依法承担责任。我们的累计责任以导致请求的事件发生前十二个月内您实际支付的服务费用为上限，但法律不得限制的责任除外。
+
+## 8. 联系与争议
+
+账单、退款、安全和隐私问题请联系 support@lmm.best。我们会在合理期限内确认并处理。争议首先通过协商解决；协商不成时，适用法律允许的范围内提交有管辖权的法院处理。本协议更新后会在本页面标明新的生效日期；继续使用即视为接受更新内容。

@@ -7,7 +7,8 @@ use axum::{
 };
 use lmm_api_rs::migration_routes::identity_security::{
     IdentitySecurityState, MemorySecurityProvider, PgValkeySecurityProvider, SecurityActor,
-    SecurityAuthorizer, SecurityCall, SecurityError, SecurityOperation, SecurityProvider, router,
+    SecurityAuthorizer, SecurityCall, SecurityError, SecurityOperation, SecurityProvider,
+    registration_router, router,
 };
 use serde_json::json;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -48,6 +49,40 @@ fn admin() -> SecurityActor {
 
 fn app(provider: Arc<MemorySecurityProvider>, authorizer: Authorizer) -> axum::Router {
     router(IdentitySecurityState::new(provider, Arc::new(authorizer)))
+}
+
+#[tokio::test]
+async fn registration_router_exposes_only_the_completed_anonymous_registration_slice() {
+    let provider = Arc::new(MemorySecurityProvider::new(Ok(serde_json::Value::Null)));
+    let response = registration_router(IdentitySecurityState::new(
+        provider,
+        Arc::new(Authorizer {
+            user: Err(SecurityError::Unauthorized),
+            admin: Err(SecurityError::Unauthorized),
+        }),
+    ))
+    .oneshot(
+        Request::post("/api/user/register")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                r#"{"username":"alice","password":"password1","accepted_legal":true}"#,
+            ))
+            .expect("registration request"),
+    )
+    .await
+    .expect("registration response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("registration body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("JSON"),
+        json!({
+            "success": true,
+            "message": ""
+        })
+    );
 }
 
 #[tokio::test]
