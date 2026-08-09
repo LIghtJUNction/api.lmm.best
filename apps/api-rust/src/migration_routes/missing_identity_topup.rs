@@ -338,7 +338,6 @@ struct TopupSelfRecord {
     money: Value,
     trade_no: String,
     payment_method: String,
-    payment_provider: String,
     create_time: i64,
     complete_time: i64,
     status: String,
@@ -353,7 +352,6 @@ impl From<TopupRecord> for TopupSelfRecord {
             money: record.money,
             trade_no: record.trade_no,
             payment_method: record.payment_method,
-            payment_provider: record.payment_provider,
             create_time: record.create_time,
             complete_time: record.complete_time,
             status: record.status,
@@ -1265,9 +1263,8 @@ fn payment_compliance_values(options: &HashMap<String, String>) -> bool {
 }
 fn payment_field(options: &HashMap<String, String>, field: &str, default: Value) -> Value {
     options
-        .get("payment_setting")
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .and_then(|value| value.get(field).cloned())
+        .get(&format!("payment_setting.{field}"))
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or(default)
 }
 fn json_value(options: &HashMap<String, String>, key: &str, default: Value) -> Value {
@@ -1781,7 +1778,7 @@ mod tests {
         assert_eq!(value["id"], 7);
         assert_eq!(value["money"], 20.0);
         assert_eq!(value["payment_method"], "stripe");
-        assert_eq!(value["payment_provider"], "stripe");
+        assert!(value.get("payment_provider").is_none());
     }
 
     #[tokio::test]
