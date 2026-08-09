@@ -8,10 +8,10 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::to_bytes,
-    extract::{Request, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{delete, get, put},
 };
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
@@ -138,7 +138,80 @@ pub fn router(state: ProfileState) -> Router {
         .route("/api/user/aff", get(get_aff_code))
         .route("/api/user/setting", put(update_setting))
         .route("/api/user/self", put(update_self).delete(delete_self))
+        .route(
+            "/api/user/bindings/{binding_type}",
+            delete(clear_self_oauth_binding),
+        )
         .with_state(state)
+}
+
+fn self_oauth_binding_column(binding_type: &str) -> Option<(&'static str, &'static str)> {
+    match binding_type.trim().to_ascii_lowercase().as_str() {
+        "github" => Some(("github_id", "github")),
+        "discord" => Some(("discord_id", "discord")),
+        "oidc" => Some(("oidc_id", "oidc")),
+        "wechat" => Some(("wechat_id", "wechat")),
+        "telegram" => Some(("telegram_id", "telegram")),
+        "linuxdo" => Some(("linux_do_id", "linuxdo")),
+        _ => None,
+    }
+}
+
+async fn clear_self_oauth_binding(
+    State(state): State<ProfileState>,
+    headers: HeaderMap,
+    Path(binding_type): Path<String>,
+) -> Result<Response, ProfileError> {
+    let identity = authenticated(&state, &headers).await?;
+    let Some((column, provider)) = self_oauth_binding_column(&binding_type) else {
+        // Go's controller keeps this legacy API error at HTTP 200 and exposes
+        // only the success/message envelope for invalid binding names.
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": "invalid parameters"
+        }))
+        .into_response());
+    };
+    let mut transaction = state
+        .pg
+        .begin()
+        .await
+        .map_err(|_| ProfileError::internal())?;
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(identity.user_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(|_| ProfileError::internal())?;
+    if exists.is_none() {
+        return Err(ProfileError::not_found());
+    }
+    let statement = format!("UPDATE users SET {column} = '' WHERE id = $1 AND deleted_at IS NULL");
+    sqlx::query(&statement)
+        .bind(identity.user_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ProfileError::internal())?;
+    if provider == "telegram" {
+        sqlx::query(
+            "DELETE FROM external_identity_claims WHERE provider = 'telegram' AND user_id = $1",
+        )
+        .bind(identity.user_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ProfileError::internal())?;
+    }
+    transaction
+        .commit()
+        .await
+        .map_err(|_| ProfileError::internal())?;
+    clear_user_cache(&state, identity.user_id).await;
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "success"
+    }))
+    .into_response())
 }
 
 async fn update_self(
@@ -681,6 +754,7 @@ fn update_success(request_locale: LegacyLocale) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use super::self_oauth_binding_column;
     use serde_json::{Map, Value};
 
     #[test]
@@ -698,5 +772,15 @@ mod tests {
             "language"
         };
         assert_eq!(key, "sidebar_modules");
+    }
+
+    #[test]
+    fn self_oauth_binding_whitelist_matches_go() {
+        for binding_type in ["github", "discord", "oidc", "wechat", "telegram", "linuxdo"] {
+            assert!(self_oauth_binding_column(&format!("  {binding_type}  ")).is_some());
+        }
+        for binding_type in ["", "email", "github_id", "password", "../github"] {
+            assert!(self_oauth_binding_column(binding_type).is_none());
+        }
     }
 }

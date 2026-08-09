@@ -42,6 +42,7 @@ POST	/api/token/batch	apps/api-rust/src/main.rs
 POST	/api/token/batch/keys	apps/api-rust/src/main.rs
 GET	/api/token/search	apps/api-rust/src/main.rs
 GET	/api/user/aff	apps/api-rust/src/main.rs
+DELETE	/api/user/bindings/:binding_type	apps/api-rust/src/main.rs
 GET	/api/user/self	apps/api-rust/src/auth/http.rs
 DELETE	/api/user/self	apps/api-rust/src/main.rs
 PUT	/api/user/self	apps/api-rust/src/main.rs

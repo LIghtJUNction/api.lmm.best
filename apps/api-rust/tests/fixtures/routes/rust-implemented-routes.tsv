@@ -42,6 +42,7 @@ POST	/api/token/batch	lmm_api_rs::migration_routes::api_token::batch_delete
 POST	/api/token/batch/keys	lmm_api_rs::migration_routes::api_token::batch_keys
 GET	/api/token/search	lmm_api_rs::migration_routes::api_token::search
 GET	/api/user/aff	lmm_api_rs::migration_routes::identity_profile::router
+DELETE	/api/user/bindings/:binding_type	lmm_api_rs::migration_routes::identity_profile::router
 GET	/api/user/self	lmm_api_rs::auth::http::self_user
 DELETE	/api/user/self	lmm_api_rs::migration_routes::identity_profile::router
 PUT	/api/user/self	lmm_api_rs::migration_routes::identity_profile::router
