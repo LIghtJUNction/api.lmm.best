@@ -24,13 +24,13 @@ use lmm_api_rs::{
         },
         identity_admin::{IdentityAdminState, router as identity_admin_router},
         identity_federation::{
-            bindings_router as identity_federation_bindings_router, DashboardFederationIdentity,
-            DisabledEmailCodeVerifier, FederationState,
+            DashboardFederationIdentity, DisabledEmailCodeVerifier, FederationState,
+            bindings_router as identity_federation_bindings_router,
         },
         identity_profile::{ProfileState, router as identity_profile_router},
         identity_security::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
-            registration_router,
+            registration_router, sessions_read_router,
         },
         missing_identity_catalog::{
             IdentityCatalogState, protected_read_router as identity_catalog_protected_read_router,
@@ -258,6 +258,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let identity_sessions = http::api_global_rate_limited_surface(
+            &app_state,
+            sessions_read_router(IdentitySecurityState::new(
+                Arc::new(PgValkeySecurityProvider::new(pg.clone(), valkey.clone())),
+                Arc::new(DashboardSecurityAuthorizer::new(Arc::clone(&auth))),
+            )),
+        );
         let federation_identity = Arc::new(
             DashboardFederationIdentity::new(
                 Arc::clone(&auth),
@@ -330,6 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(identity_admin)
             .merge(identity_topup)
             .merge(identity_checkin)
+            .merge(identity_sessions)
             .merge(identity_federation_bindings)
             .merge(registration)
             .merge(billing_subscriptions)

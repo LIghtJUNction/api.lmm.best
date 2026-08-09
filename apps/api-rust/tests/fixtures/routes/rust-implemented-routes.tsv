@@ -112,3 +112,4 @@ GET	/api/user/:id/oauth/bindings	lmm_api_rs::migration_routes::identity_federati
 DELETE	/api/user/:id/oauth/bindings/:provider_id	lmm_api_rs::migration_routes::identity_federation::bindings_router
 GET	/api/user/oauth/bindings	lmm_api_rs::migration_routes::identity_federation::bindings_router
 DELETE	/api/user/oauth/bindings/:provider_id	lmm_api_rs::migration_routes::identity_federation::bindings_router
+GET	/api/user/sessions	lmm_api_rs::migration_routes::identity_security::sessions_read_router

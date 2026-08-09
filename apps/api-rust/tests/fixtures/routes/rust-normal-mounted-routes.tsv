@@ -112,3 +112,4 @@ GET	/api/user/:id/oauth/bindings	apps/api-rust/src/main.rs:identity_federation_b
 DELETE	/api/user/:id/oauth/bindings/:provider_id	apps/api-rust/src/main.rs:identity_federation_bindings_router
 GET	/api/user/oauth/bindings	apps/api-rust/src/main.rs:identity_federation_bindings_router
 DELETE	/api/user/oauth/bindings/:provider_id	apps/api-rust/src/main.rs:identity_federation_bindings_router
+GET	/api/user/sessions	apps/api-rust/src/main.rs:identity_sessions

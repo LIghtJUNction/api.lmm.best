@@ -94,6 +94,17 @@ pub struct DashboardUser {
     pub permissions: Value,
 }
 
+/// Server-derived identity and live session metadata for route slices that
+/// need the current browser session SID. Personal access tokens do not expose
+/// this context.
+#[derive(Clone, Debug)]
+pub struct DashboardSessionContext {
+    pub user: DashboardUser,
+    pub session_id: String,
+    pub client_ip: String,
+    pub user_agent: String,
+}
+
 const TRUST_LEVEL_THRESHOLDS: [f64; 5] = [0.0, 0.0, 100.0, 500.0, 2_000.0];
 const TRUST_LEVEL_DISCOUNT_RATIOS: [f64; 5] = [1.0, 1.0, 0.97, 0.94, 0.90];
 const TRUST_LEVEL_DECAY_PERIOD_SECONDS: i64 = 90 * 24 * 60 * 60;
@@ -772,6 +783,15 @@ pub trait DashboardAuth: Send + Sync {
     ) -> Result<AuthBundle, AuthError>;
 
     async fn self_user(&self, access_token: SecretString) -> Result<DashboardUser, AuthError>;
+
+    /// Resolves a live browser session, including its server-owned SID.
+    /// Adapters without a session authority fail closed.
+    async fn current_session(
+        &self,
+        _access_token: SecretString,
+    ) -> Result<DashboardSessionContext, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Unauthorized))
+    }
 
     /// Resolves a dashboard credential before the route-specific `UserAuth`
     /// policy is applied.  Optional Go `TryUserAuth` consumers need the
