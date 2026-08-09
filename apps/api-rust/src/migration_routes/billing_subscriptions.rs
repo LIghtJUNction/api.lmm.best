@@ -7,8 +7,9 @@
 use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -331,7 +332,7 @@ async fn maybe_reset_subscription(
 
 /// Routes that do not initiate payments or accept provider callbacks.
 pub fn router(state: BillingSubscriptionsState) -> Router {
-    Router::new()
+    let protected = Router::new()
         .route("/api/subscription/plans", get(list_enabled_plans))
         .route("/api/subscription/self", get(subscription_self))
         .route("/api/subscription/self/preference", put(update_preference))
@@ -367,7 +368,57 @@ pub fn router(state: BillingSubscriptionsState) -> Router {
             "/api/subscription/admin/user_subscriptions/{id}/invalidate",
             post(admin_invalidate_subscription),
         )
-        .with_state(state)
+        // Go's user/admin middleware runs before Gin binds JSON. Keep that
+        // ordering at the listener boundary so malformed anonymous writes
+        // cannot become Axum extractor errors before auth is evaluated.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            subscription_auth_boundary,
+        ));
+    protected.with_state(state)
+}
+
+async fn subscription_auth_boundary(
+    State(state): State<BillingSubscriptionsState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !subscription_method_allowed(request.uri().path(), request.method()) {
+        return next.run(request).await;
+    }
+    let is_admin = request.uri().path().starts_with("/api/subscription/admin/");
+    let result = if is_admin {
+        admin(&state, request.headers()).await.map(|_| ())
+    } else {
+        identity(&state, request.headers()).await.map(|_| ())
+    };
+    if let Err(response) = result {
+        return response;
+    }
+    next.run(request).await
+}
+
+fn subscription_method_allowed(path: &str, method: &axum::http::Method) -> bool {
+    use axum::http::Method;
+
+    match path {
+        "/api/subscription/plans" | "/api/subscription/self" => *method == Method::GET,
+        "/api/subscription/self/preference" => *method == Method::PUT,
+        "/api/subscription/admin/plans" => *method == Method::GET || *method == Method::POST,
+        "/api/subscription/admin/bind" => *method == Method::POST,
+        _ if path.ends_with("/subscriptions/reset") => *method == Method::POST,
+        _ if path.ends_with("/invalidate") => *method == Method::POST,
+        _ if path.starts_with("/api/subscription/admin/plans/") => {
+            *method == Method::PUT || *method == Method::PATCH
+        }
+        _ if path.starts_with("/api/subscription/admin/users/") => {
+            *method == Method::GET || *method == Method::POST
+        }
+        _ if path.starts_with("/api/subscription/admin/user_subscriptions/") => {
+            *method == Method::DELETE
+        }
+        _ => false,
+    }
 }
 
 #[derive(Serialize)]

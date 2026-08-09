@@ -163,6 +163,29 @@ async fn subscription_admin_routes_should_require_an_administrator() {
 }
 
 #[tokio::test]
+async fn subscription_admin_auth_precedes_malformed_json_rejection() {
+    let response = smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/subscription/admin/plans")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        error_body(response).await,
+        json!({
+            "success": false,
+            "message": "Unauthorized, invalid access token"
+        })
+    );
+}
+
+#[tokio::test]
 async fn subscription_routes_should_preserve_legacy_method_boundaries() {
     let response = smoke_router()
         .oneshot(
