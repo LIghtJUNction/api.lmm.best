@@ -35,6 +35,8 @@ type ApiKeysContextType = {
   triggerRefresh: () => void
   resolvedKey: string
   setResolvedKey: React.Dispatch<React.SetStateAction<string>>
+  revealOpenKeyId: number | null
+  setRevealOpenKeyId: React.Dispatch<React.SetStateAction<number | null>>
   resolveRealKey: (id: number) => Promise<string | null>
   resolveRealKeysBatch: (ids: number[]) => Promise<Record<number, string>>
   resolvedKeys: Record<number, string>
@@ -51,6 +53,7 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
   const [currentRow, setCurrentRow] = useState<ApiKey | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
   const [resolvedKey, setResolvedKey] = useState('')
+  const [revealOpenKeyId, setRevealOpenKeyId] = useState<number | null>(null)
 
   const [resolvedKeys, setResolvedKeys] = useState<Record<number, string>>({})
   const [loadingKeys, setLoadingKeys] = useState<Record<number, boolean>>({})
@@ -165,6 +168,8 @@ export function ApiKeysProvider({ children }: { children: React.ReactNode }) {
         triggerRefresh,
         resolvedKey,
         setResolvedKey,
+        revealOpenKeyId,
+        setRevealOpenKeyId,
         resolveRealKey,
         resolveRealKeysBatch,
         resolvedKeys,

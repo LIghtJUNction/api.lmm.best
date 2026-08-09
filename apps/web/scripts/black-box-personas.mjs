@@ -560,15 +560,22 @@ async function requireDataResponse(response, validateData, label) {
   return payload.data
 }
 
-function waitForApiResponse(page, method, pathPattern) {
-  return page.waitForResponse(
-    (response) =>
-      response.request().method() === method &&
-      (typeof pathPattern === 'string'
-        ? new URL(response.url()).pathname === pathPattern
-        : pathPattern.test(new URL(response.url()).pathname)),
-    { timeout: 10_000 }
-  )
+function waitForApiResponse(page, method, pathPattern, responsePredicate) {
+  // A failed login or redirect may close the page before every bootstrap
+  // request is observed. Convert that teardown into a normal failed
+  // assertion instead of leaving a rejected promise outside the persona
+  // try/catch block.
+  return page
+    .waitForResponse(
+      (response) =>
+        response.request().method() === method &&
+        (typeof pathPattern === 'string'
+          ? new URL(response.url()).pathname === pathPattern
+          : pathPattern.test(new URL(response.url()).pathname)) &&
+        (responsePredicate ? responsePredicate(response) : true),
+      { timeout: 10_000 }
+    )
+    .catch(() => null)
 }
 
 function validAuthBundle(data) {
@@ -650,11 +657,7 @@ async function registerThroughUI(page, credentials) {
     .fill(credentials.password)
   const email = page.locator('input[type=email]:visible')
   if ((await email.count()) > 0) await email.first().fill(credentials.email)
-  for (const checkbox of await page
-    .locator('input[type=checkbox]:visible')
-    .all()) {
-    if (!(await checkbox.isChecked())) await checkbox.check()
-  }
+  await acceptLegalConsent(page)
   const responsePromise = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
@@ -673,6 +676,7 @@ async function loginThroughUI(page, credentials) {
   const username = page.getByLabel('Username or Email', { exact: true })
   await username.fill(credentials.username)
   await page.getByLabel('Password', { exact: true }).fill(credentials.password)
+  await acceptLegalConsent(page)
   const responsePromise = page.waitForResponse(
     (response) =>
       response.request().method() === 'POST' &&
@@ -687,6 +691,17 @@ async function loginThroughUI(page, credentials) {
   return true
 }
 
+async function acceptLegalConsent(page) {
+  // The auth form starts with consent unset and updates it when the public
+  // capability status arrives; wait for that transition before checking.
+  await page.waitForTimeout(750)
+  const checkboxes = page.getByRole('checkbox')
+  for (let index = 0; index < (await checkboxes.count()); index += 1) {
+    const checkbox = checkboxes.nth(index)
+    if (!(await checkbox.isChecked())) await checkbox.check()
+  }
+}
+
 async function runSecondUserIsolation(browser, firstTokenName, suffix) {
   const context = await browser.newContext({ serviceWorkers: 'block' })
   const metrics = createMetrics()
@@ -694,8 +709,8 @@ async function runSecondUserIsolation(browser, firstTokenName, suffix) {
   const page = await context.newPage()
   attachMetrics(page, metrics)
   const credentials = {
-    username: `preview_isolation_${suffix}`,
-    email: `preview_isolation_${suffix}@example.invalid`,
+    username: `isolate_${suffix}`,
+    email: `isolate_${suffix}@example.invalid`,
     password: 'PreviewPass123!',
   }
   try {
@@ -714,7 +729,8 @@ async function runSecondUserIsolation(browser, firstTokenName, suffix) {
     const refreshResponsePromise = waitForApiResponse(
       page,
       'POST',
-      '/api/user/auth/refresh'
+      '/api/user/auth/refresh',
+      (response) => response.status() < 400
     )
     const selfResponsePromise = waitForApiResponse(
       page,
@@ -781,11 +797,15 @@ async function runPersonaB(browser) {
   installRouting(context, metrics)
   const page = await context.newPage()
   attachMetrics(page, metrics)
-  const suffix = `${Date.now()}_${process.pid}`
+  // Keep generated identities within the backend's legacy username limit
+  // while retaining enough entropy for parallel black-box runs.
+  const suffix = `${Date.now().toString(36).slice(-7)}${process.pid
+    .toString(36)
+    .slice(-3)}`
   const credentials = {
-    username: process.env.PERSONA_USERNAME ?? `preview_buyer_${suffix}`,
+    username: process.env.PERSONA_USERNAME ?? `buyer_${suffix}`,
     email:
-      process.env.PERSONA_EMAIL ?? `preview_buyer_${suffix}@example.invalid`,
+      process.env.PERSONA_EMAIL ?? `buyer_${suffix}@example.invalid`,
     password: process.env.PERSONA_PASSWORD ?? 'PreviewPass123!',
   }
   const tokenName = `acceptance-credential-${suffix}`
@@ -824,7 +844,8 @@ async function runPersonaB(browser) {
     )
     evidence.initialSelfValid = true
     await page.waitForURL(/\/getting-started(?:\/|$)/, { timeout: 10_000 })
-    const createCredential = page.getByRole('link', {
+    // Base UI renders the primary command as an anchor with button semantics.
+    const createCredential = page.getByRole('button', {
       name: 'Create credential',
       exact: true,
     })
@@ -895,21 +916,30 @@ async function runPersonaB(browser) {
     const tokenRow = page
       .getByText(tokenName, { exact: true })
       .locator('xpath=ancestor::*[self::tr or @data-slot="table-row"][1]')
-    const maskedKey = tokenRow.getByText(/^sk-/).first()
-    await maskedKey.click()
+    // Click the actual API-key Base UI trigger (the row also contains a
+    // separate quota popover). Clicking nested masked text can race focus-out
+    // handling immediately after a freshly-created row is rendered.
+    await tokenRow.getByRole('button', { name: /^sk-/ }).first().click()
     const revealResponse = await revealResponsePromise
     if (revealResponse.status() >= 400) {
       throw new Error('credential reveal HTTP response failed')
     }
     let revealError = null
     try {
-      evidence.revealReturnedNonemptyKey = await page.evaluate(() => {
-        const tokenPattern = /^sk-[A-Za-z0-9_-]{12,}$/
-        const secretInput = [...document.querySelectorAll('input')].find(
-          (input) => tokenPattern.test(input.value)
-        )
-        return Boolean(secretInput)
-      })
+      // The response resolves before React commits the resolved key to the
+      // controlled input. Wait for the rendered value rather than sampling the
+      // DOM in that narrow network-to-render gap.
+      await page.waitForFunction(
+        () => {
+          const tokenPattern = /^sk-[A-Za-z0-9_-]{12,}$/
+          return [...document.querySelectorAll('input')].some((input) =>
+            tokenPattern.test(input.value)
+          )
+        },
+        undefined,
+        { timeout: 10_000 }
+      )
+      evidence.revealReturnedNonemptyKey = true
       if (!evidence.revealReturnedNonemptyKey) {
         throw new Error('credential reveal was empty')
       }
@@ -932,7 +962,8 @@ async function runPersonaB(browser) {
     const refreshResponsePromise = waitForApiResponse(
       page,
       'POST',
-      '/api/user/auth/refresh'
+      '/api/user/auth/refresh',
+      (response) => response.status() < 400
     )
     const refreshedSelfResponsePromise = waitForApiResponse(
       page,

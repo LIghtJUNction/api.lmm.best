@@ -559,12 +559,21 @@ impl PgModelsService {
             .fetch_one(&self.pg)
             .await
             .map_err(|_| discovery_hidden())?;
+        // The loopback-only acceptance switch is an explicit test/development
+        // grant.  It must be applied after a persisted override (so an
+        // explicit denial still wins), but before the paid fallback: a local
+        // acceptance user is intentionally not required to have a top-up.
+        let trust_granted = if self.local_acceptance {
+            None
+        } else {
+            Some(paid)
+        };
         Ok(discovery_access_granted_with_local_acceptance(
             user.id,
             &user.username,
             i64::from(user.status),
             user.role,
-            Some(paid),
+            trust_granted,
             self.local_acceptance,
         ))
     }
@@ -2067,6 +2076,34 @@ mod tests {
         ] {
             assert_eq!(trust_override_decision(raw), expected, "{raw:?}");
         }
+    }
+
+    #[test]
+    fn local_acceptance_grants_only_without_an_explicit_override() {
+        assert!(discovery_access_granted_with_local_acceptance(
+            7,
+            "local-user",
+            1,
+            1,
+            None,
+            true
+        ));
+        assert!(!discovery_access_granted_with_local_acceptance(
+            7,
+            "local-user",
+            1,
+            1,
+            Some(false),
+            true,
+        ));
+        assert!(discovery_access_granted_with_local_acceptance(
+            7,
+            "local-user",
+            1,
+            1,
+            Some(true),
+            false,
+        ));
     }
 
     #[test]
