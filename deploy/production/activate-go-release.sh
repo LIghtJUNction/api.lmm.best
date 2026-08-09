@@ -229,6 +229,9 @@ create_probe_token() {
         WHERE tokens.deleted_at IS NULL
           AND tokens.status = 1
           AND users.status = 1
+          -- Mirror common.RoleAdminUser and the relay developer-access gate:
+          -- admin/root tokens are valid on both sides of this Go cutover.
+          AND users.role >= 10
           AND (tokens.expired_time = -1 OR tokens.expired_time > EXTRACT(EPOCH FROM NOW()))
           AND (tokens.unlimited_quota OR tokens.remain_quota > 0)
           AND COALESCE(LENGTH(BTRIM(tokens.allow_ips)), 0) = 0
