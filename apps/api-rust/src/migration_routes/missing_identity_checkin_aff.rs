@@ -820,9 +820,13 @@ fn quota_display_type_from_options(dotted: Option<&str>, aggregate: Option<&str>
         .or_else(|| {
             aggregate
                 .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-                .and_then(|value| value.get("quota_display_type").and_then(Value::as_str))
+                .and_then(|value| {
+                    value
+                        .get("quota_display_type")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
                 .filter(|value| !value.trim().is_empty())
-                .map(str::to_owned)
         })
         .unwrap_or_else(|| "USD".to_owned())
 }
