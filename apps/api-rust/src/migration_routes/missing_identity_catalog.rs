@@ -27,6 +27,9 @@ use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
 
 const DEFAULT_USABLE_GROUPS: &[(&str, &str)] = &[("default", "默认分组"), ("vip", "vip分组")];
 const DEFAULT_GROUP_RATIOS: &[(&str, f64)] = &[("default", 1.0), ("vip", 1.0), ("svip", 1.0)];
+const DEFAULT_GROUP_GROUP_RATIOS: &[(&str, &[(&str, f64)])] =
+    &[("vip", &[("edit_this", 0.9)])];
+const DEFAULT_AUTO_GROUPS: &[&str] = &["default"];
 
 /// Listener dependencies for the identity-catalogue route family.
 #[derive(Clone)]
@@ -229,7 +232,8 @@ async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
             .map(|(k, v)| ((*k).to_owned(), *v))
             .collect()
     });
-    let group_ratios = nested_number_map(values.get("GroupGroupRatio")).unwrap_or_default();
+    let group_ratios = nested_number_map(values.get("GroupGroupRatio"))
+        .unwrap_or_else(|| default_group_group_ratios());
     let special = nested_string_map(values.get("group_ratio_setting.group_special_usable_group"))
         .or_else(|| special_from_legacy_setting(values.get("group_ratio_setting")))
         .unwrap_or_default();
@@ -238,8 +242,37 @@ async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
         ratios,
         group_ratios,
         special,
-        auto: string_list(values.get("AutoGroups")),
+        // Go's setting package starts with `autoGroups = ["default"]` and
+        // only replaces it after an AutoGroups option is loaded. Preserve
+        // that default when a fresh database has no persisted option yet;
+        // an explicitly persisted `[]` must still disable automatic groups.
+        auto: values
+            .get("AutoGroups")
+            .map(|raw| string_list(Some(raw)))
+            .unwrap_or_else(default_auto_groups),
     })
+}
+
+fn default_group_group_ratios() -> BTreeMap<String, BTreeMap<String, f64>> {
+    DEFAULT_GROUP_GROUP_RATIOS
+        .iter()
+        .map(|(user_group, ratios)| {
+            (
+                (*user_group).to_owned(),
+                ratios
+                    .iter()
+                    .map(|(group, ratio)| ((*group).to_owned(), *ratio))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn default_auto_groups() -> Vec<String> {
+    DEFAULT_AUTO_GROUPS
+        .iter()
+        .map(|group| (*group).to_owned())
+        .collect()
 }
 
 async fn groups_for(
@@ -583,8 +616,9 @@ fn locale(headers: &HeaderMap) -> Locale {
 #[cfg(test)]
 mod tests {
     use super::{
-        GroupConfig, IdentityCatalogState, auto_groups, legacy_ratio_value, protected_read_router,
-        public_router, router,
+        GroupConfig, IdentityCatalogState, auto_groups, default_auto_groups,
+        default_group_group_ratios, legacy_ratio_value, protected_read_router, public_router,
+        router,
     };
     use async_trait::async_trait;
     use axum::{
@@ -916,6 +950,18 @@ mod tests {
         assert_eq!(legacy_ratio_value(1.0), serde_json::json!(1));
         assert_eq!(legacy_ratio_value(0.97), serde_json::json!(0.97));
         assert_eq!(legacy_ratio_value(-2.0), serde_json::json!(-2));
+    }
+
+    #[test]
+    fn missing_catalog_options_keep_go_setting_defaults() {
+        assert_eq!(default_auto_groups(), vec!["default"]);
+        assert_eq!(
+            default_group_group_ratios(),
+            std::collections::BTreeMap::from([(
+                "vip".to_owned(),
+                std::collections::BTreeMap::from([("edit_this".to_owned(), 0.9)]),
+            )])
+        );
     }
 
     #[test]
