@@ -1113,7 +1113,7 @@ fn topup_info_data_for_user(
         "enable_redemption": compliant,
         "payment_compliance_confirmed": compliant,
         "payment_compliance_terms_version": "v1",
-        "waffo_pay_methods": if waffo { json_value(options, "WaffoPayMethods", Value::Null) } else { Value::Null },
+        "waffo_pay_methods": if waffo { waffo_pay_methods(options) } else { Value::Null },
         "creem_products": creem_products,
         "pay_methods": pay_methods,
         "topup_group_ratio": legacy_number(topup_group_ratio(options, group)),
@@ -1196,6 +1196,57 @@ fn default_pay_methods() -> Value {
         {"name": "微信", "icon": "SiWechat", "type": "wxpay"},
         {"name": "自定义1", "icon": "LuCreditCard", "type": "custom1", "min_topup": "50"},
     ])
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct WaffoPayMethod {
+    name: String,
+    icon: String,
+    #[serde(rename = "payMethodType")]
+    pay_method_type: String,
+    #[serde(rename = "payMethodName")]
+    pay_method_name: String,
+}
+
+fn default_waffo_pay_methods() -> Value {
+    json!([
+        {
+            "name": "Card",
+            "icon": "/pay-card.png",
+            "payMethodType": "CREDITCARD,DEBITCARD",
+            "payMethodName": ""
+        },
+        {
+            "name": "Apple Pay",
+            "icon": "/pay-apple.png",
+            "payMethodType": "APPLEPAY",
+            "payMethodName": "APPLEPAY"
+        },
+        {
+            "name": "Google Pay",
+            "icon": "/pay-google.png",
+            "payMethodType": "GOOGLEPAY",
+            "payMethodName": "GOOGLEPAY"
+        }
+    ])
+}
+
+/// Match Go's typed `GetWaffoPayMethods` loader: missing/blank/invalid JSON
+/// falls back to the built-in list, while a valid empty list remains empty.
+fn waffo_pay_methods(options: &HashMap<String, String>) -> Value {
+    let Some(raw) = options.get("WaffoPayMethods") else {
+        return default_waffo_pay_methods();
+    };
+    if raw.trim().is_empty() {
+        return default_waffo_pay_methods();
+    }
+    match serde_json::from_str::<Option<Vec<WaffoPayMethod>>>(raw) {
+        Ok(Some(methods)) => {
+            serde_json::to_value(methods).unwrap_or_else(|_| default_waffo_pay_methods())
+        }
+        Ok(None) => Value::Null,
+        Err(_) => default_waffo_pay_methods(),
+    }
 }
 
 fn append_payment_method(
@@ -1758,6 +1809,52 @@ mod tests {
                 {"name": "自定义1", "icon": "LuCreditCard", "type": "custom1", "min_topup": "50"},
             ])
         );
+    }
+
+    #[test]
+    fn waffo_pay_methods_keep_go_defaults_and_typed_fallbacks() {
+        let mut options = HashMap::new();
+        let defaults = json!([
+            {
+                "name": "Card",
+                "icon": "/pay-card.png",
+                "payMethodType": "CREDITCARD,DEBITCARD",
+                "payMethodName": ""
+            },
+            {
+                "name": "Apple Pay",
+                "icon": "/pay-apple.png",
+                "payMethodType": "APPLEPAY",
+                "payMethodName": "APPLEPAY"
+            },
+            {
+                "name": "Google Pay",
+                "icon": "/pay-google.png",
+                "payMethodType": "GOOGLEPAY",
+                "payMethodName": "GOOGLEPAY"
+            }
+        ]);
+        assert_eq!(waffo_pay_methods(&options), defaults);
+
+        options.insert("WaffoPayMethods".into(), "not-json".into());
+        assert_eq!(waffo_pay_methods(&options), defaults);
+        options.insert("WaffoPayMethods".into(), "[]".into());
+        assert_eq!(waffo_pay_methods(&options), json!([]));
+        options.insert(
+            "WaffoPayMethods".into(),
+            r#"[{"name":"Custom","icon":"/custom.png","payMethodType":"CUSTOM","payMethodName":""}]"#.into(),
+        );
+        assert_eq!(
+            waffo_pay_methods(&options),
+            json!([{
+                "name": "Custom",
+                "icon": "/custom.png",
+                "payMethodType": "CUSTOM",
+                "payMethodName": ""
+            }])
+        );
+        options.insert("WaffoPayMethods".into(), r#"[{"name":1}]"#.into());
+        assert_eq!(waffo_pay_methods(&options), defaults);
     }
 
     #[test]
