@@ -105,5 +105,6 @@ GET	/api/redemption/:id	apps/api-rust/src/main.rs
 DELETE	/api/redemption/invalid	apps/api-rust/src/main.rs
 GET	/api/redemption/search	apps/api-rust/src/main.rs
 GET	/v1/models	apps/api-rust/src/models.rs
+GET	/v1/models/:model	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_relay_models_billing.rs
 GET	/v1beta/models	apps/api-rust/src/models.rs
 GET	/v1beta/openai/models	apps/api-rust/src/models.rs

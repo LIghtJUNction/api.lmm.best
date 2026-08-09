@@ -340,7 +340,7 @@ POST	/v1/messages	absent	not-applicable	unmounted	not-applicable	not-applicable	
 GET	/v1/models	present	unverified	mounted	blocked-sol-stop	not-applicable	go	blocked-sol-stop	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;stop=latest-independent-sol-review-invalidated-prior-compile-differential-and-approval-credit
 POST	/v1/models/*path	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 DELETE	/v1/models/:model	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/v1/models/:model	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/v1/models/:model	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/missing_relay_models_billing.rs;mount=apps/api-rust/src/migration_routes/missing_relay_models_billing.rs;listener=apps/api-rust/src/main.rs
 POST	/v1/moderations	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/v1/realtime	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/v1/rerank	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
