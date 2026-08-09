@@ -63,6 +63,9 @@ for literal in \
   'pg_restore --list' \
   'LMM_BACKUP_AGE_IDENTITY_FILE' \
   'decrypted database backup does not match the target copy' \
+  'release_controller_owned_transaction_lock' \
+  'controller_transaction_lock_owned=1' \
+  'activation dispatch failed; transaction lock retained for audit' \
   'production observation detected an anomaly; rollback timer remains armed' \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
