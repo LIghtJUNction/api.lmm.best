@@ -79,6 +79,8 @@ case $unit in
     chmod 0600 "$last"
     ;;
   lmm-api-go-token-*)
+		printf '%s\n' "$@" >"$LMM_TEST_SERVICE_STATE/token.args"
+		grep -Fq 'AND users.role >= 10' "$LMM_TEST_SERVICE_STATE/token.args" || exit 91
     printf 'sk-%032d' 0 >"$last"
     chmod 0600 "$last"
     ;;
