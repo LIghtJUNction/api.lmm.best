@@ -46,6 +46,8 @@ for literal in \
 	'"$PROBE_BINARY" request' \
 	'run_candidate_migration apply' \
 	'run_candidate_migration verify' \
+  'rollback_layout=%s' \
+  'direct Go upgrade unexpectedly found the split core package' \
   'pacman -Rdd --noconfirm lmm-api' \
   'release_transaction_lock'; do
   contains "$literal" "$here/activate-go-release.sh"
@@ -63,6 +65,7 @@ for literal in \
   'pg_restore --list' \
   'LMM_BACKUP_AGE_IDENTITY_FILE' \
   'decrypted database backup does not match the target copy' \
+  'case $rollback_layout in split|direct)' \
   'release_controller_owned_transaction_lock' \
   'controller_transaction_lock_owned=1' \
   'activation dispatch failed; transaction lock retained for audit' \
@@ -72,6 +75,10 @@ for literal in \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
 done
+contains 'direct:lmm-api-go:/usr/bin/lmm-api-go' "$here/capture-precutover-payload.sh"
+contains '--rollback-layout "$ROLLBACK_LAYOUT"' "$here/promote-production-backups.sh"
+[[ -f $here/precutover-lmm-api-go-direct.PKGBUILD && ! -L $here/precutover-lmm-api-go-direct.PKGBUILD ]] || \
+  fail 'direct Go rollback package template is missing or unsafe'
 for literal in \
   'chmod 0700 "$capture_root/core-root/etc/lmm-api"' \
   'chmod 0600 "$capture_root/core-root/etc/lmm-api/lmm-api.env"' \
@@ -120,6 +127,8 @@ fi
 [[ ! -e $side_effect ]] || fail 'malicious environment assignment executed'
 
 TMPDIR=$TMPDIR "$here/test-go-rollback-state-machine.sh"
+TMPDIR=$TMPDIR "$here/test-precutover-capture.sh"
+TMPDIR=$TMPDIR "$here/test-precutover-packages.sh"
 "$here/test-backup-promotion-contract.sh"
 "$repo/deploy/test-frontend-release.sh"
 

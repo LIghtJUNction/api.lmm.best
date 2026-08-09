@@ -113,7 +113,7 @@ printf 'rollback core\n' >"$tmp/rollback-core.pkg.tar.zst"
 printf 'rollback go\n' >"$tmp/rollback-go.pkg.tar.zst"
 
 run_promoter() {
-  local deployment_id=$1 controller_output=$2 offhost_output=$3
+  local deployment_id=$1 controller_output=$2 offhost_output=$3 layout=${4:-split}
   FAKE_DEPLOYMENT_ID=$deployment_id FAKE_CONTROLLER_OUTPUT=$controller_output \
     "$promoter" --target-host ArchDmit --jump-host archczy --ssh-config "$ssh_config" \
     --deployment-id "$deployment_id" --controller-workspace "$tmp/controller-work" \
@@ -125,7 +125,8 @@ run_promoter() {
     --copy-script "$here/create-backup-copy.sh" --verify-script "$verifier" \
     --precutover-payload "$tmp/precutover-payload.tar" \
     --rollback-core-package "$tmp/rollback-core.pkg.tar.zst" \
-    --rollback-go-package "$tmp/rollback-go.pkg.tar.zst"
+    --rollback-go-package "$tmp/rollback-go.pkg.tar.zst" \
+    --rollback-layout "$layout"
 }
 
 # The remote prerequisite gate must reject a missing pg_restore before it
@@ -177,6 +178,16 @@ fi
 
 rm -rf -- "$tmp/controller-work/staging/backup-target-promotion-test" \
   "$tmp/controller-work/staging/backup-off-host-promotion-test" "$controller_output"
+
+: >"$FAKE_SSH_LOG"
+: >"$FAKE_SCP_LOG"
+direct_controller="$tmp/controller-direct"
+direct_offhost=/var/backups/lmm-api/promotion-direct
+run_promoter promotion-direct "$direct_controller" "$direct_offhost" direct >/dev/null
+grep -Fq -- '--rollback-layout direct' "$FAKE_SSH_LOG" || \
+  fail 'direct rollback layout was not forwarded to target backup preparation'
+rm -rf -- "$tmp/controller-work/staging/backup-target-promotion-direct" \
+  "$tmp/controller-work/staging/backup-off-host-promotion-direct" "$direct_controller"
 
 # Each pre-existing destination must fail before ownership is claimed, so the
 # cleanup trap must never issue a removal for that destination.

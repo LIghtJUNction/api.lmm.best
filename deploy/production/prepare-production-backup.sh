@@ -4,7 +4,7 @@ umask 077
 
 readonly EXPECTED_HOST=arch-dmit
 readonly ROOT=/var/lib/lmm-api-go/deploy-work
-ENV_FILE=/etc/lmm-api/lmm-api.env
+ENV_FILE=''
 
 die() { printf 'prepare-production-backup: %s\n' "$*" >&2; exit 2; }
 
@@ -12,6 +12,7 @@ DEPLOYMENT_ID=''
 PRECUTOVER_PAYLOAD=''
 ROLLBACK_CORE=''
 ROLLBACK_GO=''
+ROLLBACK_LAYOUT='split'
 CHECK_ENV_ONLY=0
 while (($#)); do
   case $1 in
@@ -20,10 +21,20 @@ while (($#)); do
     --precutover-payload) PRECUTOVER_PAYLOAD=${2:?}; shift 2 ;;
     --rollback-core-package) ROLLBACK_CORE=${2:?}; shift 2 ;;
     --rollback-go-package) ROLLBACK_GO=${2:?}; shift 2 ;;
+    --rollback-layout) ROLLBACK_LAYOUT=${2:?}; shift 2 ;;
     --check-env-only) CHECK_ENV_ONLY=1; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+case $ROLLBACK_LAYOUT in split|direct) ;; *) die 'rollback layout must be split or direct' ;; esac
+if [[ -z $ENV_FILE ]]; then
+  if [[ $ROLLBACK_LAYOUT == split ]]; then
+    ENV_FILE=/etc/lmm-api/lmm-api.env
+  else
+    ENV_FILE=/etc/lmm-api-go/lmm-api-go.env
+  fi
+fi
 
 parse_database_url() {
   local line value database_url='' database_assignments=0
@@ -71,8 +82,13 @@ grep -Fqx "deployment_id=$DEPLOYMENT_ID" "$marker" || die 'target workspace mark
 for input in "$PRECUTOVER_PAYLOAD" "$ROLLBACK_CORE" "$ROLLBACK_GO"; do
   [[ $input == "$workspace"/staging/* && -s $input && -f $input && ! -L $input ]] || die 'rollback input is missing or unsafe'
 done
-[[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package does not match production'
 [[ $(pacman -Qp "$ROLLBACK_GO") == "$(pacman -Q lmm-api-go)" ]] || die 'Go rollback package does not match production'
+if [[ $ROLLBACK_LAYOUT == split ]]; then
+  [[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package does not match production'
+else
+  [[ $(<"$ROLLBACK_CORE") == direct ]] || die 'direct rollback marker is invalid'
+  ! pacman -Q lmm-api >/dev/null 2>&1 || die 'direct backup unexpectedly found the split core package'
+fi
 
 output="$workspace/staging/backup-inputs"
 [[ ! -e $output && ! -L $output ]] || die 'backup inputs already exist'
@@ -83,15 +99,27 @@ trap cleanup EXIT
 install -Dm0600 "$PRECUTOVER_PAYLOAD" "$application_stage/precutover-payload.tar"
 install -Dm0600 "$ROLLBACK_CORE" "$application_stage/${ROLLBACK_CORE##*/}"
 install -Dm0600 "$ROLLBACK_GO" "$application_stage/${ROLLBACK_GO##*/}"
-for dropin_root in /etc/systemd/system/lmm-api.service.d /etc/systemd/system.control/lmm-api.service.d; do
+if [[ $ROLLBACK_LAYOUT == split ]]; then
+  dropin_roots=(/etc/systemd/system/lmm-api.service.d /etc/systemd/system.control/lmm-api.service.d)
+  package_names=(lmm-api lmm-api-go)
+  observed_service=lmm-api.service
+  configuration_entries=(lmm-api)
+else
+  dropin_roots=(/etc/systemd/system/lmm-api-go.service.d /etc/systemd/system.control/lmm-api-go.service.d)
+  package_names=(lmm-api-go)
+  observed_service=lmm-api-go.service
+  configuration_entries=(lmm-api-go)
+  [[ ! -d /etc/lmm-api || -L /etc/lmm-api ]] || configuration_entries+=(lmm-api)
+fi
+for dropin_root in "${dropin_roots[@]}"; do
   if [[ -d $dropin_root && ! -L $dropin_root ]]; then
     relative=${dropin_root#/}
     install -d -m0700 "$application_stage/${relative%/*}"
     cp -a -- "$dropin_root" "$application_stage/$relative"
   fi
 done
-pacman -Qi lmm-api lmm-api-go >"$application_stage/package-info.txt"
-systemctl show lmm-api.service -p LoadState -p ActiveState -p SubState -p UnitFileState \
+pacman -Qi "${package_names[@]}" >"$application_stage/package-info.txt"
+systemctl show "$observed_service" -p LoadState -p ActiveState -p SubState -p UnitFileState \
   >"$application_stage/service-state.txt"
 tar --sort=name --numeric-owner --owner=0 --group=0 -C "$application_stage" -cf "$output/application.tar" .
 
@@ -101,7 +129,8 @@ frontend_release=${BASH_REMATCH[1]}
 frontend_dir="/srv/lmm-api-frontend/$frontend_link"
 [[ -d $frontend_dir && ! -L $frontend_dir ]] || die 'frontend release directory is unsafe'
 tar --sort=name --numeric-owner --owner=0 --group=0 -C "$frontend_dir" -cf "$output/frontend.tar" .
-tar --sort=name --numeric-owner --owner=0 --group=0 -C /etc -cf "$output/configuration.tar" lmm-api
+tar --sort=name --numeric-owner --owner=0 --group=0 -C /etc -cf "$output/configuration.tar" \
+  "${configuration_entries[@]}"
 
 database_url=$(parse_database_url)
 pg_dump --dbname="$database_url" --format=custom --file="$output/postgresql.dump.new"

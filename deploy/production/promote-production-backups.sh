@@ -24,6 +24,7 @@ VERIFY_SCRIPT=''
 PRECUTOVER_PAYLOAD=''
 ROLLBACK_CORE_PACKAGE=''
 ROLLBACK_GO_PACKAGE=''
+ROLLBACK_LAYOUT='split'
 while (($#)); do
   case $1 in
     --target-host) TARGET_HOST=${2:?}; shift 2 ;;
@@ -45,9 +46,12 @@ while (($#)); do
     --precutover-payload) PRECUTOVER_PAYLOAD=${2:?}; shift 2 ;;
     --rollback-core-package) ROLLBACK_CORE_PACKAGE=${2:?}; shift 2 ;;
     --rollback-go-package) ROLLBACK_GO_PACKAGE=${2:?}; shift 2 ;;
+    --rollback-layout) ROLLBACK_LAYOUT=${2:?}; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+case $ROLLBACK_LAYOUT in split|direct) ;; *) die 'rollback layout must be split or direct' ;; esac
 
 [[ $TARGET_HOST == ArchDmit ]] || die 'target host must be ArchDmit'
 [[ $JUMP_HOST == archczy ]] || die 'jump/off-host must be archczy'
@@ -190,7 +194,8 @@ offhost_remote_owned=1
   "$remote_stage/${PREPARE_SCRIPT##*/}" --deployment-id "$DEPLOYMENT_ID" \
   --precutover-payload "$remote_stage/${PRECUTOVER_PAYLOAD##*/}" \
   --rollback-core-package "$remote_stage/${ROLLBACK_CORE_PACKAGE##*/}" \
-  --rollback-go-package "$remote_stage/${ROLLBACK_GO_PACKAGE##*/}" >/dev/null
+  --rollback-go-package "$remote_stage/${ROLLBACK_GO_PACKAGE##*/}" \
+  --rollback-layout "$ROLLBACK_LAYOUT" >/dev/null
 
 frontend_release=$("${target_ssh[@]}" \
   readlink -- /srv/lmm-api-frontend/current)

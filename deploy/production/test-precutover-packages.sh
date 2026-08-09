@@ -23,6 +23,7 @@ chmod 0755 "$root/core-root/usr" "$root/core-root/usr/bin" "$root/core-root/usr/
   "$root/go-root/usr/lib/lmm-api/backends/go"
 printf 'lmm-api\t0.1.0.r31.g3e39995.payrate2.cachefix1.txfix1-1\n' >"$root/metadata/packages.tsv"
 printf 'lmm-api-go\t0.1.0.r122.g27d4df76-1\n' >>"$root/metadata/packages.tsv"
+printf 'split\n' >"$root/metadata/layout"
 for command_path in "$root/core-root/usr/bin/lmm-api" "$root/core-root/usr/bin/lmm-api-select" \
   "$root/go-root/usr/lib/lmm-api/backends/go/lmm-api"; do
   printf '#!/bin/sh\nexit 0\n' >"$command_path"
@@ -80,5 +81,56 @@ for record in \
 done
 if bsdtar -xOf "${core[0]}" etc/lmm-api/lmm-api.env | grep -q .; then
   fail 'core rollback package embedded an environment value'
+fi
+
+direct_root=$tmp/direct-payload
+direct_output=$tmp/direct-output
+mkdir -p \
+  "$direct_root/metadata" \
+  "$direct_root/go-root/etc/lmm-api-go" \
+  "$direct_root/go-root/usr/bin" \
+  "$direct_root/go-root/usr/lib/systemd/system" \
+  "$direct_root/go-root/usr/share/doc/lmm-api-go" \
+  "$direct_root/go-root/usr/share/licenses/lmm-api-go" \
+  "$direct_root/go-root/usr/share/lmm-api-go/frontend-dist" \
+  "$direct_output"
+printf 'direct\n' >"$direct_root/metadata/layout"
+printf 'lmm-api-go\t0.1.0.r267.g50dc6a7f9-1\n' >"$direct_root/metadata/packages.tsv"
+printf '#!/bin/sh\nexit 0\n' >"$direct_root/go-root/usr/bin/lmm-api-go"
+printf '[Service]\nExecStart=/usr/bin/lmm-api-go serve\n' \
+  >"$direct_root/go-root/usr/lib/systemd/system/lmm-api-go.service"
+: >"$direct_root/go-root/etc/lmm-api-go/lmm-api-go.env"
+printf '50dc6a7f9\n' >"$direct_root/go-root/usr/share/doc/lmm-api-go/REVISION"
+for license_file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
+  printf 'fixture\n' >"$direct_root/go-root/usr/share/licenses/lmm-api-go/$license_file"
+done
+printf 'old frontend\n' >"$direct_root/go-root/usr/share/lmm-api-go/frontend-dist/index.html"
+find "$direct_root/go-root" -type d -exec chmod 0755 {} +
+chmod 0700 "$direct_root/go-root/etc/lmm-api-go"
+find "$direct_root/go-root" -type f -exec chmod 0644 {} +
+chmod 0600 "$direct_root/go-root/etc/lmm-api-go/lmm-api-go.env"
+chmod 0755 "$direct_root/go-root/usr/bin/lmm-api-go"
+tar -C "$direct_root" -cf "$tmp/direct-payload.tar" .
+
+"$here/build-precutover-packages.sh" \
+  --workspace "$tmp/workspace" \
+  --payload "$tmp/direct-payload.tar" \
+  --output-dir "$direct_output" >"$tmp/direct-result"
+
+direct_go=$direct_output/lmm-api-go-0.1.0.r267.g50dc6a7f9-1-x86_64.pkg.tar.zst
+direct_marker=$direct_output/rollback-layout.direct
+[[ -f $direct_go ]] || fail 'direct Go rollback package identity is wrong'
+[[ -f $direct_marker && $(<"$direct_marker") == direct ]] || fail 'direct rollback marker is missing'
+[[ $(pacman -Qp "$direct_go") == 'lmm-api-go 0.1.0.r267.g50dc6a7f9-1' ]] || \
+  fail 'direct Go rollback package record is wrong'
+for expected in \
+  etc/lmm-api-go/lmm-api-go.env \
+  usr/bin/lmm-api-go \
+  usr/lib/systemd/system/lmm-api-go.service \
+  usr/share/lmm-api-go/frontend-dist/index.html; do
+  bsdtar -tf "$direct_go" | grep -Fqx "$expected" || fail "direct Go package lacks $expected"
+done
+if bsdtar -xOf "$direct_go" etc/lmm-api-go/lmm-api-go.env | grep -q .; then
+  fail 'direct Go rollback package embedded an environment value'
 fi
 printf 'pre-cutover rollback packages verified\n'
