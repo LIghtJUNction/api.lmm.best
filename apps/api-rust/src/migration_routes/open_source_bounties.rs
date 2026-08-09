@@ -30,6 +30,7 @@ const DEFAULT_PAGE_SIZE: i64 = 20;
 const ENABLED_USER_STATUS: i64 = 1;
 const ROLE_ADMIN: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
 
 /// PostgreSQL and dashboard-auth dependencies for the public bounty slice.
 #[derive(Clone)]
@@ -65,6 +66,7 @@ pub fn router(state: OpenSourceBountyState) -> Router {
             "/api/open-source-bounties/disputes/admin",
             get(admin_disputes),
         )
+        .route("/api/open-source-bounties/mcp-token", get(mcp_token_status))
         .route(
             "/api/open-source-bounties/notifications",
             get(list_notifications),
@@ -230,6 +232,26 @@ struct ListPayload {
 struct BountyFeeConfig {
     rate_percent: f64,
     rate_basis_points: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyMcpTokenStatus {
+    configured: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyMcpTokenStatusPayload {
+    status: BountyMcpTokenStatus,
+    endpoint: &'static str,
+    protocol_version: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -594,6 +616,69 @@ async fn bounty_config(State(state): State<OpenSourceBountyState>, headers: Head
         },
     })
     .into_response()
+}
+
+async fn mcp_token_status(
+    State(state): State<OpenSourceBountyState>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let row = match sqlx::query(
+        "SELECT token_hint, created_at, updated_at, last_used_at \
+         FROM open_source_bounty_mcp_tokens WHERE user_id = $1",
+    )
+    .bind(viewer_id)
+    .fetch_optional(&state.pg)
+    .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(error = %error, viewer_id, "failed to load open-source bounty MCP token status");
+            return internal_failure();
+        }
+    };
+    let status = match row {
+        Some(row) => BountyMcpTokenStatus {
+            configured: true,
+            token_hint: row.try_get("token_hint").ok(),
+            created_at: row
+                .try_get::<i64, _>("created_at")
+                .ok()
+                .filter(|value| *value != 0),
+            updated_at: row
+                .try_get::<i64, _>("updated_at")
+                .ok()
+                .filter(|value| *value != 0),
+            last_used_at: row
+                .try_get::<i64, _>("last_used_at")
+                .ok()
+                .filter(|value| *value != 0),
+        },
+        None => BountyMcpTokenStatus {
+            configured: false,
+            token_hint: None,
+            created_at: None,
+            updated_at: None,
+            last_used_at: None,
+        },
+    };
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: BountyMcpTokenStatusPayload {
+            status,
+            endpoint: "/mcp",
+            protocol_version: MCP_PROTOCOL_VERSION,
+        },
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 async fn required_viewer_id(
