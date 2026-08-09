@@ -373,8 +373,13 @@ fn parse_quota_display_type(value: &str) -> Option<QuotaDisplay> {
 fn parse_aggregate_display_type(value: &str) -> Option<QuotaDisplay> {
     serde_json::from_str::<Value>(value)
         .ok()
-        .and_then(|setting| setting.get("quota_display_type").and_then(Value::as_str))
-        .and_then(parse_quota_display_type)
+        .and_then(|setting| {
+            setting
+                .get("quota_display_type")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|value| parse_quota_display_type(&value))
 }
 
 #[derive(Serialize)]
