@@ -367,6 +367,9 @@ go_valkey FLUSHDB >/dev/null
 start_go_listener
 
 psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE SCHEMA lmm_test_models_rust;
+ALTER DATABASE lmm_test_models_rust SET search_path TO lmm_test_models_rust;
+SET search_path TO lmm_test_models_rust;
 CREATE ROLE lmm_test_models_runtime LOGIN;
 CREATE TABLE lmm_schema_contract (singleton BOOLEAN PRIMARY KEY, min_reader_version BIGINT NOT NULL, max_reader_version BIGINT NOT NULL);
 INSERT INTO lmm_schema_contract VALUES (TRUE, 1, 1);
@@ -383,11 +386,24 @@ CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), use
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 CREATE TABLE channels (id BIGINT PRIMARY KEY, type INTEGER DEFAULT 0, status INTEGER DEFAULT 1);
 CREATE TABLE abilities ("group" VARCHAR(64), model VARCHAR(255), channel_id BIGINT, enabled BOOLEAN, priority INTEGER DEFAULT 0, weight INTEGER DEFAULT 0, PRIMARY KEY ("group", model, channel_id));
-GRANT USAGE ON SCHEMA public TO lmm_test_models_runtime;
+GRANT USAGE ON SCHEMA lmm_test_models_rust TO lmm_test_models_runtime;
 GRANT SELECT ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, tokens, channels, abilities TO lmm_test_models_runtime;
+GRANT UPDATE ON users TO lmm_test_models_runtime;
 GRANT INSERT, UPDATE ON auth_flows TO lmm_test_models_runtime;
 GRANT INSERT, UPDATE, DELETE ON tokens TO lmm_test_models_runtime;
 GRANT USAGE ON SEQUENCE tokens_id_seq TO lmm_test_models_runtime;
+SQL
+sed "s/__LMM_APP_SCHEMA__/lmm_test_models_rust/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/bounty-forward.sql"
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 \
+  -f "$runtime/bounty-forward.sql" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges,
+  open_source_bounty_ledgers, open_source_bounty_disputes,
+  open_source_bounty_mcp_tokens, open_source_bounty_mcp_confirmations,
+  open_source_bounty_mcp_operations, open_source_bounty_rest_operations
+  TO lmm_test_models_runtime;
 SQL
 psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO options (key, value) VALUES
@@ -411,7 +427,7 @@ VALUES ('vip', 'vip-tiered-model', 101, TRUE, 30, 10), ('default', 'dynamic-tier
 SQL
 
 preflight_port Rust_HTTP "$rust_port"
-DATABASE_URL="postgresql://lmm_test_models_runtime@127.0.0.1:$pg_port/lmm_test_models_rust" \
+DATABASE_URL="postgresql://lmm_test_models_runtime@127.0.0.1:$pg_port/lmm_test_models_rust?options=-csearch_path%3Dlmm_test_models_rust" \
   VALKEY_URL="redis://:$rust_valkey_password@127.0.0.1:$rust_valkey_port" LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
   LMM_RS_TEST_INSTANCE=1 LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port" LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 CRYPTO_SECRET="$crypto_secret" SESSION_SECRET="$session_secret" \
   LMM_MODELS_CACHE_TTL_SECONDS=60 PASSWORD_LOGIN_ENABLED=false GLOBAL_API_RATE_LIMIT_ENABLE=false \
