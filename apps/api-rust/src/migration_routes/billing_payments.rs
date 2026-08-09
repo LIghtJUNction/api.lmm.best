@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{RawQuery, State},
+    extract::{RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -169,7 +170,7 @@ impl PaymentCompliance for DisabledPaymentCompliance {
 }
 
 pub fn billing_payments_router(state: BillingHttpState) -> Router {
-    Router::new()
+    let protected = Router::new()
         .route("/api/subscription/epay/pay", post(epay_pay))
         .route("/api/subscription/fastpay/pay", post(fastpay_pay))
         .route("/api/subscription/stripe/pay", post(stripe_pay))
@@ -190,7 +191,41 @@ pub fn billing_payments_router(state: BillingHttpState) -> Router {
         .route("/api/subscription/fastpay/notify", post(fastpay_notify))
         .route("/api/stripe/webhook", post(stripe_webhook))
         .route("/api/creem/webhook", post(creem_webhook))
-        .with_state(state)
+        // Go's UserAuth middleware runs before the JSON body is bound for
+        // every user-initiated payment. Callback/webhook routes remain
+        // intentionally outside this fence and use provider verification.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            billing_payment_auth_boundary,
+        ));
+    protected.with_state(state)
+}
+
+fn is_user_payment_route(path: &str, method: &Method) -> bool {
+    *method == Method::POST
+        && matches!(
+            path,
+            "/api/subscription/epay/pay"
+                | "/api/subscription/fastpay/pay"
+                | "/api/subscription/stripe/pay"
+                | "/api/subscription/creem/pay"
+                | "/api/subscription/waffo-pancake/pay"
+                | "/api/subscription/balance/pay"
+        )
+}
+
+async fn billing_payment_auth_boundary(
+    State(state): State<BillingHttpState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !is_user_payment_route(request.uri().path(), request.method()) {
+        return next.run(request).await;
+    }
+    if state.authorizer.user_id(request.headers()).await.is_err() {
+        return payment_error(StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+    next.run(request).await
 }
 
 #[async_trait]
