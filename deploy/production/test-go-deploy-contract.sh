@@ -70,6 +70,13 @@ for literal in \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
 done
+for literal in \
+  'chmod 0700 "$capture_root/core-root/etc/lmm-api"' \
+  'chmod 0600 "$capture_root/core-root/etc/lmm-api/lmm-api.env"' \
+  'chmod 0644 "$capture_root/core-root/etc/lmm-api/backend.conf"' \
+  'chmod 0755 "$capture_root/core-root/usr/bin/lmm-api"'; do
+  contains "$literal" "$here/capture-precutover-payload.sh"
+done
 if grep -Fq 'old_version=$(ssh -o BatchMode=yes "$HOST" jq' "$here/deploy-go.sh"; then
   fail 'pre-cutover version parsing still sends a jq filter through the remote shell'
 fi

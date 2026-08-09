@@ -52,6 +52,7 @@ chmod 0644 "$payload_root/core-root/usr/lib/systemd/system/lmm-api.service" \
   "$payload_root/core-root/etc/lmm-api/backend.conf"
 chmod 0600 "$payload_root/core-root/etc/lmm-api/lmm-api.env"
 printf 'fixture\n' >"$payload_root/core-root/usr/share/licenses/lmm-api/LICENSE"
+chmod 0644 "$payload_root/core-root/usr/share/licenses/lmm-api/LICENSE"
 tar --sort=name --numeric-owner --owner=0 --group=0 -C "$payload_root" -cf "$tmp/precutover-payload.tar" .
 
 TMPDIR=$workspace/tmp "$here/build-precutover-packages.sh" \
