@@ -738,16 +738,14 @@ async fn amount(State(state): State<IdentityCheckinAffState>, request: Request) 
         None => return legacy("error", "参数错误"),
     };
     let min = option_i64(&state.pg, "MinTopUp", 1).await;
-    let display_type = option_string(&state.pg, "general_setting")
-        .await
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|value| {
-            value
-                .get("quota_display_type")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "USD".to_owned());
+    let display_type = match option_string(&state.pg, "general_setting.quota_display_type").await {
+        Some(value) => value,
+        None => option_string(&state.pg, "general_setting")
+            .await
+            .as_deref()
+            .map(|value| quota_display_type_from_options(None, Some(value)))
+            .unwrap_or_else(|| "USD".to_owned()),
+    };
     let quota_per_unit = option_f64(&state.pg, "QuotaPerUnit", DEFAULT_QUOTA_PER_UNIT as f64).await;
     let minimum = topup_minimum(min, &display_type, quota_per_unit);
     if request.amount < minimum {
@@ -781,23 +779,19 @@ async fn amount(State(state): State<IdentityCheckinAffState>, request: Request) 
         .and_then(Value::as_f64)
         .filter(|v| *v > 0.0)
         .unwrap_or(1.0);
-    let payment: Value = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT value FROM options WHERE key='payment_setting'",
-    )
-    .fetch_optional(&state.pg)
-    .await
-    .ok()
-    .flatten()
-    .flatten()
-    .and_then(|v| serde_json::from_str(&v).ok())
-    .unwrap_or(Value::Null);
-    // Legacy uses an amount-specific discount only when it is positive.
-    let discount = payment
-        .get("amount_discount")
-        .and_then(|value| value.get(request.amount.to_string()))
-        .and_then(Value::as_f64)
-        .filter(|value| *value > 0.0)
-        .unwrap_or(1.0);
+    let amount_discount = option_string(&state.pg, "payment_setting.amount_discount").await;
+    let legacy_payment_setting = if amount_discount.is_none() {
+        option_string(&state.pg, "payment_setting").await
+    } else {
+        None
+    };
+    // Go uses the positive amount-specific discount, with the dotted
+    // registered option taking precedence over the legacy aggregate shape.
+    let discount = amount_discount_from_options(
+        amount_discount.as_deref(),
+        legacy_payment_setting.as_deref(),
+        request.amount,
+    );
     let amount_in_currency = if display_type == "TOKENS" {
         (request.amount as f64) / quota_per_unit
     } else {
@@ -819,6 +813,34 @@ fn topup_minimum(min_topup: i64, display_type: &str, quota_per_unit: f64) -> i64
         min_topup
     }
 }
+
+fn quota_display_type_from_options(dotted: Option<&str>, aggregate: Option<&str>) -> String {
+    dotted
+        .and_then(|value| (!value.trim().is_empty()).then(|| value.to_owned()))
+        .or_else(|| {
+            aggregate
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| value.get("quota_display_type").and_then(Value::as_str))
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "USD".to_owned())
+}
+
+fn amount_discount_from_options(dotted: Option<&str>, aggregate: Option<&str>, amount: i64) -> f64 {
+    dotted
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| value.get(amount.to_string()).and_then(Value::as_f64))
+        .or_else(|| {
+            aggregate
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| value.get("amount_discount").cloned())
+                .and_then(|value| value.get(amount.to_string()).and_then(Value::as_f64))
+        })
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(1.0)
+}
+
 async fn option_string(pg: &PgPool, key: &str) -> Option<String> {
     sqlx::query_scalar::<_, Option<String>>("SELECT value FROM options WHERE key=$1")
         .bind(key)
@@ -1121,5 +1143,36 @@ mod tests {
     fn token_display_topup_minimum_uses_the_current_quota_per_unit() {
         assert_eq!(topup_minimum(2, "TOKENS", 1_234.5), 2_469);
         assert_eq!(topup_minimum(2, "USD", 1_234.5), 2);
+    }
+
+    #[test]
+    fn amount_quote_prefers_go_dotted_settings_and_keeps_aggregate_fallback() {
+        assert_eq!(
+            quota_display_type_from_options(
+                Some("TOKENS"),
+                Some(r#"{"quota_display_type":"CNY"}"#),
+            ),
+            "TOKENS"
+        );
+        assert_eq!(
+            quota_display_type_from_options(None, Some(r#"{"quota_display_type":"CNY"}"#)),
+            "CNY"
+        );
+        assert_eq!(
+            amount_discount_from_options(
+                Some(r#"{"100":0.8}"#),
+                Some(r#"{"amount_discount":{"100":0.7}}"#),
+                100,
+            ),
+            0.8
+        );
+        assert_eq!(
+            amount_discount_from_options(None, Some(r#"{"amount_discount":{"100":0.7}}"#), 100),
+            0.7
+        );
+        assert_eq!(
+            amount_discount_from_options(Some("invalid"), None, 100),
+            1.0
+        );
     }
 }
