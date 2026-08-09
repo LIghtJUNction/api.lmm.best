@@ -214,14 +214,14 @@ done
 mkdir -m0700 -- "$target_mirror" "$offhost_mirror"
 target_mirror_owned=1
 offhost_mirror_owned=1
-"${target_scp[@]}" -r "$target_endpoint:$target_output/." "$target_mirror/"
+"${target_scp[@]}" -p -r "$target_endpoint:$target_output/." "$target_mirror/"
 controller_owned=1
-"${target_scp[@]}" -r "$target_endpoint:$controller_remote" "$CONTROLLER_OUTPUT"
-"${target_scp[@]}" -r "$target_endpoint:$offhost_remote/." "$offhost_mirror/"
+"${target_scp[@]}" -p -r "$target_endpoint:$controller_remote" "$CONTROLLER_OUTPUT"
+"${target_scp[@]}" -p -r "$target_endpoint:$offhost_remote/." "$offhost_mirror/"
 
 "${offhost_ssh[@]}" install -d -m0700 "${OFFHOST_OUTPUT%/*}"
 offhost_owned=1
-"$scp_bin" -F "$SSH_CONFIG" -r "$offhost_mirror" "$JUMP_HOST:$OFFHOST_OUTPUT"
+"$scp_bin" -F "$SSH_CONFIG" -p -r "$offhost_mirror" "$JUMP_HOST:$OFFHOST_OUTPUT"
 "${offhost_ssh[@]}" bash -s -- "$OFFHOST_OUTPUT" <<'EOF'
 set -Eeuo pipefail
 directory=$1
