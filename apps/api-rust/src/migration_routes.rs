@@ -38,6 +38,7 @@ pub mod missing_relay_misc_new;
 pub mod missing_relay_models_billing;
 pub mod missing_relay_video;
 pub mod observability;
+pub mod open_source_bounties;
 pub mod relay_anthropic_gemini;
 pub mod relay_media;
 pub mod relay_misc;

@@ -27,6 +27,7 @@ use lmm_api_rs::{
             PgReadOnlyObservabilityTokenAuthorizer, ValkeyObservabilityMetrics,
             observability_read_router,
         },
+        open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
     },
     models::{ModelsHttpState, ModelsListenerMode, PgModelsService},
     status::{PgStatusRepository, StatusHttpState, StatusRepository},
@@ -208,6 +209,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
             )),
         ));
+        let open_source_bounties =
+            open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
         let control_public = if local_acceptance {
             // Local acceptance must never contact an operator-configured
             // uptime service; the test adapter fails closed instead.
@@ -224,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(registration)
             .merge(billing_subscriptions)
             .merge(observability)
+            .merge(open_source_bounties)
             .merge(control_public);
         if local_acceptance {
             extra_surface = extra_surface.merge(test_instance::safe_system_config_surface(

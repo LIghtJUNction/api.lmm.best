@@ -21,6 +21,7 @@ GET	/api/subscription/plans	lmm_api_rs::migration_routes::billing_subscriptions:
 GET	/api/subscription/self	lmm_api_rs::migration_routes::billing_subscriptions::router
 PUT	/api/subscription/self/preference	lmm_api_rs::migration_routes::billing_subscriptions::router
 GET	/api/home_page_content	lmm_api_rs::http::home_page_content
+GET	/api/open-source-bounties	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/log/	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/log/channel_affinity_usage_cache	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/log/search	lmm_api_rs::migration_routes::observability::observability_read_router
