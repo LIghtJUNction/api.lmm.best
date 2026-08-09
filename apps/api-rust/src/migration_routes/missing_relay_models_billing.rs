@@ -273,12 +273,11 @@ fn request_id(request: &Request) -> String {
 }
 
 fn auth_failure(error: ModelsError, version: &str, request_id: &str) -> Response {
-    if matches!(
-        error.kind,
-        ModelsErrorKind::MissingToken
-            | ModelsErrorKind::InvalidToken
-            | ModelsErrorKind::DiscoveryHidden
-    ) {
+    // The frozen Go relay mounts `/v1/models/:model` behind `TokenAuth`,
+    // which reports both a missing and an invalid credential as the OpenAI
+    // error envelope.  Keep the current-listener discovery concealment
+    // separate: only an explicit trust decision is a generic 404.
+    if error.kind == ModelsErrorKind::DiscoveryHidden {
         return compat_response(
             (
                 StatusCode::NOT_FOUND,
@@ -293,11 +292,10 @@ fn auth_failure(error: ModelsError, version: &str, request_id: &str) -> Response
     }
 
     let status = match error.kind {
+        ModelsErrorKind::MissingToken | ModelsErrorKind::InvalidToken => StatusCode::UNAUTHORIZED,
         ModelsErrorKind::AccessDenied | ModelsErrorKind::UserBanned => StatusCode::FORBIDDEN,
         ModelsErrorKind::Database => StatusCode::INTERNAL_SERVER_ERROR,
-        ModelsErrorKind::MissingToken
-        | ModelsErrorKind::InvalidToken
-        | ModelsErrorKind::DiscoveryHidden => unreachable!("handled above"),
+        ModelsErrorKind::DiscoveryHidden => unreachable!("handled above"),
     };
     compat_response(
         (
@@ -480,7 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_token_does_not_expose_the_static_catalogue() {
+    async fn rejected_token_uses_the_legacy_openai_error_envelope() {
         let response = app(
             Err(ModelsErrorKind::InvalidToken),
             Some(ModelView::new("must-not-leak", "openai")),
@@ -493,12 +491,17 @@ mod tests {
         .await
         .expect("router responds");
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(json_body(response).await, json!({"message":"Not Found"}));
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["type"], "new_api_error");
+        assert_eq!(body["error"]["code"], "");
+        assert!(body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("Invalid token (request id: ")));
     }
 
     #[tokio::test]
-    async fn missing_token_is_hidden_as_generic_not_found() {
+    async fn missing_token_uses_the_legacy_openai_error_envelope() {
         let response = app(
             Err(ModelsErrorKind::MissingToken),
             Some(ModelView::new("must-not-leak", "openai")),
@@ -511,8 +514,13 @@ mod tests {
         .await
         .expect("router responds");
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(json_body(response).await, json!({"message":"Not Found"}));
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["type"], "new_api_error");
+        assert_eq!(body["error"]["code"], "");
+        assert!(body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("Invalid token (request id: ")));
     }
 
     #[tokio::test]
