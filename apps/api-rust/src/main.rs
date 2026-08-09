@@ -9,6 +9,10 @@ use http::{ApiTokenMount, AppState, RuntimeState};
 use lmm_api_rs::{
     auth::{AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth},
     migration_routes::{
+        admin_catalog::{
+            AdminCatalogState, DashboardAdminCatalogAuthorizer, PgCatalogProvider,
+            router as admin_catalog_router,
+        },
         api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
         billing_subscriptions::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
@@ -188,6 +192,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let identity_profile = identity_profile_router(
             ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
         );
+        let catalog_http = reqwest::Client::builder()
+            .timeout(config.dependency_timeout)
+            .build()
+            .map_err(|_| io::Error::other("failed to initialize catalog HTTP client"))?;
+        let admin_catalog = http::api_global_rate_limited_surface(
+            &app_state,
+            admin_catalog_router(AdminCatalogState::new(
+                Arc::new(
+                    PgCatalogProvider::with_official_upstream(pg.clone(), catalog_http)
+                        .map_err(|_| io::Error::other("failed to initialize catalog provider"))?,
+                ),
+                Arc::new(DashboardAdminCatalogAuthorizer::new(Arc::clone(&auth))),
+            )),
+        );
         // Administrator user-management routes use the same PostgreSQL and
         // Valkey-backed auth/session fences as the isolated candidate surface.
         // Keep them a Rust candidate while Go retains production ownership.
@@ -236,6 +254,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ))
         };
         let mut extra_surface = identity_profile
+            .merge(admin_catalog)
             .merge(identity_admin)
             .merge(registration)
             .merge(billing_subscriptions)
