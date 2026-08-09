@@ -25,6 +25,9 @@ case " $* " in
 esac
 if [[ $* == *' bash -s -- '* ]]; then
   script=$(cat)
+  if [[ $script == *'backup transaction lock ownership changed'* ]]; then
+    printf 'failed-backup-lock-release %s\n' "$*" >>"$FAKE_SSH_LOG"
+  fi
   if [[ $script == *'required backup command is unavailable:'* ]]; then
     [[ $script == *' pg_dump pg_restore '* ]] || exit 94
     if [[ ${FAKE_MISSING_TARGET_COMMAND:-} == pg_restore ]]; then
@@ -219,5 +222,7 @@ grep -Fq "rm -rf -- $failure_offhost" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned off-host partial was not removed'
 grep -Fq "rm -rf -- /var/lib/lmm-api-go/deploy-work/$failure_id/staging/controller-copy" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned target-side controller partial was not removed'
+grep -Fq "failed-backup-lock-release" "$FAKE_SSH_LOG" || \
+  fail 'failed backup promotion did not release its transaction lock'
 
 printf 'backup promotion contract verified\n'
