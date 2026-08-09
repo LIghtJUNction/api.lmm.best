@@ -35,6 +35,19 @@ impl ChannelAdminAuthorizer for Allow {
     }
 }
 
+struct DenyAll;
+
+#[async_trait]
+impl ChannelAdminAuthorizer for DenyAll {
+    async fn authorize(
+        &self,
+        _: &axum::http::HeaderMap,
+        _: ChannelAction,
+    ) -> Result<(), ChannelError> {
+        Err(ChannelError::Unauthorized)
+    }
+}
+
 struct DenySensitive;
 
 #[async_trait]
@@ -216,6 +229,38 @@ async fn malformed_tag_operation_json_keeps_the_legacy_success_envelope() {
     assert_eq!(
         json_body(response).await,
         serde_json::json!({"success":false,"message":"参数错误"})
+    );
+}
+
+#[tokio::test]
+async fn malformed_tag_operation_authentication_precedes_json_binding() {
+    let app = channel_ops_router(ChannelOpsHttpState::new(
+        PgPoolOptions::new()
+            .connect_lazy("postgres://unused")
+            .expect("lazy pool"),
+        redis::Client::open("redis://127.0.0.1/").expect("Valkey client"),
+        Arc::new(DenyAll),
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/channel/tag/disabled")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        json_body(response).await,
+        serde_json::json!({
+            "success": false,
+            "message": "Unauthorized, invalid access token",
+            "code": "AUTH_UNAUTHORIZED"
+        })
     );
 }
 
