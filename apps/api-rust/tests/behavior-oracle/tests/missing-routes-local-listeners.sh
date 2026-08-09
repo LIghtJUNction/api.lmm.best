@@ -98,10 +98,12 @@ createdb -h 127.0.0.1 -p "$pg_port" -O "$role" "$database"
 # This makes every SQL reference resolve through the exact test namespace that
 # Config validates when LMM_RS_TEST_INSTANCE=1.
 sed "s/public\./$schema./g" "$repo_root/apps/api-rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql" > "$runtime/baseline.sql"
+sed "s/__LMM_APP_SCHEMA__/$schema/g" "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" > "$runtime/bounty-forward.sql"
 psql -h 127.0.0.1 -p "$pg_port" -U "$role" -d "$database" -v ON_ERROR_STOP=1 <<SQL >/dev/null
 CREATE SCHEMA $schema AUTHORIZATION $role;
 SET search_path TO $schema;
 \i $runtime/baseline.sql
+\i $runtime/bounty-forward.sql
 CREATE TABLE lmm_schema_contract (singleton BOOLEAN PRIMARY KEY, min_reader_version BIGINT NOT NULL, max_reader_version BIGINT NOT NULL);
 INSERT INTO lmm_schema_contract VALUES (TRUE, 1, 1);
 SQL
@@ -149,9 +151,11 @@ if [[ $(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.
 fi
 
 database_url="postgresql://$role@127.0.0.1:$pg_port/$database?options=-csearch_path=$schema"
+# Test instances accept only the single-slot identity; blue/green slot names
+# are intentionally rejected outside the normal deployment policy.
 env \
   LMM_RS_TEST_INSTANCE=1 \
-  LMM_RS_SLOT=blue \
+  LMM_RS_SLOT=single \
   LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
   DATABASE_URL="$database_url" \
   VALKEY_URL="redis://127.0.0.1:$valkey_port" \
