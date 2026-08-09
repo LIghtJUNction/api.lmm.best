@@ -28,6 +28,7 @@ use crate::auth::{AuthErrorKind, DashboardAuth};
 const MAX_PAGE_SIZE: i64 = 50;
 const DEFAULT_PAGE_SIZE: i64 = 20;
 const ENABLED_USER_STATUS: i64 = 1;
+const ROLE_ADMIN: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// PostgreSQL and dashboard-auth dependencies for the public bounty slice.
@@ -59,6 +60,10 @@ pub fn router(state: OpenSourceBountyState) -> Router {
         .route(
             "/api/open-source-bounties/disputes/mine",
             get(owned_disputes),
+        )
+        .route(
+            "/api/open-source-bounties/disputes/admin",
+            get(admin_disputes),
         )
         .route(
             "/api/open-source-bounties/notifications",
@@ -599,6 +604,34 @@ async fn required_viewer_id(
         Some(viewer_id) => Ok(viewer_id),
         None => Err(auth_failure(AuthErrorKind::Unauthorized)),
     }
+}
+
+async fn required_admin_id(
+    state: &OpenSourceBountyState,
+    headers: &HeaderMap,
+) -> Result<i64, Response> {
+    let token =
+        authorization_token(headers).ok_or_else(|| auth_failure(AuthErrorKind::Unauthorized))?;
+    let user = state
+        .auth
+        .self_user(SecretString::from(token))
+        .await
+        .map_err(|error| auth_failure(error.kind))?;
+    if user.id <= 0 || user.status != ENABLED_USER_STATUS {
+        return Err(auth_failure(AuthErrorKind::Unauthorized));
+    }
+    if user.role < ROLE_ADMIN {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(FailureEnvelope {
+                success: false,
+                code: "AUTH_INSUFFICIENT_PRIVILEGE",
+                message: "Unauthorized, insufficient privileges",
+            }),
+        )
+            .into_response());
+    }
+    Ok(user.id)
 }
 
 fn project_select() -> &'static str {
@@ -1184,6 +1217,58 @@ async fn owned_disputes(
             Ok(item) => items.push(item),
             Err(error) => {
                 tracing::error!(error = %error, viewer_id, "failed to decode owned open-source bounty dispute");
+                return internal_failure();
+            }
+        }
+    }
+    let mut response = Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: items,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+async fn admin_disputes(
+    State(state): State<OpenSourceBountyState>,
+    Query(query): Query<DisputeListQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let admin_id = match required_admin_id(&state, &headers).await {
+        Ok(admin_id) => admin_id,
+        Err(response) => return response,
+    };
+    let (status, limit) = match query.normalized() {
+        Ok(values) => values,
+        Err(response) => return *response,
+    };
+    let mut sql = dispute_view_select().to_owned();
+    if status.is_some() {
+        sql.push_str(" WHERE d.status = $1");
+    }
+    sql.push_str(" ORDER BY CASE WHEN d.status = 'open' THEN 0 ELSE 1 END, d.updated_at DESC, d.id DESC LIMIT $");
+    sql.push_str(if status.is_some() { "2" } else { "1" });
+    let mut request = sqlx::query(&sql);
+    if let Some(status) = status {
+        request = request.bind(status);
+    }
+    let rows = match request.bind(limit).fetch_all(&state.pg).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(error = %error, admin_id, "failed to list administrator open-source bounty disputes");
+            return internal_failure();
+        }
+    };
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match dispute_view_from_row(&row) {
+            Ok(item) => items.push(item),
+            Err(error) => {
+                tracing::error!(error = %error, admin_id, "failed to decode administrator open-source bounty dispute");
                 return internal_failure();
             }
         }
