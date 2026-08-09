@@ -57,6 +57,34 @@ release_version="$base_version.r$revision_count.g$short_revision"
 deployment_id="go-$short_revision-$(date -u +%Y%m%dT%H%M%SZ)"
 [[ $deployment_id =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || die 'generated deployment ID is invalid'
 
+controller_transaction_lock_owned=0
+release_controller_owned_transaction_lock() {
+  ssh -o BatchMode=yes "$HOST" bash -s -- "$deployment_id" <<'REMOTE'
+set -Eeuo pipefail
+deployment_id=$1
+lock=/var/lib/lmm-api-go/deploy-transaction.lock
+marker="$lock/deployment.env"
+[[ -d $lock && ! -L $lock && -f $marker && ! -L $marker ]]
+[[ $(stat -c '%U:%G:%a' "$lock") == root:root:700 ]]
+[[ $(stat -c '%U:%G:%a' "$marker") == root:root:600 ]]
+grep -Fqx 'format=1' "$marker"
+grep -Fqx "deployment_id=$deployment_id" "$marker"
+grep -Fqx 'status=ACTIVE' "$marker"
+rm -f -- "$marker"
+rmdir -- "$lock"
+REMOTE
+}
+cleanup_controller_transaction_lock() {
+  local rc=$?
+  trap - EXIT
+  if ((rc != 0 && controller_transaction_lock_owned != 0)); then
+    set +e
+    release_controller_owned_transaction_lock
+  fi
+  exit "$rc"
+}
+trap cleanup_controller_transaction_lock EXIT
+
 artifacts=$WORKSPACE/artifacts/$deployment_id
 new_dir=$artifacts/new
 rollback_dir=$artifacts/rollback
@@ -152,6 +180,7 @@ fi
   --precutover-payload "$capture_dir/precutover-payload.tar" \
   --rollback-core-package "$rollback_core" --rollback-go-package "$rollback_go" \
   >"$manifest_dir/backup-locations.txt"
+controller_transaction_lock_owned=1
 target_mirror="$WORKSPACE/staging/backup-target-$deployment_id"
 [[ -f $target_mirror/database.archive && ! -L $target_mirror/database.archive ]] || die 'plain target database backup mirror is missing'
 pg_restore --list "$target_mirror/database.archive" >/dev/null
@@ -188,7 +217,7 @@ remote_go="$remote_stage/${rollback_go##*/}"
 target_backup="/var/lib/lmm-api-go/deploy-backups/$deployment_id"
 activation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)
 deploy_unit="lmm-api-go-deploy-$deployment_id"
-ssh -o BatchMode=yes "$HOST" systemd-run \
+if ! ssh -o BatchMode=yes "$HOST" systemd-run \
   --unit="$deploy_unit" --collect --property=Type=oneshot --property=TimeoutStartSec=9min \
   "$remote_stage/activate-go-release.sh" activate \
   --workspace "$remote_workspace" \
@@ -199,7 +228,13 @@ ssh -o BatchMode=yes "$HOST" systemd-run \
   --expected-version "$release_version" --old-version "$old_version" \
   --frontend-index-sha256 "$frontend_index_sha256" \
   --frontend-release-script "$remote_stage/frontend-release.sh" \
-  --backup-dir "$target_backup" --rollback-seconds 600 >/dev/null
+  --backup-dir "$target_backup" --rollback-seconds 600 >/dev/null; then
+  # The remote dispatch result is ambiguous on transport failure. Retain the
+  # exact transaction lock so a running activation cannot lose its guard.
+  controller_transaction_lock_owned=0
+  die 'activation dispatch failed; transaction lock retained for audit'
+fi
+controller_transaction_lock_owned=0
 
 status_file="$remote_workspace/state/status"
 for _ in {1..160}; do
