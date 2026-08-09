@@ -300,6 +300,103 @@ async fn mcp_token_status_requires_dashboard_auth_before_token_lookup() {
         .expect("route response");
 
     assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, no-cache, must-revalidate, private, max-age=0")
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
+        "AUTH_UNAUTHORIZED"
+    );
+}
+
+#[tokio::test]
+async fn mcp_token_rotation_requires_dashboard_auth_before_token_write() {
+    let pg = PgPoolOptions::new()
+        .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+        .expect("lazy PostgreSQL pool");
+    let valkey = redis::Client::open("redis://route-test:route-test@127.0.0.1:1")
+        .expect("lazy Valkey client");
+    let auth_config = AuthConfig {
+        session_secret: SecretString::from(
+            "open-source-bounty-mcp-token-rotate-route-test-secret-012345678901234567890123456789",
+        ),
+        ..AuthConfig::default()
+    };
+    let auth = Arc::new(
+        PgValkeyDashboardAuth::new(pg.clone(), valkey, auth_config)
+            .expect("route-test auth adapter"),
+    );
+    let app = router(OpenSourceBountyState::new(pg, auth));
+
+    let response = app
+        .oneshot(
+            Request::post("/api/open-source-bounties/mcp-token")
+                .body(Body::empty())
+                .expect("route request"),
+        )
+        .await
+        .expect("route response");
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, no-cache, must-revalidate, private, max-age=0")
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
+        "AUTH_UNAUTHORIZED"
+    );
+}
+
+#[tokio::test]
+async fn mcp_token_revocation_requires_dashboard_auth_before_token_delete() {
+    let pg = PgPoolOptions::new()
+        .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+        .expect("lazy PostgreSQL pool");
+    let valkey = redis::Client::open("redis://route-test:route-test@127.0.0.1:1")
+        .expect("lazy Valkey client");
+    let auth_config = AuthConfig {
+        session_secret: SecretString::from(
+            "open-source-bounty-mcp-token-revoke-route-test-secret-012345678901234567890123456789",
+        ),
+        ..AuthConfig::default()
+    };
+    let auth = Arc::new(
+        PgValkeyDashboardAuth::new(pg.clone(), valkey, auth_config)
+            .expect("route-test auth adapter"),
+    );
+    let app = router(OpenSourceBountyState::new(pg, auth));
+
+    let response = app
+        .oneshot(
+            Request::delete("/api/open-source-bounties/mcp-token")
+                .body(Body::empty())
+                .expect("route request"),
+        )
+        .await
+        .expect("route response");
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store, no-cache, must-revalidate, private, max-age=0")
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("response body");
