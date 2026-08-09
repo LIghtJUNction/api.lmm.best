@@ -98,6 +98,14 @@ impl LegacyLocale {
         }
     }
 
+    const fn invalid_params(self) -> &'static str {
+        match self {
+            Self::En => "Invalid parameters",
+            Self::ZhCn => "无效的参数",
+            Self::ZhTw => "無效的參數",
+        }
+    }
+
     const fn insufficient_privilege(self) -> &'static str {
         match self {
             Self::En => "Unauthorized, insufficient privileges",
@@ -372,9 +380,7 @@ impl SecurityError {
                 "注册前必须同意用户协议和隐私政策",
                 Some("LEGAL_CONSENT_REQUIRED"),
             ),
-            Self::InvalidRegistration => {
-                failure(StatusCode::OK, "无效的注册参数", Some("INVALID_PARAMS"))
-            }
+            Self::InvalidRegistration => failure(StatusCode::OK, locale.invalid_params(), None),
             Self::RegistrationConflict => {
                 failure(StatusCode::OK, "用户名或邮箱已存在", Some("USER_EXISTS"))
             }
