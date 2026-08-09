@@ -26,8 +26,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::RequestContext;
 use crate::auth::{
-    AuthErrorKind, DashboardAuth, DashboardUser, DashboardUserView, UserAuthPolicyError,
-    enforce_user_auth, enforce_user_auth_view, user_auth_message,
+    AuthErrorKind, DashboardAuth, DashboardUser, UserAuthPolicyError, enforce_user_auth,
+    user_auth_message,
 };
 
 const ROLE_ADMIN: i64 = 10;
@@ -180,30 +180,6 @@ async fn actor(state: &IdentityTopupState, headers: &HeaderMap) -> Result<Dashbo
         })?;
     enforce_user_auth(&user).map_err(|error| user_auth_error(headers, error))?;
     Ok(user)
-}
-
-async fn actor_view(
-    state: &IdentityTopupState,
-    headers: &HeaderMap,
-) -> Result<DashboardUserView, Response> {
-    let Some(token) = bearer(headers) else {
-        return Err(unauthorized());
-    };
-    let view = state
-        .auth
-        .self_user_view_for_optional(SecretString::from(token))
-        .await
-        .map_err(|error| match error.kind {
-            AuthErrorKind::UserDisabled => {
-                user_auth_error(headers, UserAuthPolicyError::UserDisabled)
-            }
-            AuthErrorKind::Unauthorized
-            | AuthErrorKind::TokenExpired
-            | AuthErrorKind::SessionRevoked => unauthorized(),
-            _ => unauthorized(),
-        })?;
-    enforce_user_auth_view(&view).map_err(|error| user_auth_error(headers, error))?;
-    Ok(view)
 }
 
 async fn administrator(
@@ -1003,7 +979,11 @@ fn completed_quota(amount: i64, money: &str, provider: &str, quota_per_unit: f64
 }
 
 async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap) -> Response {
-    let actor = match actor_view(&state, &headers).await {
+    // Frozen Go exposes the complete payment configuration to every ordinary
+    // UserAuth principal. Console activation is not part of this route's
+    // authorization contract; individual payment writes keep their own
+    // compliance and credential guards.
+    let actor = match actor(&state, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
@@ -1011,11 +991,15 @@ async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap)
         Ok(options) => options,
         Err(_) => return fail("系统错误"),
     };
-    ok(topup_info_data_for_user(
-        &options,
-        actor.developer_access_granted,
-        &actor.group,
-    ))
+    let mut data = topup_info_data_for_user(&options, true, &actor.group);
+    // Keep the frozen Go response shape. The activation-aware helper is also
+    // used by newer Rust-only callers, but these two metadata fields were not
+    // present in `controller.GetTopUpInfo` and must not leak on this route.
+    if let Value::Object(ref mut object) = data {
+        object.remove("developer_access_granted");
+        object.remove("topup_group_ratio");
+    }
+    ok(data)
 }
 
 #[cfg(test)]
