@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
+ROOT=$(git -C "$HERE" rev-parse --show-toplevel)
+readonly ROOT
 readonly SHARED="$HERE/../common/lmm-api"
 readonly PACKAGES=(
   lmm-api-go
@@ -86,8 +88,14 @@ contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-grep -Fqx '_commit=546910cef6627da7728e3cc4f9648e2c67e96c61' "$HERE/lmm-api-go/PKGBUILD" ||
+go_release_commit=546910cef6627da7728e3cc4f9648e2c67e96c61
+readonly go_release_commit
+grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
+go_release_pkgver=$(git -C "$ROOT" describe --long --tags --abbrev=9 "$go_release_commit" | \
+  sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g')
+grep -Fqx "pkgver=$go_release_pkgver" "$HERE/lmm-api-go/PKGBUILD" ||
+  die "canonical Go package version does not match pinned revision: $go_release_pkgver"
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 
 grep -Fqx 'ExecStart=/usr/bin/lmm-api-go serve' "$SHARED/lmm-api-go.service" ||
