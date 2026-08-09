@@ -23,6 +23,10 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::{
+    task::JoinHandle,
+    time::{self, Duration as TokioDuration},
+};
 
 const PLAN_CACHE_PREFIX: &str = "new-api:subscription_plan:v1:";
 const PLAN_INFO_CACHE_PREFIX: &str = "new-api:subscription_plan_info:v1:";
@@ -42,6 +46,287 @@ impl BillingSubscriptionsState {
     pub fn new(pg: PgPool, valkey: Option<redis::Client>, auth: Arc<dyn DashboardAuth>) -> Self {
         Self { pg, valkey, auth }
     }
+}
+
+/// Start the Go-compatible subscription maintenance loop for the process
+/// elected as the database master.  The loop is deliberately opt-out for
+/// `NODE_TYPE=slave`, matching Go's `common.IsMasterNode` decision, and is
+/// disabled for the isolated Rust test instance so fixtures remain explicit.
+pub fn spawn_maintenance(pg: PgPool, valkey: Option<redis::Client>) -> Option<JoinHandle<()>> {
+    if std::env::var("NODE_TYPE").ok().as_deref() == Some("slave")
+        || std::env::var("LMM_RS_TEST_INSTANCE").ok().as_deref() == Some("1")
+    {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        let mut ticker = time::interval(TokioDuration::from_secs(60));
+        let mut last_cleanup = 0_i64;
+        loop {
+            ticker.tick().await;
+            let current = match database_timestamp(&pg).await {
+                Ok(current) => current,
+                Err(error) => {
+                    tracing::warn!(%error, "subscription maintenance clock query failed");
+                    continue;
+                }
+            };
+            let cleanup = current.saturating_sub(last_cleanup) >= 30 * 60;
+            match maintenance_once_at(&pg, valkey.as_ref(), current, cleanup).await {
+                Ok((expired, reset, cleaned)) => {
+                    if cleanup {
+                        last_cleanup = current;
+                    }
+                    if expired > 0 || reset > 0 || cleaned > 0 {
+                        tracing::debug!(
+                            expired,
+                            reset,
+                            cleaned,
+                            "subscription maintenance completed"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "subscription maintenance failed");
+                }
+            }
+        }
+    }))
+}
+
+/// Execute one maintenance pass.  This public seam is used by the isolated
+/// PostgreSQL/Valkey integration proof; the production loop above calls the
+/// same implementation with the Go-compatible 60-second cadence.
+pub async fn maintenance_once(
+    pg: &PgPool,
+    valkey: Option<&redis::Client>,
+) -> Result<(), sqlx::Error> {
+    let current = database_timestamp(pg).await?;
+    maintenance_once_at(pg, valkey, current, true)
+        .await
+        .map(|_| ())
+}
+
+async fn database_timestamp(pg: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT EXTRACT(EPOCH FROM NOW())::BIGINT")
+        .fetch_one(pg)
+        .await
+}
+
+async fn maintenance_once_at(
+    pg: &PgPool,
+    valkey: Option<&redis::Client>,
+    current: i64,
+    cleanup: bool,
+) -> Result<(i64, i64, i64), sqlx::Error> {
+    let mut expired = 0_i64;
+    loop {
+        let count = expire_due_subscriptions(pg, valkey, current, 300).await?;
+        expired = expired.saturating_add(count);
+        if count < 300 {
+            break;
+        }
+    }
+
+    let mut reset = 0_i64;
+    loop {
+        let count = reset_due_subscriptions(pg, current, 300).await?;
+        reset = reset.saturating_add(count);
+        if count < 300 {
+            break;
+        }
+    }
+
+    let cleaned = if cleanup {
+        let cutoff = current.saturating_sub(7 * 24 * 60 * 60);
+        sqlx::query("DELETE FROM subscription_pre_consume_records WHERE updated_at < $1")
+            .bind(cutoff)
+            .execute(pg)
+            .await?
+            .rows_affected() as i64
+    } else {
+        0
+    };
+    Ok((expired, reset, cleaned))
+}
+
+async fn expire_due_subscriptions(
+    pg: &PgPool,
+    valkey: Option<&redis::Client>,
+    current: i64,
+    limit: i64,
+) -> Result<i64, sqlx::Error> {
+    let candidate_users = sqlx::query(
+        "SELECT user_id FROM user_subscriptions WHERE status='active' AND end_time > 0 AND end_time <= $1 ORDER BY end_time ASC, id ASC LIMIT $2",
+    )
+    .bind(current)
+    .bind(limit)
+    .fetch_all(pg)
+    .await?
+    .into_iter()
+    .map(|row| row.try_get::<i64, _>("user_id"))
+    .collect::<Result<BTreeSet<_>, _>>()?;
+
+    let mut expired_count = 0_i64;
+    for user_id in candidate_users {
+        let mut tx = pg.begin().await?;
+        let changed = sqlx::query(
+            "UPDATE user_subscriptions SET status='expired',updated_at=$2 WHERE user_id=$1 AND status='active' AND end_time > 0 AND end_time <= $2",
+        )
+        .bind(user_id)
+        .bind(current)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as i64;
+        if changed == 0 {
+            tx.commit().await?;
+            continue;
+        }
+        expired_count = expired_count.saturating_add(changed);
+
+        let active_upgrade: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM user_subscriptions WHERE user_id=$1 AND status='active' AND end_time>$2 AND upgrade_group<>'')",
+        )
+        .bind(user_id)
+        .bind(current)
+        .fetch_one(&mut *tx)
+        .await?;
+        let mut cache_group = None;
+        if !active_upgrade {
+            if let Some(row) = sqlx::query(
+                "SELECT COALESCE(downgrade_group,'') AS downgrade_group, COALESCE(upgrade_group,'') AS upgrade_group, COALESCE(prev_user_group,'') AS prev_user_group FROM user_subscriptions WHERE user_id=$1 AND status='expired' AND (downgrade_group<>'' OR upgrade_group<>'') ORDER BY end_time DESC,id DESC LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            {
+                let current_group: String = sqlx::query_scalar(
+                    "SELECT \"group\" FROM users WHERE id=$1 FOR UPDATE",
+                )
+                .bind(user_id)
+                .fetch_one(&mut *tx)
+                .await?;
+                let explicit_downgrade: String = row.try_get("downgrade_group")?;
+                let upgrade_group: String = row.try_get("upgrade_group")?;
+                let previous_group: String = row.try_get("prev_user_group")?;
+                let target = if !explicit_downgrade.trim().is_empty() {
+                    explicit_downgrade.trim().to_owned()
+                } else if !upgrade_group.trim().is_empty()
+                    && !previous_group.trim().is_empty()
+                    && current_group == upgrade_group.trim()
+                {
+                    previous_group.trim().to_owned()
+                } else {
+                    String::new()
+                };
+                if !target.is_empty() && target != current_group {
+                    sqlx::query("UPDATE users SET \"group\"=$2 WHERE id=$1")
+                        .bind(user_id)
+                        .bind(&target)
+                        .execute(&mut *tx)
+                        .await?;
+                    cache_group = Some(target);
+                }
+            }
+        }
+        tx.commit().await?;
+        if cache_group.is_some() {
+            evict_user_cache(valkey, user_id).await;
+        }
+    }
+    Ok(expired_count)
+}
+
+async fn reset_due_subscriptions(
+    pg: &PgPool,
+    current: i64,
+    limit: i64,
+) -> Result<i64, sqlx::Error> {
+    let candidates = sqlx::query(
+        "SELECT id, plan_id FROM user_subscriptions WHERE next_reset_time > 0 AND next_reset_time <= $1 AND status='active' ORDER BY next_reset_time ASC, id ASC LIMIT $2",
+    )
+    .bind(current)
+    .bind(limit)
+    .fetch_all(pg)
+    .await?;
+    let mut reset_count = 0_i64;
+    for candidate in candidates {
+        let id: i64 = candidate.try_get("id")?;
+        let plan_id: i64 = candidate.try_get("plan_id")?;
+        let plan = match plan(pg, plan_id).await {
+            Ok(plan) => plan,
+            Err(_) => continue,
+        };
+        let mut tx = pg.begin().await?;
+        let Some(row) = sqlx::query(&format!(
+            "{SUB_SELECT} WHERE id=$1 AND next_reset_time > 0 AND next_reset_time <= $2 FOR UPDATE"
+        ))
+        .bind(id)
+        .bind(current)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            tx.commit().await?;
+            continue;
+        };
+        let subscription = subscription_from_row(&row)?;
+        maybe_reset_subscription(&mut tx, &subscription, &plan, current).await?;
+        tx.commit().await?;
+        reset_count = reset_count.saturating_add(1);
+    }
+    Ok(reset_count)
+}
+
+async fn maybe_reset_subscription(
+    tx: &mut Transaction<'_, Postgres>,
+    subscription: &Subscription,
+    plan: &Plan,
+    current: i64,
+) -> Result<(), sqlx::Error> {
+    if subscription.next_reset_time > 0 && subscription.next_reset_time > current {
+        return Ok(());
+    }
+    if !matches!(
+        plan.quota_reset_period.trim(),
+        "daily" | "weekly" | "monthly" | "custom"
+    ) {
+        return Ok(());
+    }
+    let mut base = if subscription.last_reset_time > 0 {
+        subscription.last_reset_time
+    } else {
+        subscription.start_time
+    };
+    let mut next = next_reset(base, subscription.end_time, plan);
+    let mut advanced = false;
+    while next > 0 && next <= current {
+        advanced = true;
+        base = next;
+        next = next_reset(base, subscription.end_time, plan);
+    }
+    if !advanced {
+        if subscription.next_reset_time == 0 && next > 0 {
+            sqlx::query(
+                "UPDATE user_subscriptions SET last_reset_time=$2,next_reset_time=$3,updated_at=$4 WHERE id=$1",
+            )
+            .bind(subscription.id)
+            .bind(base)
+            .bind(next)
+            .bind(current)
+            .execute(&mut **tx)
+            .await?;
+        }
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE user_subscriptions SET amount_used=0,last_reset_time=$2,next_reset_time=$3,updated_at=$4 WHERE id=$1",
+    )
+    .bind(subscription.id)
+    .bind(base)
+    .bind(next)
+    .bind(current)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 /// Routes that do not initiate payments or accept provider callbacks.
@@ -991,9 +1276,10 @@ fn next_reset(start: i64, end: i64, plan: &Plan) -> i64 {
             })
         }
         "monthly" => first_of_month(base).and_then(|first| add_calendar_months(first, 1)),
-        "custom" => {
+        "custom" if plan.quota_reset_custom_seconds > 0 => {
             base.checked_add_signed(ChronoDuration::seconds(plan.quota_reset_custom_seconds))
         }
+        "custom" => None,
         _ => None,
     };
     let Some(next) = next else {
@@ -1352,7 +1638,11 @@ async fn evict_plan(state: &BillingSubscriptionsState, plan_id: i64) {
 /// The user cache is reconstructible from PostgreSQL and its TTL bounds the
 /// recovery window, matching the legacy cache-aside contract.
 async fn evict_user(state: &BillingSubscriptionsState, user_id: i64) {
-    let Some(client) = &state.valkey else { return };
+    evict_user_cache(state.valkey.as_ref(), user_id).await;
+}
+
+async fn evict_user_cache(valkey: Option<&redis::Client>, user_id: i64) {
+    let Some(client) = valkey else { return };
     let Ok(mut connection) = client.get_multiplexed_async_connection().await else {
         return;
     };

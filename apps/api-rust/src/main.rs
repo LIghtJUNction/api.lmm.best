@@ -16,6 +16,7 @@ use lmm_api_rs::{
         api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
         billing_subscriptions::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
+            spawn_maintenance as spawn_subscription_maintenance,
         },
         control_public::{
             ControlPublicHttpState, PgControlPublicRepository, ReqwestUptimeKumaClient,
@@ -265,6 +266,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(valkey.clone()),
             Arc::clone(&auth),
         ));
+        let _subscription_maintenance =
+            spawn_subscription_maintenance(pg.clone(), Some(valkey.clone()));
         let observability = observability_read_router(ObservabilityState::new(
             Arc::new(PgObservabilityStore::postgres_read_only(
                 pg.clone(),
