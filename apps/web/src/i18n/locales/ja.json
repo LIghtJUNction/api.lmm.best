@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "チャンネルに追加できる再利用可能なモデルセット。",
     "Collections of metadata tags for bulk operations.": "一括操作用のメタデータタグのコレクション。",
     "HTTP endpoint mappings shared across providers.": "プロバイダー間で共有する HTTP エンドポイントマッピング。",
-    "Endpoint Group": "エンドポイントグループ"
+    "Endpoint Group": "エンドポイントグループ",
+    "Bug report": "バグ報告",
+    "Feature request": "機能リクエスト",
+    "Feedback rewards": "フィードバック報酬",
+    "Frontend improvement": "フロントエンド改善",
+    "Improve interface, accessibility, or mobile usability.": "UI、アクセシビリティ、モバイル操作性を改善します。",
+    "Report & earn": "報告して報酬を得る",
+    "Report a reproducible problem and its impact.": "再現可能な問題と影響を報告します。",
+    "Suggest a useful capability or workflow.": "役立つ機能やワークフローを提案します。",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "有効な報告は審査後に5米ドル以上の報酬対象です。提出だけでは報酬は保証されません。"
   }
 }

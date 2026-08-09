@@ -16,6 +16,10 @@ body:
         - 第三方托管站、私有修改版和外部供应商服务本身的问题，请联系相应维护者或服务商。
         - 请务必删除 API Key、Cookie、Token、密码、DSN 和其他敏感信息。
 
+        ## 有效反馈奖励
+
+        经维护者审核并确认有效、非重复且属于本项目范围的问题，可获得 **5 美元起**的奖励。提交 Issue 不代表自动获奖；最终资格和金额以审核结果为准。
+
   - type: checkboxes
     id: submission-checks
     attributes:

@@ -13,6 +13,10 @@ body:
 
         提交前请搜索本仓库的 Issues，并查看[项目 README](https://github.com/LIghtJUNction/api.lmm.best#readme)与[悬赏流程说明](https://github.com/LIghtJUNction/api.lmm.best/blob/main/docs/open-source-bounties.zh-CN.md)。
 
+        ## 有效反馈奖励
+
+        经维护者审核并确认有效、非重复且属于本项目范围的建议，可获得 **5 美元起**的奖励。提交 Issue 不代表自动获奖；最终资格和金额以审核结果为准。
+
   - type: checkboxes
     id: submission-checks
     attributes:

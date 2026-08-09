@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "可复用的模型集合，可附加到渠道。",
     "Collections of metadata tags for bulk operations.": "用于批量操作的元数据标签集合。",
     "HTTP endpoint mappings shared across providers.": "各提供商共享的 HTTP 端点映射。",
-    "Endpoint Group": "端点分组"
+    "Endpoint Group": "端点分组",
+    "Bug report": "Bug 反馈",
+    "Feature request": "功能请求",
+    "Feedback rewards": "反馈奖励",
+    "Frontend improvement": "前端改进",
+    "Improve interface, accessibility, or mobile usability.": "改进界面、无障碍体验或移动端可用性。",
+    "Report & earn": "反馈并获奖励",
+    "Report a reproducible problem and its impact.": "报告可复现的问题及其影响。",
+    "Suggest a useful capability or workflow.": "建议实用的新能力或流程改进。",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "有效反馈经审核后可获得 5 美元起的奖励；提交并不代表一定获奖。"
   }
 }

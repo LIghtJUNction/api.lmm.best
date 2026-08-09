@@ -5845,6 +5845,15 @@
     "Reusable sets of models you can attach to channels.": "可重複使用、可附加至頻道的模型集合。",
     "Collections of metadata tags for bulk operations.": "用於批次操作的中繼資料標籤集合。",
     "HTTP endpoint mappings shared across providers.": "各提供者共用的 HTTP 端點對應。",
-    "Endpoint Group": "端點群組"
+    "Endpoint Group": "端點群組",
+    "Bug report": "Bug 回報",
+    "Feature request": "功能請求",
+    "Feedback rewards": "回饋獎勵",
+    "Frontend improvement": "前端改進",
+    "Improve interface, accessibility, or mobile usability.": "改善介面、無障礙體驗或行動裝置可用性。",
+    "Report & earn": "回報並獲獎",
+    "Report a reproducible problem and its impact.": "回報可重現的問題及其影響。",
+    "Suggest a useful capability or workflow.": "建議實用的新功能或工作流程。",
+    "Valid reports earn at least $5 after review. Submission does not guarantee a reward.": "有效回饋經審核後可獲得 5 美元起的獎勵；提交不代表必定獲獎。"
   }
 }
