@@ -215,7 +215,6 @@ remote_candidate="$remote_stage/${candidate##*/}"
 remote_core="$remote_stage/${rollback_core##*/}"
 remote_go="$remote_stage/${rollback_go##*/}"
 target_backup="/var/lib/lmm-api-go/deploy-backups/$deployment_id"
-activation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)
 deploy_unit="lmm-api-go-deploy-$deployment_id"
 if ! ssh -o BatchMode=yes "$HOST" systemd-run \
   --unit="$deploy_unit" --collect --property=Type=oneshot --property=TimeoutStartSec=9min \
@@ -250,16 +249,17 @@ for _ in {1..160}; do
 done
 [[ $deployment_status == AWAITING_CONFIRMATION\ * ]] || die 'activation did not reach the observation gate before its rollback deadline'
 
+observation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)
 observation_started=$(date +%s)
 while (( $(date +%s) - observation_started < OBSERVATION_SECONDS )); do
   if ! ssh -o BatchMode=yes "$HOST" bash -s -- \
-    "$remote_workspace" "$release_version" "$frontend_index_sha256" "$deployment_id" "$activation_epoch" <<'REMOTE'
+    "$remote_workspace" "$release_version" "$frontend_index_sha256" "$deployment_id" "$observation_epoch" <<'REMOTE'
 set -Eeuo pipefail
 workspace=$1
 expected_version=$2
 frontend_sha=$3
 deployment_id=$4
-activation_epoch=$5
+observation_epoch=$5
 cli="$workspace/staging/lmm-api-go"
 state="$workspace/state"
 token="$state/probe-token"
@@ -283,8 +283,8 @@ jq -e '.success == true and .live == true' "$state/observe-live.json" >/dev/null
 "$cli" request --base-url https://api.lmm.best --path /v1/models --timeout 8s --fail \
   --token-file "$token" --output "$state/observe-models.json"
 jq -e '.data | type == "array"' "$state/observe-models.json" >/dev/null
-[[ -z $(journalctl --quiet -u lmm-api-go.service --since "@$activation_epoch" --priority=err --no-pager --output=cat) ]]
-[[ -z $(journalctl --quiet -u nginx.service --since "@$activation_epoch" --priority=err --no-pager --output=cat) ]]
+[[ -z $(journalctl --quiet -u lmm-api-go.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
+[[ -z $(journalctl --quiet -u nginx.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
 REMOTE
   then
     die 'production observation detected an anomaly; rollback timer remains armed'

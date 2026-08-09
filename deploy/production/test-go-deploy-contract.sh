@@ -66,6 +66,7 @@ for literal in \
   'release_controller_owned_transaction_lock' \
   'controller_transaction_lock_owned=1' \
   'activation dispatch failed; transaction lock retained for audit' \
+  'observation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)' \
   'production observation detected an anomaly; rollback timer remains armed' \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
@@ -79,6 +80,9 @@ for literal in \
 done
 if grep -Fq 'old_version=$(ssh -o BatchMode=yes "$HOST" jq' "$here/deploy-go.sh"; then
   fail 'pre-cutover version parsing still sends a jq filter through the remote shell'
+fi
+if grep -Fq 'activation_epoch' "$here/deploy-go.sh"; then
+  fail 'stable observation still includes the activation transition window'
 fi
 if grep -Fq '| pg_restore --list' "$here/deploy-go.sh" || \
   grep -Fq '| tar -tf -' "$here/deploy-go.sh"; then
