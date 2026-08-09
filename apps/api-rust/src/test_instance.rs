@@ -2953,6 +2953,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_test_surface_mounts_topup_read_routes_before_authentication() {
+        let pg = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("a lazy PostgreSQL URL is valid");
+        let valkey =
+            redis::Client::open("redis://127.0.0.1:1/").expect("a lazy Valkey URL is valid");
+        let auth: Arc<dyn DashboardAuth> = Arc::new(
+            PgValkeyDashboardAuth::new(
+                pg.clone(),
+                valkey.clone(),
+                AuthConfig {
+                    session_secret: SecretString::from("TestR5!session-secret-with-entropy-123456"),
+                    ..AuthConfig::default()
+                },
+            )
+            .expect("test auth config is valid"),
+        );
+        for path in ["/api/user/topup/info", "/api/user/topup/self"] {
+            let response = safe_candidate_surface(pg.clone(), valkey.clone(), Arc::clone(&auth))
+                .oneshot(
+                    Request::get(path)
+                        .body(Body::empty())
+                        .expect("request is valid"),
+                )
+                .await
+                .expect("router is infallible");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "requires an isolated PostgreSQL database; set LMM_RANKINGS_TEST_DATABASE_URL"]
     async fn rankings_pg_snapshot_keeps_history_previous_rank_and_vendor_metadata() {
         let database_url = env::var("LMM_RANKINGS_TEST_DATABASE_URL").expect(
