@@ -25,6 +25,7 @@ GET	/api/open-source-bounties	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/projects/:id	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/config	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/mine	apps/api-rust/src/main.rs
+GET	/api/open-source-bounties/accepted	apps/api-rust/src/main.rs
 GET	/api/log/	apps/api-rust/src/main.rs:190
 GET	/api/log/channel_affinity_usage_cache	apps/api-rust/src/main.rs:190
 GET	/api/log/search	apps/api-rust/src/main.rs:190
