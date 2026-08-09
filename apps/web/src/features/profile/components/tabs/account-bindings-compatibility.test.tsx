@@ -78,6 +78,19 @@ async function flushQueries() {
   await new Promise((resolve) => setTimeout(resolve, 10))
 }
 
+async function waitForCondition(
+  condition: () => boolean,
+  failureMessage: string
+): Promise<void> {
+  const deadline = Date.now() + 1500
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`${failureMessage}: ${document.body.textContent}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 function cachedStatus() {
   return {
     github_oauth: true,
@@ -168,7 +181,16 @@ describe('legacy Go account binding compatibility', () => {
     statusResponse.resolve({
       data: { success: true, data: { github_oauth: true } },
     })
-    await act(flushQueries)
+    await act(async () =>
+      waitForCondition(
+        () =>
+          queryClient.isFetching({
+            queryKey: ['status', 'anonymous'],
+            exact: true,
+          }) === 0,
+        'legacy status request did not settle'
+      )
+    )
 
     assert.equal(buttonsWithText('Unbind').length, 0)
     assert.deepEqual(deletes, [])
@@ -201,15 +223,31 @@ describe('legacy Go account binding compatibility', () => {
     statusResponse.resolve({
       data: { success: true, data: cachedStatus() },
     })
-    await act(flushQueries)
+    await act(async () =>
+      waitForCondition(
+        () => buttonsWithText('Unbind').length > 0,
+        'live self-unbind capability did not render'
+      )
+    )
 
     const unbindButton = buttonsWithText('Unbind')[0]
     assert.ok(unbindButton)
     await act(async () => unbindButton.click())
+    await act(async () =>
+      waitForCondition(
+        () => buttonsWithText('Confirm Unbind').length > 0,
+        'unbind confirmation did not render'
+      )
+    )
     const confirmButton = buttonsWithText('Confirm Unbind')[0]
     assert.ok(confirmButton)
-    await act(async () => confirmButton.click())
-    await flushQueries()
+    await act(async () => {
+      confirmButton.click()
+      await waitForCondition(
+        () => deletes.length === 1,
+        'self-unbind request was not sent'
+      )
+    })
     assert.deepEqual(deletes, ['/api/user/bindings/github'])
 
     await act(async () => root.unmount())
