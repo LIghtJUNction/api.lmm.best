@@ -5,6 +5,7 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
 readonly SHARED="$HERE/../common/lmm-api"
 readonly PACKAGES=(
+  lmm-api-go
   lmm-api-go-bin
   lmm-api-go-git
   lmm-api-rs-bin
@@ -54,6 +55,10 @@ for package in lmm-api-go-bin lmm-api-go-git; do
 done
 contains_srcinfo lmm-api-go-bin $'\tconflicts = lmm-api-go-git'
 contains_srcinfo lmm-api-go-git $'\tconflicts = lmm-api-go-bin'
+for variant in lmm-api-go-bin lmm-api-go-git; do
+  contains_srcinfo lmm-api-go $'\tconflicts = '"$variant"
+done
+contains_srcinfo lmm-api-go $'\tbackup = etc/lmm-api-go/lmm-api-go.env'
 
 for package in lmm-api-rs-bin lmm-api-rs-git; do
   contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-rs'
@@ -78,6 +83,11 @@ for package in lmm-api-go-bin lmm-api-rs-bin; do
 done
 contains_srcinfo lmm-api-go-git $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
+contains_srcinfo lmm-api-go $'\tmakedepends = bun'
+contains_srcinfo lmm-api-go $'\tmakedepends = git'
+contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
+grep -Fqx '_commit=3c9b8596716e3bb4f6fb439cfd6e1d168064e892' "$HERE/lmm-api-go/PKGBUILD" ||
+  die 'canonical Go package is not pinned to the reviewed direct-package revision'
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 
 grep -Fqx 'ExecStart=/usr/bin/lmm-api-go serve' "$SHARED/lmm-api-go.service" ||
@@ -144,4 +154,4 @@ for removed_path in pkg-go/usr/bin/lmm-api pkg-rs/usr/bin/lmm-api; do
     die "mock package exposes removed command $removed_path"
 done
 
-printf '%s\n' 'four-package direct-backend AUR matrix verified'
+printf '%s\n' 'five-package direct-backend AUR matrix verified'

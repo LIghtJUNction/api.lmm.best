@@ -1,9 +1,9 @@
 # Maintainer: LIghtJUNction
 
-pkgname=lmm-api-go-git
+pkgname=lmm-api-go
 pkgver=0.1.1.r73.g3c9b85967
 pkgrel=1
-pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (git)'
+pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend'
 arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/api.lmm.best'
 license=('AGPL-3.0-only')
@@ -13,19 +13,13 @@ optdepends=(
   'postgresql: production database'
   'valkey: cache, rate limiting, and login sessions'
 )
-provides=('lmm-api-go')
-conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-bin')
+conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go-bin' 'lmm-api-go-git')
 backup=('etc/lmm-api-go/lmm-api-go.env')
 options=('!strip')
-source=('lmm-api-go::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main')
-sha256sums=('SKIP')
 
-pkgver() {
-  cd lmm-api-go || return
-  git describe --long --tags --abbrev=9 2>/dev/null | \
-    sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g' || \
-    printf '0.0.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=9 HEAD)"
-}
+_commit=3c9b8596716e3bb4f6fb439cfd6e1d168064e892
+source=("lmm-api-go::git+${url}.git#commit=${_commit}")
+sha256sums=('SKIP')
 
 build() {
   cd lmm-api-go || return
@@ -35,7 +29,7 @@ build() {
     cd apps/api-go || return
     CGO_ENABLED=0 go build -trimpath \
       -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${pkgver}" \
-      -o "${srcdir}/lmm-api-go" .
+      -o "${srcdir}/lmm-api-go-bin" .
   )
 }
 
@@ -44,7 +38,7 @@ package() {
   local shared="${root}/packaging/common/lmm-api"
   local file
 
-  install -Dm0755 "${srcdir}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
+  install -Dm0755 "${srcdir}/lmm-api-go-bin" "${pkgdir}/usr/bin/lmm-api-go"
   install -Dm0644 "${shared}/lmm-api-go.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
   install -Dm0600 "${shared}/lmm-api-go.env" \
@@ -59,6 +53,6 @@ package() {
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     install -Dm0644 "${root}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
   done
-  git -C "${root}" rev-parse HEAD > "${srcdir}/REVISION"
+  printf '%s\n' "${_commit}" >"${srcdir}/REVISION"
   install -Dm0644 "${srcdir}/REVISION" "${pkgdir}/usr/share/doc/${pkgname}/REVISION"
 }
