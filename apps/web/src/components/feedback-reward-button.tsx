@@ -82,14 +82,14 @@ export function FeedbackRewardButton() {
   ]
 
   return (
-    <div className='pointer-events-none fixed right-[max(1rem,env(safe-area-inset-right))] bottom-[max(1rem,env(safe-area-inset-bottom))] z-30 print:hidden'>
+    <div className='pointer-events-none fixed right-[calc(1rem+env(safe-area-inset-right))] bottom-[calc(1rem+env(safe-area-inset-bottom))] z-30 print:hidden'>
       <Popover>
         <PopoverTrigger
           render={
             <Button
               variant='outline'
               size='lg'
-              className='bg-background pointer-events-auto h-11 rounded-sm border-2'
+              className='bg-background pointer-events-auto h-11 min-w-11 rounded-sm border-2'
               aria-label={t('Report & earn')}
             />
           }
@@ -103,7 +103,7 @@ export function FeedbackRewardButton() {
           align='end'
           sideOffset={10}
           collisionPadding={16}
-          className='pointer-events-auto w-[calc(100vw-2rem)] max-w-sm gap-0 overflow-hidden rounded-sm p-0'
+          className='pointer-events-auto max-h-[calc(100dvh_-_6.5rem_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom))] w-[calc(100vw_-_2rem_-_env(safe-area-inset-left)_-_env(safe-area-inset-right))] max-w-sm gap-0 overflow-y-auto overscroll-contain rounded-sm p-0'
         >
           <PopoverHeader className='gap-1 p-4'>
             <PopoverTitle>{t('Feedback rewards')}</PopoverTitle>
