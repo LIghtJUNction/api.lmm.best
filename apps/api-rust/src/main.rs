@@ -29,6 +29,9 @@ use lmm_api_rs::{
             ControlPublicHttpState, PgControlPublicRepository, ReqwestUptimeKumaClient,
             control_public_router,
         },
+        identity_2fa::{
+            Identity2FAReadState, status_read_router as identity_2fa_status_read_router,
+        },
         identity_admin::{IdentityAdminState, router as identity_admin_router},
         identity_federation::{
             DashboardFederationIdentity, DisabledEmailCodeVerifier, FederationState,
@@ -304,6 +307,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(DashboardSecurityAuthorizer::new(Arc::clone(&auth))),
             )),
         );
+        let identity_2fa_status = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_2fa_status_read_router(Identity2FAReadState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+            )),
+        );
         let federation_identity = Arc::new(
             DashboardFederationIdentity::new(
                 Arc::clone(&auth),
@@ -450,6 +460,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(identity_checkin)
             .merge(identity_sessions)
             .merge(identity_passkey)
+            .merge(identity_2fa_status)
             .merge(identity_federation_bindings)
             .merge(registration)
             .merge(billing_subscriptions)

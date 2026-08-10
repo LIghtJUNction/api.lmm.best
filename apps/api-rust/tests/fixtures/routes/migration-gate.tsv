@@ -216,7 +216,7 @@ POST	/api/user/2fa/disable	absent	not-applicable	unmounted	not-applicable	not-ap
 POST	/api/user/2fa/enable	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/2fa/setup	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/user/2fa/stats	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/user/2fa/status	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/api/user/2fa/status	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/identity_2fa.rs;mount=apps/api-rust/src/migration_routes/identity_2fa.rs;listener=apps/api-rust/src/main.rs;differential=apps/api-rust/tests/behavior-oracle/tests/auth-listener-differential.sh:43/43;postgres=accepted-isolated-two-fa-status-read;valkey=accepted-no-change
 DELETE	/api/user/:id	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/user/:id	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 DELETE	/api/user/:id/2fa	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
