@@ -21,7 +21,8 @@ import { useEffect, useRef } from 'react'
 declare global {
   interface Window {
     turnstile?: {
-      render: (element: HTMLElement, options: Record<string, unknown>) => void
+      ready?: (callback: () => void) => void
+      render: (element: HTMLElement, options: Record<string, unknown>) => unknown
     }
   }
 }
@@ -42,26 +43,58 @@ export function Turnstile({
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    const render = () => {
-      if (!ref.current || !window.turnstile) return
-      try {
-        window.turnstile.render(ref.current, {
-          sitekey: siteKey,
-          callback: (token: string) => onVerify(token),
-          'error-callback': () => onExpire?.(),
-          'expired-callback': () => onExpire?.(),
-        })
-      } catch {
-        /* empty */
+    let disposed = false
+    let rendered = false
+    let poller: number | undefined
+
+    const renderWidget = () => {
+      if (disposed || rendered || !ref.current || !window.turnstile) return
+      const renderNow = () => {
+        if (disposed || rendered || !ref.current || !window.turnstile) return
+        try {
+          window.turnstile.render(ref.current, {
+            sitekey: siteKey,
+            callback: (token: string) => onVerify(token),
+            'error-callback': () => onExpire?.(),
+            'expired-callback': () => onExpire?.(),
+          })
+          rendered = true
+        } catch {
+          /* The script can expose the API before its widget runtime is ready. */
+        }
       }
+
+      if (window.turnstile.ready) {
+        window.turnstile.ready(renderNow)
+      } else {
+        renderNow()
+      }
+    }
+
+    const cleanup = () => {
+      disposed = true
+      if (poller !== undefined) window.clearInterval(poller)
+    }
+
+    const scriptId = 'cf-turnstile'
+    const existingScript = document.getElementById(scriptId)
+
+    // A different login form may have inserted the shared script already.
+    // Wait for its runtime instead of returning before this widget is rendered.
+    if (existingScript && !window.turnstile) {
+      poller = window.setInterval(renderWidget, 100)
+      existingScript.addEventListener('load', renderWidget, { once: true })
+      return cleanup
+    }
+
+    const render = () => {
+      renderWidget()
     }
 
     if (window.turnstile) {
       render()
-      return
+      return cleanup
     }
-    const scriptId = 'cf-turnstile'
-    if (document.querySelector(`#${scriptId}`)) return
     const s = document.createElement('script')
     s.id = scriptId
     s.src =
@@ -70,6 +103,8 @@ export function Turnstile({
     s.defer = true
     s.onload = () => render()
     document.head.appendChild(s)
+
+    return cleanup
   }, [siteKey, onVerify, onExpire])
 
   return <div ref={ref} className={className} />
