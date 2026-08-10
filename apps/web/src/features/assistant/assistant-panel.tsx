@@ -175,14 +175,14 @@ export function AssistantPanel(props: {
       },
       {
         id: 'api-key',
-        question: t('How do I create and use an API key?'),
+        question: t('What are my Base URL, model ID, and API key?'),
         answer: t(
-          'Use {{baseUrl}} as the Base URL. Create a key on the API Keys page, then copy an exact model ID from Pricing. Keep the key private because it may only be displayed once.',
+          'Your Base URL is {{baseUrl}}. Open connection details to copy it, see the current model ID, and create a new API key after explicit confirmation. Existing keys remain private.',
           { baseUrl }
         ),
         action: {
           kind: 'tool',
-          label: t('Create a key safely'),
+          label: t('View connection details'),
           tool: 'key',
         },
       },
@@ -423,6 +423,7 @@ export function AssistantPanel(props: {
                 {activeTool === 'key' ? (
                   <AssistantKeyTool
                     baseUrl={baseUrl}
+                    defaultModel={statusQuery.data?.model ?? ''}
                     developerAccessGranted={
                       statusQuery.data?.developer_access_granted === true
                     }

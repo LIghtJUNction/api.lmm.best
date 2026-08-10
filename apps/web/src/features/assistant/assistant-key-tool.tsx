@@ -47,6 +47,7 @@ import { createAssistantDefaultKey, type AssistantCreatedKey } from './api'
 
 export function AssistantKeyTool(props: {
   baseUrl: string
+  defaultModel: string
   developerAccessGranted: boolean
 }) {
   const { t } = useTranslation()
@@ -54,6 +55,7 @@ export function AssistantKeyTool(props: {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<AssistantCreatedKey | null>(null)
+  const model = props.defaultModel || '<MODEL_ID>'
 
   const createKey = async () => {
     if (creating) return
@@ -113,6 +115,15 @@ export function AssistantKeyTool(props: {
           </div>
           <div className='grid gap-1'>
             <span className='text-muted-foreground text-xs'>
+              {t('Model ID')}
+            </span>
+            <div className='bg-background flex items-center gap-2 rounded-lg border p-2'>
+              <code className='min-w-0 flex-1 truncate text-xs'>{model}</code>
+              <CopyButton value={model} size='sm' />
+            </div>
+          </div>
+          <div className='grid gap-1'>
+            <span className='text-muted-foreground text-xs'>
               {t('API key')}
             </span>
             <div className='bg-background flex items-center gap-2 rounded-lg border p-2'>
@@ -139,6 +150,26 @@ export function AssistantKeyTool(props: {
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>
+          <div className='rounded-lg border px-3'>
+            <div className='flex items-center justify-between gap-2 border-b py-2'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Base URL')}
+              </span>
+              <div className='flex min-w-0 items-center gap-1.5'>
+                <code className='truncate text-xs'>{props.baseUrl}</code>
+                <CopyButton value={props.baseUrl} size='sm' />
+              </div>
+            </div>
+            <div className='flex items-center justify-between gap-2 py-2'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Model ID')}
+              </span>
+              <div className='flex min-w-0 items-center gap-1.5'>
+                <code className='truncate text-xs'>{model}</code>
+                <CopyButton value={model} size='sm' />
+              </div>
+            </div>
+          </div>
           <div className='grid gap-1.5'>
             <Label htmlFor='assistant-key-name'>{t('Key name')}</Label>
             <Input
