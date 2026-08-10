@@ -20,7 +20,7 @@ runtime_root=${LMM_AUTH_LISTENER_TMP_ROOT:-/tmp}
   echo 'LMM_AUTH_LISTENER_TMP_ROOT must be an absolute, non-symlink directory' >&2
   exit 2
 }
-expected_scenarios=37
+expected_scenarios=38
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -640,7 +640,7 @@ psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 \
 # without invoking the task runner or any external provider.
 for database in auth_go auth_rust; do
   psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
-    -c "INSERT INTO system_tasks (id, task_id, type, status, active_key, payload, state, result, error, locked_by, created_at, updated_at) VALUES (900001, 'systask_parity_fixture', 'model_update', 'succeeded', 'model_update', '{\"fixture\":true}', '{\"step\":\"done\"}', '{\"updated\":1}', '', '', 1700000000, 1700000010)" >/dev/null
+    -c "INSERT INTO system_tasks (id, task_id, type, status, active_key, payload, state, result, error, locked_by, created_at, updated_at) VALUES (900001, 'systask_parity_fixture', 'parity_fixture', 'succeeded', 'parity_fixture', '{\"fixture\":true}', '{\"step\":\"done\"}', '{\"updated\":1}', '', '', 1700000000, 1700000010)" >/dev/null
 done
 
 # Go loads the process-wide ratio cache during startup.  Restart only the
@@ -716,6 +716,9 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
       capture_listener_response "$prefix.system-task-list" -H "authorization: Bearer $token" "$base/api/system-task/list?limit=1"
       grep -qx 200 "$prefix.system-task-list.status"
       jq -e '.success == true and .message == "" and (.data | length == 1) and .data[0].task_id == "systask_parity_fixture" and .data[0].payload.fixture == true and .data[0].state.step == "done" and .data[0].result.updated == 1' "$prefix.system-task-list.json" >/dev/null
+      capture_listener_response "$prefix.system-task-current" -H "authorization: Bearer $token" "$base/api/system-task/current?type=parity_fixture"
+      grep -qx 200 "$prefix.system-task-current.status"
+      jq -e '.success == true and .message == "" and .data == null' "$prefix.system-task-current.json" >/dev/null
     fi
     capture_listener_response "$prefix.origin-missing" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" "$base/api/user/auth/refresh"
     capture_listener_response "$prefix.origin-evil" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" -H 'origin: https://evil.example' "$base/api/user/auth/refresh"
@@ -787,6 +790,7 @@ done
 assert_listener_response_match a-first.group
 assert_listener_response_match a-first.status-test
 assert_listener_response_match a-first.system-task-list
+assert_listener_response_match a-first.system-task-current
 
 # Expire the just-rotated old token in the real database, then prove a replay
 # revokes the family over each TCP listener.  This avoids a wall-clock sleep
@@ -1027,4 +1031,4 @@ jq -cn \
   --argjson scenarios "$scenario_total" \
   --argjson exact_matches "$exact_matches" \
   --argjson mismatches "$mismatch_count" \
-  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
+  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list","GET /api/system-task/current"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
