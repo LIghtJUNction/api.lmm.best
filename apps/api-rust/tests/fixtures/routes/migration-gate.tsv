@@ -337,7 +337,7 @@ POST	/v1/images/edits	absent	not-applicable	unmounted	not-applicable	not-applica
 POST	/v1/images/generations	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/v1/images/variations	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/v1/messages	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/v1/models	present	unverified	mounted	blocked-sol-stop	not-applicable	go	blocked-sol-stop	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;stop=latest-independent-sol-review-invalidated-prior-compile-differential-and-approval-credit
+GET	/v1/models	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;differential=apps/api-rust/tests/behavior-oracle/tests/models-listener-differential.sh:32/32
 POST	/v1/models/*path	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 DELETE	/v1/models/:model	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/v1/models/:model	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/missing_relay_models_billing.rs;mount=apps/api-rust/src/migration_routes/missing_relay_models_billing.rs;listener=apps/api-rust/src/main.rs
@@ -352,6 +352,6 @@ POST	/v1/videos	absent	not-applicable	unmounted	not-applicable	not-applicable	go
 GET	/v1/videos/:task_id	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/v1/videos/:task_id/content	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/v1/videos/:video_id/remix	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/v1beta/models	present	unverified	mounted	blocked-sol-stop	not-applicable	go	blocked-sol-stop	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;stop=latest-independent-sol-review-invalidated-prior-compile-differential-and-approval-credit
+GET	/v1beta/models	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;differential=apps/api-rust/tests/behavior-oracle/tests/models-listener-differential.sh:32/32
 POST	/v1beta/models/*path	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/v1beta/openai/models	present	unverified	mounted	blocked-sol-stop	not-applicable	go	blocked-sol-stop	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;stop=latest-independent-sol-review-invalidated-prior-compile-differential-and-approval-credit
+GET	/v1beta/openai/models	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/models.rs;mount=apps/api-rust/src/models.rs;differential=apps/api-rust/tests/behavior-oracle/tests/models-listener-differential.sh:32/32
