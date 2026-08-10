@@ -47,6 +47,7 @@ GET	/api/log/stat	lmm_api_rs::migration_routes::observability::observability_rea
 GET	/api/log/token	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/notice	lmm_api_rs::http::notice
 GET	/api/status	lmm_api_rs::http::status
+GET	/api/uptime/status	lmm_api_rs::migration_routes::control_public::control_public_router
 GET	/api/user-agreement	lmm_api_rs::migration_routes::control_public::control_public_router
 GET	/api/token/	lmm_api_rs::migration_routes::api_token::list
 POST	/api/token/	lmm_api_rs::migration_routes::api_token::create

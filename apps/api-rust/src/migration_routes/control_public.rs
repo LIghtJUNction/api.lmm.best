@@ -249,7 +249,7 @@ async fn uptime_status(State(state): State<ControlPublicHttpState>) -> Response 
     // This exact empty Vec (rather than `null`) is observable in the legacy
     // response when no group configuration exists or it is malformed.
     if groups.is_empty() {
-        return legacy_success(Vec::<UptimeGroupResult>::new()).into_response();
+        return legacy_success_response(Vec::<UptimeGroupResult>::new());
     }
 
     let mut tasks = tokio::task::JoinSet::new();
@@ -275,7 +275,7 @@ async fn uptime_status(State(state): State<ControlPublicHttpState>) -> Response 
     {
         tasks.abort_all();
     }
-    legacy_success(results).into_response()
+    legacy_success_response(results)
 }
 
 async fn fetch_group(
@@ -391,6 +391,15 @@ fn legacy_success<T>(data: T) -> Json<LegacySuccess<T>> {
         message: "",
         data,
     })
+}
+
+fn legacy_success_response<T: Serialize>(data: T) -> Response {
+    let mut response = legacy_success(data).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
 }
 
 fn legacy_dependency_error() -> Response {
