@@ -95,11 +95,11 @@ func ClassifyAssistantIntent(message string) string {
 		"成本", "费用", "计费", "消耗", "cost", "estimate", "billing", "token price"):
 		return AssistantIntentCost
 	case assistantMessageContains(normalized,
-		"api key", "api-key", "apikey", "密钥", "令牌", "token", "创建 key", "create key"):
-		return AssistantIntentAPIKey
-	case assistantMessageContains(normalized,
-		"claude code", "cc switch", "chatgpt", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
+		"claude code", "cc switch", "cc-switch", "chatgpt", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
 		return AssistantIntentClientSetup
+	case assistantMessageContains(normalized,
+		"api key", "api-key", "apikey", "base url", "base_url", "model id", "模型 id", "模型id", "密钥", "令牌", "token", "创建 key", "创建key", "create key", "create a key", "create my key"):
+		return AssistantIntentAPIKey
 	case assistantMessageContains(normalized,
 		"开源", "悬赏", "挑战", "小费", "bounty", "tip", "challenge", "任务发布"):
 		return AssistantIntentBounty

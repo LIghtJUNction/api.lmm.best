@@ -69,10 +69,36 @@ export type AssistantHandoff = {
   email?: string
 }
 
+export type AssistantIntent =
+  | 'onboarding'
+  | 'plan_purchase'
+  | 'api_key'
+  | 'client_setup'
+  | 'cost'
+  | 'bounty'
+  | 'human_support'
+  | 'other'
+
 export type AssistantIntentSummary = {
-  intent: string
+  intent: AssistantIntent
   count: number
 }
+
+export type AssistantReply = {
+  content: string
+  intent?: AssistantIntent
+}
+
+const ASSISTANT_INTENTS = new Set<AssistantIntent>([
+  'onboarding',
+  'plan_purchase',
+  'api_key',
+  'client_setup',
+  'cost',
+  'bounty',
+  'human_support',
+  'other',
+])
 
 type AssistantAPIResponse<T> = {
   success: boolean
@@ -98,13 +124,26 @@ export function parseAssistantReply(payload: AssistantChatPayload): string {
   )
 }
 
-export async function sendAssistantMessage(message: string): Promise<string> {
+export function parseAssistantIntent(
+  value: unknown
+): AssistantIntent | undefined {
+  if (typeof value !== 'string') return undefined
+  const intent = value.trim().toLowerCase() as AssistantIntent
+  return ASSISTANT_INTENTS.has(intent) ? intent : undefined
+}
+
+export async function sendAssistantMessage(
+  message: string
+): Promise<AssistantReply> {
   const response = await api.post<AssistantChatPayload>(
     '/api/assistant/chat',
     { message },
     { skipBusinessError: true, skipErrorHandler: true }
   )
-  return parseAssistantReply(response.data)
+  return {
+    content: parseAssistantReply(response.data),
+    intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
+  }
 }
 
 export async function getAssistantStatus(): Promise<AssistantStatus> {

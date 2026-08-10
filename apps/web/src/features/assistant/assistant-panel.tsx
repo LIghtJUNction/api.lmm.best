@@ -59,6 +59,7 @@ import {
 import { AssistantCostTool } from './assistant-cost-tool'
 import type { AssistantPresetId } from './assistant-events'
 import { AssistantHandoffTool } from './assistant-handoff-tool'
+import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { AssistantSetupTool } from './assistant-setup-tool'
@@ -305,13 +306,18 @@ export function AssistantPanel(props: {
     ])
     setSending(true)
     try {
-      const answer = await sendAssistantMessage(message)
+      const reply = await sendAssistantMessage(message)
+      const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
+      const suggestedAction = suggestedPresetId
+        ? presets.find((preset) => preset.id === suggestedPresetId)?.action
+        : undefined
       setEntries((current) => [
         ...current,
         {
           id: nanoid(),
           role: 'assistant',
-          content: answer,
+          content: reply.content,
+          action: suggestedAction,
         },
       ])
       await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })

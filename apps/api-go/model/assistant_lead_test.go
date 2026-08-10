@@ -28,7 +28,10 @@ func TestClassifyAssistantIntent(t *testing.T) {
 	tests := map[string]string{
 		"请转人工客服":                             AssistantIntentHumanSupport,
 		"How do I create an API key?":        AssistantIntentAPIKey,
+		"Base URL 和模型 ID 是什么":                AssistantIntentAPIKey,
 		"Windows 安装 Claude Code 和 CC Switch": AssistantIntentClientSetup,
+		"macOS 怎样配置 cc-switch":               AssistantIntentClientSetup,
+		"怎样把 Base URL 配置进 cc-switch":         AssistantIntentClientSetup,
 		"开源挑战完成后怎么赠小费":                       AssistantIntentBounty,
 		"帮我计算 token 成本":                      AssistantIntentCost,
 		"哪个套餐最划算，有优惠吗":                       AssistantIntentPlanPurchase,
