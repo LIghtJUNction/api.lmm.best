@@ -2410,7 +2410,9 @@ async fn list_self_bindings(State(state): State<FederationState>, headers: Heade
             true,
         ),
         Err(_) => with_auth_version(
-            failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+            // `common.ApiError` is a legacy business envelope and keeps HTTP
+            // 200 even when the database lookup fails.
+            failure(StatusCode::OK, "internal server error"),
             true,
         ),
     }
@@ -2428,7 +2430,10 @@ async fn unbind_self(
     let provider_id = match provider_id.parse::<i64>() {
         Ok(provider_id) => provider_id,
         Err(_) => {
-            return with_auth_version(failure(StatusCode::OK, "invalid provider id"), true);
+            // The self-service Go handler uses its localized legacy message
+            // for a malformed provider path segment. Keep this distinct from
+            // the administrator route, whose frozen message is English.
+            return with_auth_version(failure(StatusCode::OK, "无效的提供商 ID"), true);
         }
     };
     with_auth_version(
@@ -2473,7 +2478,9 @@ async fn list_admin_bindings(
             true,
         ),
         Err(_) => with_auth_version(
-            failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+            // `common.ApiError` is a legacy business envelope and keeps HTTP
+            // 200 even when the database lookup fails.
+            failure(StatusCode::OK, "internal server error"),
             true,
         ),
     }
@@ -2534,9 +2541,9 @@ async fn delete_binding(
     provider_id: i64,
     message: &'static str,
 ) -> Response {
-    if user_id <= 0 || provider_id <= 0 {
-        return failure(StatusCode::OK, "invalid provider id");
-    }
+    // Go parses the path with strconv.Atoi and passes every representable
+    // integer to DeleteUserOAuthBinding. Do not add a Rust-side positivity
+    // guard: zero/negative ids are ordinary no-op deletes there.
     match sqlx::query("DELETE FROM user_oauth_bindings WHERE user_id = $1 AND provider_id = $2")
         .bind(user_id)
         .bind(provider_id)
@@ -2549,7 +2556,9 @@ async fn delete_binding(
             data: None,
         })
         .into_response(),
-        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+        // `common.ApiError` keeps this handler's legacy HTTP-200 envelope,
+        // including when GORM reports a database failure.
+        Err(_) => failure(StatusCode::OK, "internal server error"),
     }
 }
 

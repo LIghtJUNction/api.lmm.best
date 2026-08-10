@@ -282,6 +282,71 @@ async fn binding_mutation_preserves_go_auth_version_after_authentication() {
             .and_then(|value| value.to_str().ok()),
         Some("864b7076dbcd0a3c01b5520316720ebf")
     );
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .expect("response body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON body"),
+        json!({"success": false, "message": "无效的提供商 ID"})
+    );
+}
+
+#[tokio::test]
+async fn binding_database_failures_keep_go_legacy_ok_envelopes() {
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(10))
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("a lazy test pool is valid");
+    let app = router(FederationState::new(
+        pool,
+        Arc::new(BoundIdentity),
+        "test-secret",
+    ));
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::get("/api/user/oauth/bindings")
+                .body(Body::empty())
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    assert_eq!(
+        list_response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
+    );
+    let body = axum::body::to_bytes(list_response.into_body(), 1024)
+        .await
+        .expect("response body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON body"),
+        json!({"success": false, "message": "internal server error"})
+    );
+
+    // Atoi accepts numeric zero. Go sends that value to DeleteUserOAuthBinding
+    // instead of rejecting it in the controller; the resulting DB error still
+    // uses the same HTTP-200 business envelope.
+    let delete_response = app
+        .oneshot(
+            Request::delete("/api/user/oauth/bindings/0")
+                .body(Body::empty())
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(delete_response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(delete_response.into_body(), 1024)
+        .await
+        .expect("response body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON body"),
+        json!({"success": false, "message": "internal server error"})
+    );
 }
 
 #[tokio::test]
