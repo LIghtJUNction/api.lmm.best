@@ -32,6 +32,15 @@ impl ProfileIdentityResolver for VerifiedPrincipal {
     }
 }
 
+struct InternalPrincipal;
+
+#[async_trait]
+impl ProfileIdentityResolver for InternalPrincipal {
+    async fn principal(&self, _: &HeaderMap) -> Result<ProfileIdentity, ProfileAuthError> {
+        Err(ProfileAuthError::Internal)
+    }
+}
+
 fn app() -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
@@ -46,6 +55,38 @@ fn app_without_listener_principal() -> axum::Router {
         .expect("valid lazy test URL");
     let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid test URL");
     router(ProfileState::new(pool, valkey))
+}
+
+#[tokio::test]
+async fn profile_auth_dependency_failures_keep_go_internal_auth_status_and_code() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+        .expect("valid lazy test URL");
+    let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid test URL");
+    let response = router(
+        ProfileState::new(pool, valkey).with_identity_resolver(Arc::new(InternalPrincipal)),
+    )
+    .oneshot(
+        Request::get("/api/user/aff")
+            .header("accept-language", "zh-CN")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON failure envelope"),
+        serde_json::json!({
+            "success": false,
+            "code": "AUTH_INTERNAL_ERROR",
+            "message": "数据库出错，请联系管理员"
+        })
+    );
 }
 
 #[tokio::test]
@@ -182,7 +223,7 @@ async fn authenticated_profile_handler_errors_preserve_auth_version() {
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
             .headers()
@@ -230,7 +271,7 @@ async fn self_profile_password_rotation_requires_session_owner_before_postgres()
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
