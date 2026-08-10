@@ -638,12 +638,10 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
   capture_listener_response "$prefix.anonymous-logout" -X POST -H 'origin: https://trusted.example' "$base/api/user/auth/logout"
   grep -qx 200 "$prefix.anonymous-logout.status"
   if [[ $base == *":$rust_port" ]]; then
-    # These legacy Go routes remain deliberately unmounted in the Rust
-    # candidate until they receive independent approval.
+    # The 2FA completion route remains deliberately unmounted in the Rust
+    # candidate until it receives independent approval.
     capture_listener_response "$prefix.hidden-login-2fa" -X POST "$base/api/user/login/2fa"
     grep -qx 404 "$prefix.hidden-login-2fa.status"
-    capture_listener_response "$prefix.hidden-token" "$base/api/user/token"
-    grep -qx 404 "$prefix.hidden-token.status"
   fi
 done
 for name in input failure anonymous-self anonymous-refresh anonymous-logout; do

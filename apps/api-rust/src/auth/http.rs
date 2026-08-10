@@ -635,30 +635,6 @@ async fn logout(State(state): State<AuthHttpState>, request: Request) -> Respons
     }
 }
 
-#[allow(dead_code)] // Kept compiled for future verification, but deliberately not mounted.
-async fn generate_personal_access_token(
-    State(state): State<AuthHttpState>,
-    request: Request,
-) -> Response {
-    let locale = LegacyLocale::from_request(&request);
-    let Some(token) = authorization_token(request.headers()) else {
-        return unauthorized(locale.message(LegacyAuthMessage::InvalidAccessToken));
-    };
-    match state
-        .auth
-        .generate_personal_access_token(SecretString::from(token))
-        .await
-    {
-        Ok(token) => Json(SuccessEnvelope {
-            success: true,
-            message: "",
-            data: Some(token),
-        })
-        .into_response(),
-        Err(error) => auth_error(error),
-    }
-}
-
 fn request_metadata(request: &Request) -> RequestMetadata {
     RequestMetadata {
         ip: request
