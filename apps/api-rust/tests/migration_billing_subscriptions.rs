@@ -103,6 +103,7 @@ impl DashboardAuth for FixtureAuth {
 
 fn smoke_router() -> axum::Router {
     let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
         .connect_lazy("postgres://postgres@127.0.0.1:1/billing")
         .expect("valid lazy PostgreSQL test URL");
     router(BillingSubscriptionsState::new(
@@ -181,6 +182,34 @@ async fn subscription_admin_auth_precedes_malformed_json_rejection() {
         json!({
             "success": false,
             "message": "Unauthorized, invalid access token"
+        })
+    );
+}
+
+#[tokio::test]
+async fn subscription_self_degrades_database_read_failures_to_empty_lists() {
+    let response = smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/subscription/self")
+                .header("authorization", "Bearer user")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        error_body(response).await,
+        json!({
+            "success": true,
+            "message": "",
+            "data": {
+                "billing_preference": "subscription_first",
+                "subscriptions": [],
+                "all_subscriptions": []
+            }
         })
     );
 }
