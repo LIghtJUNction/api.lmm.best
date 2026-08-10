@@ -36,6 +36,9 @@ use lmm_api_rs::{
             passkey_read_router, registration_router, sessions_read_router,
         },
         missing_control_public::{GroupState, RatioConfigState, group_router, ratio_config_router},
+        missing_control_tasks::{
+            ControlTaskStatusState, PgControlTaskStatusProbe, status_test_router,
+        },
         missing_identity_catalog::{
             IdentityCatalogState, protected_read_router as identity_catalog_protected_read_router,
             public_router as identity_catalog_public_router,
@@ -66,6 +69,7 @@ use probes::InfrastructureProbe;
 use public_content::{PgPublicContentRepository, ValkeyPublicContentCache};
 use rate_limit::ValkeyGlobalApiRateLimiter;
 use secrecy::ExposeSecret;
+use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use std::{
     future::IntoFuture,
@@ -352,6 +356,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )),
             )),
         );
+        // The legacy handler checks PostgreSQL before returning the process
+        // counter. Keep the status-only mount separate from task-list
+        // candidates. The frozen Go API route is registered before its relay
+        // statistics middleware, so its own request is excluded; subtract the
+        // current listener request while retaining other in-flight work.
+        let status_test = http::api_global_rate_limited_surface_with_legacy_headers(
+            &app_state,
+            status_test_router(ControlTaskStatusState::new(
+                Arc::new(DashboardObservabilityAuthorizer::new(
+                    Arc::clone(&auth),
+                    Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
+                )),
+                Arc::new(PgControlTaskStatusProbe::new(
+                    pg.clone(),
+                    Arc::new({
+                        let runtime = runtime.clone();
+                        move || {
+                            json!({
+                                "active_connections": runtime.inflight().saturating_sub(1),
+                            })
+                        }
+                    }),
+                )),
+            )),
+        );
         let open_source_bounties =
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
         // The single-model GET is a read-only static catalogue lookup. Keep
@@ -400,6 +429,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(registration)
             .merge(billing_subscriptions)
             .merge(observability)
+            .merge(status_test)
             .merge(open_source_bounties)
             .merge(model_lookup)
             .merge(control_public)

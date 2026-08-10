@@ -1881,7 +1881,7 @@ impl PgTestStatusProbe {
 #[async_trait]
 impl ControlTaskStatusProbe for PgTestStatusProbe {
     async fn test_status(&self) -> Result<Value, ControlTaskStatusError> {
-        sqlx::query_scalar::<_, i64>("SELECT 1")
+        sqlx::query_scalar::<_, i32>("SELECT 1")
             .fetch_one(&self.pg)
             .await
             .map_err(|_| ControlTaskStatusError::DatabaseUnavailable)?;

@@ -15,7 +15,7 @@ curl_max_time=15
 listener_wait_attempts=${LMM_AUTH_LISTENER_WAIT_ATTEMPTS:-1200}
 approval_mode=${LMM_AUTH_LISTENER_APPROVAL:-0}
 probe_only=${LMM_AUTH_LISTENER_PROBE_ONLY:-0}
-expected_scenarios=35
+expected_scenarios=36
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -692,6 +692,9 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
       capture_listener_response "$prefix.group" -H "authorization: Bearer $token" "$base/api/group/"
       grep -qx 200 "$prefix.group.status"
       jq -e '.success == true and (.data | type == "array")' "$prefix.group.json" >/dev/null
+      capture_listener_response "$prefix.status-test" -H "authorization: Bearer $token" "$base/api/status/test"
+      grep -qx 200 "$prefix.status-test.status"
+      jq -e '.success == true and .message == "Server is running" and .http_stats.active_connections == 0' "$prefix.status-test.json" >/dev/null
     fi
     capture_listener_response "$prefix.origin-missing" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" "$base/api/user/auth/refresh"
     capture_listener_response "$prefix.origin-evil" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" -H 'origin: https://evil.example' "$base/api/user/auth/refresh"
@@ -761,6 +764,7 @@ for schedule in a-first b-first; do
   done
 done
 assert_listener_response_match a-first.group
+assert_listener_response_match a-first.status-test
 
 # Expire the just-rotated old token in the real database, then prove a replay
 # revokes the family over each TCP listener.  This avoids a wall-clock sleep
@@ -1001,4 +1005,4 @@ jq -cn \
   --argjson scenarios "$scenario_total" \
   --argjson exact_matches "$exact_matches" \
   --argjson mismatches "$mismatch_count" \
-  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
+  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
