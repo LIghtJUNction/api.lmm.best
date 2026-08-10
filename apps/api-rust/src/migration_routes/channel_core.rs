@@ -63,7 +63,7 @@ pub fn router(state: ChannelCoreState) -> Router {
         .route("/api/channel/ops", get(ops))
         .route("/api/channel/fix", post(fix_abilities))
         .route("/api/channel/multi_key/manage", post(manage_multi_keys))
-        // Go's authentication middleware runs before JSON binding. Keep a
+        // Go's authentication middleware runs before JSON binding.  Keep a
         // listener-owned preflight here so malformed/underspecified bodies
         // cannot turn an anonymous request into Axum's 422 before the shared
         // dashboard authorizer returns the legacy 401 envelope.
@@ -133,6 +133,9 @@ fn empty() -> Json<Envelope<Value>> {
 
 #[derive(Debug)]
 pub enum ChannelError {
+    /// The Go `ConsoleAccessGate` conceals channel discovery routes before
+    /// AdminAuth sees anonymous, invalid, disabled, or unactivated users.
+    ConsoleNotFound,
     Unauthorized,
     Forbidden,
     Invalid(&'static str),
@@ -142,6 +145,9 @@ pub enum ChannelError {
 }
 impl ChannelError {
     pub(crate) fn legacy(self) -> Response {
+        if matches!(&self, Self::ConsoleNotFound) {
+            return (StatusCode::NOT_FOUND, Json(json!({"message":"Not Found"}))).into_response();
+        }
         if matches!(&self, Self::Unauthorized) {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -157,7 +163,7 @@ impl ChannelError {
                 .into_response();
         }
         let message = match self {
-            Self::Unauthorized | Self::Forbidden => unreachable!(),
+            Self::ConsoleNotFound | Self::Unauthorized | Self::Forbidden => unreachable!(),
             Self::Invalid(message) => message,
             Self::NotFound => "渠道不存在",
             Self::Database => "数据库错误",

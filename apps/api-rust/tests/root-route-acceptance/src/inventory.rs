@@ -152,12 +152,12 @@ pub fn load_routes() -> Result<Vec<RouteCase>, String> {
     }
 
     let expected_auth_counts = BTreeMap::from([
-        (AuthClass::Public, 19usize),
+        (AuthClass::Public, 21usize),
         (AuthClass::PublicOrUser, 14usize),
-        (AuthClass::User, 69usize),
+        (AuthClass::User, 81usize),
         (AuthClass::UserOrToken, 40usize),
-        (AuthClass::Token, 46usize),
-        (AuthClass::Admin, 156usize),
+        (AuthClass::Token, 47usize),
+        (AuthClass::Admin, 141usize),
         (AuthClass::Root, 2usize),
         (AuthClass::Webhook, 10usize),
     ]);
@@ -275,7 +275,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.auth == AuthClass::Admin)
                 .count(),
-            156
+            141
         );
         assert_eq!(
             routes
@@ -289,14 +289,14 @@ mod tests {
                 .iter()
                 .filter(|route| route.auth == AuthClass::User)
                 .count(),
-            69
+            81
         );
         assert_eq!(
             routes
                 .iter()
                 .filter(|route| route.auth == AuthClass::Token)
                 .count(),
-            46
+            47
         );
     }
 

@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 
 use crate::auth::{
     AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, UserAuthPolicyError,
-    dashboard_token_candidate, enforce_user_auth, user_auth_message,
+    dashboard_token_candidate, enforce_user_auth, enforce_user_auth_view, user_auth_message,
 };
 use crate::{ClientIpKey, RequestContext, legacy_empty_response};
 
@@ -41,6 +41,9 @@ pub struct MissingControlPrincipal {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MissingControlAuthError {
+    /// The Go `ConsoleAccessGate` conceals dashboard discovery routes before
+    /// the nested UserAuth/AdminAuth middleware sees the request.
+    ConsoleNotFound,
     UnmatchedOpaque,
     Unauthorized,
     TokenExpired,
@@ -64,6 +67,16 @@ pub trait MissingControlAuthorizer: Send + Sync {
     ) -> Result<MissingControlPrincipal, MissingControlAuthError>;
 
     async fn optional_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
+        self.principal(headers).await
+    }
+
+    /// Resolves a principal after the normal listener's console activation
+    /// gate. Candidate/test authorizers retain the old required-principal
+    /// behavior by default; the production adapter overrides this boundary.
+    async fn console_principal(
         &self,
         headers: &HeaderMap,
     ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
@@ -172,6 +185,27 @@ impl MissingControlAuthorizer for DashboardMissingControlAuthorizer {
             ),
             Err(_) => Err(MissingControlAuthError::Unavailable),
         }
+    }
+
+    async fn console_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
+        let token =
+            dashboard_credential(headers).ok_or(MissingControlAuthError::ConsoleNotFound)?;
+        let view = self
+            .auth
+            .self_user_view_for_optional(SecretString::from(token))
+            .await
+            .map_err(|_| MissingControlAuthError::ConsoleNotFound)?;
+        if view.id <= 0 || view.status != 1 || !view.developer_access_granted {
+            return Err(MissingControlAuthError::ConsoleNotFound);
+        }
+        enforce_user_auth_view(&view).map_err(MissingControlAuthError::UserAuth)?;
+        Ok(MissingControlPrincipal {
+            user_id: view.id,
+            role: view.role,
+        })
     }
 }
 
@@ -509,7 +543,7 @@ async fn groups(State(state): State<MissingControlPublicState>, headers: HeaderM
 }
 
 async fn models(State(state): State<MissingControlPublicState>, headers: HeaderMap) -> Response {
-    if let Err(response) = require_dashboard(&state, &headers).await {
+    if let Err(response) = require_public_dashboard(&state, &headers).await {
         return response;
     }
     with_auth_version(legacy_json(json!({
@@ -575,7 +609,13 @@ async fn rankings(
     }
 }
 
-async fn ratio_config(State(state): State<MissingControlPublicState>) -> Response {
+async fn ratio_config(
+    State(state): State<MissingControlPublicState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = require_public_dashboard(&state, &headers).await {
+        return response;
+    }
     match state.ratio().await {
         Some(data) => legacy_json(json!({"success": true, "message": "", "data": data})),
         None => public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用"),
@@ -788,6 +828,12 @@ fn empty_limiter_response(status: StatusCode, retry_after_seconds: Option<u64>) 
 }
 
 async fn token_usage(state: &MissingControlPublicState, headers: &HeaderMap) -> Response {
+    // `/api/usage` is part of the Go console discovery prefixes. The outer
+    // ConsoleAccessGate hides a request with no credential before TokenAuth
+    // can emit its ordinary token-specific 401 envelope.
+    if !dashboard_credential_present(headers) {
+        return console_not_found();
+    }
     let Some(raw) = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -974,18 +1020,18 @@ async fn nav_actor(
     access: HeaderNavAccess,
     module: &str,
 ) -> Result<Option<MissingControlPrincipal>, Response> {
+    // ConsoleAccessGate runs before the header-nav module policy on the Go
+    // listener. `/api/pricing` and `/api/rankings` are discovery surfaces, so
+    // an anonymous request is concealed even when the module is configured as
+    // public.
+    if !dashboard_credential_present(headers) {
+        return Err(console_not_found());
+    }
     if !access.enabled {
         return Err(public_failure(
             StatusCode::FORBIDDEN,
             &format!("{module} is disabled"),
         ));
-    }
-    if !dashboard_credential_present(headers) {
-        return if access.require_auth {
-            Err(dashboard_unauthorized(headers))
-        } else {
-            Ok(None)
-        };
     }
     let authorization = if access.require_auth {
         state.authorizer.principal(headers).await
@@ -994,6 +1040,7 @@ async fn nav_actor(
     };
     match authorization {
         Ok(principal) => Ok(Some(principal)),
+        Err(MissingControlAuthError::ConsoleNotFound) => Err(console_not_found()),
         Err(MissingControlAuthError::UnmatchedOpaque) if !access.require_auth => Ok(None),
         Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
             Err(public_dashboard_unauthorized(headers))
@@ -1022,8 +1069,9 @@ async fn require_public_dashboard(
     state: &MissingControlPublicState,
     headers: &HeaderMap,
 ) -> Result<MissingControlPrincipal, Response> {
-    match state.authorizer.principal(headers).await {
+    match state.authorizer.console_principal(headers).await {
         Ok(principal) => Ok(principal),
+        Err(MissingControlAuthError::ConsoleNotFound) => Err(console_not_found()),
         Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
             Err(public_dashboard_unauthorized(headers))
         }
@@ -1050,6 +1098,7 @@ async fn require_dashboard(
 ) -> Result<MissingControlPrincipal, Response> {
     match state.authorizer.principal(headers).await {
         Ok(principal) => Ok(principal),
+        Err(MissingControlAuthError::ConsoleNotFound) => Err(console_not_found()),
         Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
             Err(dashboard_unauthorized(headers))
         }
@@ -1207,6 +1256,10 @@ fn public_dashboard_unauthorized(headers: &HeaderMap) -> Response {
             "message": auth_invalid_access_token(headers),
         }),
     )
+}
+
+fn console_not_found() -> Response {
+    legacy_json_with_status(StatusCode::NOT_FOUND, json!({"message": "Not Found"}))
 }
 
 fn dashboard_internal_error(headers: &HeaderMap) -> Response {

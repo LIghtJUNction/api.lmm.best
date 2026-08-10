@@ -258,13 +258,23 @@ sub is_models_post_alias {
         || $path eq '/v1beta/models/:model/*tail';
 }
 
+# The shared `/v1/models/:model` method router is composed in three places:
+# the focused compatibility candidate, the normal GET catalogue, and the
+# relay's POST/DELETE method router.  These declarations intentionally describe
+# one Axum method surface rather than three independently mounted endpoints.
+sub is_models_shared_alias {
+    return 1 if $_[1] eq '/v1/models/:model'
+        && ($_[0] eq 'GET' || $_[0] eq 'DELETE');
+    return is_models_post_alias(@_);
+}
+
 sub method_calls {
     my ($expression) = @_;
     my @calls;
     my $index = 0;
     while ($index < length($expression)) {
         my $remaining = substr($expression, $index);
-        if ($remaining =~ /\A(?:axum\s*::\s*routing\s*::\s*)?($method_pattern)\s*\(/i) {
+        if ($remaining =~ /\A(?:\.\s*)?(?:axum\s*::\s*routing\s*::\s*)?($method_pattern)\s*\(/i) {
             my $method = lc $1;
             my $opening = $index + length($&)- 1;
             my $closing = matching_delimiter($expression, $opening, '(', ')');
@@ -522,7 +532,7 @@ for my $file (@source_files) {
             }
             my $key = "$method\t$candidate_path";
             if (exists $candidates{$key}) {
-                next if is_models_post_alias($method, $path);
+                next if is_models_shared_alias($method, $path);
                 $failed |= fail("$file:$line: duplicate normalized route $method $candidate_path (first at $candidates{$key})");
                 next;
             }

@@ -1253,7 +1253,13 @@ return {0, ttl}
     ) -> Result<DashboardUserView, AuthError> {
         let user = if self.codec.is_dashboard_token_candidate(&access_token) {
             let identity = self.codec.parse(&access_token)?;
-            let (_, user) = self.validate_identity_for_optional(&identity).await?;
+            // The frozen Go `UserAuth` middleware validates a dashboard
+            // session before the handler-level role/status policy. A disabled
+            // session therefore surfaces as AUTH_SESSION_REVOKED, while an
+            // opaque personal token reaches the explicit user-disabled
+            // branch below. Keep the optional self projection faithful to
+            // that ordering.
+            let (_, user) = self.validate_identity(&identity).await?;
             user
         } else {
             let raw = access_token.expose_secret().trim();

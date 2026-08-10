@@ -37,6 +37,7 @@ use std::{
     },
     time::Duration,
 };
+use tokio::sync::RwLock;
 
 const OPTIONS_CACHE_KEY: &str = "lmm:system-config:options";
 const AFFINITY_CACHE_PREFIX: &str = "new-api:channel_affinity:v1:";
@@ -227,6 +228,51 @@ impl SystemConfigRuntimeWriter for MissingSystemConfigRuntimeWriter {
     }
 }
 
+/// Process-wide option owner used by the normal Rust listener.
+///
+/// Most migrated handlers read durable options from PostgreSQL for each
+/// request.  A small set of long-lived adapters, however, needs the same
+/// process-wide view that the legacy Go `OptionMap` provided.  Keeping that
+/// view behind one shared lock gives `/api/option/` a concrete runtime owner
+/// without creating a route-local cache that other workers cannot observe.
+#[derive(Clone, Debug, Default)]
+pub struct ProcessRuntimeOptions {
+    values: Arc<RwLock<BTreeMap<String, String>>>,
+}
+
+impl ProcessRuntimeOptions {
+    #[must_use]
+    pub fn new(initial: BTreeMap<String, String>) -> Self {
+        Self {
+            values: Arc::new(RwLock::new(initial)),
+        }
+    }
+
+    /// Returns a coherent snapshot for runtime adapters that need options
+    /// without issuing another PostgreSQL query.
+    pub async fn snapshot(&self) -> BTreeMap<String, String> {
+        self.values.read().await.clone()
+    }
+}
+
+#[async_trait]
+impl SystemConfigRuntimeWriter for ProcessRuntimeOptions {
+    async fn preflight(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        if changes.is_empty() || changes.iter().any(|(key, _)| key.trim().is_empty()) {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    async fn apply_committed(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        let mut values = self.values.write().await;
+        for (key, value) in changes {
+            values.insert(key.clone(), value.clone());
+        }
+        Ok(())
+    }
+}
+
 /// Server-validated identity used by configuration audit records.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SystemConfigIdentity {
@@ -247,7 +293,12 @@ pub struct SystemConfigAuthContext {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SystemConfigAuthRejection {
-    Unauthorized { supplied: bool },
+    /// ConsoleAccessGate hides system configuration discovery until the
+    /// credential resolves to an activated developer account.
+    ConsoleNotFound,
+    Unauthorized {
+        supplied: bool,
+    },
     TokenExpired,
     SessionRevoked,
     UserDisabled,
@@ -289,10 +340,10 @@ impl SystemConfigAuthorizer for DashboardRootAuthorizer {
         &self,
         headers: &HeaderMap,
     ) -> Result<SystemConfigAuthContext, SystemConfigAuthRejection> {
-        use crate::auth::{AuthErrorKind, UserAuthPolicyError, enforce_user_auth};
+        use crate::auth::{UserAuthPolicyError, enforce_user_auth_view};
 
-        let token = dashboard_credential(headers)
-            .ok_or(SystemConfigAuthRejection::Unauthorized { supplied: false })?;
+        let token =
+            dashboard_credential(headers).ok_or(SystemConfigAuthRejection::ConsoleNotFound)?;
         let credential = if crate::auth::dashboard_token_candidate(&token) {
             SystemConfigCredential::DashboardSession
         } else {
@@ -300,16 +351,13 @@ impl SystemConfigAuthorizer for DashboardRootAuthorizer {
         };
         let user = self
             .auth
-            .self_user(SecretString::from(token))
+            .self_user_view_for_optional(SecretString::from(token))
             .await
-            .map_err(|error| match error.kind {
-                AuthErrorKind::TokenExpired => SystemConfigAuthRejection::TokenExpired,
-                AuthErrorKind::SessionRevoked => SystemConfigAuthRejection::SessionRevoked,
-                AuthErrorKind::UserDisabled => SystemConfigAuthRejection::UserDisabled,
-                AuthErrorKind::Internal => SystemConfigAuthRejection::Internal,
-                _ => SystemConfigAuthRejection::Unauthorized { supplied: true },
-            })?;
-        enforce_user_auth(&user).map_err(|error| match error {
+            .map_err(|_| SystemConfigAuthRejection::ConsoleNotFound)?;
+        if !user.developer_access_granted {
+            return Err(SystemConfigAuthRejection::ConsoleNotFound);
+        }
+        enforce_user_auth_view(&user).map_err(|error| match error {
             UserAuthPolicyError::UserDisabled => SystemConfigAuthRejection::UserDisabled,
             UserAuthPolicyError::InsufficientPrivilege => {
                 SystemConfigAuthRejection::InsufficientPrivilege
@@ -981,6 +1029,9 @@ fn user_policy_message(headers: &HeaderMap, rejection: SystemConfigAuthRejection
 
 fn auth_rejection(headers: &HeaderMap, rejection: SystemConfigAuthRejection) -> Response {
     let (status, code, message) = match rejection {
+        SystemConfigAuthRejection::ConsoleNotFound => {
+            return legacy_json(StatusCode::NOT_FOUND, json!({"message": "Not Found"}));
+        }
         SystemConfigAuthRejection::Unauthorized { supplied } => (
             StatusCode::UNAUTHORIZED,
             "AUTH_UNAUTHORIZED",
@@ -1975,6 +2026,23 @@ async fn get_setup(State(state): State<SystemConfigHttpState>) -> Response {
             Ok(value) => value,
             Err(_) => return legacy_error("获取初始化状态失败"),
         };
+    // The frozen Go listener runs CheckSetup during startup.  When a root
+    // already exists but the setup marker is absent, that startup check
+    // creates the marker and thereafter GET /api/setup reports an initialized
+    // installation.  Mirror the durable marker here so a PostgreSQL-mounted
+    // Rust listener does not expose the transient pre-CheckSetup state.
+    if root_init
+        && sqlx::query("INSERT INTO setups (version, initialized_at) VALUES ('rust-migration', $1)")
+            .bind(chrono_seconds())
+            .execute(&state.pg)
+            .await
+            .is_ok()
+    {
+        return legacy_json(
+            StatusCode::OK,
+            json!({"success":true,"data":{"status":true,"root_init":false,"database_type":""}}),
+        );
+    }
     legacy_json(
         StatusCode::OK,
         json!({"success":true,"data":{"status":false,"root_init":root_init,"database_type":"PostgreSQL"}}),

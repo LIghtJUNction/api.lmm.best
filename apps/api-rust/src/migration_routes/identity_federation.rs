@@ -635,6 +635,14 @@ impl FederationState {
 
 /// Routes for OAuth/OIDC federation and custom OAuth binding management.
 pub fn router(state: FederationState) -> Router {
+    provider_router(state.clone()).merge(bindings_router(state))
+}
+
+/// Builds only the provider/login-exchange routes.  The durable binding
+/// management routes are intentionally exposed separately so a listener can
+/// take ownership of PostgreSQL binding reads/deletes without also enabling a
+/// remote OAuth provider or login issuer.
+pub fn provider_router(state: FederationState) -> Router {
     Router::new()
         .route("/api/oauth/state", post(create_oauth_state))
         .route("/api/oauth/{provider}", get(oauth_callback))
@@ -644,16 +652,6 @@ pub fn router(state: FederationState) -> Router {
         .route("/api/oauth/telegram/login", get(telegram_login))
         .route("/api/oauth/telegram/bind/start", post(telegram_bind_start))
         .route("/api/oauth/telegram/bind/{flow_token}", get(telegram_bind))
-        .route("/api/user/oauth/bindings", get(list_self_bindings))
-        .route(
-            "/api/user/oauth/bindings/{provider_id}",
-            delete(unbind_self),
-        )
-        .route("/api/user/{id}/oauth/bindings", get(list_admin_bindings))
-        .route(
-            "/api/user/{id}/oauth/bindings/{provider_id}",
-            delete(unbind_admin),
-        )
         .with_state(state)
 }
 
@@ -664,6 +662,10 @@ pub fn router(state: FederationState) -> Router {
 /// These four routes are PostgreSQL/session-authority operations and can be
 /// mounted independently without exposing a half-configured provider flow.
 pub fn bindings_router(state: FederationState) -> Router {
+    bindings_routes().with_state(state)
+}
+
+fn bindings_routes() -> Router<FederationState> {
     Router::new()
         .route("/api/user/oauth/bindings", get(list_self_bindings))
         .route(
@@ -675,7 +677,6 @@ pub fn bindings_router(state: FederationState) -> Router {
             "/api/user/{id}/oauth/bindings/{provider_id}",
             delete(unbind_admin),
         )
-        .with_state(state)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2421,9 +2422,11 @@ async fn unbind_self(
     };
     let provider_id = match provider_id.parse::<i64>() {
         Ok(provider_id) => provider_id,
-        Err(_) => return failure(StatusCode::OK, "invalid provider id"),
+        Err(_) => return failure(StatusCode::OK, "无效的提供商 ID"),
     };
-    delete_binding(&state.pool, actor.user_id, provider_id, "解绑成功").await
+    delete_binding(&state.pool, actor.user_id, provider_id, "解绑成功")
+        .await
+        .0
 }
 
 async fn list_admin_bindings(
@@ -2478,16 +2481,60 @@ async fn unbind_admin(
     }
     let user_id = match user_id.parse::<i64>() {
         Ok(user_id) => user_id,
-        Err(_) => return failure(StatusCode::OK, "invalid user id"),
+        Err(_) => {
+            let response = failure(StatusCode::OK, "invalid user id");
+            record_oauth_unbind_audit(
+                &state.pool,
+                &actor,
+                &user_id.to_string(),
+                &provider_id,
+                response.status(),
+                false,
+            )
+            .await;
+            return response;
+        }
     };
     let provider_id = match provider_id.parse::<i64>() {
         Ok(provider_id) => provider_id,
-        Err(_) => return failure(StatusCode::OK, "invalid provider id"),
+        Err(_) => {
+            let response = failure(StatusCode::OK, "invalid provider id");
+            record_oauth_unbind_audit(
+                &state.pool,
+                &actor,
+                &user_id.to_string(),
+                &provider_id,
+                response.status(),
+                false,
+            )
+            .await;
+            return response;
+        }
     };
     if !can_manage_binding_target(&state.pool, actor.role, user_id).await {
-        return failure(StatusCode::OK, "no permission");
+        let response = failure(StatusCode::OK, "no permission");
+        record_oauth_unbind_audit(
+            &state.pool,
+            &actor,
+            &user_id.to_string(),
+            &provider_id.to_string(),
+            response.status(),
+            false,
+        )
+        .await;
+        return response;
     }
-    delete_binding(&state.pool, user_id, provider_id, "success").await
+    let (response, success) = delete_binding(&state.pool, user_id, provider_id, "success").await;
+    record_oauth_unbind_audit(
+        &state.pool,
+        &actor,
+        &user_id.to_string(),
+        &provider_id.to_string(),
+        response.status(),
+        success,
+    )
+    .await;
+    response
 }
 
 async fn can_manage_binding_target(pool: &PgPool, actor_role: i64, user_id: i64) -> bool {
@@ -2507,24 +2554,74 @@ async fn delete_binding(
     user_id: i64,
     provider_id: i64,
     message: &'static str,
-) -> Response {
-    if user_id <= 0 || provider_id <= 0 {
-        return failure(StatusCode::OK, "invalid provider id");
-    }
+) -> (Response, bool) {
     match sqlx::query("DELETE FROM user_oauth_bindings WHERE user_id = $1 AND provider_id = $2")
         .bind(user_id)
         .bind(provider_id)
         .execute(pool)
         .await
     {
-        Ok(_) => Json(Envelope::<()> {
-            success: true,
-            message,
-            data: None,
-        })
-        .into_response(),
-        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+        Ok(_) => (
+            Json(Envelope::<()> {
+                success: true,
+                message,
+                data: None,
+            })
+            .into_response(),
+            true,
+        ),
+        Err(_) => (
+            failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+            false,
+        ),
     }
+}
+
+/// Mirrors Go's AdminAuth middleware audit for the administrator binding
+/// delete route. The audit is best-effort and must never change the response
+/// returned by the binding handler.
+async fn record_oauth_unbind_audit(
+    pool: &PgPool,
+    actor: &FederationPrincipal,
+    user_id: &str,
+    provider_id: &str,
+    status: StatusCode,
+    success: bool,
+) {
+    let username = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = $1")
+        .bind(actor.user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let path = format!("/api/user/{user_id}/oauth/bindings/{provider_id}");
+    let other = json!({
+        "op": {"action": "user.oauth_unbind"},
+        "admin_info": {
+            "admin_id": actor.user_id,
+            "admin_username": username,
+            "admin_role": actor.role,
+            "auth_method": "session",
+        },
+        "audit_info": {
+            "method": "DELETE",
+            "route": "/api/user/:id/oauth/bindings/:provider_id",
+            "path": path,
+            "status": status.as_u16(),
+            "success": success,
+            "params": {"id": user_id, "provider_id": provider_id},
+        },
+    });
+    let _ = sqlx::query(
+        "INSERT INTO logs (user_id, created_at, type, content, username, ip, other) VALUES ($1, EXTRACT(EPOCH FROM NOW())::BIGINT, 3, $2, $3, '', $4)",
+    )
+    .bind(actor.user_id)
+    .bind("DELETE /api/user/:id/oauth/bindings/:provider_id")
+    .bind(username)
+    .bind(other.to_string())
+    .execute(pool)
+    .await;
 }
 
 #[cfg(test)]

@@ -21,8 +21,8 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use lmm_contracts::LegacySuccessEnvelope;
 use rand::RngCore;
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize, Serializer, de::DeserializeOwned};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row, postgres::PgRow};
 use std::sync::Arc;
@@ -55,10 +55,69 @@ impl OpenSourceBountyState {
 /// Public discovery and authenticated bounty notification routes.
 pub fn router(state: OpenSourceBountyState) -> Router {
     Router::new()
-        .route("/api/open-source-bounties", get(list_bounties))
+        .route(
+            "/api/open-source-bounties",
+            get(list_bounties).post(create_draft),
+        )
         .route(
             "/api/open-source-bounties/projects/{id}",
-            get(detail_bounty),
+            get(detail_bounty).put(update_draft).delete(delete_draft),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/pause",
+            post(pause_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/resume",
+            post(resume_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/publish",
+            post(publish_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/close",
+            post(close_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/accept",
+            post(accept_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/submit",
+            post(submit_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/withdraw",
+            post(withdraw_challenge),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/cancel",
+            post(cancel_challenge),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/approve",
+            post(approve_challenge),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/reject",
+            post(reject_challenge),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/rate-owner",
+            post(rate_owner),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/tip",
+            post(tip_challenge),
+        )
+        .route(
+            "/api/open-source-bounties/challenges/{challenge_id}/disputes",
+            post(open_dispute),
+        )
+        .route(
+            "/api/open-source-bounties/disputes/{dispute_id}/resolve",
+            post(resolve_dispute),
         )
         .route("/api/open-source-bounties/config", get(bounty_config))
         .route("/api/open-source-bounties/mine", get(owned_bounties))
@@ -173,6 +232,2890 @@ impl ListQuery {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct DraftInput {
+    repository_url: String,
+    title: String,
+    description: String,
+    rules: String,
+    reward_quota: i64,
+    reward_slots: i64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AcceptInput {
+    github_handle: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct SubmitInput {
+    issue_url: String,
+    pull_request_url: String,
+    submission_note: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ReviewInput {
+    review_note: String,
+    rating_score: i64,
+    rating_comment: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RatingInput {
+    score: i64,
+    comment: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct TipInput {
+    quota: i64,
+    note: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct DisputeInput {
+    reason: String,
+    statement: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ResolutionInput {
+    action: String,
+    resolution: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BountyProject {
+    id: i64,
+    owner_user_id: i64,
+    repository_url: String,
+    title: String,
+    description: String,
+    rules: String,
+    reward_quota: i64,
+    net_reward_quota: i64,
+    reward_slots: i64,
+    escrow_quota: i64,
+    platform_fee_rate_bps: i64,
+    platform_fee_quota: i64,
+    status: String,
+    created_at: i64,
+    updated_at: i64,
+    published_at: i64,
+    closed_at: i64,
+}
+
+const RAW_PROJECT_SELECT: &str = "SELECT id::BIGINT AS id, owner_user_id::BIGINT AS owner_user_id, repository_url, title, description, rules, reward_quota::BIGINT AS reward_quota, net_reward_quota::BIGINT AS net_reward_quota, reward_slots::BIGINT AS reward_slots, escrow_quota::BIGINT AS escrow_quota, platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, platform_fee_quota::BIGINT AS platform_fee_quota, status, created_at::BIGINT AS created_at, updated_at::BIGINT AS updated_at, published_at::BIGINT AS published_at, closed_at::BIGINT AS closed_at FROM open_source_bounty_projects WHERE id = $1";
+
+fn raw_project_from_row(row: &PgRow) -> Result<BountyProject, sqlx::Error> {
+    Ok(BountyProject {
+        id: row.try_get("id")?,
+        owner_user_id: row.try_get("owner_user_id")?,
+        repository_url: row.try_get("repository_url")?,
+        title: row.try_get("title")?,
+        description: row.try_get("description")?,
+        rules: row.try_get("rules")?,
+        reward_quota: row.try_get("reward_quota")?,
+        net_reward_quota: row.try_get("net_reward_quota")?,
+        reward_slots: row.try_get("reward_slots")?,
+        escrow_quota: row.try_get("escrow_quota")?,
+        platform_fee_rate_bps: row.try_get("platform_fee_rate_bps")?,
+        platform_fee_quota: row.try_get("platform_fee_quota")?,
+        status: row.try_get("status")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        published_at: row.try_get("published_at")?,
+        closed_at: row.try_get("closed_at")?,
+    })
+}
+
+fn normalize_github_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > 100 {
+        return false;
+    }
+    if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+fn normalize_repository_url(raw: &str) -> Result<String, (&'static str, &'static str)> {
+    let url = reqwest::Url::parse(raw.trim()).map_err(|_| {
+        (
+            "OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY",
+            "repository must be a public GitHub HTTPS URL",
+        )
+    })?;
+    if !url.scheme().eq_ignore_ascii_case("https")
+        || !url
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return Err((
+            "OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY",
+            "repository must be a public GitHub HTTPS URL",
+        ));
+    }
+    let segments = url
+        .path_segments()
+        .ok_or((
+            "OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY",
+            "repository must point to a GitHub owner and repository",
+        ))?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() != 2 {
+        return Err((
+            "OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY",
+            "repository must point to a GitHub owner and repository",
+        ));
+    }
+    let owner = segments[0];
+    let repository = segments[1].trim_end_matches(".git");
+    if owner.is_empty()
+        || repository.is_empty()
+        || !normalize_github_name(owner)
+        || !normalize_github_name(repository)
+    {
+        return Err((
+            "OPEN_SOURCE_BOUNTY_INVALID_REPOSITORY",
+            "repository contains an invalid GitHub owner or repository name",
+        ));
+    }
+    Ok(format!("https://github.com/{owner}/{repository}"))
+}
+
+fn normalize_github_handle(raw: &str) -> Result<String, Box<Response>> {
+    let handle = raw.trim().strip_prefix('@').unwrap_or(raw.trim());
+    if !normalize_github_name(handle) {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_HANDLE",
+            "GitHub handle is invalid",
+        )));
+    }
+    Ok(handle.to_owned())
+}
+
+fn normalize_github_evidence(
+    raw: &str,
+    repository_url: &str,
+    kind: &str,
+) -> Result<String, Box<Response>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    let url = reqwest::Url::parse(raw).map_err(|_| {
+        Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE",
+            "submitted Issue and pull request links must be GitHub HTTPS URLs",
+        ))
+    })?;
+    if !url.scheme().eq_ignore_ascii_case("https")
+        || !url
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("github.com"))
+    {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE",
+            "submitted Issue and pull request links must be GitHub HTTPS URLs",
+        )));
+    }
+    let segments = url
+        .path_segments()
+        .ok_or_else(|| {
+            Box::new(business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE",
+                "Issue or pull request URL has an invalid path",
+            ))
+        })?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() != 4 || segments[2] != kind {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE",
+            "Issue or pull request URL has an invalid path",
+        )));
+    }
+    if segments[3].parse::<i64>().is_err() {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_EVIDENCE",
+            "Issue or pull request number is invalid",
+        )));
+    }
+    let repo = normalize_repository_url(&format!(
+        "https://github.com/{}/{}",
+        segments[0], segments[1]
+    ))
+    .map_err(|_| {
+        Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH",
+            "every submitted Issue or pull request must belong to the bounty repository",
+        ))
+    })?;
+    if !repo.eq_ignore_ascii_case(repository_url) {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_EVIDENCE_REPOSITORY_MISMATCH",
+            "every submitted Issue or pull request must belong to the bounty repository",
+        )));
+    }
+    Ok(format!("{repo}/{kind}/{}", segments[3]))
+}
+
+fn normalize_draft(input: DraftInput) -> Result<DraftInput, Box<Response>> {
+    let repository_url = normalize_repository_url(&input.repository_url)
+        .map_err(|(code, message)| Box::new(business_failure(code, message)))?;
+    let title = input.title.trim().to_owned();
+    let description = input.description.trim().to_owned();
+    let rules = input.rules.trim().to_owned();
+    if !(4..=120).contains(&title.len()) {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_TITLE",
+            "title must contain 4 to 120 characters",
+        )));
+    }
+    if !(20..=2000).contains(&description.len()) {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_DESCRIPTION",
+            "description must contain 20 to 2000 characters",
+        )));
+    }
+    if !(20..=5000).contains(&rules.len()) {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_RULES",
+            "rules must contain 20 to 5000 characters",
+        )));
+    }
+    if input.reward_quota <= 0
+        || input.reward_slots < 1
+        || input.reward_slots > 100
+        || input.reward_quota.checked_mul(input.reward_slots).is_none()
+    {
+        return Err(Box::new(business_failure(
+            if input.reward_quota <= 0 {
+                "OPEN_SOURCE_BOUNTY_INVALID_QUOTA"
+            } else if !(1..=100).contains(&input.reward_slots) {
+                "OPEN_SOURCE_BOUNTY_INVALID_SLOTS"
+            } else {
+                "OPEN_SOURCE_BOUNTY_INVALID_QUOTA"
+            },
+            if input.reward_quota <= 0 {
+                "reward quota must be positive"
+            } else if !(1..=100).contains(&input.reward_slots) {
+                "reward slots must be between 1 and 100"
+            } else {
+                "bounty quota is too large"
+            },
+        )));
+    }
+    Ok(DraftInput {
+        repository_url,
+        title,
+        description,
+        rules,
+        ..input
+    })
+}
+
+async fn read_draft_input(request: Request) -> Result<DraftInput, Response> {
+    read_json_input(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty request",
+    )
+    .await
+}
+
+async fn read_json_input<T: DeserializeOwned>(
+    request: Request,
+    code: &'static str,
+    message: &'static str,
+) -> Result<T, Response> {
+    let body = axum::body::to_bytes(request.into_body(), 2 * 1024 * 1024)
+        .await
+        .map_err(|_| business_failure(code, message))?;
+    serde_json::from_slice::<T>(&body).map_err(|_| business_failure(code, message))
+}
+
+async fn load_raw_project(
+    state: &OpenSourceBountyState,
+    project_id: i64,
+) -> Result<Option<BountyProject>, sqlx::Error> {
+    sqlx::query(RAW_PROJECT_SELECT)
+        .bind(project_id)
+        .fetch_optional(&state.pg)
+        .await?
+        .as_ref()
+        .map(raw_project_from_row)
+        .transpose()
+}
+
+fn project_id_from_path(path: &str) -> Result<i64, Box<Response>> {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            Box::new(business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            ))
+        })
+}
+
+async fn create_draft(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let input = match read_draft_input(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let input = match normalize_draft(input) {
+        Ok(input) => input,
+        Err(response) => return *response,
+    };
+    let now = chrono::Utc::now().timestamp();
+    let project_id = match sqlx::query_scalar::<_, i64>(
+        "INSERT INTO open_source_bounty_projects (owner_user_id, repository_url, title, description, rules, reward_quota, reward_slots, status, created_at, updated_at, published_at, closed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$8,0,0) RETURNING id::BIGINT",
+    )
+    .bind(viewer_id)
+    .bind(&input.repository_url)
+    .bind(&input.title)
+    .bind(&input.description)
+    .bind(&input.rules)
+    .bind(input.reward_quota)
+    .bind(input.reward_slots)
+    .bind(now)
+    .fetch_one(&state.pg)
+    .await
+    {
+        Ok(project_id) => project_id,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, "failed to create open-source bounty draft");
+            return internal_failure();
+        }
+    };
+    let project = match load_raw_project(&state, project_id).await {
+        Ok(Some(project)) => project,
+        Ok(None) | Err(_) => return internal_failure(),
+    };
+    Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: project,
+    })
+    .into_response()
+}
+
+async fn update_draft(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match project_id_from_path(request.uri().path()) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    let input = match read_draft_input(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let input = match normalize_draft(input) {
+        Ok(input) => input,
+        Err(response) => return *response,
+    };
+    let result = sqlx::query(
+        "UPDATE open_source_bounty_projects SET repository_url=$1,title=$2,description=$3,rules=$4,reward_quota=$5,reward_slots=$6,updated_at=$7 WHERE id=$8 AND owner_user_id=$9 AND status='draft'",
+    )
+    .bind(&input.repository_url)
+    .bind(&input.title)
+    .bind(&input.description)
+    .bind(&input.rules)
+    .bind(input.reward_quota)
+    .bind(input.reward_slots)
+    .bind(chrono::Utc::now().timestamp())
+    .bind(project_id)
+    .bind(viewer_id)
+    .execute(&state.pg)
+    .await;
+    match result {
+        Ok(result) if result.rows_affected() == 1 => {}
+        Ok(_) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_DRAFT_NOT_FOUND",
+                "editable bounty draft was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to update open-source bounty draft");
+            return internal_failure();
+        }
+    }
+    match load_raw_project(&state, project_id).await {
+        Ok(Some(project)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: project,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+async fn delete_draft(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match project_id_from_path(request.uri().path()) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    match sqlx::query(
+        "DELETE FROM open_source_bounty_projects WHERE id=$1 AND owner_user_id=$2 AND status='draft'",
+    )
+    .bind(project_id)
+    .bind(viewer_id)
+    .execute(&state.pg)
+    .await
+    {
+        Ok(result) if result.rows_affected() == 1 => Json(LegacySuccessEnvelope { success: true, message: "", data: Value::Null }).into_response(),
+        Ok(_) => business_failure("OPEN_SOURCE_BOUNTY_DRAFT_NOT_FOUND", "deletable bounty draft was not found"),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to delete open-source bounty draft");
+            internal_failure()
+        }
+    }
+}
+
+async fn set_bounty_paused(
+    State(state): State<OpenSourceBountyState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    paused: bool,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match project_id.parse::<i64>() {
+        Ok(project_id) if project_id > 0 => project_id,
+        _ => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let (from, to) = if paused {
+        ("published", "paused")
+    } else {
+        ("paused", "published")
+    };
+    match sqlx::query("UPDATE open_source_bounty_projects SET status=$1,updated_at=$2 WHERE id=$3 AND owner_user_id=$4 AND status=$5")
+        .bind(to)
+        .bind(chrono::Utc::now().timestamp())
+        .bind(project_id)
+        .bind(viewer_id)
+        .bind(from)
+        .execute(&state.pg)
+        .await
+    {
+        Ok(result) if result.rows_affected() == 1 => {}
+        Ok(_) => return business_failure("OPEN_SOURCE_BOUNTY_INVALID_STATE", "bounty cannot change to the requested state"),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to change open-source bounty state");
+            return internal_failure();
+        }
+    }
+    match load_raw_project(&state, project_id).await {
+        Ok(Some(project)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: project,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+async fn pause_bounty(
+    state: State<OpenSourceBountyState>,
+    path: Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    set_bounty_paused(state, path, headers, true).await
+}
+
+async fn resume_bounty(
+    state: State<OpenSourceBountyState>,
+    path: Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    set_bounty_paused(state, path, headers, false).await
+}
+
+fn parse_positive_id(
+    value: &str,
+    code: &'static str,
+    message: &'static str,
+) -> Result<i64, Box<Response>> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Box::new(business_failure(code, message)))
+}
+
+fn project_action_id(path: &str) -> Result<i64, Box<Response>> {
+    let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    let Some(index) = segments.iter().position(|segment| *segment == "projects") else {
+        return Err(Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_ID",
+            "invalid open-source bounty identifier",
+        )));
+    };
+    let value = segments.get(index + 1).ok_or_else(|| {
+        Box::new(business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_ID",
+            "invalid open-source bounty identifier",
+        ))
+    })?;
+    parse_positive_id(
+        value,
+        "OPEN_SOURCE_BOUNTY_INVALID_ID",
+        "invalid open-source bounty identifier",
+    )
+}
+
+async fn publish_bounty(
+    State(state): State<OpenSourceBountyState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match parse_positive_id(
+        &project_id,
+        "OPEN_SOURCE_BOUNTY_INVALID_ID",
+        "invalid open-source bounty identifier",
+    ) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to begin bounty publication");
+            return internal_failure();
+        }
+    };
+    let project_row = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load bounty for publication");
+            return internal_failure();
+        }
+    };
+    let project = match raw_project_from_row(&project_row) {
+        Ok(project) if project.owner_user_id == viewer_id => project,
+        Ok(_) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to decode bounty for publication");
+            return internal_failure();
+        }
+    };
+    if project.status != "draft" {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_STATE",
+            "only a draft bounty can be published",
+        );
+    }
+    let fee_raw = match sqlx::query_scalar::<_, Option<String>>(
+        "SELECT value FROM options WHERE key = 'OpenSourceBountyFeeRate'",
+    )
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(value) => value.flatten().unwrap_or_default(),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load bounty fee configuration");
+            return internal_failure();
+        }
+    };
+    let fee_rate_bps = parse_fee_rate_basis_points(&fee_raw).unwrap_or(100);
+    let gross = match project.reward_quota.checked_mul(project.reward_slots) {
+        Some(gross) if gross > 0 => gross,
+        _ => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_QUOTA",
+                "bounty quota is too large",
+            );
+        }
+    };
+    let fee_per_slot = (project.reward_quota / 10_000)
+        .saturating_mul(fee_rate_bps)
+        .saturating_add(
+            (project.reward_quota % 10_000)
+                .saturating_mul(fee_rate_bps)
+                .saturating_add(9_999)
+                / 10_000,
+        );
+    if fee_per_slot < 0 || fee_per_slot >= project.reward_quota {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_FEE",
+            "platform fee leaves no contributor reward",
+        );
+    }
+    let net_reward = project.reward_quota - fee_per_slot;
+    let escrow = match net_reward.checked_mul(project.reward_slots) {
+        Some(value) if value >= 0 => value,
+        _ => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_QUOTA",
+                "bounty quota is too large",
+            );
+        }
+    };
+    let platform_fee = match fee_per_slot.checked_mul(project.reward_slots) {
+        Some(value) if value >= 0 && value.checked_add(escrow) == Some(gross) => value,
+        _ => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_QUOTA",
+                "bounty quota is too large",
+            );
+        }
+    };
+    let charged_quota = gross;
+    let debit = match sqlx::query(
+        "UPDATE users SET quota = quota - $1 WHERE id = $2 AND deleted_at IS NULL AND quota >= $1",
+    )
+    .bind(charged_quota)
+    .bind(viewer_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to charge bounty publication");
+            return internal_failure();
+        }
+    };
+    if debit.rows_affected() != 1 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE",
+            "insufficient balance to publish this bounty",
+        );
+    }
+    let mut fee_recipient = 0_i64;
+    if platform_fee > 0 {
+        fee_recipient = match sqlx::query_scalar::<_, i64>(
+            "SELECT id::BIGINT FROM users WHERE role = 10 AND status = 1 AND deleted_at IS NULL ORDER BY id ASC LIMIT 1",
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND",
+                    "an enabled super administrator is required to receive the platform fee",
+                );
+            }
+            Err(error) => {
+                tracing::error!(%error, viewer_id, project_id, "failed to load bounty fee recipient");
+                return internal_failure();
+            }
+        };
+        let credit = match sqlx::query(
+            "UPDATE users SET quota = quota + $1 WHERE id = $2 AND role = 10 AND status = 1 AND deleted_at IS NULL",
+        )
+        .bind(platform_fee)
+        .bind(fee_recipient)
+        .execute(&mut *transaction)
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, project_id, "failed to credit bounty fee recipient");
+                return internal_failure();
+            }
+        };
+        if credit.rows_affected() != 1 {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_FEE_RECIPIENT_NOT_FOUND",
+                "the super administrator fee account is unavailable",
+            );
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_projects SET status='published', escrow_quota=$1, net_reward_quota=$2, platform_fee_rate_bps=$3, platform_fee_quota=$4, published_at=$5, updated_at=$5 WHERE id=$6",
+    )
+    .bind(escrow)
+    .bind(net_reward)
+    .bind(fee_rate_bps)
+    .bind(platform_fee)
+    .bind(now)
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(%error, viewer_id, project_id, "failed to publish bounty project");
+        return internal_failure();
+    }
+    if let Err(error) = sqlx::query(
+        "INSERT INTO open_source_bounty_ledgers (project_id, user_id, kind, quota, created_at) VALUES ($1,$2,'escrow_fund',$3,$4)",
+    )
+    .bind(project_id)
+    .bind(viewer_id)
+    .bind(escrow)
+    .bind(now)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(%error, viewer_id, project_id, "failed to record bounty escrow");
+        return internal_failure();
+    }
+    if platform_fee > 0 {
+        if let Err(error) = sqlx::query(
+            "INSERT INTO open_source_bounty_ledgers (project_id, user_id, counterparty_user_id, kind, quota, created_at) VALUES ($1,$2,$3,'platform_fee',$4,$5)",
+        )
+        .bind(project_id)
+        .bind(viewer_id)
+        .bind(fee_recipient)
+        .bind(platform_fee)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        {
+            tracing::error!(%error, viewer_id, project_id, "failed to record bounty platform fee");
+            return internal_failure();
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, project_id, "failed to commit bounty publication");
+        return internal_failure();
+    }
+    let project = match load_raw_project(&state, project_id).await {
+        Ok(Some(project)) => project,
+        Ok(None) | Err(_) => return internal_failure(),
+    };
+    let remaining_quota = match sqlx::query_scalar::<_, i64>(
+        "SELECT quota::BIGINT FROM users WHERE id = $1",
+    )
+    .bind(viewer_id)
+    .fetch_one(&state.pg)
+    .await
+    {
+        Ok(quota) => quota,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load remaining bounty quota");
+            return internal_failure();
+        }
+    };
+    Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: serde_json::json!({
+            "project": project,
+            "charged_quota": charged_quota,
+            "remaining_quota": remaining_quota,
+        }),
+    })
+    .into_response()
+}
+
+async fn close_bounty(
+    State(state): State<OpenSourceBountyState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match parse_positive_id(
+        &project_id,
+        "OPEN_SOURCE_BOUNTY_INVALID_ID",
+        "invalid open-source bounty identifier",
+    ) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to begin bounty close");
+            return internal_failure();
+        }
+    };
+    let row = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load bounty for close");
+            return internal_failure();
+        }
+    };
+    let project = match raw_project_from_row(&row) {
+        Ok(project) if project.owner_user_id == viewer_id => project,
+        Ok(_) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to decode bounty for close");
+            return internal_failure();
+        }
+    };
+    if !matches!(project.status.as_str(), "published" | "paused") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_STATE",
+            "only a published or paused bounty can be closed",
+        );
+    }
+    let active = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges WHERE project_id=$1 AND status IN ('accepted','submitted')",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to count active bounty challenges");
+            return internal_failure();
+        }
+    };
+    if active > 0 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_ACTIVE_CHALLENGES",
+            "cancel unsubmitted challenges or review submitted work before closing the bounty",
+        );
+    }
+    let open_disputes = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM open_source_bounty_disputes WHERE project_id=$1 AND status='open'",
+    )
+    .bind(project_id)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to count open bounty disputes");
+            return internal_failure();
+        }
+    };
+    if open_disputes > 0 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_OPEN_DISPUTES",
+            "resolve open bounty disputes before closing or refunding escrow",
+        );
+    }
+    let appeal_cutoff = chrono::Utc::now().timestamp() - 7 * 24 * 60 * 60;
+    let appealable = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id=$1 AND c.status='rejected' AND c.rejected_at>$2 AND NOT EXISTS (SELECT 1 FROM open_source_bounty_disputes d WHERE d.challenge_id=c.id AND d.status IN ('resolved_paid','resolved_denied'))",
+    )
+    .bind(project_id)
+    .bind(appeal_cutoff)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to count appealable bounty rejections");
+            return internal_failure();
+        }
+    };
+    if appealable > 0 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_APPEAL_WINDOW",
+            "rejected challenges remain appealable for seven days before escrow can be refunded",
+        );
+    }
+    let refunded_quota = project.escrow_quota;
+    if refunded_quota > 0 {
+        let credit = match sqlx::query(
+            "UPDATE users SET quota=quota+$1 WHERE id=$2 AND deleted_at IS NULL",
+        )
+        .bind(refunded_quota)
+        .bind(viewer_id)
+        .execute(&mut *transaction)
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, project_id, "failed to refund bounty escrow");
+                return internal_failure();
+            }
+        };
+        if credit.rows_affected() != 1 {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_OWNER_NOT_FOUND",
+                "bounty owner was not found",
+            );
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_projects SET status='closed', escrow_quota=0, closed_at=$1, updated_at=$1 WHERE id=$2",
+    )
+    .bind(now)
+    .bind(project_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(%error, viewer_id, project_id, "failed to close bounty project");
+        return internal_failure();
+    }
+    if refunded_quota > 0 {
+        if let Err(error) = sqlx::query(
+            "INSERT INTO open_source_bounty_ledgers (project_id, user_id, kind, quota, created_at) VALUES ($1,$2,'escrow_refund',$3,$4)",
+        )
+        .bind(project_id)
+        .bind(viewer_id)
+        .bind(refunded_quota)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        {
+            tracing::error!(%error, viewer_id, project_id, "failed to record bounty escrow refund");
+            return internal_failure();
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, project_id, "failed to commit bounty close");
+        return internal_failure();
+    }
+    let project = match load_raw_project(&state, project_id).await {
+        Ok(Some(project)) => project,
+        Ok(None) | Err(_) => return internal_failure(),
+    };
+    let remaining_quota = match sqlx::query_scalar::<_, i64>(
+        "SELECT quota::BIGINT FROM users WHERE id=$1",
+    )
+    .bind(viewer_id)
+    .fetch_one(&state.pg)
+    .await
+    {
+        Ok(quota) => quota,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load remaining quota after bounty close");
+            return internal_failure();
+        }
+    };
+    Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: serde_json::json!({
+            "project": project,
+            "refunded_quota": refunded_quota,
+            "remaining_quota": remaining_quota,
+        }),
+    })
+    .into_response()
+}
+
+async fn accept_bounty(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match project_action_id(request.uri().path()) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    let input = match read_json_input::<AcceptInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty request",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let github_handle = match normalize_github_handle(&input.github_handle) {
+        Ok(handle) => handle,
+        Err(response) => return *response,
+    };
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to begin bounty acceptance");
+            return internal_failure();
+        }
+    };
+    let row = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load bounty for acceptance");
+            return internal_failure();
+        }
+    };
+    let project = match raw_project_from_row(&row) {
+        Ok(project) => project,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to decode bounty for acceptance");
+            return internal_failure();
+        }
+    };
+    if project.status != "published" {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_NOT_ACCEPTING",
+            "bounty is not accepting new challenges",
+        );
+    }
+    if project.owner_user_id == viewer_id {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_OWNER_CANNOT_ACCEPT",
+            "bounty owner cannot accept their own challenge",
+        );
+    }
+    let previous = match sqlx::query(
+        "SELECT id::BIGINT AS id, status, rejected_at::BIGINT AS rejected_at FROM open_source_bounty_challenges WHERE project_id=$1 AND participant_user_id=$2 ORDER BY id DESC",
+    )
+    .bind(project_id)
+    .bind(viewer_id)
+    .fetch_all(&mut *transaction)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to inspect previous bounty challenges");
+            return internal_failure();
+        }
+    };
+    let appeal_cutoff = chrono::Utc::now().timestamp() - 7 * 24 * 60 * 60;
+    for row in previous {
+        let status: String = match row.try_get("status") {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, project_id, "failed to decode previous bounty challenge");
+                return internal_failure();
+            }
+        };
+        if matches!(status.as_str(), "accepted" | "submitted" | "approved") {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED",
+                "this bounty already has an active or completed attempt",
+            );
+        }
+        if status == "rejected" {
+            let rejected_at: i64 = row.try_get("rejected_at").unwrap_or_default();
+            let open_disputes = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::BIGINT FROM open_source_bounty_disputes WHERE challenge_id=$1 AND status='open'",
+            )
+            .bind(row.try_get::<i64, _>("id").unwrap_or_default())
+            .fetch_one(&mut *transaction)
+            .await;
+            let denied_disputes = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*)::BIGINT FROM open_source_bounty_disputes WHERE challenge_id=$1 AND status='resolved_denied'",
+            )
+            .bind(row.try_get::<i64, _>("id").unwrap_or_default())
+            .fetch_one(&mut *transaction)
+            .await;
+            match (open_disputes, denied_disputes) {
+                (Ok(open), Ok(denied))
+                    if open == 0 && (denied > 0 || rejected_at <= appeal_cutoff) => {}
+                (Ok(_), Ok(_)) => {
+                    return business_failure(
+                        "OPEN_SOURCE_BOUNTY_RETRY_PENDING",
+                        "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends",
+                    );
+                }
+                (Err(error), _) | (_, Err(error)) => {
+                    tracing::error!(%error, viewer_id, project_id, "failed to inspect bounty challenge disputes");
+                    return internal_failure();
+                }
+            }
+        }
+    }
+    let occupied = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id=$1 AND (c.status IN ('accepted','submitted','approved') OR (c.status='rejected' AND c.rejected_at>$2 AND NOT EXISTS (SELECT 1 FROM open_source_bounty_disputes d WHERE d.challenge_id=c.id AND d.status IN ('resolved_paid','resolved_denied'))) OR EXISTS (SELECT 1 FROM open_source_bounty_disputes d WHERE d.challenge_id=c.id AND d.status='open'))",
+    )
+    .bind(project_id)
+    .bind(appeal_cutoff)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to count bounty reward slots");
+            return internal_failure();
+        }
+    };
+    if occupied >= project.reward_slots {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_FULL",
+            "all reward slots are currently occupied",
+        );
+    }
+    let reward_quota = if project.net_reward_quota > 0 {
+        project.net_reward_quota
+    } else {
+        project.reward_quota
+    };
+    let now = chrono::Utc::now().timestamp();
+    let challenge_id = match sqlx::query_scalar::<_, i64>(
+        "INSERT INTO open_source_bounty_challenges (project_id,participant_user_id,github_handle,status,reward_quota,accepted_at,created_at,updated_at) VALUES ($1,$2,$3,'accepted',$4,$5,$5,$5) RETURNING id::BIGINT",
+    )
+    .bind(project_id)
+    .bind(viewer_id)
+    .bind(github_handle)
+    .bind(reward_quota)
+    .bind(now)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(id) => id,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to create bounty challenge");
+            return internal_failure();
+        }
+    };
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, project_id, "failed to commit bounty acceptance");
+        return internal_failure();
+    }
+    match load_challenge(&state, challenge_id).await {
+        Ok(Some(challenge)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: challenge,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+async fn submit_bounty(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match project_action_id(request.uri().path()) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    let input = match read_json_input::<SubmitInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty submission",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let submission_note = input.submission_note.trim().to_owned();
+    if submission_note.len() > 2000 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_SUBMISSION",
+            "completion note must contain at most 2000 characters",
+        );
+    }
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to begin bounty submission");
+            return internal_failure();
+        }
+    };
+    let project = match sqlx::query(RAW_PROJECT_SELECT)
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => match raw_project_from_row(&row) {
+            Ok(project) => project,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, project_id, "failed to decode bounty submission project");
+                return internal_failure();
+            }
+        },
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load bounty submission project");
+            return internal_failure();
+        }
+    };
+    let challenge_row = match sqlx::query(&format!(
+        "{} WHERE project_id=$1 AND participant_user_id=$2 AND status='accepted' ORDER BY id DESC LIMIT 1 FOR UPDATE",
+        challenge_select()
+    ))
+    .bind(project_id)
+    .bind(viewer_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return business_failure("OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND", "accepted challenge was not found"),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to load accepted bounty challenge");
+            return internal_failure();
+        }
+    };
+    let challenge = match challenge_from_row(&challenge_row) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to decode accepted bounty challenge");
+            return internal_failure();
+        }
+    };
+    let issue_url =
+        match normalize_github_evidence(&input.issue_url, &project.repository_url, "issues") {
+            Ok(url) => url,
+            Err(response) => return *response,
+        };
+    let pull_request_url =
+        match normalize_github_evidence(&input.pull_request_url, &project.repository_url, "pull") {
+            Ok(url) => url,
+            Err(response) => return *response,
+        };
+    if issue_url.is_empty() && pull_request_url.is_empty() {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_EVIDENCE_REQUIRED",
+            "provide at least one GitHub Issue or pull request URL",
+        );
+    }
+    if !pull_request_url.is_empty() {
+        let duplicate = match sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges WHERE project_id=$1 AND id<>$2 AND pull_request_url=$3 AND status IN ('submitted','approved')",
+        )
+        .bind(project_id)
+        .bind(challenge.id)
+        .bind(&pull_request_url)
+        .fetch_one(&mut *transaction)
+        .await
+        {
+            Ok(count) => count,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, project_id, "failed to check duplicate bounty pull request");
+                return internal_failure();
+            }
+        };
+        if duplicate > 0 {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_DUPLICATE_PULL_REQUEST",
+                "this pull request has already been submitted",
+            );
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_challenges SET issue_url=$1,pull_request_url=$2,submission_note=$3,status='submitted',submitted_at=$4,updated_at=$4 WHERE id=$5",
+    )
+    .bind(&issue_url)
+    .bind(&pull_request_url)
+    .bind(&submission_note)
+    .bind(now)
+    .bind(challenge.id)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(%error, viewer_id, project_id, "failed to update bounty submission");
+        return internal_failure();
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, project_id, "failed to commit bounty submission");
+        return internal_failure();
+    }
+    match load_challenge(&state, challenge.id).await {
+        Ok(Some(challenge)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: challenge,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+async fn withdraw_challenge(
+    State(state): State<OpenSourceBountyState>,
+    Path(challenge_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    change_challenge_state(state, challenge_id, headers, false).await
+}
+
+async fn cancel_challenge(
+    State(state): State<OpenSourceBountyState>,
+    Path(challenge_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    change_challenge_state(state, challenge_id, headers, true).await
+}
+
+async fn change_challenge_state(
+    state: OpenSourceBountyState,
+    challenge_id: String,
+    headers: HeaderMap,
+    owner_cancel: bool,
+) -> Response {
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let challenge_id = match parse_positive_id(
+        &challenge_id,
+        "OPEN_SOURCE_BOUNTY_INVALID_ID",
+        "invalid open-source bounty identifier",
+    ) {
+        Ok(challenge_id) => challenge_id,
+        Err(response) => return *response,
+    };
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to begin bounty challenge state change");
+            return internal_failure();
+        }
+    };
+    let reference = match sqlx::query("SELECT project_id::BIGINT AS project_id, participant_user_id::BIGINT AS participant_user_id FROM open_source_bounty_challenges WHERE id=$1")
+        .bind(challenge_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return business_failure("OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND", "challenge was not found"),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to load bounty challenge reference");
+            return internal_failure();
+        }
+    };
+    let project_id: i64 = match reference.try_get("project_id") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty challenge reference");
+            return internal_failure();
+        }
+    };
+    if owner_cancel {
+        let project_owner = match sqlx::query_scalar::<_, i64>(
+            "SELECT owner_user_id::BIGINT FROM open_source_bounty_projects WHERE id=$1 AND owner_user_id=$2 FOR UPDATE",
+        )
+        .bind(project_id)
+        .bind(viewer_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to authorize bounty challenge cancellation");
+                return internal_failure();
+            }
+        };
+        if project_owner.is_none() {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_FORBIDDEN",
+                "only the bounty owner can cancel this challenge",
+            );
+        }
+        let project_status = match sqlx::query_scalar::<_, String>(
+            "SELECT status FROM open_source_bounty_projects WHERE id=$1",
+        )
+        .bind(project_id)
+        .fetch_one(&mut *transaction)
+        .await
+        {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to load bounty state for cancellation");
+                return internal_failure();
+            }
+        };
+        if !matches!(project_status.as_str(), "published" | "paused") {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_STATE",
+                "only a published or paused bounty can cancel a challenge",
+            );
+        }
+    } else {
+        let participant: i64 = reference.try_get("participant_user_id").unwrap_or_default();
+        if participant != viewer_id {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND",
+                "challenge was not found",
+            );
+        }
+    }
+    let challenge_row = match sqlx::query(&format!("{} WHERE id=$1 FOR UPDATE", challenge_select()))
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty challenge");
+            return internal_failure();
+        }
+    };
+    let challenge = match challenge_from_row(&challenge_row) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty challenge");
+            return internal_failure();
+        }
+    };
+    if owner_cancel {
+        if challenge.status != "accepted" {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+                "only an unsubmitted challenge can be cancelled",
+            );
+        }
+    } else if !matches!(challenge.status.as_str(), "accepted" | "submitted") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+            "challenge cannot be withdrawn",
+        );
+    }
+    let open_disputes = match sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM open_source_bounty_disputes WHERE challenge_id=$1 AND status='open'",
+    )
+    .bind(challenge_id)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to inspect bounty challenge disputes");
+            return internal_failure();
+        }
+    };
+    if open_disputes > 0 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_OPEN_DISPUTES",
+            if owner_cancel {
+                "a challenge with an open dispute cannot be cancelled"
+            } else {
+                "a challenge with an open dispute cannot be withdrawn"
+            },
+        );
+    }
+    let target = if owner_cancel {
+        "cancelled"
+    } else {
+        "withdrawn"
+    };
+    if let Err(error) =
+        sqlx::query("UPDATE open_source_bounty_challenges SET status=$1,updated_at=$2 WHERE id=$3")
+            .bind(target)
+            .bind(chrono::Utc::now().timestamp())
+            .bind(challenge_id)
+            .execute(&mut *transaction)
+            .await
+    {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to change bounty challenge state");
+        return internal_failure();
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to commit bounty challenge state change");
+        return internal_failure();
+    }
+    match load_challenge(&state, challenge_id).await {
+        Ok(Some(challenge)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: challenge,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+async fn approve_challenge(
+    State(state): State<OpenSourceBountyState>,
+    request: Request,
+) -> Response {
+    review_challenge(state, request, true).await
+}
+
+async fn reject_challenge(
+    State(state): State<OpenSourceBountyState>,
+    request: Request,
+) -> Response {
+    review_challenge(state, request, false).await
+}
+
+async fn review_challenge(
+    state: OpenSourceBountyState,
+    request: Request,
+    approve: bool,
+) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let challenge_id = match request
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+    {
+        Some(challenge_id) => challenge_id,
+        None => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let input = match read_json_input::<ReviewInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty review",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let review_note = input.review_note.trim().to_owned();
+    if review_note.len() > 2000 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_REVIEW",
+            "review note is too long",
+        );
+    }
+    let rating_comment = input.rating_comment.trim().to_owned();
+    if !(1..=5).contains(&input.rating_score) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_RATING",
+            "rating score must be between 1 and 5",
+        );
+    }
+    if !(2..=1000).contains(&rating_comment.len()) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_RATING",
+            "rating comment must contain 2 to 1000 characters",
+        );
+    }
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to begin bounty review");
+            return internal_failure();
+        }
+    };
+    let project_id = match sqlx::query_scalar::<_, i64>(
+        "SELECT project_id::BIGINT FROM open_source_bounty_challenges WHERE id=$1",
+    )
+    .bind(challenge_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(project_id)) => project_id,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND",
+                "challenge submission was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to load bounty review challenge");
+            return internal_failure();
+        }
+    };
+    let project = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => match raw_project_from_row(&row) {
+            Ok(project) if project.owner_user_id == viewer_id => project,
+            Ok(_) => {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_FORBIDDEN",
+                    "only the bounty owner can review this submission",
+                );
+            }
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty review project");
+                return internal_failure();
+            }
+        },
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_FORBIDDEN",
+                "only the bounty owner can review this submission",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty review project");
+            return internal_failure();
+        }
+    };
+    let challenge_row = match sqlx::query(&format!("{} WHERE id=$1 FOR UPDATE", challenge_select()))
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty review challenge");
+            return internal_failure();
+        }
+    };
+    let challenge = match challenge_from_row(&challenge_row) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty review challenge");
+            return internal_failure();
+        }
+    };
+    if challenge.project_id != project.id {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_DISPUTE_IDENTITY_MISMATCH",
+            "challenge project changed while the submission was reviewed",
+        );
+    }
+    if challenge.status != "submitted" {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+            "only a submitted challenge can be reviewed",
+        );
+    }
+    let now = chrono::Utc::now().timestamp();
+    let mut transferred_quota = 0_i64;
+    if approve {
+        if !matches!(project.status.as_str(), "published" | "paused") {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_STATE",
+                "bounty is not in a payable state",
+            );
+        }
+        if challenge.reward_quota <= 0 || project.escrow_quota < challenge.reward_quota {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_ESCROW_INSUFFICIENT",
+                "bounty escrow is insufficient",
+            );
+        }
+        let credit = match sqlx::query(
+            "UPDATE users SET quota=quota+$1 WHERE id=$2 AND deleted_at IS NULL",
+        )
+        .bind(challenge.reward_quota)
+        .bind(challenge.participant_user_id)
+        .execute(&mut *transaction)
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to credit bounty participant");
+                return internal_failure();
+            }
+        };
+        if credit.rows_affected() != 1 {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_PARTICIPANT_NOT_FOUND",
+                "challenge participant was not found",
+            );
+        }
+        transferred_quota = challenge.reward_quota;
+        let remaining_escrow = project.escrow_quota - transferred_quota;
+        if remaining_escrow == 0 {
+            if let Err(error) = sqlx::query("UPDATE open_source_bounty_projects SET escrow_quota=0,status='completed',closed_at=$1,updated_at=$1 WHERE id=$2")
+                .bind(now)
+                .bind(project.id)
+                .execute(&mut *transaction)
+                .await
+            {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to complete bounty project after payout");
+                return internal_failure();
+            }
+        } else if let Err(error) = sqlx::query(
+            "UPDATE open_source_bounty_projects SET escrow_quota=$1,updated_at=$2 WHERE id=$3",
+        )
+        .bind(remaining_escrow)
+        .bind(now)
+        .bind(project.id)
+        .execute(&mut *transaction)
+        .await
+        {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to update bounty escrow after payout");
+            return internal_failure();
+        }
+    }
+    let target = if approve { "approved" } else { "rejected" };
+    let rejected_at = if approve { 0 } else { now };
+    let paid_at = if approve { now } else { 0 };
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_challenges SET status=$1,review_note=$2,owner_rating_score=$3,owner_rating_comment=$4,owner_rated_at=$5,reviewed_at=$5,rejected_at=$6,paid_at=$7,updated_at=$5 WHERE id=$8",
+    )
+    .bind(target)
+    .bind(&review_note)
+    .bind(input.rating_score)
+    .bind(&rating_comment)
+    .bind(now)
+    .bind(rejected_at)
+    .bind(paid_at)
+    .bind(challenge_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to update bounty review");
+        return internal_failure();
+    }
+    if approve {
+        if let Err(error) = sqlx::query("UPDATE open_source_bounty_disputes SET status='resolved_paid',resolution='The publisher approved and paid the reward after the dispute was opened.',resolved_by_user_id=$1,resolved_at=$2,updated_at=$2,open_key=NULL WHERE challenge_id=$3 AND status='open'")
+            .bind(viewer_id)
+            .bind(now)
+            .bind(challenge_id)
+            .execute(&mut *transaction)
+            .await
+        {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to resolve open bounty dispute after approval");
+            return internal_failure();
+        }
+        let payout_key = format!("challenge:{challenge_id}");
+        if let Err(error) = sqlx::query("INSERT INTO open_source_bounty_ledgers (project_id,challenge_id,user_id,counterparty_user_id,kind,quota,reward_payout_key,created_at) VALUES ($1,$2,$3,$4,'reward_transfer',$5,$6,$7)")
+            .bind(project.id)
+            .bind(challenge_id)
+            .bind(viewer_id)
+            .bind(challenge.participant_user_id)
+            .bind(transferred_quota)
+            .bind(payout_key)
+            .bind(now)
+            .execute(&mut *transaction)
+            .await
+        {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to record bounty reward payout");
+            return internal_failure();
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to commit bounty review");
+        return internal_failure();
+    }
+    let challenge = match load_challenge(&state, challenge_id).await {
+        Ok(Some(challenge)) => challenge,
+        Ok(None) | Err(_) => return internal_failure(),
+    };
+    Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: serde_json::json!({"challenge": challenge, "transferred_quota": transferred_quota}),
+    })
+    .into_response()
+}
+
+async fn rate_owner(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let challenge_id = match request
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+    {
+        Some(id) => id,
+        None => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let input = match read_json_input::<RatingInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty rating",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let comment = input.comment.trim().to_owned();
+    if !(1..=5).contains(&input.score) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_RATING",
+            "rating score must be between 1 and 5",
+        );
+    }
+    if !(2..=1000).contains(&comment.len()) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_RATING",
+            "rating comment must contain 2 to 1000 characters",
+        );
+    }
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to begin bounty owner rating");
+            return internal_failure();
+        }
+    };
+    let row = match sqlx::query(&format!(
+        "{} WHERE id=$1 AND participant_user_id=$2 FOR UPDATE",
+        challenge_select()
+    ))
+    .bind(challenge_id)
+    .bind(viewer_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND",
+                "challenge was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to load bounty owner rating challenge");
+            return internal_failure();
+        }
+    };
+    let challenge = match challenge_from_row(&row) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty owner rating challenge");
+            return internal_failure();
+        }
+    };
+    if !matches!(challenge.status.as_str(), "approved" | "rejected") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+            "the bounty owner can only be rated after review",
+        );
+    }
+    if challenge.contributor_rated_at > 0 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_RATING_EXISTS",
+            "the publisher rating for this challenge has already been submitted",
+        );
+    }
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query("UPDATE open_source_bounty_challenges SET contributor_rating_score=$1,contributor_rating_comment=$2,contributor_rated_at=$3,updated_at=$3 WHERE id=$4")
+        .bind(input.score)
+        .bind(comment)
+        .bind(now)
+        .bind(challenge_id)
+        .execute(&mut *transaction)
+        .await
+    {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to save bounty owner rating");
+        return internal_failure();
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to commit bounty owner rating");
+        return internal_failure();
+    }
+    match load_challenge(&state, challenge_id).await {
+        Ok(Some(challenge)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: challenge,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+fn valid_idempotency_key(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (8..=128).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn tip_operation_key_hash(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+fn tip_operation_payload_hash(challenge_id: i64, quota: i64, note: &str) -> String {
+    // Keep the JSON field order and trimmed note identical to Go's
+    // OpenSourceBountyMCPPayloadHash input. This is the replay identity, not
+    // a transport signature, so it must remain stable across listeners.
+    let payload = serde_json::json!({
+        "challenge_id": challenge_id,
+        "quota": quota,
+        "note": note,
+    });
+    let encoded = serde_json::to_vec(&payload).expect("tip payload is serializable");
+    hex::encode(Sha256::digest(encoded))
+}
+
+async fn replay_tip_operation(
+    state: &OpenSourceBountyState,
+    viewer_id: i64,
+    key_hash: &str,
+    payload_hash: &str,
+) -> Result<Option<Response>, Response> {
+    let row = sqlx::query(
+        "SELECT payload_hash, result_json, completed_at::BIGINT AS completed_at FROM open_source_bounty_rest_operations WHERE user_id=$1 AND operation='tip' AND idempotency_key_hash=$2",
+    )
+    .bind(viewer_id)
+    .bind(key_hash)
+    .fetch_optional(&state.pg)
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, viewer_id, "failed to load bounty tip idempotency record");
+        internal_failure()
+    })?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let stored_payload: String = row.try_get("payload_hash").unwrap_or_default();
+    if stored_payload != payload_hash {
+        return Err(business_failure(
+            "OPEN_SOURCE_BOUNTY_IDEMPOTENCY_MISMATCH",
+            "Idempotency-Key was already used for a different bounty tip",
+        ));
+    }
+    let completed_at: i64 = row.try_get("completed_at").unwrap_or_default();
+    let result_json: String = row.try_get("result_json").unwrap_or_default();
+    if completed_at <= 0 || result_json.is_empty() {
+        return Err(business_failure(
+            "OPEN_SOURCE_BOUNTY_IDEMPOTENCY_IN_PROGRESS",
+            "the bounty tip is still being committed; retry with the same Idempotency-Key",
+        ));
+    }
+    let data = serde_json::from_str::<Value>(&result_json).map_err(|error| {
+        tracing::error!(%error, viewer_id, "failed to decode bounty tip idempotency result");
+        internal_failure()
+    })?;
+    Ok(Some(
+        Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data,
+        })
+        .into_response(),
+    ))
+}
+
+async fn tip_challenge(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let challenge_id = match request
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+    {
+        Some(id) => id,
+        None => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let idempotency_key = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !valid_idempotency_key(idempotency_key) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_IDEMPOTENCY_KEY",
+            "Idempotency-Key must contain 8 to 128 supported characters",
+        );
+    }
+    let input = match read_json_input::<TipInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty tip",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let note = input.note.trim().to_owned();
+    if input.quota <= 0 || input.quota > 1_000_000_000 || note.len() > 500 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_TIP",
+            if note.len() > 500 {
+                "tip note is too long"
+            } else {
+                "tip quota must be a positive supported amount"
+            },
+        );
+    }
+    let idempotency_key_hash = tip_operation_key_hash(idempotency_key);
+    let payload_hash = tip_operation_payload_hash(challenge_id, input.quota, &note);
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to begin bounty tip");
+            return internal_failure();
+        }
+    };
+    let existing = match sqlx::query(
+        "SELECT payload_hash, result_json, completed_at::BIGINT AS completed_at FROM open_source_bounty_rest_operations WHERE user_id=$1 AND operation='tip' AND idempotency_key_hash=$2 FOR UPDATE",
+    )
+    .bind(viewer_id)
+    .bind(&idempotency_key_hash)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty tip idempotency record");
+            return internal_failure();
+        }
+    };
+    if let Some(row) = existing {
+        let stored_payload: String = row.try_get("payload_hash").unwrap_or_default();
+        if stored_payload != payload_hash {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_IDEMPOTENCY_MISMATCH",
+                "Idempotency-Key was already used for a different bounty tip",
+            );
+        }
+        let completed_at: i64 = row.try_get("completed_at").unwrap_or_default();
+        let result_json: String = row.try_get("result_json").unwrap_or_default();
+        if completed_at <= 0 || result_json.is_empty() {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_IDEMPOTENCY_IN_PROGRESS",
+                "the bounty tip is still being committed; retry with the same Idempotency-Key",
+            );
+        }
+        let data = match serde_json::from_str::<Value>(&result_json) {
+            Ok(data) => data,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty tip idempotency result");
+                return internal_failure();
+            }
+        };
+        if transaction.commit().await.is_err() {
+            return internal_failure();
+        }
+        return Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data,
+        })
+        .into_response();
+    }
+    let operation_id = match sqlx::query_scalar::<_, i64>(
+        "INSERT INTO open_source_bounty_rest_operations (user_id,operation,idempotency_key_hash,payload_hash,created_at,completed_at,result_json) VALUES ($1,'tip',$2,$3,$4,0,'') RETURNING id::BIGINT",
+    )
+    .bind(viewer_id)
+    .bind(&idempotency_key_hash)
+    .bind(&payload_hash)
+    .bind(chrono::Utc::now().timestamp())
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(id) => id,
+        Err(error)
+            if error
+                .as_database_error()
+                .and_then(|database| database.code())
+                .as_deref()
+                == Some("23505") =>
+        {
+            let _ = transaction.rollback().await;
+            return match replay_tip_operation(
+                &state,
+                viewer_id,
+                &idempotency_key_hash,
+                &payload_hash,
+            )
+            .await
+            {
+                Ok(Some(response)) => response,
+                Ok(None) => internal_failure(),
+                Err(response) => response,
+            };
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to reserve bounty tip idempotency record");
+            return internal_failure();
+        }
+    };
+    let project_id = match sqlx::query_scalar::<_, i64>(
+        "SELECT project_id::BIGINT FROM open_source_bounty_challenges WHERE id=$1",
+    )
+    .bind(challenge_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND",
+                "challenge was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to load bounty tip challenge");
+            return internal_failure();
+        }
+    };
+    let owner = match sqlx::query_scalar::<_, i64>("SELECT owner_user_id::BIGINT FROM open_source_bounty_projects WHERE id=$1 AND owner_user_id=$2 FOR UPDATE")
+        .bind(project_id)
+        .bind(viewer_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return business_failure("OPEN_SOURCE_BOUNTY_FORBIDDEN", "only the bounty owner can tip this contributor"),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to authorize bounty tip");
+            return internal_failure();
+        }
+    };
+    let challenge_row = match sqlx::query(&format!("{} WHERE id=$1 FOR UPDATE", challenge_select()))
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty tip challenge");
+            return internal_failure();
+        }
+    };
+    let challenge = match challenge_from_row(&challenge_row) {
+        Ok(challenge) => challenge,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty tip challenge");
+            return internal_failure();
+        }
+    };
+    if challenge.participant_user_id == owner {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_SELF_TIP",
+            "bounty owners cannot tip themselves",
+        );
+    }
+    if matches!(challenge.status.as_str(), "withdrawn" | "cancelled") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+            "inactive challenges cannot receive tips",
+        );
+    }
+    let debit = match sqlx::query(
+        "UPDATE users SET quota=quota-$1 WHERE id=$2 AND deleted_at IS NULL AND quota >= $1",
+    )
+    .bind(input.quota)
+    .bind(owner)
+    .execute(&mut *transaction)
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to debit bounty tip");
+            return internal_failure();
+        }
+    };
+    if debit.rows_affected() != 1 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INSUFFICIENT_BALANCE",
+            "insufficient balance to send this tip",
+        );
+    }
+    let credit =
+        match sqlx::query("UPDATE users SET quota=quota+$1 WHERE id=$2 AND deleted_at IS NULL")
+            .bind(input.quota)
+            .bind(challenge.participant_user_id)
+            .execute(&mut *transaction)
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to credit bounty tip");
+                return internal_failure();
+            }
+        };
+    if credit.rows_affected() != 1 {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_PARTICIPANT_NOT_FOUND",
+            "challenge participant was not found",
+        );
+    }
+    let now = chrono::Utc::now().timestamp();
+    if let Err(error) = sqlx::query(
+        "UPDATE open_source_bounty_challenges SET tip_quota=tip_quota+$1,updated_at=$2 WHERE id=$3",
+    )
+    .bind(input.quota)
+    .bind(now)
+    .bind(challenge_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to update bounty tip total");
+        return internal_failure();
+    }
+    if let Err(error) = sqlx::query("INSERT INTO open_source_bounty_ledgers (project_id,challenge_id,user_id,counterparty_user_id,kind,quota,note,created_at) VALUES ($1,$2,$3,$4,'tip_transfer',$5,$6,$7)")
+        .bind(project_id)
+        .bind(challenge_id)
+        .bind(owner)
+        .bind(challenge.participant_user_id)
+        .bind(input.quota)
+        .bind(&note)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+    {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to record bounty tip");
+        return internal_failure();
+    }
+    let challenge = match sqlx::query(&format!("{} WHERE id=$1", challenge_select()))
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => match challenge_from_row(&row) {
+            Ok(challenge) => challenge,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to decode committed bounty tip challenge");
+                return internal_failure();
+            }
+        },
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to reload committed bounty tip challenge");
+            return internal_failure();
+        }
+    };
+    let remaining_quota = match sqlx::query_scalar::<_, i64>(
+        "SELECT quota::BIGINT FROM users WHERE id=$1",
+    )
+    .bind(owner)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(quota) => quota,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to load remaining bounty tip quota");
+            return internal_failure();
+        }
+    };
+    let result_data = serde_json::json!({
+        "challenge": challenge,
+        "transferred_quota": input.quota,
+        "remaining_quota": remaining_quota,
+    });
+    let result_json = match serde_json::to_string(&result_data) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to encode bounty tip idempotency result");
+            return internal_failure();
+        }
+    };
+    let completed_at = chrono::Utc::now().timestamp();
+    match sqlx::query(
+        "UPDATE open_source_bounty_rest_operations SET result_json=$1,completed_at=$2 WHERE id=$3 AND completed_at=0",
+    )
+    .bind(result_json)
+    .bind(completed_at)
+    .bind(operation_id)
+    .execute(&mut *transaction)
+    .await
+    {
+        Ok(result) if result.rows_affected() == 1 => {}
+        Ok(_) => return internal_failure(),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to complete bounty tip idempotency record");
+            return internal_failure();
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to commit bounty tip");
+        return internal_failure();
+    }
+    Json(LegacySuccessEnvelope {
+        success: true,
+        message: "",
+        data: result_data,
+    })
+    .into_response()
+}
+
+fn valid_dispute_reason(value: &str) -> bool {
+    matches!(
+        value,
+        "merged_but_unpaid"
+            | "requirements_met_but_rejected"
+            | "misleading_requirements"
+            | "abusive_conduct"
+            | "other"
+    )
+}
+
+async fn open_dispute(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let viewer_id = match required_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let challenge_id = match request
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+    {
+        Some(id) => id,
+        None => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let input = match read_json_input::<DisputeInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty dispute",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let reason = input.reason.trim().to_owned();
+    let statement = input.statement.trim().to_owned();
+    if !valid_dispute_reason(&reason) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_DISPUTE",
+            "invalid bounty dispute reason",
+        );
+    }
+    if !(20..=5000).contains(&statement.len()) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_DISPUTE",
+            "dispute statement must contain 20 to 5000 characters",
+        );
+    }
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to begin bounty dispute");
+            return internal_failure();
+        }
+    };
+    let challenge_ref = match sqlx::query(
+        "SELECT project_id::BIGINT AS project_id FROM open_source_bounty_challenges WHERE id=$1",
+    )
+    .bind(challenge_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_CHALLENGE_NOT_FOUND",
+                "challenge was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to load bounty dispute challenge");
+            return internal_failure();
+        }
+    };
+    let project_id: i64 = match challenge_ref.try_get("project_id") {
+        Ok(id) => id,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty dispute challenge");
+            return internal_failure();
+        }
+    };
+    let project = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+        .bind(project_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => match raw_project_from_row(&row) {
+            Ok(project) => project,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty dispute project");
+                return internal_failure();
+            }
+        },
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty dispute project");
+            return internal_failure();
+        }
+    };
+    let challenge = match sqlx::query(&format!("{} WHERE id=$1 FOR UPDATE", challenge_select()))
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => match challenge_from_row(&row) {
+            Ok(challenge) => challenge,
+            Err(error) => {
+                tracing::error!(%error, viewer_id, challenge_id, "failed to decode bounty dispute challenge");
+                return internal_failure();
+            }
+        },
+        Err(error) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to lock bounty dispute challenge");
+            return internal_failure();
+        }
+    };
+    if challenge.project_id != project.id {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_DISPUTE_IDENTITY_MISMATCH",
+            "challenge project changed while the dispute was opened",
+        );
+    }
+    if matches!(project.status.as_str(), "draft" | "closed") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_STATE",
+            "closed or unpublished bounty escrow cannot be disputed",
+        );
+    }
+    if viewer_id != challenge.participant_user_id && viewer_id != project.owner_user_id {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_FORBIDDEN",
+            "only a bounty party can open a dispute",
+        );
+    }
+    if matches!(challenge.status.as_str(), "withdrawn" | "cancelled") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+            "inactive challenges cannot be disputed",
+        );
+    }
+    if challenge.status == "rejected"
+        && challenge.rejected_at <= chrono::Utc::now().timestamp() - 7 * 24 * 60 * 60
+    {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_DISPUTE_WINDOW_EXPIRED",
+            "the seven-day dispute window for this rejected challenge has expired",
+        );
+    }
+    let open_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::BIGINT FROM open_source_bounty_disputes WHERE challenge_id=$1 AND status='open'")
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await;
+    let prior_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)::BIGINT FROM open_source_bounty_disputes WHERE challenge_id=$1 AND opened_by_user_id=$2")
+        .bind(challenge_id)
+        .bind(viewer_id)
+        .fetch_one(&mut *transaction)
+        .await;
+    match (open_exists, prior_exists) {
+        (Ok(open), Ok(prior)) if open > 0 || prior > 0 => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_DISPUTE_EXISTS",
+                if prior > 0 {
+                    "this party has already opened the final dispute case for this challenge"
+                } else {
+                    "an open dispute already exists for this challenge"
+                },
+            );
+        }
+        (Ok(_), Ok(_)) => {}
+        (Err(error), _) | (_, Err(error)) => {
+            tracing::error!(%error, viewer_id, challenge_id, "failed to inspect existing bounty disputes");
+            return internal_failure();
+        }
+    }
+    let against = if viewer_id == project.owner_user_id {
+        challenge.participant_user_id
+    } else {
+        project.owner_user_id
+    };
+    let now = chrono::Utc::now().timestamp();
+    let case_key = format!("challenge:{challenge_id}:user:{viewer_id}");
+    let open_key = format!("challenge:{challenge_id}");
+    let dispute_id = match sqlx::query_scalar::<_, i64>(
+        "INSERT INTO open_source_bounty_disputes (challenge_id,project_id,opened_by_user_id,against_user_id,case_key,open_key,reason,statement,project_title_snapshot,repository_url_snapshot,project_rules_snapshot,project_escrow_quota_snapshot,challenge_status_snapshot,issue_url_snapshot,pull_request_url_snapshot,submission_note_snapshot,review_note_snapshot,reward_quota_snapshot,tip_quota_snapshot,owner_rating_score_snapshot,owner_rating_comment_snapshot,contributor_rating_score_snapshot,contributor_rating_comment_snapshot,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'open',$24,$24) RETURNING id::BIGINT",
+    )
+    .bind(challenge_id)
+    .bind(project.id)
+    .bind(viewer_id)
+    .bind(against)
+    .bind(case_key)
+    .bind(open_key)
+    .bind(reason)
+    .bind(statement)
+    .bind(&project.title)
+    .bind(&project.repository_url)
+    .bind(&project.rules)
+    .bind(project.escrow_quota)
+    .bind(&challenge.status)
+    .bind(&challenge.issue_url)
+    .bind(&challenge.pull_request_url)
+    .bind(&challenge.submission_note)
+    .bind(&challenge.review_note)
+    .bind(challenge.reward_quota)
+    .bind(challenge.tip_quota)
+    .bind(challenge.owner_rating_score)
+    .bind(&challenge.owner_rating_comment)
+    .bind(challenge.contributor_rating_score)
+    .bind(&challenge.contributor_rating_comment)
+    .bind(now)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(id) => id,
+        Err(error) => {
+            if error.as_database_error().is_some_and(|db| db.code().as_deref() == Some("23505")) {
+                return business_failure("OPEN_SOURCE_BOUNTY_DISPUTE_EXISTS", "an open dispute already exists for this challenge");
+            }
+            tracing::error!(%error, viewer_id, challenge_id, "failed to create bounty dispute");
+            return internal_failure();
+        }
+    };
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, challenge_id, "failed to commit bounty dispute");
+        return internal_failure();
+    }
+    match load_dispute_view(&state, dispute_id, Some(viewer_id), false).await {
+        Ok(Some(view)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: view,
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
+async fn resolve_dispute(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
+    let headers = request.headers().clone();
+    let admin_id = match required_admin_id(&state, &headers).await {
+        Ok(admin_id) => admin_id,
+        Err(response) => return response,
+    };
+    let dispute_id = match request
+        .uri()
+        .path()
+        .rsplit('/')
+        .nth(1)
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+    {
+        Some(id) => id,
+        None => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_INVALID_ID",
+                "invalid open-source bounty identifier",
+            );
+        }
+    };
+    let input = match read_json_input::<ResolutionInput>(
+        request,
+        "OPEN_SOURCE_BOUNTY_INVALID_REQUEST",
+        "invalid bounty dispute resolution",
+    )
+    .await
+    {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let action = input.action.trim().to_owned();
+    let resolution = input.resolution.trim().to_owned();
+    if !matches!(action.as_str(), "pay" | "deny") {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_DISPUTE_RESOLUTION",
+            "dispute resolution action must be pay or deny",
+        );
+    }
+    if !(10..=5000).contains(&resolution.len()) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_INVALID_DISPUTE_RESOLUTION",
+            "resolution must contain 10 to 5000 characters",
+        );
+    }
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, admin_id, dispute_id, "failed to begin bounty dispute resolution");
+            return internal_failure();
+        }
+    };
+    let admin_is_valid = match sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND deleted_at IS NULL AND status=$2 AND role >= $3)",
+    )
+    .bind(admin_id)
+    .bind(ENABLED_USER_STATUS)
+    .bind(ROLE_ADMIN)
+    .fetch_one(&mut *transaction)
+    .await
+    {
+        Ok(is_valid) => is_valid,
+        Err(error) => {
+            tracing::error!(%error, admin_id, dispute_id, "failed to revalidate bounty dispute administrator");
+            return internal_failure();
+        }
+    };
+    if !admin_is_valid {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_FORBIDDEN",
+            "administrator access is required",
+        );
+    }
+    let reference = match sqlx::query("SELECT project_id::BIGINT AS project_id,challenge_id::BIGINT AS challenge_id FROM open_source_bounty_disputes WHERE id=$1")
+        .bind(dispute_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return business_failure("OPEN_SOURCE_BOUNTY_DISPUTE_NOT_FOUND", "bounty dispute was not found"),
+        Err(error) => {
+            tracing::error!(%error, admin_id, dispute_id, "failed to load bounty dispute reference");
+            return internal_failure();
+        }
+    };
+    let project_id: i64 = reference.try_get("project_id").unwrap_or_default();
+    let challenge_id: i64 = reference.try_get("challenge_id").unwrap_or_default();
+    let project = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+        .bind(project_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => match raw_project_from_row(&row) {
+            Ok(project) => project,
+            Err(_) => return internal_failure(),
+        },
+        Err(error) => {
+            tracing::error!(%error, admin_id, dispute_id, "failed to lock bounty dispute project");
+            return internal_failure();
+        }
+    };
+    let challenge_row = match sqlx::query(&format!("{} WHERE id=$1 FOR UPDATE", challenge_select()))
+        .bind(challenge_id)
+        .fetch_one(&mut *transaction)
+        .await
+    {
+        Ok(row) => row,
+        Err(error) => {
+            tracing::error!(%error, admin_id, dispute_id, "failed to lock bounty dispute challenge");
+            return internal_failure();
+        }
+    };
+    let challenge = match challenge_from_row(&challenge_row) {
+        Ok(challenge) => challenge,
+        Err(_) => return internal_failure(),
+    };
+    let dispute_row =
+        match sqlx::query("SELECT * FROM open_source_bounty_disputes WHERE id=$1 FOR UPDATE")
+            .bind(dispute_id)
+            .fetch_one(&mut *transaction)
+            .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                tracing::error!(%error, admin_id, dispute_id, "failed to lock bounty dispute");
+                return internal_failure();
+            }
+        };
+    let dispute_status: String = dispute_row.try_get("status").unwrap_or_default();
+    if dispute_status != "open" {
+        let already = (action == "pay" && dispute_status == "resolved_paid")
+            || (action == "deny" && dispute_status == "resolved_denied");
+        if !already {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_DISPUTE_RESOLVED",
+                "bounty dispute is already resolved with a different action",
+            );
+        }
+    }
+    if challenge.project_id != project.id
+        || dispute_row
+            .try_get::<i64, _>("project_id")
+            .unwrap_or_default()
+            != project.id
+        || dispute_row
+            .try_get::<i64, _>("challenge_id")
+            .unwrap_or_default()
+            != challenge.id
+        || challenge.participant_user_id <= 0
+        || project.owner_user_id <= 0
+        || challenge.participant_user_id == project.owner_user_id
+    {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_DISPUTE_IDENTITY_MISMATCH",
+            "dispute parties do not match the bounty challenge and project",
+        );
+    }
+    if admin_id == project.owner_user_id || admin_id == challenge.participant_user_id {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_DISPUTE_CONFLICT",
+            "a bounty party cannot adjudicate their own dispute",
+        );
+    }
+    let mut transferred_quota = 0_i64;
+    if dispute_status == "open" {
+        let now = chrono::Utc::now().timestamp();
+        let target_status = if action == "pay" {
+            "resolved_paid"
+        } else {
+            "resolved_denied"
+        };
+        if action == "pay" {
+            let opened_by: i64 = dispute_row.try_get("opened_by_user_id").unwrap_or_default();
+            let against: i64 = dispute_row.try_get("against_user_id").unwrap_or_default();
+            if opened_by != challenge.participant_user_id || against != project.owner_user_id {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_DISPUTE_NOT_PAYABLE",
+                    "only a contributor claim against the bounty owner can receive an enforced escrow payment",
+                );
+            }
+            if !matches!(challenge.status.as_str(), "submitted" | "rejected") {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+                    "an enforced payout requires a submitted or rejected challenge",
+                );
+            }
+            if challenge.issue_url.is_empty() || challenge.pull_request_url.is_empty() {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_INVALID_CHALLENGE_STATE",
+                    "a dispute payout requires submitted Issue and pull request evidence",
+                );
+            }
+            let reward_snapshot: i64 = dispute_row
+                .try_get("reward_quota_snapshot")
+                .unwrap_or_default();
+            if reward_snapshot <= 0
+                || challenge.reward_quota != reward_snapshot
+                || project.escrow_quota < reward_snapshot
+            {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_ESCROW_INSUFFICIENT",
+                    "bounty escrow is insufficient",
+                );
+            }
+            let credit = match sqlx::query(
+                "UPDATE users SET quota=quota+$1 WHERE id=$2 AND deleted_at IS NULL",
+            )
+            .bind(reward_snapshot)
+            .bind(challenge.participant_user_id)
+            .execute(&mut *transaction)
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::error!(%error, admin_id, dispute_id, "failed to credit enforced bounty payout");
+                    return internal_failure();
+                }
+            };
+            if credit.rows_affected() != 1 {
+                return business_failure(
+                    "OPEN_SOURCE_BOUNTY_PARTICIPANT_NOT_FOUND",
+                    "challenge participant was not found",
+                );
+            }
+            transferred_quota = reward_snapshot;
+            let remaining = project.escrow_quota - transferred_quota;
+            if let Err(error) = if remaining == 0 {
+                sqlx::query("UPDATE open_source_bounty_projects SET escrow_quota=0,status='completed',closed_at=$1,updated_at=$1 WHERE id=$2").bind(now).bind(project.id).execute(&mut *transaction).await
+            } else {
+                sqlx::query("UPDATE open_source_bounty_projects SET escrow_quota=$1,updated_at=$2 WHERE id=$3").bind(remaining).bind(now).bind(project.id).execute(&mut *transaction).await
+            } {
+                tracing::error!(%error, admin_id, dispute_id, "failed to update enforced bounty escrow");
+                return internal_failure();
+            }
+            if let Err(error) = sqlx::query("UPDATE open_source_bounty_challenges SET status='approved',owner_rating_overturned=(status='rejected' AND owner_rating_score>0),paid_at=$1,updated_at=$1 WHERE id=$2").bind(now).bind(challenge.id).execute(&mut *transaction).await { tracing::error!(%error, admin_id, dispute_id, "failed to update enforced bounty challenge"); return internal_failure(); }
+            let payout_key = format!("challenge:{}", challenge.id);
+            if let Err(error) = sqlx::query("INSERT INTO open_source_bounty_ledgers (project_id,challenge_id,user_id,counterparty_user_id,kind,quota,note,reward_payout_key,created_at) VALUES ($1,$2,$3,$4,'dispute_reward_transfer',$5,$6,$7,$8)").bind(project.id).bind(challenge.id).bind(project.owner_user_id).bind(challenge.participant_user_id).bind(transferred_quota).bind(&resolution).bind(payout_key).bind(now).execute(&mut *transaction).await { tracing::error!(%error, admin_id, dispute_id, "failed to record enforced bounty payout"); return internal_failure(); }
+        }
+        if let Err(error) = sqlx::query("UPDATE open_source_bounty_disputes SET status=$1,resolution=$2,resolved_by_user_id=$3,resolved_at=$4,updated_at=$4,open_key=NULL WHERE id=$5").bind(target_status).bind(&resolution).bind(admin_id).bind(now).bind(dispute_id).execute(&mut *transaction).await { tracing::error!(%error, admin_id, dispute_id, "failed to resolve bounty dispute"); return internal_failure(); }
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, admin_id, dispute_id, "failed to commit bounty dispute resolution");
+        return internal_failure();
+    }
+    match load_dispute_view(&state, dispute_id, None, true).await {
+        Ok(Some(view)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: serde_json::json!({
+                "dispute": view,
+                "transferred_quota": transferred_quota,
+            }),
+        })
+        .into_response(),
+        Ok(None) | Err(_) => internal_failure(),
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct BountyProjectView {
     id: i64,
@@ -195,6 +3138,7 @@ struct BountyProjectView {
     owner_username: String,
     active_challenge_count: i64,
     approved_challenge_count: i64,
+    #[serde(serialize_with = "serialize_rating_average")]
     owner_rating_average: f64,
     owner_rating_count: i64,
     owner_thank_heart_count: i64,
@@ -241,6 +3185,7 @@ struct ListPayload {
 
 #[derive(Debug, Serialize)]
 struct BountyFeeConfig {
+    #[serde(serialize_with = "serialize_rating_average")]
     rate_percent: f64,
     rate_basis_points: i64,
 }
@@ -280,6 +3225,19 @@ struct BountyProjectDetail {
     ledger: Vec<BountyLedger>,
 }
 
+fn serialize_rating_average<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    // Go's encoding/json emits integral float64 values as `0`, `1`, etc.
+    // Preserve fractional averages while matching that strict wire shape.
+    if value.is_finite() && value.fract() == 0.0 {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct BountyChallengeView {
     #[serde(flatten)]
@@ -288,8 +3246,10 @@ struct BountyChallengeView {
     project_title: String,
     repository_url: String,
     owner_username: String,
+    #[serde(serialize_with = "serialize_rating_average")]
     participant_rating_average: f64,
     participant_rating_count: i64,
+    #[serde(serialize_with = "serialize_rating_average")]
     owner_rating_average: f64,
     owner_rating_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -641,7 +3601,7 @@ async fn mcp_token_status(
     State(state): State<OpenSourceBountyState>,
     headers: HeaderMap,
 ) -> Response {
-    let viewer_id = match required_viewer_id(&state, &headers).await {
+    let viewer_id = match required_mcp_viewer_id(&state, &headers).await {
         Ok(viewer_id) => viewer_id,
         Err(response) => return response,
     };
@@ -696,7 +3656,7 @@ async fn rotate_mcp_token(
     headers: HeaderMap,
     client_ip: Option<Extension<ClientIpKey>>,
 ) -> Response {
-    let viewer_id = match required_viewer_id(&state, &headers).await {
+    let viewer_id = match required_mcp_viewer_id(&state, &headers).await {
         Ok(viewer_id) => viewer_id,
         Err(response) => return response,
     };
@@ -779,7 +3739,7 @@ async fn revoke_mcp_token(
     headers: HeaderMap,
     client_ip: Option<Extension<ClientIpKey>>,
 ) -> Response {
-    let viewer_id = match required_viewer_id(&state, &headers).await {
+    let viewer_id = match required_mcp_viewer_id(&state, &headers).await {
         Ok(viewer_id) => viewer_id,
         Err(response) => return response,
     };
@@ -884,6 +3844,39 @@ async fn required_viewer_id(
     }
 }
 
+/// Mirrors the Go ConsoleAccessGate boundary around the MCP management
+/// surface. Anonymous, invalid, disabled, and pre-activation dashboard
+/// credentials are deliberately concealed as a generic 404 before UserAuth
+/// reaches the handler; an activated credential continues through the normal
+/// viewer lookup.
+async fn required_mcp_viewer_id(
+    state: &OpenSourceBountyState,
+    headers: &HeaderMap,
+) -> Result<i64, Response> {
+    let Some(token) = authorization_token(headers) else {
+        return Err(console_not_found());
+    };
+    let view = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+        .map_err(|_| console_not_found())?;
+    if view.id <= 0 || view.status != ENABLED_USER_STATUS || !view.developer_access_granted {
+        return Err(console_not_found());
+    }
+    Ok(view.id)
+}
+
+fn console_not_found() -> Response {
+    let mut response =
+        (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+}
+
 async fn required_admin_id(
     state: &OpenSourceBountyState,
     headers: &HeaderMap,
@@ -981,6 +3974,19 @@ fn challenge_from_row(row: &PgRow) -> Result<BountyChallenge, sqlx::Error> {
     })
 }
 
+async fn load_challenge(
+    state: &OpenSourceBountyState,
+    challenge_id: i64,
+) -> Result<Option<BountyChallenge>, sqlx::Error> {
+    sqlx::query(&format!("{} WHERE id = $1", challenge_select()))
+        .bind(challenge_id)
+        .fetch_optional(&state.pg)
+        .await?
+        .as_ref()
+        .map(challenge_from_row)
+        .transpose()
+}
+
 fn challenge_view_select() -> &'static str {
     "SELECT c.id::BIGINT AS id, c.project_id::BIGINT AS project_id, c.participant_user_id::BIGINT AS participant_user_id, c.github_handle, c.status, c.issue_url, c.pull_request_url, c.submission_note, c.review_note, c.reward_quota::BIGINT AS reward_quota, c.tip_quota::BIGINT AS tip_quota, c.owner_rating_score::BIGINT AS owner_rating_score, c.owner_rating_comment, c.owner_rated_at::BIGINT AS owner_rated_at, c.contributor_rating_score::BIGINT AS contributor_rating_score, c.contributor_rating_comment, c.contributor_rated_at::BIGINT AS contributor_rated_at, c.owner_rating_overturned, c.accepted_at::BIGINT AS accepted_at, c.submitted_at::BIGINT AS submitted_at, c.reviewed_at::BIGINT AS reviewed_at, c.rejected_at::BIGINT AS rejected_at, c.paid_at::BIGINT AS paid_at, c.created_at::BIGINT AS created_at, c.updated_at::BIGINT AS updated_at, participant.username AS participant_username, p.title AS project_title, p.repository_url AS repository_url, owner.username AS owner_username, COALESCE((SELECT AVG(history.owner_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = FALSE), 0)::DOUBLE PRECISION AS participant_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = FALSE) AS participant_rating_count, COALESCE((SELECT AVG(history.contributor_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges history JOIN open_source_bounty_projects history_project ON history_project.id = history.project_id WHERE history_project.owner_user_id = p.owner_user_id AND history.contributor_rating_score > 0), 0)::DOUBLE PRECISION AS owner_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges history JOIN open_source_bounty_projects history_project ON history_project.id = history.project_id WHERE history_project.owner_user_id = p.owner_user_id AND history.contributor_rating_score > 0) AS owner_rating_count FROM open_source_bounty_challenges c JOIN users participant ON participant.id = c.participant_user_id JOIN open_source_bounty_projects p ON p.id = c.project_id JOIN users owner ON owner.id = p.owner_user_id"
 }
@@ -1074,6 +4080,28 @@ fn dispute_view_from_row(row: &PgRow) -> Result<BountyDisputeView, sqlx::Error> 
         against_username: row.try_get("against_username")?,
         live_evidence_changed: row.try_get("live_evidence_changed")?,
     })
+}
+
+async fn load_dispute_view(
+    state: &OpenSourceBountyState,
+    dispute_id: i64,
+    viewer_id: Option<i64>,
+    admin: bool,
+) -> Result<Option<BountyDisputeView>, sqlx::Error> {
+    let mut sql = format!("{} WHERE d.id = $1", dispute_view_select());
+    if !admin {
+        sql.push_str(" AND (d.opened_by_user_id = $2 OR d.against_user_id = $2)");
+    }
+    let mut query = sqlx::query(&sql).bind(dispute_id);
+    if !admin {
+        query = query.bind(viewer_id.unwrap_or_default());
+    }
+    query
+        .fetch_optional(&state.pg)
+        .await?
+        .as_ref()
+        .map(dispute_view_from_row)
+        .transpose()
 }
 
 fn challenge_priority(status: &str) -> i64 {
@@ -1862,8 +4890,9 @@ mod tests {
     use base64::Engine;
 
     use super::{
-        DEFAULT_PAGE_SIZE, DisputeListQuery, ListQuery, MAX_PAGE_SIZE, NotificationQuery,
-        challenge_priority, dashboard_token_candidate, parse_fee_rate_basis_points,
+        BountyFeeConfig, DEFAULT_PAGE_SIZE, DisputeListQuery, ListQuery, MAX_PAGE_SIZE,
+        NotificationQuery, challenge_priority, dashboard_token_candidate,
+        parse_fee_rate_basis_points,
     };
 
     #[test]
@@ -1940,6 +4969,26 @@ mod tests {
         for value in ["", "001", "100.01", "101", "1.234", "-1"] {
             assert_eq!(parse_fee_rate_basis_points(value), None, "value={value}");
         }
+    }
+
+    #[test]
+    fn fee_rate_json_matches_go_integral_float_wire_shape() {
+        let integral = serde_json::to_string(&BountyFeeConfig {
+            rate_percent: 1.0,
+            rate_basis_points: 100,
+        })
+        .unwrap();
+        assert_eq!(integral, r#"{"rate_percent":1,"rate_basis_points":100}"#);
+
+        let fractional = serde_json::to_string(&BountyFeeConfig {
+            rate_percent: 2.5,
+            rate_basis_points: 250,
+        })
+        .unwrap();
+        assert_eq!(
+            fractional,
+            r#"{"rate_percent":2.5,"rate_basis_points":250}"#
+        );
     }
 
     #[test]

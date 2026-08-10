@@ -8,7 +8,8 @@ use axum::{
 use lmm_api_rs::migration_routes::observability::{
     InMemoryObservabilityStore, ObservabilityAccess, ObservabilityAuthError,
     ObservabilityAuthorizer, ObservabilityCall, ObservabilityPrincipal, ObservabilityState,
-    ObservabilityStore, ObservabilityStoreError, observability_read_router, observability_router,
+    ObservabilityStore, ObservabilityStoreError, observability_metrics_router,
+    observability_read_router, observability_router,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,6 +86,13 @@ fn read_router() -> axum::Router {
     ))
 }
 
+fn metrics_router() -> axum::Router {
+    observability_metrics_router(ObservabilityState::new(
+        Arc::new(SuccessStore),
+        Arc::new(Allow { role: 100 }),
+    ))
+}
+
 #[tokio::test]
 async fn observability_read_router_mounts_the_storage_only_surface() {
     let response = read_router()
@@ -97,6 +105,22 @@ async fn observability_read_router_mounts_the_storage_only_surface() {
         .await
         .expect("router response");
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn observability_metrics_router_mounts_the_postgres_metric_reads() {
+    let app = metrics_router();
+    for uri in [
+        "/api/perf-metrics?model=gpt-test",
+        "/api/perf-metrics/summary",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(uri).body(Body::empty()).expect("request"))
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
 }
 
 async fn body(response: axum::response::Response) -> Value {

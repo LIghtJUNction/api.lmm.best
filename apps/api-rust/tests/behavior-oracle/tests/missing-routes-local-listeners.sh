@@ -18,6 +18,8 @@ requested_valkey_port=${LMM_MISSING_ROUTES_VALKEY_PORT:-6380}
 requested_oracle_valkey_port=${LMM_MISSING_ROUTES_GO_VALKEY_PORT:-16397}
 runtime_base=${LMM_MISSING_ROUTES_RUNTIME_BASE:-/home/lightjunction/.cache}
 include_classes=${MISSING_ROUTES_INCLUDE_CLASSES:-no-side-effect,external-gateway}
+ready_attempts=${LMM_MISSING_ROUTES_READY_ATTEMPTS:-1200}
+result_dir=${MISSING_ROUTES_RESULT_DIR:-}
 go_pid=
 go_valkey_pid=
 rust_pid=
@@ -27,6 +29,17 @@ go_valkey_pid_start=
 rust_pid_start=
 valkey_pid_start=
 [[ -d $runtime_base ]] || { echo "runtime base does not exist: $runtime_base" >&2; exit 1; }
+[[ $ready_attempts =~ ^[1-9][0-9]*$ ]] || {
+  echo "LMM_MISSING_ROUTES_READY_ATTEMPTS must be a positive integer" >&2
+  exit 2
+}
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    echo "MISSING_ROUTES_RESULT_DIR must be an absolute path without '..'" >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 runtime=$(mktemp -d "$runtime_base/lmm-missing-routes-listeners.XXXXXX")
 cargo_target="$runtime/cargo-target"
 rust_binary=${LMM_MISSING_ROUTES_RUST_BINARY:-"$repo_root/apps/api-rust/target/debug/lmm-api-rs"}
@@ -148,7 +161,7 @@ env \
   GIN_MODE=release \
   "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
 record_pid go_pid "$!"
-for _ in {1..300}; do
+for ((attempt = 0; attempt < ready_attempts; attempt++)); do
   [[ $(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$oracle_port/api/status" || true) == 200 ]] && break
   sleep .05
 done
@@ -177,7 +190,7 @@ env \
   VERSION=v0.0.0 \
   "$rust_binary" >"$runtime/rust.log" 2>&1 &
 record_pid rust_pid "$!"
-for _ in {1..300}; do
+for ((attempt = 0; attempt < ready_attempts; attempt++)); do
   [[ $(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$rust_port/readyz" || true) == 200 ]] && break
   sleep .05
 done
@@ -189,4 +202,5 @@ fi
 GO_BASE_URL="http://127.0.0.1:$oracle_port" RUST_BASE_URL="http://127.0.0.1:$rust_port" \
   MISSING_ROUTES_MODE=transport \
   MISSING_ROUTES_INCLUDE_CLASSES="$include_classes" \
+  MISSING_ROUTES_RESULT_DIR="$result_dir" \
   "$repo_root/apps/api-rust/tests/behavior-oracle/tests/missing-routes-listener-differential.sh"

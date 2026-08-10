@@ -6,8 +6,9 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::identity_federation::{
-    FederatedLogin, FederatedUser, FederationError, FederationIdentity, FederationPrincipal,
-    FederationProviderError, FederationProviders, FederationState, OAuthFlowContext, router,
+    FederatedLogin, FederatedUser, FederationError, FederationIdentity,
+    FederationMutationPublisher, FederationPrincipal, FederationProviderError, FederationProviders,
+    FederationState, OAuthFlowContext, bindings_router, provider_router, router,
     verify_telegram_authorization,
 };
 use serde_json::{Value, json};
@@ -48,6 +49,31 @@ impl FederationIdentity for BoundIdentity {
 
     async fn verify_email_code(&self, _: &str, _: &str) -> Result<bool, FederationError> {
         Ok(false)
+    }
+
+    async fn validate_session_reference(
+        &self,
+        user_id: i64,
+        session_id: &str,
+    ) -> Result<(), FederationError> {
+        (user_id == 7 && session_id == "session-7")
+            .then_some(())
+            .ok_or(FederationError::Unauthorized)
+    }
+}
+
+struct ConfiguredMutationPublisher;
+
+#[async_trait]
+impl FederationMutationPublisher for ConfiguredMutationPublisher {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    async fn publish_user(&self, user_id: i64) -> Result<(), FederationError> {
+        (user_id == 7)
+            .then_some(())
+            .ok_or(FederationError::Internal)
     }
 }
 
@@ -124,6 +150,16 @@ impl FederationProviders for GithubBoundary {
         })
     }
 
+    async fn validate_existing_login(
+        &self,
+        provider: &str,
+        subject: &str,
+    ) -> Result<(), FederationError> {
+        (provider == "telegram" && subject == "12345")
+            .then_some(())
+            .ok_or(FederationError::Unauthorized)
+    }
+
     fn telegram_bot_token(&self) -> Option<String> {
         Some("test-bot-token".to_owned())
     }
@@ -142,7 +178,7 @@ async fn isolated_postgres() -> sqlx::PgPool {
         .connect(&database_url)
         .await
         .expect("connect isolated PostgreSQL");
-    sqlx::query("DROP TABLE IF EXISTS auth_flows, users CASCADE")
+    sqlx::query("DROP TABLE IF EXISTS external_identity_claims, auth_flows, users CASCADE")
         .execute(&pool)
         .await
         .expect("reset isolated identity tables");
@@ -158,6 +194,10 @@ async fn isolated_postgres() -> sqlx::PgPool {
     .execute(&pool)
     .await
     .expect("create auth_flows");
+    sqlx::query("CREATE TABLE external_identity_claims (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, subject TEXT NOT NULL, user_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, UNIQUE (provider, subject), UNIQUE (provider, user_id))")
+        .execute(&pool)
+        .await
+        .expect("create external identity claims");
     sqlx::query("INSERT INTO users (id, github_id, status) VALUES (7, '', 1)")
         .execute(&pool)
         .await
@@ -170,7 +210,7 @@ async fn callback_rejects_missing_state_before_any_provider_exchange() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
         .expect("a lazy test pool is valid");
-    let app = router(FederationState::new(
+    let app = provider_router(FederationState::new(
         pool,
         Arc::new(NoIdentity),
         "test-secret",
@@ -257,6 +297,27 @@ async fn federation_user_routes_reject_invalid_identity_before_postgres() {
 }
 
 #[tokio::test]
+async fn bindings_router_rejects_missing_identity_before_postgres() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+        .expect("a lazy test pool is valid");
+    let response = bindings_router(FederationState::new(
+        pool,
+        Arc::new(NoIdentity),
+        "test-secret",
+    ))
+    .oneshot(
+        Request::get("/api/user/oauth/bindings")
+            .body(Body::empty())
+            .expect("request is valid"),
+    )
+    .await
+    .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn telegram_bind_failure_redirect_escapes_untrusted_flow_token() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
@@ -326,13 +387,15 @@ async fn oauth_bind_callback_consumes_postgres_state_and_claims_the_account_once
     let pool = isolated_postgres().await;
     let app = router(
         FederationState::new(pool.clone(), Arc::new(BoundIdentity), "test-secret")
-            .with_providers(Arc::new(GithubBoundary)),
+            .with_providers(Arc::new(GithubBoundary))
+            .with_mutation_publisher(Arc::new(ConfiguredMutationPublisher)),
     );
 
     let state_response = app
         .clone()
         .oneshot(
             Request::post("/api/oauth/state")
+                .header("authorization", "Bearer fixture-access")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"provider":"github","intent":"bind"}"#))
                 .expect("state request is valid"),

@@ -31,6 +31,67 @@ pub trait TurnstileVerifier: Send + Sync {
     async fn verify(&self, token: &str, remote_ip: &str) -> bool;
 }
 
+/// Security policy shared by anonymous, credential-creating endpoints.
+///
+/// The policy keeps the rate-limit, request-size, and Turnstile configuration
+/// bound to the same listener-owned [`DashboardAuth`] instance.  Consumers
+/// must opt in explicitly; an endpoint without this policy must fail closed.
+#[derive(Clone)]
+pub struct AnonymousRequestSecurity {
+    auth: Arc<dyn DashboardAuth>,
+    body_limit_bytes: usize,
+    turnstile_check_enabled: bool,
+    turnstile_verifier: Option<Arc<dyn TurnstileVerifier>>,
+}
+
+/// Result of applying the configured Turnstile policy to one request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnstileCheckOutcome {
+    /// The operator has not enabled Turnstile checks.
+    Disabled,
+    /// Turnstile is enabled but the client did not supply a challenge token.
+    MissingToken,
+    /// The verifier rejected the token or was unavailable.
+    Rejected,
+    /// The verifier accepted the token.
+    Allowed,
+}
+
+impl AnonymousRequestSecurity {
+    /// Returns the maximum accepted anonymous request size.
+    #[must_use]
+    pub const fn body_limit_bytes(&self) -> usize {
+        self.body_limit_bytes
+    }
+
+    /// Applies the listener's critical rate-limit policy.
+    pub async fn check_critical_rate_limit(
+        &self,
+        client_ip: &str,
+    ) -> Result<CriticalRateLimitOutcome, AuthError> {
+        self.auth.check_critical_rate_limit(client_ip).await
+    }
+
+    /// Applies the listener's configured Turnstile policy and fails closed on
+    /// a missing verifier, an upstream error, or an invalid token.
+    pub async fn check_turnstile(&self, uri: &Uri, client_ip: &str) -> TurnstileCheckOutcome {
+        if !self.turnstile_check_enabled {
+            return TurnstileCheckOutcome::Disabled;
+        }
+        let Some(token) = turnstile_token(uri) else {
+            return TurnstileCheckOutcome::MissingToken;
+        };
+        let Some(verifier) = self.turnstile_verifier.as_ref() else {
+            return TurnstileCheckOutcome::Rejected;
+        };
+        if verifier.verify(&token, client_ip).await {
+            TurnstileCheckOutcome::Allowed
+        } else {
+            TurnstileCheckOutcome::Rejected
+        }
+    }
+}
+
 struct CloudflareTurnstileVerifier {
     client: Option<reqwest::Client>,
     secret: Option<SecretString>,
@@ -161,6 +222,21 @@ impl AuthHttpState {
     #[must_use]
     pub fn dashboard_auth(&self) -> Arc<dyn DashboardAuth> {
         Arc::clone(&self.auth)
+    }
+
+    /// Derives the exact anonymous-request security policy used by login.
+    ///
+    /// This lets separately mounted anonymous routes share the configured
+    /// limit, critical limiter, and Turnstile verifier rather than silently
+    /// re-implementing a divergent policy.
+    #[must_use]
+    pub fn anonymous_request_security(&self) -> AnonymousRequestSecurity {
+        AnonymousRequestSecurity {
+            auth: Arc::clone(&self.auth),
+            body_limit_bytes: self.anonymous_body_limit_bytes,
+            turnstile_check_enabled: self.turnstile_check_enabled,
+            turnstile_verifier: self.turnstile_verifier.clone(),
+        }
     }
 }
 
@@ -683,7 +759,8 @@ fn turnstile_token(uri: &Uri) -> Option<String> {
     })
 }
 
-fn turnstile_missing_response() -> Response {
+/// Produces the legacy-compatible response for a missing Turnstile token.
+pub fn turnstile_missing_response() -> Response {
     (
         StatusCode::OK,
         Json(serde_json::json!({"success": false, "message": "Turnstile token 为空"})),
@@ -691,7 +768,8 @@ fn turnstile_missing_response() -> Response {
         .into_response()
 }
 
-fn turnstile_failure_response() -> Response {
+/// Produces the legacy-compatible response for a rejected Turnstile token.
+pub fn turnstile_failure_response() -> Response {
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -1173,6 +1251,10 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
         (StatusCode::CREATED, content_length.to_owned()).into_response()
+    }
+
+    fn registration_probe_router() -> Router {
+        Router::new().fallback(registration_probe)
     }
 
     impl MockAuth {
@@ -2222,7 +2304,7 @@ mod tests {
             AuthHttpState::new(auth.clone(), false)
                 .with_anonymous_body_limit_bytes(16)
                 .with_turnstile_verifier(verifier.clone()),
-            Router::new().route("/api/user/register", post(registration_probe)),
+            registration_probe_router(),
         );
 
         let response = router
@@ -2308,7 +2390,7 @@ mod tests {
         let verifier = Arc::new(MockTurnstile::allowing());
         let response = anonymous_registration_surface(
             AuthHttpState::new(auth.clone(), false).with_turnstile_verifier(verifier.clone()),
-            Router::new().route("/api/user/register", post(registration_probe)),
+            registration_probe_router(),
         )
         .oneshot(
             Request::builder()
@@ -2437,5 +2519,39 @@ mod tests {
                 .expect("body"),
         )
         .expect("JSON")
+    }
+
+    #[tokio::test]
+    async fn anonymous_request_security_reuses_limit_rate_limit_and_turnstile_policy() {
+        let auth = Arc::new(MockAuth::success());
+        let verifier = Arc::new(MockTurnstile::allowing());
+        let policy = AuthHttpState::new(auth.clone(), false)
+            .with_anonymous_body_limit_bytes(123)
+            .with_turnstile_verifier(verifier.clone())
+            .anonymous_request_security();
+
+        assert_eq!(policy.body_limit_bytes(), 123);
+        assert!(matches!(
+            policy.check_critical_rate_limit("203.0.113.9").await,
+            Ok(CriticalRateLimitOutcome::Allowed)
+        ));
+        assert_eq!(
+            policy
+                .check_turnstile(
+                    &"/api/user/register?turnstile=token".parse().unwrap(),
+                    "203.0.113.9"
+                )
+                .await,
+            TurnstileCheckOutcome::Allowed
+        );
+        assert_eq!(
+            verifier
+                .requests
+                .lock()
+                .expect("turnstile requests lock")
+                .as_slice(),
+            &[("token".to_owned(), "203.0.113.9".to_owned())]
+        );
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 1);
     }
 }

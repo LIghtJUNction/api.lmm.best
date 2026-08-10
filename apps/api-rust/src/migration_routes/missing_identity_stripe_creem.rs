@@ -608,11 +608,22 @@ pub fn router(state: IdentityStripeCreemState) -> Router {
     // checkout routes also pass through CriticalRateLimit.  This isolated
     // slice cannot attach those shared listener policies, so it remains
     // candidate-only until the root listener owns that integration.
-    Router::new()
-        .route("/api/user/stripe/amount", post(stripe_amount))
+    amount_routes()
         .route("/api/user/stripe/pay", post(stripe_pay))
         .route("/api/user/creem/pay", post(creem_pay))
         .with_state(state)
+}
+
+/// Mounts only the deterministic Stripe amount quote.  The checkout routes
+/// additionally require the listener's critical-rate-limit and external
+/// gateway boundaries, so the normal listener can adopt this read-only
+/// calculation without exposing an incomplete payment path.
+pub fn amount_router(state: IdentityStripeCreemState) -> Router {
+    amount_routes().with_state(state)
+}
+
+fn amount_routes() -> Router<IdentityStripeCreemState> {
+    Router::new().route("/api/user/stripe/amount", post(stripe_amount))
 }
 
 #[derive(Default, Deserialize)]

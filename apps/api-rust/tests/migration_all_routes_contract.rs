@@ -78,6 +78,10 @@ const TEST_INSTANCE_COMPOSED_MODULES: &[(&str, &str)] = &[
     // The legacy generic relay paths are intentionally test-instance-only
     // until their provider boundary obtains independent production approval.
     ("relay_misc", "relay_misc_routes"),
+    // The relay-misc composite factory delegates to these two production
+    // ownership slices, so the same candidate-root test exercises both.
+    ("relay_misc_active", "relay_misc_routes"),
+    ("relay_misc_frozen", "relay_misc_routes"),
 ];
 
 #[test]

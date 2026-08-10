@@ -9,12 +9,13 @@
 
 use std::{fmt, sync::Arc, time::Duration};
 
+use crate::auth::{DashboardAuth, UserAuthPolicyError, enforce_user_auth_view, user_auth_message};
 use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::Bytes,
     extract::{Extension, Path, RawQuery, Request, State},
-    http::HeaderMap,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -32,6 +33,7 @@ const IONET_PUBLIC_BASE: &str = "https://api.io.solutions/v1/io-cloud/caas/";
 const IONET_ENTERPRISE_BASE: &str = "https://api.io.solutions/enterprise/v1/io-cloud/caas/";
 const DEFAULT_IONET_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_IONET_RESPONSE_BYTES: usize = 1_048_576;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Authenticated actor installed by the shared authentication listener.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1075,12 +1077,26 @@ fn request_hash(call: &DeploymentCall) -> Result<String, DeploymentError> {
 #[derive(Clone)]
 pub struct DeploymentState {
     provider: Arc<dyn DeploymentProvider>,
+    dashboard_auth: Option<Arc<dyn DashboardAuth>>,
 }
 
 impl DeploymentState {
     #[must_use]
     pub fn new(provider: Arc<dyn DeploymentProvider>) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            dashboard_auth: None,
+        }
+    }
+
+    /// Installs the shared dashboard-auth authority used by the normal
+    /// listener.  Candidate/test routers may omit it and continue to rely on
+    /// an explicitly injected [`DeploymentActor`], but a production mount must
+    /// never depend on a caller-provided extension.
+    #[must_use]
+    pub fn with_dashboard_auth(mut self, auth: Arc<dyn DashboardAuth>) -> Self {
+        self.dashboard_auth = Some(auth);
+        self
     }
 }
 
@@ -1118,7 +1134,10 @@ pub fn router(state: DeploymentState) -> Router {
         // The legacy admin group authenticates before binding JSON or query
         // parameters. Keep that ordering here so malformed input cannot turn
         // an unauthorized request into an extractor-generated 400/422.
-        .route_layer(middleware::from_fn(deployment_admin_guard))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            deployment_admin_guard,
+        ))
         .with_state(state)
 }
 
@@ -1149,15 +1168,214 @@ fn require_admin(actor: Option<Extension<DeploymentActor>>) -> Option<Deployment
         .filter(|actor| actor.user_id > 0 && actor.role >= ADMIN_ROLE)
 }
 
-async fn deployment_admin_guard(request: Request, next: Next) -> Response {
-    let authorized = request
-        .extensions()
-        .get::<DeploymentActor>()
-        .is_some_and(|actor| actor.user_id > 0 && actor.role >= ADMIN_ROLE);
-    if !authorized {
-        return failure("无权进行此操作");
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeploymentAuthRejection {
+    /// The Go `ConsoleAccessGate` conceals deployment discovery routes from
+    /// anonymous, invalid, disabled, and unactivated credentials.
+    ConsoleNotFound,
+    Unauthorized {
+        supplied: bool,
+    },
+    TokenExpired,
+    SessionRevoked,
+    UserDisabled,
+    InvalidUser,
+    InsufficientPrivilege,
+    Internal,
+}
+
+async fn deployment_admin_guard(
+    State(state): State<DeploymentState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let Some(auth) = state.dashboard_auth.as_ref() else {
+        match request.extensions().get::<DeploymentActor>().copied() {
+            Some(actor) if actor.user_id > 0 && actor.role >= ADMIN_ROLE => {
+                return next.run(request).await;
+            }
+            Some(actor) if actor.user_id > 0 => {
+                return deployment_auth_rejection(
+                    request.headers(),
+                    DeploymentAuthRejection::InsufficientPrivilege,
+                );
+            }
+            _ => {
+                return deployment_auth_rejection(
+                    request.headers(),
+                    DeploymentAuthRejection::Unauthorized { supplied: false },
+                );
+            }
+        }
+    };
+
+    let Some(token) = dashboard_credential(request.headers()) else {
+        return deployment_auth_rejection(
+            request.headers(),
+            DeploymentAuthRejection::ConsoleNotFound,
+        );
+    };
+    // The normal Go listener runs ConsoleAccessGate before AdminAuth. Resolve
+    // the optional view first so relay-console inventory remains a generic
+    // 404 until the account has crossed the live activation/trust boundary.
+    let user = match auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+    {
+        Ok(user) => user,
+        Err(_) => {
+            return deployment_auth_rejection(
+                request.headers(),
+                DeploymentAuthRejection::ConsoleNotFound,
+            );
+        }
+    };
+    if user.id <= 0 || user.status != 1 || !user.developer_access_granted {
+        return deployment_auth_rejection(
+            request.headers(),
+            DeploymentAuthRejection::ConsoleNotFound,
+        );
     }
+    if let Err(policy) = enforce_user_auth_view(&user) {
+        let rejection = match policy {
+            UserAuthPolicyError::UserDisabled => DeploymentAuthRejection::UserDisabled,
+            UserAuthPolicyError::InsufficientPrivilege => {
+                DeploymentAuthRejection::InsufficientPrivilege
+            }
+            UserAuthPolicyError::InvalidUserInfo => DeploymentAuthRejection::InvalidUser,
+        };
+        return deployment_auth_rejection(request.headers(), rejection);
+    }
+    if user.role < ADMIN_ROLE {
+        return deployment_auth_rejection(
+            request.headers(),
+            DeploymentAuthRejection::InsufficientPrivilege,
+        );
+    }
+
+    request.extensions_mut().insert(DeploymentActor {
+        user_id: user.id,
+        role: user.role,
+    });
     next.run(request).await
+}
+
+fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let mut fields = value.split_whitespace();
+    let first = fields.next()?;
+    let second = fields.next();
+    if fields.next().is_some() {
+        return None;
+    }
+    match second {
+        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
+            Some(token.to_owned())
+        }
+        None if !first.is_empty() => Some(first.to_owned()),
+        _ => None,
+    }
+}
+
+fn token_locale(headers: &HeaderMap) -> (bool, bool) {
+    let language = headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    (language.starts_with("zh-tw"), language.starts_with("zh"))
+}
+
+fn invalid_access_token(headers: &HeaderMap) -> &'static str {
+    match token_locale(headers) {
+        (true, _) => "無權進行此操作，access token 無效",
+        (_, true) => "无权进行此操作，access token 无效",
+        _ => "Unauthorized, invalid access token",
+    }
+}
+
+fn deployment_policy_message(
+    headers: &HeaderMap,
+    rejection: DeploymentAuthRejection,
+) -> &'static str {
+    let policy = match rejection {
+        DeploymentAuthRejection::UserDisabled => UserAuthPolicyError::UserDisabled,
+        DeploymentAuthRejection::InvalidUser => UserAuthPolicyError::InvalidUserInfo,
+        DeploymentAuthRejection::InsufficientPrivilege => {
+            UserAuthPolicyError::InsufficientPrivilege
+        }
+        _ => return invalid_access_token(headers),
+    };
+    user_auth_message(
+        policy,
+        headers
+            .get(header::ACCEPT_LANGUAGE)
+            .and_then(|value| value.to_str().ok()),
+    )
+}
+
+fn deployment_auth_rejection(headers: &HeaderMap, rejection: DeploymentAuthRejection) -> Response {
+    if matches!(rejection, DeploymentAuthRejection::ConsoleNotFound) {
+        let mut response =
+            (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+        return response;
+    }
+    let (status, code, message) = match rejection {
+        DeploymentAuthRejection::ConsoleNotFound => {
+            unreachable!("console-not-found is returned before legacy auth mapping")
+        }
+        DeploymentAuthRejection::Unauthorized { .. } => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_UNAUTHORIZED",
+            invalid_access_token(headers),
+        ),
+        DeploymentAuthRejection::TokenExpired => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_TOKEN_EXPIRED",
+            invalid_access_token(headers),
+        ),
+        DeploymentAuthRejection::SessionRevoked => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_SESSION_REVOKED",
+            invalid_access_token(headers),
+        ),
+        DeploymentAuthRejection::UserDisabled => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_USER_DISABLED",
+            deployment_policy_message(headers, rejection),
+        ),
+        DeploymentAuthRejection::InvalidUser => (
+            StatusCode::UNAUTHORIZED,
+            "AUTH_USER_INVALID",
+            deployment_policy_message(headers, rejection),
+        ),
+        DeploymentAuthRejection::InsufficientPrivilege => (
+            StatusCode::FORBIDDEN,
+            "AUTH_INSUFFICIENT_PRIVILEGE",
+            deployment_policy_message(headers, rejection),
+        ),
+        DeploymentAuthRejection::Internal => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AUTH_INTERNAL_ERROR",
+            "Database error, please contact the administrator",
+        ),
+    };
+    let mut response = (
+        status,
+        Json(json!({"success": false, "code": code, "message": message})),
+    )
+        .into_response();
+    if status.is_success() {
+        response.headers_mut().insert(
+            header::HeaderName::from_static("auth-version"),
+            axum::http::HeaderValue::from_static(AUTH_VERSION),
+        );
+    }
+    response
 }
 
 async fn run(

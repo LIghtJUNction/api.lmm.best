@@ -41,12 +41,27 @@ pub struct BillingSubscriptionsState {
     pg: PgPool,
     valkey: Option<redis::Client>,
     auth: Arc<dyn DashboardAuth>,
+    console_access_gate: bool,
 }
 
 impl BillingSubscriptionsState {
     #[must_use]
     pub fn new(pg: PgPool, valkey: Option<redis::Client>, auth: Arc<dyn DashboardAuth>) -> Self {
-        Self { pg, valkey, auth }
+        Self {
+            pg,
+            valkey,
+            auth,
+            console_access_gate: false,
+        }
+    }
+
+    /// Enables the API-wide ConsoleAccessGate used by the normal listener.
+    /// Module-level contract tests leave this disabled so they can continue
+    /// to exercise the route's direct UserAuth envelope in isolation.
+    #[must_use]
+    pub fn with_console_access_gate(mut self) -> Self {
+        self.console_access_gate = true;
+        self
     }
 }
 
@@ -387,6 +402,11 @@ async fn subscription_auth_boundary(
     if !subscription_method_allowed(request.uri().path(), request.method()) {
         return next.run(request).await;
     }
+    if state.console_access_gate
+        && let Err(response) = console_access(&state, request.headers()).await
+    {
+        return response;
+    }
     let is_admin = request.uri().path().starts_with("/api/subscription/admin/");
     let result = if is_admin {
         admin(&state, request.headers()).await.map(|_| ())
@@ -397,6 +417,42 @@ async fn subscription_auth_boundary(
         return response;
     }
     next.run(request).await
+}
+
+/// Mirrors the API-wide Go ConsoleAccessGate for the normal listener.  The
+/// detailed UserAuth/AdminAuth response remains owned by `identity`/`admin`
+/// after this discovery check has admitted the request.
+async fn console_access(
+    state: &BillingSubscriptionsState,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            let mut fields = value.split_whitespace();
+            let first = fields.next()?;
+            let second = fields.next();
+            if fields.next().is_some() {
+                return None;
+            }
+            match second {
+                Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
+                    Some(token.to_owned())
+                }
+                None if !first.is_empty() => Some(first.to_owned()),
+                _ => None,
+            }
+        })
+        .ok_or_else(console_not_found)?;
+    let user = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+        .map_err(|_| console_not_found())?;
+    user.developer_access_granted
+        .then_some(())
+        .ok_or_else(console_not_found)
 }
 
 fn subscription_method_allowed(path: &str, method: &axum::http::Method) -> bool {
@@ -479,6 +535,10 @@ fn auth_failure(status: StatusCode, code: &'static str, message: &'static str) -
         Json(json!({"success": false, "code": code, "message": message})),
     )
         .into_response()
+}
+
+fn console_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response()
 }
 
 async fn identity(

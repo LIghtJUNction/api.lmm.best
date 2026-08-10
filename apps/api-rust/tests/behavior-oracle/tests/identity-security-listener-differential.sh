@@ -26,6 +26,9 @@ go_port=${LMM_IDENTITY_SECURITY_GO_PORT:-13019}
 rust_port=${LMM_IDENTITY_SECURITY_RUST_PORT:-33049}
 go_valkey_port=${LMM_IDENTITY_SECURITY_GO_VALKEY_PORT:-16419}
 rust_valkey_port=${LMM_IDENTITY_SECURITY_RUST_VALKEY_PORT:-56419}
+rust_database=lmm_test_identity_security_rust
+rust_role=lmm_test_identity_security_runtime
+rust_schema=lmm_test_identity_security_v1
 runtime=$(mktemp -d /tmp/lmm-identity-security.XXXXXX)
 go_valkey_pid=''
 rust_valkey_pid=''
@@ -124,16 +127,30 @@ start_valkey rust "$rust_valkey_port" "$rust_valkey_password" rust_valkey_pid
 initdb --no-locale --encoding=UTF8 --auth=trust -D "$runtime/pg" >/dev/null
 pg_ctl -D "$runtime/pg" -l "$runtime/postgres.log" \
   -o "-h 127.0.0.1 -p $pg_port -k $runtime" -w start >/dev/null
-createdb -h 127.0.0.1 -p "$pg_port" lmm_identity_security_rust
+createdb -h 127.0.0.1 -p "$pg_port" "$rust_database"
 
 # The Rust candidate is an explicitly isolated test instance.  Its schema and
 # role must remain unique to this runner; production databases are never named
 # here and no environment defaults are accepted for DATABASE_URL/VALKEY_URL.
-psql -h 127.0.0.1 -p "$pg_port" -d lmm_identity_security_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE ROLE lmm_identity_security_runtime LOGIN;
+psql -h 127.0.0.1 -p "$pg_port" -d "$rust_database" -v ON_ERROR_STOP=1 \
+  -v rust_role="$rust_role" -v rust_schema="$rust_schema" <<'SQL' >/dev/null
+CREATE ROLE :"rust_role" LOGIN;
+CREATE SCHEMA :"rust_schema" AUTHORIZATION :"rust_role";
+SET search_path TO :"rust_schema";
 CREATE TABLE lmm_schema_contract (singleton BOOLEAN PRIMARY KEY, min_reader_version BIGINT NOT NULL, max_reader_version BIGINT NOT NULL);
 INSERT INTO lmm_schema_contract VALUES (TRUE, 1, 1);
-CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT NOT NULL, password TEXT NOT NULL, display_name TEXT, role BIGINT NOT NULL, status BIGINT NOT NULL, email TEXT, "group" TEXT DEFAULT 'default', setting TEXT DEFAULT '{}', auth_version BIGINT NOT NULL DEFAULT 1, deleted_at TIMESTAMPTZ);
+CREATE TABLE users (
+  id BIGINT PRIMARY KEY, username TEXT NOT NULL, password TEXT NOT NULL,
+  display_name TEXT, role BIGINT NOT NULL, status BIGINT NOT NULL, email TEXT,
+  github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT,
+  telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0,
+  used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0,
+  "group" TEXT DEFAULT 'default', setting TEXT DEFAULT '{}',
+  aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0,
+  aff_history BIGINT DEFAULT 0, inviter_id BIGINT, linux_do_id TEXT,
+  stripe_customer TEXT, console_activated_at BIGINT NOT NULL DEFAULT 0,
+  auth_version BIGINT NOT NULL DEFAULT 1, deleted_at TIMESTAMPTZ
+);
 CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, user_id BIGINT NOT NULL, version BIGINT NOT NULL, user_auth_version BIGINT NOT NULL, status TEXT NOT NULL, refresh_hash CHAR(64) NOT NULL, previous_refresh_hash TEXT, previous_valid_until BIGINT NOT NULL DEFAULT 0, login_method TEXT NOT NULL, ip TEXT, user_agent TEXT, created_at BIGINT NOT NULL, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason TEXT);
 CREATE TABLE passkey_credentials (user_id BIGINT NOT NULL, credential_id BYTEA, deleted_at TIMESTAMPTZ, last_used_at TIMESTAMPTZ, backup_eligible BOOLEAN, backup_state BOOLEAN);
 CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT);
@@ -144,9 +161,47 @@ CREATE TABLE casbin_rule (id BIGINT PRIMARY KEY, ptype TEXT, v0 TEXT, v1 TEXT, v
 CREATE TABLE auth_flows (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, token_hash CHAR(64) NOT NULL UNIQUE, purpose TEXT NOT NULL, provider TEXT, intent TEXT, user_id BIGINT, session_id TEXT, payload TEXT, created_at TIMESTAMPTZ, expires_at TIMESTAMPTZ NOT NULL, consumed_at TIMESTAMPTZ);
 CREATE TABLE two_fa_backup_codes (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id BIGINT NOT NULL, code_hash TEXT NOT NULL, is_used BOOLEAN DEFAULT FALSE, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
 CREATE TABLE tokens (id BIGINT PRIMARY KEY, user_id BIGINT NOT NULL, key VARCHAR(128) UNIQUE, status INTEGER DEFAULT 1, name TEXT DEFAULT '', created_time BIGINT DEFAULT 0, accessed_time BIGINT DEFAULT 0, expired_time BIGINT DEFAULT -1, remain_quota BIGINT DEFAULT 0, unlimited_quota BOOLEAN DEFAULT FALSE, model_limits_enabled BOOLEAN DEFAULT FALSE, model_limits TEXT, allow_ips TEXT DEFAULT '', used_quota BIGINT DEFAULT 0, "group" TEXT DEFAULT '', cross_group_retry BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMPTZ);
-GRANT USAGE ON SCHEMA public TO lmm_identity_security_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lmm_identity_security_runtime;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO lmm_identity_security_runtime;
+CREATE TABLE open_source_bounty_projects (
+  id BIGINT, owner_user_id BIGINT, repository_url TEXT, title TEXT,
+  description TEXT, rules TEXT, reward_quota BIGINT, net_reward_quota BIGINT,
+  reward_slots BIGINT, escrow_quota BIGINT, platform_fee_rate_bps BIGINT,
+  platform_fee_quota BIGINT, status TEXT, created_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ, published_at TIMESTAMPTZ, closed_at TIMESTAMPTZ
+);
+CREATE TABLE open_source_bounty_challenges (
+  id BIGINT, project_id BIGINT, participant_user_id BIGINT,
+  github_handle TEXT, status TEXT, issue_url TEXT, pull_request_url TEXT,
+  submission_note TEXT, review_note TEXT, reward_quota BIGINT, tip_quota BIGINT,
+  owner_rating_score BIGINT, owner_rating_comment TEXT, owner_rated_at TIMESTAMPTZ,
+  contributor_rating_score BIGINT, contributor_rating_comment TEXT,
+  contributor_rated_at TIMESTAMPTZ, owner_rating_overturned BOOLEAN,
+  accepted_at TIMESTAMPTZ, submitted_at TIMESTAMPTZ, reviewed_at TIMESTAMPTZ,
+  rejected_at TIMESTAMPTZ, paid_at TIMESTAMPTZ, created_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ
+);
+CREATE TABLE open_source_bounty_ledgers (
+  id BIGINT, project_id BIGINT, challenge_id BIGINT, user_id BIGINT,
+  counterparty_user_id BIGINT, kind TEXT, quota BIGINT, note TEXT,
+  recipient_read_at TIMESTAMPTZ, thanked_at TIMESTAMPTZ, created_at TIMESTAMPTZ
+);
+CREATE TABLE open_source_bounty_disputes (
+  id BIGINT, challenge_id BIGINT, project_id BIGINT, opened_by_user_id BIGINT,
+  against_user_id BIGINT, reason TEXT, statement TEXT,
+  project_title_snapshot TEXT, repository_url_snapshot TEXT,
+  project_rules_snapshot TEXT, project_escrow_quota_snapshot BIGINT,
+  challenge_status_snapshot TEXT, issue_url_snapshot TEXT,
+  pull_request_url_snapshot TEXT, submission_note_snapshot TEXT,
+  review_note_snapshot TEXT, reward_quota_snapshot BIGINT,
+  tip_quota_snapshot BIGINT, owner_rating_score_snapshot BIGINT,
+  owner_rating_comment_snapshot TEXT, contributor_rating_score_snapshot BIGINT,
+  contributor_rating_comment_snapshot TEXT, status TEXT, resolution TEXT,
+  resolved_by_user_id BIGINT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ
+);
+GRANT USAGE ON SCHEMA public TO :"rust_role";
+GRANT USAGE ON SCHEMA :"rust_schema" TO :"rust_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA :"rust_schema" TO :"rust_role";
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA :"rust_schema" TO :"rust_role";
 SQL
 
 cargo build --offline --manifest-path "$repo_root/apps/api-rust/Cargo.toml" -p lmm-api-rs --locked
@@ -161,19 +216,21 @@ mkdir -p "$runtime/go-source/web/dist"
 
 dead_proxy='http://127.0.0.1:9'
 local_only='127.0.0.1,localhost'
+# These identity probes are all anonymous/auth-fail boundaries and do not
+# require Go's cache client. Keep the disposable Valkey child for the Rust
+# listener, but leave REDIS_CONN_STRING unset so Go cannot turn a cache
+# transport hiccup into a readiness failure before the HTTP matrix.
 env SQL_DSN=local SQLITE_PATH="$runtime/legacy.db?_busy_timeout=30000" PORT="$go_port" \
-  REDIS_CONN_STRING="redis://:$go_valkey_password@127.0.0.1:$go_valkey_port/0" \
   SESSION_SECRET="$session_secret" GIN_MODE=release \
-  HTTP_PROXY="$dead_proxy" HTTPS_PROXY="$dead_proxy" ALL_PROXY="$dead_proxy" \
-  http_proxy="$dead_proxy" https_proxy="$dead_proxy" all_proxy="$dead_proxy" \
-  NO_PROXY="$local_only" no_proxy="$local_only" \
   "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
 go_pid=$!
 
-env DATABASE_URL="postgresql://lmm_identity_security_runtime@127.0.0.1:$pg_port/lmm_identity_security_rust" \
-  VALKEY_URL="redis://:$rust_valkey_password@127.0.0.1:$rust_valkey_port/0" \
-  LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=blue \
-  LMM_SCHEMA_CONTRACT=1 SESSION_SECRET="$session_secret" \
+# The current config accepts the serialized test slot `single`; the old
+# `blue` value makes the Rust listener exit before any route is exercised.
+env DATABASE_URL="postgresql://$rust_role@127.0.0.1:$pg_port/$rust_database?options=-csearch_path%3D$rust_schema" \
+  VALKEY_URL="redis://:$rust_valkey_password@127.0.0.1:$rust_valkey_port" \
+  LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=single \
+  LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port" LMM_SCHEMA_CONTRACT=1 SESSION_SECRET="$session_secret" \
   HTTP_PROXY="$dead_proxy" HTTPS_PROXY="$dead_proxy" ALL_PROXY="$dead_proxy" \
   http_proxy="$dead_proxy" https_proxy="$dead_proxy" all_proxy="$dead_proxy" \
   NO_PROXY="$local_only" no_proxy="$local_only" \
@@ -278,8 +335,7 @@ assert_header_absent() {
 assert_common_failure_headers() {
   local prefix=$1 implementation=$2
   case "$implementation" in
-    go) assert_header_equals "$prefix" content-type 'application/json; charset=utf-8' ;;
-    rust) assert_header_equals "$prefix" content-type 'application/json' ;;
+    go|rust) assert_header_equals "$prefix" content-type 'application/json; charset=utf-8' ;;
     *) fail_assertion "unknown implementation: $implementation" "$prefix" ;;
   esac
   assert_header_absent "$prefix" auth-version
@@ -376,7 +432,7 @@ done
 anonymous_routes=(
   'GET|/api/reset_password?email=not-an-email|__NO_BODY__|200|{"success":false,"message":"无效的参数"}|plain'
   'GET|/api/verification?email=not-an-email|__NO_BODY__|200|{"success":false,"message":"无效的参数"}|plain'
-  'POST|/api/user/login/2fa|{}|200|{"success":false,"message":"会话已过期，请重新登录"}|no-store'
+  'POST|/api/user/login/2fa|{}|200|{"success":false,"message":"参数错误"}|no-store'
   'POST|/api/user/passkey/login/begin|{}|200|{"success":false,"message":"管理员未启用 Passkey 登录"}|no-store'
   'POST|/api/user/passkey/login/finish|{}|200|{"success":false,"message":"管理员未启用 Passkey 登录"}|no-store'
   'POST|/api/user/register|{}|200|{"success":false,"message":"无效的参数"}|plain'
@@ -392,8 +448,20 @@ for route in "${anonymous_routes[@]}"; do
   assert_common_failure_headers "go-$label" go
 
   capture_response "rust-$label" "$method" "http://127.0.0.1:$rust_port" "$path" "$body" __ABSENT__
-  assert_status "rust-$label" 503
-  assert_json_exact "rust-$label" "$unavailable_json"
+  # Verify2FALogin binds the required `code` field in Go before touching its
+  # unavailable provider.  The Rust candidate mirrors that observable
+  # malformed-body boundary with the same HTTP-200 parameter-error envelope;
+  # only well-shaped requests continue to the explicit 503 capability gate.
+  if [[ $path == /api/user/login/2fa ||
+    $path == /api/user/passkey/login/begin ||
+    $path == /api/user/passkey/login/finish ||
+    $path == /api/user/reset ]]; then
+    assert_status "rust-$label" "$go_status"
+    assert_json_exact "rust-$label" "$go_json"
+  else
+    assert_status "rust-$label" 503
+    assert_json_exact "rust-$label" "$unavailable_json"
+  fi
   assert_common_failure_headers "rust-$label" rust
 
   if [[ $cache_policy == no-store ]]; then

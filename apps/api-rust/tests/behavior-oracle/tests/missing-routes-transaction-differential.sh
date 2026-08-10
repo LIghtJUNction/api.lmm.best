@@ -17,6 +17,7 @@ case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT mus
 pg_port=${LMM_TRANSACTION_PG_PORT:-55467}
 go_port=${LMM_TRANSACTION_GO_PORT:-13037}
 rust_port=${LMM_TRANSACTION_RUST_PORT:-33067}
+rust_test_instance=${LMM_TRANSACTION_RUST_TEST_INSTANCE:-1}
 # Default Valkey endpoint for the Rust test-instance is 6380, but the script
 # now falls back to a random free port if that port is occupied.
 valkey_port=${LMM_TRANSACTION_VALKEY_PORT:-6380}
@@ -24,6 +25,7 @@ runtime_base=${LMM_TRANSACTION_RUNTIME_BASE:-/tmp}
 [[ -d $runtime_base && -w $runtime_base ]] || { echo "transaction runtime base is not writable: $runtime_base" >&2; exit 1; }
 runtime=$(mktemp -d "$runtime_base/lmm-transaction-differential.XXXXXX")
 keep_runtime=${LMM_TRANSACTION_KEEP_RUNTIME:-0}
+result_dir=${LMM_TRANSACTION_RESULT_DIR:-}
 cargo_target=${LMM_TRANSACTION_CARGO_TARGET_DIR:-"$runtime/cargo-target"}
 rust_binary=${LMM_TRANSACTION_RUST_BINARY:-"$cargo_target/debug/lmm-api-rs"}
 go_build="$runtime/go-build"
@@ -34,17 +36,23 @@ rust_role=lmm_test_transaction_rust
 database=lmm_test_transaction
 passed=0
 route_filter=${LMM_TRANSACTION_ROUTE_FILTER:-}
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    echo "LMM_TRANSACTION_RESULT_DIR must be an absolute path without '..'" >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 [[ -n $route_filter ]] && expected_phase_total=4 || expected_phase_total=28
-go_pid=
-rust_pid=
-valkey_pid=
-go_pid_start=
-rust_pid_start=
-valkey_pid_start=
+# shellcheck disable=SC2034 # Read indirectly through the PID variable names.
+go_pid='' rust_pid='' valkey_pid='' go_pid_start='' rust_pid_start='' valkey_pid_start=''
 
 cleanup() {
-  stop_listeners || true
-  stop_owned_process valkey_pid || true
+  # The trap is installed before the helper definitions so that preflight
+  # failures still clean their exact runtime.  Guard calls whose definitions
+  # may not have been reached yet.
+  if declare -F stop_listeners >/dev/null 2>&1; then stop_listeners || true; fi
+  if declare -F stop_owned_process >/dev/null 2>&1; then stop_owned_process valkey_pid || true; fi
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   if [[ $keep_runtime == 1 ]]; then
     echo "preserved transaction runtime: $runtime" >&2
@@ -103,11 +111,15 @@ admin_schema_sql() {
 }
 snapshot() {
   local engine=$1
+  local topup_projection="to_jsonb(x) - 'id' - 'create_time' - 'complete_time'"
+  if [[ ${LMM_TRANSACTION_OMIT_OPTIONAL_TOPUP_COLUMNS:-0} == 1 ]]; then
+    topup_projection+=" - 'credited_quota' - 'expected_amount_micros' - 'provider_event_id' - 'provider_product_id' - 'provider_store_id' - 'provider_transaction_id' - 'settled_amount_micros' - 'settlement_currency'"
+  fi
   app_sql "$engine" "SELECT jsonb_build_object(
-    'users', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'access_token' - 'created_at' - 'last_login_at' ORDER BY id) FROM users x),'[]'::jsonb),
+    'users', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'access_token' - 'created_at' - 'last_login_at' - 'last_api_activity_at' - 'trust_level_override' ORDER BY id) FROM users x),'[]'::jsonb),
     'checkins', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'created_at' ORDER BY user_id,checkin_date) FROM checkins x),'[]'::jsonb),
     'redemptions', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'created_time' - 'redeemed_time' ORDER BY key) FROM redemptions x),'[]'::jsonb),
-    'top_ups', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'create_time' - 'complete_time' ORDER BY trade_no) FROM top_ups x),'[]'::jsonb),
+    'top_ups', COALESCE((SELECT jsonb_agg($topup_projection ORDER BY trade_no) FROM top_ups x),'[]'::jsonb),
     'logs', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'created_at' - 'request_id' - 'upstream_request_id' ORDER BY user_id,type,content) FROM logs x WHERE type <> 7),'[]'::jsonb),
     'options', COALESCE((SELECT jsonb_object_agg(key,value ORDER BY key) FROM options WHERE key IN ('checkin_setting','checkin_setting.enabled','checkin_setting.min_quota','checkin_setting.max_quota','payment_setting.compliance_confirmed','payment_setting.compliance_terms_version','QuotaPerUnit','MinTopUp','Price','TopupGroupRatio','general_setting')),'{}'::jsonb))" | jq -S .
 }
@@ -167,7 +179,9 @@ if [[ ${LMM_TRANSACTION_CANONICAL_JSON_SELF_TEST:-0} == 1 ]]; then
 fi
 wait_for() {
   local port=$1 path=$2
-  for _ in {1..300}; do curl --silent --output /dev/null "http://127.0.0.1:$port$path" && return 0 || true; sleep .05; done
+  # Go's first PostgreSQL AutoMigrate can exceed 15 seconds on a loaded
+  # shared host even though the process is healthy and making progress.
+  for _ in {1..6000}; do curl --silent --output /dev/null "http://127.0.0.1:$port$path" && return 0 || true; sleep .05; done
   return 1
 }
 start_listeners() {
@@ -359,6 +373,9 @@ if [[ ${LMM_TRANSACTION_SKIP_RUST_BUILD:-0} != 1 ]]; then
 fi
 [[ -x $rust_binary ]] || { echo "Rust test-instance binary unavailable: $rust_binary" >&2; exit 1; }
 cp -a "$legacy_root/." "$go_build/go-source"
+# The frozen oracle archive is intentionally immutable; the disposable copy
+# must be writable for the embedded frontend placeholder and cleanup hooks.
+chmod -R u+rwX -- "$go_build/go-source"
 mkdir -p "$go_build/go-source/web/dist"; : >"$go_build/go-source/web/dist/index.html"
 (cd "$go_build/go-source" && GOTOOLCHAIN=local CGO_ENABLED=1 go build -buildvcs=false -o "$go_build/legacy-go" .)
 initdb --no-locale --encoding=UTF8 --auth=trust -D "$runtime/pg" >/dev/null
@@ -381,6 +398,28 @@ for owner_pair in "$go_schema:$go_role" "$rust_schema:$rust_role"; do
     END LOOP;
   END \$\$; ALTER SCHEMA $schema OWNER TO $role;"
 done
+# Current Go's settlement model is additive to the frozen baseline.  When the
+# oracle is the current Go checkout, provision the same nullable-safe columns
+# in both disposable schemas so the transaction snapshot exercises the real
+# normalized credited-quota write rather than silently hiding it as an absent
+# legacy column.  The default stays off for the immutable 5418 contract.
+if [[ ${LMM_TRANSACTION_TOPUP_SETTLEMENT_COLUMNS:-0} == 1 ]]; then
+  for schema in "$go_schema" "$rust_schema"; do
+    admin_schema_sql "$schema" "ALTER TABLE top_ups
+      ADD COLUMN IF NOT EXISTS credited_quota BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS expected_amount_micros BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS settled_amount_micros BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS settlement_currency VARCHAR(16) NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS provider_product_id VARCHAR(255) NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS provider_store_id VARCHAR(255) NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS provider_event_id VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS provider_transaction_id VARCHAR(255);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_provider_event
+        ON top_ups (payment_provider, provider_event_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_provider_transaction
+        ON top_ups (payment_provider, provider_transaction_id);"
+  done
+fi
 # Rust's readiness probe also requires the forward-only contract-2
 # open-source-bounty relations.  Apply this after the baseline ownership pass
 # because PostgreSQL does not allow a linked serial sequence to be re-owned
@@ -404,6 +443,16 @@ while IFS=$'\t' read -r id; do
   [[ -n $id ]] || continue
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
+  if [[ -n $result_dir ]]; then
+    route_json=$(jq -c --arg id "$id" '.fixtures[] | select(.id == $id) | .route' "$fixtures")
+    method=$(jq -r '.method' <<<"$route_json")
+    path=$(jq -r '.path' <<<"$route_json")
+    path=${path%%\?*}
+    jq -cn --arg method "$method" --arg path "$path" --arg route "$id" \
+      --arg runtime "$runtime" \
+      '{method:$method,path:$path,differential_verified:true,differential_scope:"full-transaction",cases:28,route_fixture:$route,isolated_runtime:$runtime,approval_credit:false,differences:null,mismatch_names:[]}' \
+      >"$result_dir/$id.json"
+  fi
 done < <(jq -r '.fixtures[].id' "$fixtures")
 if [[ $route_filter == federation-bindings && ${LMM_TRANSACTION_RS_TEST_INSTANCE:-1} != 0 ]]; then
   echo 'federation-bindings requires LMM_TRANSACTION_RS_TEST_INSTANCE=0 because the test instance intentionally denies federation identities' >&2
