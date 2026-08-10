@@ -178,7 +178,7 @@ export function PersonalAccessIPCard({
         </div>
         <p className='text-muted-foreground text-xs leading-5'>
           {t(
-            'This setting only affects the production mainland-China ingress rule; it does not expose your IP to other users.'
+            'This setting only affects the production restricted ingress rule; it does not expose your IP to other users.'
           )}
         </p>
       </div>
@@ -189,7 +189,7 @@ export function PersonalAccessIPCard({
     <TitledCard
       title={t('Personal IP allowlist')}
       description={t(
-        'One address can bypass the production mainland-China gate'
+        'One address can bypass the production restricted ingress rule'
       )}
       icon={<Globe2 className='h-4 w-4' />}
       iconTone={eligible ? 'success' : 'neutral'}

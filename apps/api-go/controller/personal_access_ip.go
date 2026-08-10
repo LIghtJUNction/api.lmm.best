@@ -162,7 +162,7 @@ func CheckPersonalAccessIPPolicy(c *gin.Context) {
 		return
 	}
 	if !allowed {
-		personalAccessIPError(c, http.StatusForbidden, "CN_DIRECT_ACCESS_BLOCKED", "direct mainland-China access is not allowed for this account")
+		personalAccessIPError(c, http.StatusForbidden, "CN_DIRECT_ACCESS_BLOCKED", "direct access is not allowed for this account")
 		return
 	}
 	c.Status(http.StatusNoContent)
