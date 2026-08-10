@@ -6010,6 +6010,14 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Choose a common question or ask anything about using LMM.": "选择常见问题，或直接询问任何 LMM 使用问题。",
+    "The AI assistant could not answer right now. Try again or contact support.": "AI 助手暂时无法回答。请重试或联系人工支持。",
+    "Assistant is thinking...": "助手正在思考…",
+    "Clear conversation": "清空对话",
+    "Ask about plans, setup, keys, or costs...": "询问套餐、配置、密钥或成本…",
+    "Weekly included credit remaining: {{amount}}": "本周赠送额度剩余：{{amount}}",
+    "Weekly included AI credit applies first.": "将优先使用每周赠送的 AI 额度。",
+    "AI answers may be inaccurate. Never send passwords or API keys.": "AI 回答可能不准确。请勿发送密码或 API 密钥。"
   }
 }

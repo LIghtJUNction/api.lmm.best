@@ -95,6 +95,7 @@ type RelayInfo struct {
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
 	IsPlayground           bool
+	IsAssistant            bool
 	UsePrice               bool
 	RelayMode              int
 	OriginModelName        string
@@ -254,6 +255,7 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "RelayMode: %d, ", info.RelayMode)
 	fmt.Fprintf(b, "IsStream: %t, ", info.IsStream)
 	fmt.Fprintf(b, "IsPlayground: %t, ", info.IsPlayground)
+	fmt.Fprintf(b, "IsAssistant: %t, ", info.IsAssistant)
 	fmt.Fprintf(b, "RequestURLPath: %q, ", info.RequestURLPath)
 	fmt.Fprintf(b, "OriginModelName: %q, ", info.OriginModelName)
 	fmt.Fprintf(b, "EstimatePromptTokens: %d, ", info.estimatePromptTokens)
@@ -508,6 +510,9 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.IsPlayground = true
 		info.RequestURLPath = strings.TrimPrefix(info.RequestURLPath, "/pg")
 		info.RequestURLPath = "/v1" + info.RequestURLPath
+	}
+	if c.GetBool("assistant_request") {
+		info.IsAssistant = true
 	}
 
 	userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)

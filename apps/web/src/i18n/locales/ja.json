@@ -6010,6 +6010,14 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Choose a common question or ask anything about using LMM.": "よくある質問を選ぶか、LMMの使い方について自由に質問してください。",
+    "The AI assistant could not answer right now. Try again or contact support.": "AIアシスタントは現在回答できません。再試行するか、サポートにお問い合わせください。",
+    "Assistant is thinking...": "アシスタントが考えています…",
+    "Clear conversation": "会話をクリア",
+    "Ask about plans, setup, keys, or costs...": "プラン、設定、APIキー、料金について質問…",
+    "Weekly included credit remaining: {{amount}}": "今週の無料クレジット残高：{{amount}}",
+    "Weekly included AI credit applies first.": "毎週付与されるAIクレジットが先に使用されます。",
+    "AI answers may be inaccurate. Never send passwords or API keys.": "AIの回答は不正確な場合があります。パスワードやAPIキーを送信しないでください。"
   }
 }

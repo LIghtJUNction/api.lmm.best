@@ -66,6 +66,14 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	assistantRouter := router.Group("/api/assistant")
+	assistantRouter.Use(middleware.RouteTag("relay"))
+	assistantRouter.Use(middleware.SystemPerformanceCheck())
+	assistantRouter.Use(middleware.UserAuth())
+	{
+		assistantRouter.GET("/status", controller.GetAssistantStatus)
+		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
+	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())

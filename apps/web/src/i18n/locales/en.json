@@ -6010,6 +6010,14 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Choose a common question or ask anything about using LMM.": "Choose a common question or ask anything about using LMM.",
+    "The AI assistant could not answer right now. Try again or contact support.": "The AI assistant could not answer right now. Try again or contact support.",
+    "Assistant is thinking...": "Assistant is thinking...",
+    "Clear conversation": "Clear conversation",
+    "Ask about plans, setup, keys, or costs...": "Ask about plans, setup, keys, or costs...",
+    "Weekly included credit remaining: {{amount}}": "Weekly included credit remaining: {{amount}}",
+    "Weekly included AI credit applies first.": "Weekly included AI credit applies first.",
+    "AI answers may be inaccurate. Never send passwords or API keys.": "AI answers may be inaccurate. Never send passwords or API keys."
   }
 }
