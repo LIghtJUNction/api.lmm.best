@@ -177,11 +177,25 @@ start_listeners() {
     PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false GIN_MODE=release \
     "$go_build/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"
   if ! wait_for "$go_port" /api/status; then sed -n '1,220p' "$runtime/go.log" >&2; return 1; fi
-  LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=single LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
-    DATABASE_URL="$rust_dsn" VALKEY_URL="redis://127.0.0.1:$valkey_port/6" LMM_SCHEMA_CONTRACT=1 \
-    SESSION_SECRET='TransactionOracle-2026!SyntheticOnly' CRYPTO_SECRET='TransactionOracle-Crypto-2026!SyntheticOnly' \
-    PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none VERSION=v0.0.0 \
-    "$rust_binary" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!"
+  local rust_instance=${LMM_TRANSACTION_RS_TEST_INSTANCE:-1}
+  local rust_slot=green
+  [[ $rust_instance == 1 ]] && rust_slot=single
+  local -a rust_env=(
+    "LMM_RS_SLOT=$rust_slot"
+    "LMM_RS_LISTEN_ADDR=127.0.0.1:$rust_port"
+    "DATABASE_URL=$rust_dsn"
+    "VALKEY_URL=redis://127.0.0.1:$valkey_port/6"
+    "LMM_SCHEMA_CONTRACT=1"
+    'SESSION_SECRET=TransactionOracle-2026!SyntheticOnly'
+    'CRYPTO_SECRET=TransactionOracle-Crypto-2026!SyntheticOnly'
+    'PASSWORD_LOGIN_ENABLED=true'
+    'GLOBAL_API_RATE_LIMIT_ENABLE=false'
+    'CRITICAL_RATE_LIMIT_ENABLE=false'
+    'TRUSTED_PROXIES=none'
+    'VERSION=v0.0.0'
+  )
+  [[ $rust_instance == 1 ]] && rust_env+=("LMM_RS_TEST_INSTANCE=1")
+  env "${rust_env[@]}" "$rust_binary" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!"
   if ! wait_for "$rust_port" /readyz; then sed -n '1,220p' "$runtime/rust.log" >&2; return 1; fi
 }
 login() {
@@ -234,6 +248,7 @@ seed() {
       checkin-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='false' WHERE key='checkin_setting.enabled'" ;;
       checkin-existing) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO checkins(id,user_id,checkin_date,quota_awarded,created_at) VALUES(1,101,to_char(CURRENT_DATE,'YYYY-MM-DD'),100,0)" ;;
       aff-code) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_code='ORACLE-AFF-101' WHERE id=101" ;;
+      topup-admin) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO top_ups(id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,status) VALUES(1,101,2,2,'ORACLE-TOPUP-ADMIN-101','manual','stripe',1730000000,'pending')" ;;
       aff-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_quota=499999 WHERE id=101" ;;
       amount-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='3' WHERE key='MinTopUp'" ;;
       redeem*) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO redemptions(id,key,status,quota,created_time,expired_time) VALUES(1,'ORACLE-REDEEM-101',1,300,0,0)" ;;
@@ -262,6 +277,7 @@ route_for() {
     self-groups) printf 'GET\t/api/user/self/groups\t__NONE__\tuser101\n' ;;
     user-models) printf 'GET\t/api/user/models\t__NONE__\tuser101\n' ;;
     aff-code) printf 'GET\t/api/user/aff\t__NONE__\tuser101\n' ;;
+    admin-topups) printf 'GET\t/api/user/topup?p=1&page_size=10\t__NONE__\troot\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -275,6 +291,7 @@ phase_seed() {
     checkin-status:failure) printf checkin-failure ;;
     topup-self:positive|topup-self:rollback|topup-self:replay) printf topup ;;
     aff-code:positive|aff-code:failure|aff-code:rollback|aff-code:replay) printf aff-code ;;
+    admin-topups:positive|admin-topups:rollback|admin-topups:replay) printf topup-admin ;;
     checkin-commit-rollback:failure) printf checkin-existing ;;
     affiliate-transfer:failure) printf aff-failure ;;
     amount-quote:failure) printf amount-failure ;;
@@ -292,6 +309,7 @@ run_phase() {
   start_listeners
   IFS=$'\t' read -r method path body actor < <(route_for "$id")
   [[ $phase != failure || $id != access-token-generation ]] || actor=anonymous
+  [[ $phase != failure || $id != admin-topups ]] || actor=anonymous
   prepare_actor "$actor"
   snapshot go >"$runtime/go.$id.$phase.before"; snapshot rust >"$runtime/rust.$id.$phase.before"
   pair "$id.$phase.first" "$method" "$path" "$body"
@@ -365,7 +383,7 @@ for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
 if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
-  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code ]]; then
+  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code && $route_filter != admin-topups ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -374,7 +392,7 @@ while IFS=$'\t' read -r id; do
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
 done < <(jq -r '.fixtures[].id' "$fixtures")
-if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code ]]; then
+if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code || $route_filter == admin-topups ]]; then
   for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
 fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi

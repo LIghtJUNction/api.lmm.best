@@ -39,7 +39,10 @@ use lmm_api_rs::{
         missing_identity_checkin_aff::{
             IdentityCheckinAffState, read_router as identity_checkin_read_router,
         },
-        missing_identity_topup::{IdentityTopupState, read_router as identity_topup_read_router},
+        missing_identity_topup::{
+            IdentityTopupState, admin_read_router as identity_topup_admin_read_router,
+            read_router as identity_topup_read_router,
+        },
         missing_relay_models_billing::{
             ModelLookupState, PgStaticModelLookup, model_lookup_router,
         },
@@ -251,6 +254,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &app_state,
             identity_topup_read_router(IdentityTopupState::new(pg.clone(), Arc::clone(&auth))),
         );
+        let identity_topup_admin = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_topup_admin_read_router(IdentityTopupState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+            )),
+        );
         let identity_checkin = http::api_global_rate_limited_surface(
             &app_state,
             identity_checkin_read_router(IdentityCheckinAffState::new(
@@ -336,6 +346,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(admin_catalog)
             .merge(identity_admin)
             .merge(identity_topup)
+            .merge(identity_topup_admin)
             .merge(identity_checkin)
             .merge(identity_sessions)
             .merge(identity_federation_bindings)

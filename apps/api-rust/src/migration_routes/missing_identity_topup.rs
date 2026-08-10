@@ -67,6 +67,15 @@ pub fn read_router(state: IdentityTopupState) -> Router {
     topup_read_routes().with_state(state)
 }
 
+/// Mounts only the administrator's read-only top-up history on a normal
+/// listener.  Redemption and manual completion remain isolated until their
+/// write-side transaction differential is complete.
+pub fn admin_read_router(state: IdentityTopupState) -> Router {
+    Router::new()
+        .route("/api/user/topup", get(all_topups))
+        .with_state(state)
+}
+
 fn topup_read_routes() -> Router<IdentityTopupState> {
     Router::new()
         .route("/api/user/topup/info", get(topup_info))
@@ -337,12 +346,7 @@ impl From<TopupRecord> for TopupSelfRecord {
 
 fn topup_record(row: &sqlx::postgres::PgRow) -> Result<TopupRecord, sqlx::Error> {
     let money_text: String = row.try_get("money")?;
-    let money = money_text
-        .parse::<f64>()
-        .ok()
-        .and_then(Number::from_f64)
-        .map(Value::Number)
-        .unwrap_or_else(|| Value::String(money_text));
+    let money = money_value(&money_text);
     Ok(TopupRecord {
         id: row.try_get("id")?,
         user_id: row.try_get("user_id")?,
@@ -355,6 +359,30 @@ fn topup_record(row: &sqlx::postgres::PgRow) -> Result<TopupRecord, sqlx::Error>
         complete_time: row.try_get("complete_time")?,
         status: row.try_get("status")?,
     })
+}
+
+/// Go's `encoding/json` emits integral `float64` values without a trailing
+/// `.0` (for example, `2`, not `2.0`).  PostgreSQL may return either spelling
+/// for a NUMERIC column, so normalize integral values before serializing the
+/// legacy response while retaining fractional amounts as JSON numbers.
+fn money_value(text: &str) -> Value {
+    if let Ok(integer) = text.parse::<i64>() {
+        return Value::Number(integer.into());
+    }
+    match text.parse::<f64>() {
+        Ok(value) if value.is_finite() && value.fract() == 0.0 => {
+            if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+                return Value::Number((value as i64).into());
+            }
+            Number::from_f64(value)
+                .map(Value::Number)
+                .unwrap_or_else(|| Value::String(text.to_owned()))
+        }
+        Ok(value) => Number::from_f64(value)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(text.to_owned())),
+        Err(_) => Value::String(text.to_owned()),
+    }
 }
 
 const TOPUP_COLUMNS: &str = r#"id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount,
@@ -1908,6 +1936,16 @@ mod tests {
         assert_eq!(value["money"], 20.0);
         assert_eq!(value["payment_method"], "stripe");
         assert!(value.get("payment_provider").is_none());
+    }
+
+    #[test]
+    fn money_value_matches_go_integral_float_wire_shape() {
+        assert_eq!(serde_json::to_string(&money_value("2.000")).unwrap(), "2");
+        assert_eq!(serde_json::to_string(&money_value("2.5")).unwrap(), "2.5");
+        assert_eq!(
+            serde_json::to_string(&money_value("not-a-number")).unwrap(),
+            "\"not-a-number\""
+        );
     }
 
     #[tokio::test]

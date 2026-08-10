@@ -69,6 +69,7 @@ DELETE	/api/user/:id	lmm_api_rs::migration_routes::identity_admin::router
 POST	/api/user/manage	lmm_api_rs::migration_routes::identity_admin::router
 GET	/api/user/self	lmm_api_rs::auth::http::self_user
 GET	/api/user/self/groups	lmm_api_rs::migration_routes::missing_identity_catalog::protected_read_router
+GET	/api/user/topup	lmm_api_rs::migration_routes::missing_identity_topup::admin_read_router
 GET	/api/user/topup/info	lmm_api_rs::migration_routes::missing_identity_topup::read_router
 GET	/api/user/topup/self	lmm_api_rs::migration_routes::missing_identity_topup::read_router
 DELETE	/api/user/self	lmm_api_rs::migration_routes::identity_profile::router
