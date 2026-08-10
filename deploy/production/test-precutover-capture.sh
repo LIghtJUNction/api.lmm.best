@@ -18,6 +18,7 @@ mkdir -p "$bin" "$workspace/staging" \
   "$fs/usr/lib/systemd/system" \
   "$fs/usr/share/doc/lmm-api-go" \
   "$fs/usr/share/licenses/lmm-api-go" \
+  "$fs/usr/share/lmm-api-go/edge-policy/nginx" \
   "$fs/usr/share/lmm-api-go/frontend-dist"
 printf 'format=1\ndeployment_id=direct-fixture\n' >"$workspace/.lmm-deploy-workspace"
 
@@ -56,6 +57,8 @@ case $1 in
       /usr/lib/ \
       /usr/lib/systemd/ \
       /usr/lib/systemd/system/ \
+      /usr/lib/systemd/system/geoip2-country-update.service \
+      /usr/lib/systemd/system/geoip2-country-update.timer \
       /usr/lib/systemd/system/lmm-api-go.service \
       /usr/share/ \
       /usr/share/doc/ \
@@ -67,6 +70,13 @@ case $1 in
       /usr/share/licenses/lmm-api-go/NOTICE \
       /usr/share/licenses/lmm-api-go/THIRD-PARTY-LICENSES.md \
       /usr/share/lmm-api-go/ \
+      /usr/share/lmm-api-go/edge-policy/ \
+      /usr/share/lmm-api-go/edge-policy/nginx/ \
+      /usr/share/lmm-api-go/edge-policy/nginx/http-map.conf \
+      /usr/share/lmm-api-go/edge-policy/nginx/lmm-api-locations.conf \
+      /usr/share/lmm-api-go/edge-policy/nginx/lmm-api-region-policy.conf \
+      /usr/share/lmm-api-go/edge-policy/nginx/mime.types \
+      /usr/share/lmm-api-go/edge-policy/nginx/new-api.conf \
       /usr/share/lmm-api-go/frontend-dist/ \
       /usr/share/lmm-api-go/frontend-dist/index.html
     ;;
@@ -78,9 +88,14 @@ chmod 0755 "$bin"/*
 printf 'SQL_DSN=postgres://secret.invalid/fixture\n' >"$fs/etc/lmm-api-go/lmm-api-go.env"
 printf '#!/bin/sh\nexit 0\n' >"$fs/usr/bin/lmm-api-go"
 printf '[Service]\nExecStart=/usr/bin/lmm-api-go serve\n' >"$fs/usr/lib/systemd/system/lmm-api-go.service"
+printf '[Service]\nExecStart=/usr/bin/geoip2-country-update\n' >"$fs/usr/lib/systemd/system/geoip2-country-update.service"
+printf '[Timer]\nOnCalendar=daily\n' >"$fs/usr/lib/systemd/system/geoip2-country-update.timer"
 printf '50dc6a7f9\n' >"$fs/usr/share/doc/lmm-api-go/REVISION"
 for license_file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
   printf 'fixture\n' >"$fs/usr/share/licenses/lmm-api-go/$license_file"
+done
+for edge_file in http-map.conf lmm-api-locations.conf lmm-api-region-policy.conf mime.types new-api.conf; do
+  printf 'fixture edge policy\n' >"$fs/usr/share/lmm-api-go/edge-policy/nginx/$edge_file"
 done
 printf 'old frontend\n' >"$fs/usr/share/lmm-api-go/frontend-dist/index.html"
 chmod 0600 "$fs/etc/lmm-api-go/lmm-api-go.env"
