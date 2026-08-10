@@ -535,9 +535,9 @@ func (runtime *productionRuntime) createBackup(ctx context.Context, options prod
 		}
 		databasePath := filepath.Join(stage, "database.archive")
 		databaseTemporary := databasePath + ".new"
-		childEnvironment := productionChildEnvironment(environmentValues, map[string]string{"PGDATABASE": databaseURL})
+		childEnvironment := productionChildEnvironment(environmentValues, nil)
 		if _, err := runtime.runner.Run(ctx, productionCommand{
-			Name: "pg_dump", Args: []string{"--format=custom", "--file=" + databaseTemporary},
+			Name: "pg_dump", Args: []string{"--format=custom", "--file=" + databaseTemporary, databaseURL},
 			Env: childEnvironment, Timeout: 10 * time.Minute, Sensitive: true,
 		}); err != nil {
 			return fmt.Errorf("create PostgreSQL production backup: %w", err)
