@@ -6152,6 +6152,7 @@
     "Resolved": "已解決",
     "No resolved human-support requests.": "沒有已解決的人工支援請求。",
     "Unable to verify account access": "無法驗證帳戶存取權限",
-    "Retry before using account-specific assistant tools.": "請重試後再使用需要帳戶權限的助手工具。"
+    "Retry before using account-specific assistant tools.": "請重試後再使用需要帳戶權限的助手工具。",
+    "Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.": "L0 存取權限審核期間仍可查看儲值優惠。L1 審核通過後即可使用即時訂閱方案比較。"
   }
 }

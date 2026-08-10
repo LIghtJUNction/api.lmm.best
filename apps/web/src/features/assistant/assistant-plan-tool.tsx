@@ -69,7 +69,6 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   const topupQuery = useQuery({
     queryKey: ['topup-info'],
     queryFn: getTopupInfo,
-    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -89,29 +88,11 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
     [topupQuery.data?.data?.discount]
   )
 
-  if (!props.developerAccessGranted) {
-    return (
-      <Card size='sm' className='border-dashed'>
-        <CardHeader>
-          <CardTitle>{t('Live plan recommendations require L1')}</CardTitle>
-          <CardDescription>
-            {t(
-              'Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.'
-            )}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button variant='outline' render={<Link to='/getting-started' />}>
-            {t('View onboarding status')}
-            <ArrowRight data-icon='inline-end' aria-hidden='true' />
-          </Button>
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const loading = plansQuery.isLoading || topupQuery.isLoading
-  const noPlans = !loading && comparisons.length === 0
+  const loading =
+    topupQuery.isLoading ||
+    (props.developerAccessGranted && plansQuery.isLoading)
+  const noPlans =
+    props.developerAccessGranted && !loading && comparisons.length === 0
   let planContent: ReactNode = (
     <div className='grid gap-2'>
       {comparisons.slice(0, 3).map((comparison) => {
@@ -161,7 +142,15 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
       })}
     </div>
   )
-  if (loading) {
+  if (!props.developerAccessGranted) {
+    planContent = (
+      <div className='bg-muted/40 rounded-lg border p-3 text-xs leading-5'>
+        {t(
+          'Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.'
+        )}
+      </div>
+    )
+  } else if (loading) {
     planContent = (
       <p className='text-muted-foreground text-sm'>{t('Loading...')}</p>
     )
@@ -187,20 +176,22 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-4'>
-        <div className='grid gap-1.5'>
-          <Label htmlFor='assistant-expected-credit'>
-            {t('Expected monthly API credit (USD)')}
-          </Label>
-          <Input
-            id='assistant-expected-credit'
-            type='number'
-            inputMode='decimal'
-            min={0}
-            step={5}
-            value={expectedCredit}
-            onChange={(event) => setExpectedCredit(event.target.value)}
-          />
-        </div>
+        {props.developerAccessGranted ? (
+          <div className='grid gap-1.5'>
+            <Label htmlFor='assistant-expected-credit'>
+              {t('Expected monthly API credit (USD)')}
+            </Label>
+            <Input
+              id='assistant-expected-credit'
+              type='number'
+              inputMode='decimal'
+              min={0}
+              step={5}
+              value={expectedCredit}
+              onChange={(event) => setExpectedCredit(event.target.value)}
+            />
+          </div>
+        ) : null}
 
         {planContent}
 
@@ -231,7 +222,9 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
           )}
         </p>
         <Button variant='outline' render={<Link to='/wallet' />}>
-          {t('Review plans and exact checkout prices')}
+          {props.developerAccessGranted
+            ? t('Review plans and exact checkout prices')
+            : t('Add funds')}
           <ArrowRight data-icon='inline-end' aria-hidden='true' />
         </Button>
       </CardContent>

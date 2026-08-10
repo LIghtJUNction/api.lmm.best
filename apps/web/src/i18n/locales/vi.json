@@ -6152,6 +6152,7 @@
     "Resolved": "Đã giải quyết",
     "No resolved human-support requests.": "Không có yêu cầu hỗ trợ trực tiếp nào đã giải quyết.",
     "Unable to verify account access": "Không thể xác minh quyền truy cập tài khoản",
-    "Retry before using account-specific assistant tools.": "Hãy thử lại trước khi dùng các công cụ trợ lý dành riêng cho tài khoản."
+    "Retry before using account-specific assistant tools.": "Hãy thử lại trước khi dùng các công cụ trợ lý dành riêng cho tài khoản.",
+    "Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.": "Ưu đãi nạp tiền vẫn khả dụng trong khi quyền truy cập L0 đang được xét duyệt. Tính năng so sánh gói đăng ký trực tiếp sẽ mở sau khi được duyệt L1."
   }
 }
