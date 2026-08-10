@@ -3,6 +3,7 @@ GET	/api/about	lmm_api_rs::http::about
 GET	/api/livez	lmm_api_rs::http::livez
 GET	/api/group/	lmm_api_rs::migration_routes::missing_control_public::group_router
 GET	/api/status/test	lmm_api_rs::migration_routes::missing_control_tasks::status_test_router
+GET	/api/system-task/list	lmm_api_rs::migration_routes::control_admin::system_task_list_router
 GET	/api/data/	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/data/flow	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/data/flow/self	lmm_api_rs::migration_routes::observability::observability_read_router
