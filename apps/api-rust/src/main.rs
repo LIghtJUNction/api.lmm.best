@@ -38,6 +38,7 @@ use lmm_api_rs::{
         missing_identity_catalog::{
             IdentityCatalogState, protected_read_router as identity_catalog_protected_read_router,
             public_router as identity_catalog_public_router,
+            token_router as identity_catalog_token_router,
         },
         missing_identity_checkin_aff::{
             IdentityCheckinAffState, read_router as identity_checkin_read_router,
@@ -232,6 +233,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let identity_catalog_token = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_catalog_token_router(IdentityCatalogState::new(pg.clone(), Arc::clone(&auth))),
+        );
         let catalog_http = reqwest::Client::builder()
             .timeout(config.dependency_timeout)
             .build()
@@ -374,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut extra_surface = identity_profile
             .merge(identity_catalog)
             .merge(identity_catalog_protected)
+            .merge(identity_catalog_token)
             .merge(admin_catalog)
             .merge(identity_admin)
             .merge(identity_topup)

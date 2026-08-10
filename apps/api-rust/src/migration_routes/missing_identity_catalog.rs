@@ -28,8 +28,7 @@ use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
 
 const DEFAULT_USABLE_GROUPS: &[(&str, &str)] = &[("default", "默认分组"), ("vip", "vip分组")];
 const DEFAULT_GROUP_RATIOS: &[(&str, f64)] = &[("default", 1.0), ("vip", 1.0), ("svip", 1.0)];
-const DEFAULT_GROUP_GROUP_RATIOS: &[(&str, &[(&str, f64)])] =
-    &[("vip", &[("edit_this", 0.9)])];
+const DEFAULT_GROUP_GROUP_RATIOS: &[(&str, &[(&str, f64)])] = &[("vip", &[("edit_this", 0.9)])];
 const DEFAULT_AUTO_GROUPS: &[&str] = &["default"];
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
@@ -71,7 +70,15 @@ pub fn public_router(state: IdentityCatalogState) -> Router {
 /// generation.  The normal listener owns this read slice only after the
 /// shared dashboard-auth service accepts the request.
 pub fn protected_read_router(state: IdentityCatalogState) -> Router {
-    authenticated_routes(state.clone()).with_state(state)
+    protected_read_routes_with_auth(state.clone()).with_state(state)
+}
+
+/// Mounts only personal-token generation on a listener that already owns the
+/// authenticated catalogue reads.  Keeping this route split lets the normal
+/// listener add the Go `/api/user/token` contract without overlapping the
+/// broader candidate router used by the isolated test instance.
+pub fn token_router(state: IdentityCatalogState) -> Router {
+    token_routes(state.clone()).with_state(state)
 }
 
 fn public_routes() -> Router<IdentityCatalogState> {
@@ -87,14 +94,20 @@ fn protected_read_routes() -> Router<IdentityCatalogState> {
 }
 
 fn authenticated_routes(state: IdentityCatalogState) -> Router<IdentityCatalogState> {
+    protected_read_routes_with_auth(state.clone()).merge(token_routes(state))
+}
+
+fn protected_read_routes_with_auth(state: IdentityCatalogState) -> Router<IdentityCatalogState> {
     protected_read_routes()
+        .route_layer(middleware::from_fn_with_state(state, catalog_auth_boundary))
+}
+
+fn token_routes(state: IdentityCatalogState) -> Router<IdentityCatalogState> {
+    Router::new()
         .route("/api/user/token", get(generate_access_token))
-        // Match Go's UserAuth ordering and response header once for all
-        // protected catalogue routes, including token-generation failures.
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            catalog_auth_boundary,
-        ))
+        // Match Go's UserAuth ordering and response header once for the
+        // protected token route, including token-generation failures.
+        .route_layer(middleware::from_fn_with_state(state, catalog_auth_boundary))
 }
 
 async fn catalog_auth_boundary(
@@ -102,9 +115,16 @@ async fn catalog_auth_boundary(
     mut request: Request,
     next: Next,
 ) -> Response {
+    let token_route = request.uri().path() == "/api/user/token";
     let user = match authenticated(&state, request.headers()).await {
         Ok(user) => user,
-        Err(error) => return error.into_response(),
+        Err(error) => {
+            let mut response = error.into_response();
+            if token_route {
+                disable_token_cache(&mut response);
+            }
+            return response;
+        }
     };
     request.extensions_mut().insert(user);
     let mut response = next.run(request).await;
@@ -112,7 +132,26 @@ async fn catalog_auth_boundary(
         "auth-version",
         axum::http::HeaderValue::from_static(AUTH_VERSION),
     );
+    if token_route {
+        disable_token_cache(&mut response);
+    }
     response
+}
+
+fn disable_token_cache(response: &mut Response) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static(
+            "no-store, no-cache, must-revalidate, private, max-age=0",
+        ),
+    );
+    response.headers_mut().insert(
+        header::PRAGMA,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, axum::http::HeaderValue::from_static("0"));
 }
 
 async fn get_public_groups(
@@ -649,7 +688,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::{
         body::to_bytes,
-        http::{Request, StatusCode},
+        http::{Request, StatusCode, header},
     };
     use secrecy::SecretString;
     use sqlx::postgres::PgPoolOptions;
@@ -801,6 +840,12 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some(AUTH_VERSION)
         );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, no-cache, must-revalidate, private, max-age=0"
+        );
+        assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+        assert_eq!(response.headers()[header::EXPIRES], "0");
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
@@ -971,6 +1016,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, no-cache, must-revalidate, private, max-age=0"
+        );
+        assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+        assert_eq!(response.headers()[header::EXPIRES], "0");
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),

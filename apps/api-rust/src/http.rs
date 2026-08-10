@@ -275,9 +275,9 @@ fn finalize_listener(router: Router, state: AppState) -> Router {
         .method_not_allowed_fallback(root_not_found)
         // Keep intentionally unmounted legacy auth surfaces concealed even
         // when a different normal-listener surface owns the surrounding path
-        // space.  The auth router applies the same guard locally, but the
-        // listener-wide guard is needed for `/api/user/token` to avoid a
-        // fallback protocol error instead of Go's 404 contract.
+        // space. The personal-token route is mounted by the identity-catalog
+        // candidate/normal surface and must therefore reach its own auth
+        // boundary instead of being hidden by this listener-wide guard.
         .layer(middleware::from_fn(restrict_auth_surface))
         .layer(middleware::from_fn(legacy_models_cors))
         .layer(middleware::from_fn_with_state(boundary, request_boundary))
@@ -323,10 +323,7 @@ pub fn api_global_rate_limited_surface(state: &AppState, surface: Router) -> Rou
 }
 
 async fn restrict_auth_surface(request: Request, next: Next) -> Response {
-    if matches!(
-        request.uri().path(),
-        "/api/user/login/2fa" | "/api/user/token"
-    ) {
+    if matches!(request.uri().path(), "/api/user/login/2fa") {
         return not_found(request).await;
     }
     next.run(request).await
