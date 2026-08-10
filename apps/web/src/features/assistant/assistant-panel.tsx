@@ -61,6 +61,7 @@ import type { AssistantPresetId } from './assistant-events'
 import { AssistantHandoffTool } from './assistant-handoff-tool'
 import { AssistantKeyTool } from './assistant-key-tool'
 import { AssistantPlanTool } from './assistant-plan-tool'
+import { AssistantSetupTool } from './assistant-setup-tool'
 
 type AssistantActionPath =
   | '/getting-started'
@@ -75,7 +76,7 @@ type AssistantAction =
   | {
       kind: 'tool'
       label: string
-      tool: 'key' | 'cost' | 'handoff' | 'plan'
+      tool: 'key' | 'cost' | 'handoff' | 'plan' | 'setup'
     }
 
 type AssistantPreset = {
@@ -100,7 +101,7 @@ function getBaseUrl(): string {
 
 function PresetAction(props: {
   action: AssistantAction
-  onToolOpen: (tool: 'key' | 'cost' | 'handoff' | 'plan') => void
+  onToolOpen: (tool: 'key' | 'cost' | 'handoff' | 'plan' | 'setup') => void
 }) {
   const { action } = props
   if (action.kind === 'tool') {
@@ -189,12 +190,12 @@ export function AssistantPanel(props: {
         id: 'client-setup',
         question: t('How do I set up Claude Code or CC Switch?'),
         answer: t(
-          'Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. In CC Switch, create an OpenAI-compatible provider and enter those values; use the client guide for app-specific fields.'
+          'Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.'
         ),
         action: {
-          kind: 'route',
-          label: t('Get API credentials'),
-          to: '/keys',
+          kind: 'tool',
+          label: t('Open client setup guide'),
+          tool: 'setup',
         },
       },
       {
@@ -252,7 +253,7 @@ export function AssistantPanel(props: {
   })
   const [sending, setSending] = useState(false)
   const [activeTool, setActiveTool] = useState<
-    'key' | 'cost' | 'handoff' | 'plan' | null
+    'key' | 'cost' | 'handoff' | 'plan' | 'setup' | null
   >(null)
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
@@ -441,6 +442,17 @@ export function AssistantPanel(props: {
                     developerAccessGranted={
                       statusQuery.data?.developer_access_granted === true
                     }
+                  />
+                ) : null}
+                {activeTool === 'setup' ? (
+                  <AssistantSetupTool
+                    rootUrl={baseUrl.replace(/\/v1$/, '')}
+                    openAIBaseUrl={baseUrl}
+                    defaultModel={statusQuery.data?.model ?? ''}
+                    developerAccessGranted={
+                      statusQuery.data?.developer_access_granted === true
+                    }
+                    onCreateKey={() => setActiveTool('key')}
                   />
                 ) : null}
                 <div className='border-t pt-3'>

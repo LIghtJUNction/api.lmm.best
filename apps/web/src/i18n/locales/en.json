@@ -6087,6 +6087,25 @@
     "save {{percent}}%": "save {{percent}}%",
     "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.",
     "Review plans and exact checkout prices": "Review plans and exact checkout prices",
-    "Estimated monthly capacity": "Estimated monthly capacity"
+    "Estimated monthly capacity": "Estimated monthly capacity",
+    "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.": "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.",
+    "Open client setup guide": "Open client setup guide",
+    "Client setup guide": "Client setup guide",
+    "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.": "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.",
+    "You can install clients while L0 access is under review. API requests become available after L1 approval.": "You can install clients while L0 access is under review. API requests become available after L1 approval.",
+    "Install command": "Install command",
+    "PowerShell session configuration": "PowerShell session configuration",
+    "Shell session configuration": "Shell session configuration",
+    "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.": "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.",
+    "Official installation guide": "Official installation guide",
+    "Create API key": "Create API key",
+    "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.": "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.",
+    "Open official releases": "Open official releases",
+    "Official ChatGPT desktop uses OpenAI sign-in": "Official ChatGPT desktop uses OpenAI sign-in",
+    "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.": "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.",
+    "OpenAI-compatible Base URL": "OpenAI-compatible Base URL",
+    "Model ID": "Model ID",
+    "Download official ChatGPT": "Download official ChatGPT",
+    "Use CC Switch instead": "Use CC Switch instead"
   }
 }

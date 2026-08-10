@@ -6087,6 +6087,25 @@
     "save {{percent}}%": "{{percent}}% 割引",
     "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "プラン比較は含まれるクレジットのみを基準にしています。リセット規則、モデル権限、支払い方法、グループ倍率によって最終的な価値は変わるため、決済画面の表示を確認してください。",
     "Review plans and exact checkout prices": "プランと正確な決済価格を確認",
-    "Estimated monthly capacity": "月間容量の目安"
+    "Estimated monthly capacity": "月間容量の目安",
+    "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.": "Windows、Linux、macOS のクライアントでは、Base URL、モデル ID、API キーの3項目を使用します。確認済みのインストールコマンドとアプリ固有の項目は設定ガイドで確認できます。",
+    "Open client setup guide": "クライアント設定ガイドを開く",
+    "Client setup guide": "クライアント設定ガイド",
+    "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.": "このサービスの正確な値をコピーしてください。自分でキーを作成してコピーするまで、API キーはプレースホルダーのままです。",
+    "You can install clients while L0 access is under review. API requests become available after L1 approval.": "L0 アクセスの審査中でもクライアントをインストールできます。L1 承認後に API リクエストが利用可能になります。",
+    "Install command": "インストールコマンド",
+    "PowerShell session configuration": "PowerShell セッション設定",
+    "Shell session configuration": "Shell セッション設定",
+    "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.": "これらの変数は現在のターミナルセッションにのみ適用されます。API キーは Bearer トークンとして送信され、このガイドに実際のキーが埋め込まれることはありません。",
+    "Official installation guide": "公式インストールガイド",
+    "Create API key": "API キーを作成",
+    "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.": "公式リリースから CC Switch をインストールし、これらの値で Claude プロバイダーを追加して有効にしてください。",
+    "Open official releases": "公式リリースを開く",
+    "Official ChatGPT desktop uses OpenAI sign-in": "公式 ChatGPT デスクトップは OpenAI ログインを使用します",
+    "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.": "公式 ChatGPT デスクトップアプリでは、このサービスの Base URL と API キーをカスタムプロバイダーとして使用できません。このサービスには CC Switch または OpenAI 互換クライアントを使用してください。",
+    "OpenAI-compatible Base URL": "OpenAI 互換 Base URL",
+    "Model ID": "モデル ID",
+    "Download official ChatGPT": "公式 ChatGPT をダウンロード",
+    "Use CC Switch instead": "代わりに CC Switch を使う"
   }
 }

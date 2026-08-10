@@ -6087,6 +6087,25 @@
     "save {{percent}}%": "tiết kiệm {{percent}}%",
     "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "Việc so sánh chỉ dựa trên tín dụng đi kèm. Quy tắc đặt lại, quyền truy cập mô hình, phương thức thanh toán và hệ số nhóm có thể làm thay đổi giá trị cuối cùng; số tiền tại bước thanh toán là căn cứ chính thức.",
     "Review plans and exact checkout prices": "Xem gói và giá thanh toán chính xác",
-    "Estimated monthly capacity": "Dung lượng ước tính mỗi tháng"
+    "Estimated monthly capacity": "Dung lượng ước tính mỗi tháng",
+    "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.": "Ứng dụng Windows, Linux và macOS dùng cùng ba giá trị: URL cơ sở, ID mô hình và khóa API. Mở hướng dẫn để xem lệnh cài đặt đã xác minh và các trường riêng của từng ứng dụng.",
+    "Open client setup guide": "Mở hướng dẫn thiết lập ứng dụng",
+    "Client setup guide": "Hướng dẫn thiết lập ứng dụng",
+    "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.": "Hãy sao chép chính xác các giá trị của dịch vụ này. Khóa API chỉ là chỗ giữ chỗ cho đến khi bạn tự tạo và sao chép khóa.",
+    "You can install clients while L0 access is under review. API requests become available after L1 approval.": "Bạn có thể cài ứng dụng trong khi quyền L0 đang được xét duyệt. Yêu cầu API sẽ khả dụng sau khi L1 được phê duyệt.",
+    "Install command": "Lệnh cài đặt",
+    "PowerShell session configuration": "Cấu hình phiên PowerShell",
+    "Shell session configuration": "Cấu hình phiên Shell",
+    "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.": "Các biến này chỉ áp dụng cho phiên terminal hiện tại. Khóa API được gửi dưới dạng Bearer token và không bao giờ được nhúng vào hướng dẫn này.",
+    "Official installation guide": "Hướng dẫn cài đặt chính thức",
+    "Create API key": "Tạo khóa API",
+    "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.": "Cài CC Switch từ bản phát hành chính thức, thêm nhà cung cấp Claude bằng các giá trị này rồi bật nhà cung cấp đó.",
+    "Open official releases": "Mở bản phát hành chính thức",
+    "Official ChatGPT desktop uses OpenAI sign-in": "ChatGPT desktop chính thức dùng đăng nhập OpenAI",
+    "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.": "Ứng dụng ChatGPT desktop chính thức không nhận URL cơ sở và khóa API của dịch vụ này làm nhà cung cấp tùy chỉnh. Hãy dùng CC Switch hoặc ứng dụng tương thích OpenAI.",
+    "OpenAI-compatible Base URL": "URL cơ sở tương thích OpenAI",
+    "Model ID": "ID mô hình",
+    "Download official ChatGPT": "Tải ChatGPT chính thức",
+    "Use CC Switch instead": "Dùng CC Switch thay thế"
   }
 }

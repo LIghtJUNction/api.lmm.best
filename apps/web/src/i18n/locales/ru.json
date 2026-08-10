@@ -6087,6 +6087,25 @@
     "save {{percent}}%": "экономия {{percent}} %",
     "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "Сравнение учитывает только включённый кредит. Правила сброса, доступ к моделям, способ оплаты и групповые множители могут изменить итоговую выгоду; окончательной является сумма при оформлении.",
     "Review plans and exact checkout prices": "Посмотреть планы и точные цены при оформлении",
-    "Estimated monthly capacity": "Расчётная месячная ёмкость"
+    "Estimated monthly capacity": "Расчётная месячная ёмкость",
+    "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.": "Клиенты Windows, Linux и macOS используют три одинаковых значения: базовый URL, ID модели и API-ключ. Откройте руководство, чтобы получить проверенные команды установки и поля для конкретных приложений.",
+    "Open client setup guide": "Открыть руководство по настройке",
+    "Client setup guide": "Руководство по настройке клиента",
+    "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.": "Копируйте точные значения для этого сервиса. API-ключ остаётся заполнителем, пока вы сами не создадите и не скопируете его.",
+    "You can install clients while L0 access is under review. API requests become available after L1 approval.": "Клиенты можно установить, пока доступ L0 находится на рассмотрении. API-запросы станут доступны после одобрения L1.",
+    "Install command": "Команда установки",
+    "PowerShell session configuration": "Настройка сеанса PowerShell",
+    "Shell session configuration": "Настройка сеанса Shell",
+    "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.": "Эти переменные действуют в текущем сеансе терминала. API-ключ отправляется как Bearer-токен и никогда не встраивается в это руководство.",
+    "Official installation guide": "Официальное руководство по установке",
+    "Create API key": "Создать API-ключ",
+    "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.": "Установите CC Switch из официальных выпусков, добавьте провайдера Claude с этими значениями и включите его.",
+    "Open official releases": "Открыть официальные выпуски",
+    "Official ChatGPT desktop uses OpenAI sign-in": "Официальное приложение ChatGPT использует вход OpenAI",
+    "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.": "Официальное приложение ChatGPT не принимает базовый URL и API-ключ этого сервиса как пользовательского провайдера. Используйте CC Switch или совместимый с OpenAI клиент.",
+    "OpenAI-compatible Base URL": "Базовый URL, совместимый с OpenAI",
+    "Model ID": "ID модели",
+    "Download official ChatGPT": "Скачать официальный ChatGPT",
+    "Use CC Switch instead": "Использовать CC Switch"
   }
 }
