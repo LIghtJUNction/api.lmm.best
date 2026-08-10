@@ -235,6 +235,14 @@ func actionableJournalLine(line string) bool {
 	if strings.Contains(trimmed, "failed (2: No such file or directory)") && strings.Contains(trimmed, " /static/") {
 		return false
 	}
+	// A client that disconnects while nginx is proxying through a service
+	// restart can leave this harmless sendfile error in the journal. It is not
+	// evidence of a failed backend health gate and must not strand a confirmed
+	// release in AWAITING_CONFIRMATION.
+	if strings.Contains(trimmed, "sendfile() failed (32: Broken pipe)") &&
+		strings.Contains(trimmed, "while sending request to upstream") {
+		return false
+	}
 	return true
 }
 
