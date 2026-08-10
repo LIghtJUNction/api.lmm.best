@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -222,7 +222,14 @@ async fn privacy_policy(State(state): State<ControlPublicHttpState>) -> Response
 
 async fn legal_document(state: ControlPublicHttpState, key: &str) -> Response {
     match state.repository.option(key).await {
-        Ok(value) => legacy_success(value.unwrap_or_default()).into_response(),
+        Ok(value) => {
+            let mut response = legacy_success(value.unwrap_or_default()).into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            response
+        }
         Err(error) => {
             tracing::error!(%error, option = key, "public legal document read failed");
             legacy_dependency_error()

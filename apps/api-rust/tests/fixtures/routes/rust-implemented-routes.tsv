@@ -21,6 +21,7 @@ GET	/api/subscription/plans	lmm_api_rs::migration_routes::billing_subscriptions:
 GET	/api/subscription/self	lmm_api_rs::migration_routes::billing_subscriptions::router
 PUT	/api/subscription/self/preference	lmm_api_rs::migration_routes::billing_subscriptions::router
 GET	/api/home_page_content	lmm_api_rs::http::home_page_content
+GET	/api/privacy-policy	lmm_api_rs::migration_routes::control_public::control_public_router
 GET	/api/open-source-bounties	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/projects/:id	lmm_api_rs::migration_routes::open_source_bounties::router
 GET	/api/open-source-bounties/config	lmm_api_rs::migration_routes::open_source_bounties::router
@@ -46,6 +47,7 @@ GET	/api/log/stat	lmm_api_rs::migration_routes::observability::observability_rea
 GET	/api/log/token	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/notice	lmm_api_rs::http::notice
 GET	/api/status	lmm_api_rs::http::status
+GET	/api/user-agreement	lmm_api_rs::migration_routes::control_public::control_public_router
 GET	/api/token/	lmm_api_rs::migration_routes::api_token::list
 POST	/api/token/	lmm_api_rs::migration_routes::api_token::create
 PUT	/api/token/	lmm_api_rs::migration_routes::api_token::update

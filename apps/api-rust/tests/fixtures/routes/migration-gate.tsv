@@ -144,7 +144,7 @@ POST	/api/prefill_group/	absent	not-applicable	unmounted	not-applicable	not-appl
 PUT	/api/prefill_group/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 DELETE	/api/prefill_group/:id	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/pricing	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/privacy-policy	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/api/privacy-policy	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/control_public.rs;mount=apps/api-rust/src/migration_routes/control_public.rs;listener=apps/api-rust/src/main.rs::control_public
 GET	/api/rankings	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/ratio_config	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/ratio_sync/channels	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
@@ -207,7 +207,7 @@ POST	/api/token/batch/keys	present	unverified	mounted	unverified	not-applicable	
 GET	/api/token/search	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	apps/api-rust/src/migration_routes/api_token.rs
 GET	/api/uptime/status	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/usage/token/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/user-agreement	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/api/user-agreement	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/control_public.rs;mount=apps/api-rust/src/migration_routes/control_public.rs;listener=apps/api-rust/src/main.rs::control_public
 GET	/api/user/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 PUT	/api/user/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
