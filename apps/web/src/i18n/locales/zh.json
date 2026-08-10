@@ -6087,6 +6087,25 @@
     "save {{percent}}%": "节省 {{percent}}%",
     "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "套餐匹配仅比较包含额度。重置规则、模型权限、支付方式和分组倍率可能影响最终价值；请以结算页为准。",
     "Review plans and exact checkout prices": "查看套餐与准确结算价格",
-    "Estimated monthly capacity": "预计月度容量"
+    "Estimated monthly capacity": "预计月度容量",
+    "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.": "Windows、Linux 和 macOS 客户端都使用相同的三个参数：Base URL、模型 ID 和 API 密钥。打开配置指南即可查看已核实的安装命令和应用专用字段。",
+    "Open client setup guide": "打开客户端配置指南",
+    "Client setup guide": "客户端配置指南",
+    "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.": "请复制本站提供的准确参数。在你自行创建并复制密钥前，指南只会显示密钥占位符。",
+    "You can install clients while L0 access is under review. API requests become available after L1 approval.": "L0 审核期间可以先安装客户端；升级到 L1 后即可发起 API 请求。",
+    "Install command": "安装命令",
+    "PowerShell session configuration": "PowerShell 会话配置",
+    "Shell session configuration": "Shell 会话配置",
+    "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.": "这些变量仅作用于当前终端会话。API 密钥会作为 Bearer Token 发送，指南不会嵌入你的真实密钥。",
+    "Official installation guide": "官方安装指南",
+    "Create API key": "创建 API 密钥",
+    "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.": "从官方发布页安装 CC Switch，使用这些参数添加 Claude 供应商，然后启用该供应商。",
+    "Open official releases": "打开官方发布页",
+    "Official ChatGPT desktop uses OpenAI sign-in": "官方 ChatGPT 桌面版使用 OpenAI 账号登录",
+    "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.": "官方 ChatGPT 桌面应用不能把本站 Base URL 和 API 密钥作为自定义供应商使用。要接入本站，请使用 CC Switch 或 OpenAI 兼容客户端。",
+    "OpenAI-compatible Base URL": "OpenAI 兼容 Base URL",
+    "Model ID": "模型 ID",
+    "Download official ChatGPT": "下载官方 ChatGPT",
+    "Use CC Switch instead": "改用 CC Switch"
   }
 }

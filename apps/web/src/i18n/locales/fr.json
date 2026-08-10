@@ -6087,6 +6087,25 @@
     "save {{percent}}%": "économisez {{percent}} %",
     "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "La comparaison tient uniquement compte du crédit inclus. Les règles de réinitialisation, l’accès aux modèles, le moyen de paiement et les multiplicateurs de groupe peuvent modifier la valeur finale ; le prix affiché au paiement fait foi.",
     "Review plans and exact checkout prices": "Voir les offres et les prix exacts au paiement",
-    "Estimated monthly capacity": "Capacité mensuelle estimée"
+    "Estimated monthly capacity": "Capacité mensuelle estimée",
+    "Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.": "Les clients Windows, Linux et macOS utilisent les trois mêmes valeurs : URL de base, identifiant du modèle et clé API. Ouvrez le guide pour obtenir les commandes vérifiées et les champs propres à chaque application.",
+    "Open client setup guide": "Ouvrir le guide de configuration",
+    "Client setup guide": "Guide de configuration du client",
+    "Copy the exact values for this service. API keys stay as placeholders until you create and copy one yourself.": "Copiez les valeurs exactes de ce service. La clé API reste un espace réservé jusqu’à ce que vous en créiez et copiiez une vous-même.",
+    "You can install clients while L0 access is under review. API requests become available after L1 approval.": "Vous pouvez installer les clients pendant l’examen de l’accès L0. Les requêtes API seront disponibles après l’approbation L1.",
+    "Install command": "Commande d’installation",
+    "PowerShell session configuration": "Configuration de session PowerShell",
+    "Shell session configuration": "Configuration de session Shell",
+    "These variables apply to the current terminal session. The API key is sent as a Bearer token and is never embedded by this guide.": "Ces variables s’appliquent à la session de terminal actuelle. La clé API est envoyée comme jeton Bearer et n’est jamais intégrée par ce guide.",
+    "Official installation guide": "Guide d’installation officiel",
+    "Create API key": "Créer une clé API",
+    "Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.": "Installez CC Switch depuis ses versions officielles, ajoutez un fournisseur Claude avec ces valeurs, puis activez-le.",
+    "Open official releases": "Ouvrir les versions officielles",
+    "Official ChatGPT desktop uses OpenAI sign-in": "L’application ChatGPT officielle utilise la connexion OpenAI",
+    "The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.": "L’application de bureau ChatGPT officielle n’accepte pas l’URL de base et la clé API de ce service comme fournisseur personnalisé. Utilisez CC Switch ou un client compatible OpenAI pour ce service.",
+    "OpenAI-compatible Base URL": "URL de base compatible OpenAI",
+    "Model ID": "Identifiant du modèle",
+    "Download official ChatGPT": "Télécharger ChatGPT officiel",
+    "Use CC Switch instead": "Utiliser plutôt CC Switch"
   }
 }
