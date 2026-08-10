@@ -20,9 +20,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const assistantMessageMaxRunes = 4000
+const (
+	assistantMessageMaxRunes      = 4000
+	assistantConversationMaxRunes = 12000
+	assistantConversationMaxItems = 12
+)
 
 const assistantIntentHeader = "X-LMM-Assistant-Intent"
+
+var errAssistantConversationTooLong = errors.New("assistant conversation is too long")
 
 const assistantSystemPromptTemplate = `You are the built-in customer assistant for LMM, an AI API service.
 Answer in the user's language and be concise, accurate, and practical.
@@ -37,7 +43,8 @@ Current service connection facts:
 - Existing API keys are private and unavailable to you. Direct the user to the connection details tool to create and copy a new key with explicit confirmation.`
 
 type assistantChatInput struct {
-	Message string `json:"message"`
+	Message  string                   `json:"message"`
+	Messages []assistantOpenAIMessage `json:"messages"`
 }
 
 type assistantOpenAIMessage struct {
@@ -71,6 +78,47 @@ func writeAssistantError(c *gin.Context, status int, code string, err error) {
 	})
 }
 
+func normalizeAssistantConversation(input assistantChatInput) ([]assistantOpenAIMessage, string, error) {
+	if len(input.Messages) > assistantConversationMaxItems {
+		return nil, "", errAssistantConversationTooLong
+	}
+
+	messages := make([]assistantOpenAIMessage, 0, len(input.Messages))
+	totalRunes := 0
+	for index, message := range input.Messages {
+		message.Role = strings.TrimSpace(message.Role)
+		message.Content = strings.TrimSpace(message.Content)
+		if message.Role != "user" && message.Role != "assistant" {
+			return nil, "", errors.New("assistant conversation accepts only user and assistant roles")
+		}
+		if index == 0 && message.Role != "user" {
+			return nil, "", errors.New("assistant conversation must start with a user message")
+		}
+		if message.Content == "" {
+			return nil, "", errors.New("assistant conversation messages cannot be empty")
+		}
+		messageRunes := utf8.RuneCountInString(message.Content)
+		if messageRunes > assistantMessageMaxRunes {
+			return nil, "", errAssistantConversationTooLong
+		}
+		totalRunes += messageRunes
+		if totalRunes > assistantConversationMaxRunes {
+			return nil, "", errAssistantConversationTooLong
+		}
+		messages = append(messages, message)
+	}
+	if len(messages) == 0 || messages[len(messages)-1].Role != "user" {
+		return nil, "", errors.New("assistant conversation must end with the current user message")
+	}
+
+	latestMessage := messages[len(messages)-1].Content
+	legacyMessage := strings.TrimSpace(input.Message)
+	if legacyMessage != "" && legacyMessage != latestMessage {
+		return nil, "", errors.New("assistant message must match the latest conversation message")
+	}
+	return messages, latestMessage, nil
+}
+
 // PrepareAssistantRequest validates the narrow browser contract, then replaces
 // it with a server-owned OpenAI request before channel selection. This keeps
 // the configured model, system prompt, and billing boundary outside user
@@ -92,29 +140,44 @@ func PrepareAssistantRequest(c *gin.Context) {
 		return
 	}
 	input.Message = strings.TrimSpace(input.Message)
-	if input.Message == "" {
-		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_MESSAGE_REQUIRED", errors.New("assistant message is required"))
-		return
+	conversation := []assistantOpenAIMessage{{Role: "user", Content: input.Message}}
+	latestMessage := input.Message
+	if len(input.Messages) > 0 {
+		var conversationErr error
+		conversation, latestMessage, conversationErr = normalizeAssistantConversation(input)
+		if conversationErr != nil {
+			if errors.Is(conversationErr, errAssistantConversationTooLong) {
+				writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_CONVERSATION_TOO_LONG", conversationErr)
+			} else {
+				writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_INVALID_CONVERSATION", conversationErr)
+			}
+			return
+		}
+	} else {
+		if input.Message == "" {
+			writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_MESSAGE_REQUIRED", errors.New("assistant message is required"))
+			return
+		}
+		if utf8.RuneCountInString(input.Message) > assistantMessageMaxRunes {
+			writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_MESSAGE_TOO_LONG", fmt.Errorf("assistant message must be at most %d characters", assistantMessageMaxRunes))
+			return
+		}
 	}
-	if utf8.RuneCountInString(input.Message) > assistantMessageMaxRunes {
-		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_MESSAGE_TOO_LONG", fmt.Errorf("assistant message must be at most %d characters", assistantMessageMaxRunes))
-		return
-	}
-	intent := model.ClassifyAssistantIntent(input.Message)
+	intent := model.ClassifyAssistantIntent(latestMessage)
 	c.Header(assistantIntentHeader, intent)
 	if userID := c.GetInt("id"); userID > 0 {
-		if err := model.RecordAssistantIntent(userID, input.Message); err != nil {
+		if err := model.RecordAssistantIntent(userID, latestMessage); err != nil {
 			// Product analytics must never make customer support unavailable.
 			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
 		}
 	}
 
+	requestMessages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
+	requestMessages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings)}
+	requestMessages = append(requestMessages, conversation...)
 	request := assistantOpenAIRequest{
-		Model: settings.Model,
-		Messages: []assistantOpenAIMessage{
-			{Role: "system", Content: buildAssistantSystemPrompt(settings)},
-			{Role: "user", Content: input.Message},
-		},
+		Model:       settings.Model,
+		Messages:    requestMessages,
 		Stream:      false,
 		Temperature: 0.2,
 		MaxTokens:   900,

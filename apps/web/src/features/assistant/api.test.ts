@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { parseAssistantIntent, parseAssistantReply } from './api'
+import {
+  buildAssistantConversation,
+  parseAssistantIntent,
+  parseAssistantReply,
+  type AssistantChatMessage,
+} from './api'
 
 describe('assistant response parsing', () => {
   test('extracts the first assistant message', () => {
@@ -47,5 +52,57 @@ describe('assistant response parsing', () => {
     assert.equal(parseAssistantIntent('HUMAN_SUPPORT'), 'human_support')
     assert.equal(parseAssistantIntent('unknown-intent'), undefined)
     assert.equal(parseAssistantIntent(undefined), undefined)
+  })
+})
+
+describe('assistant conversation context', () => {
+  test('keeps recent multi-turn context and always starts with a user message', () => {
+    const history: AssistantChatMessage[] = [
+      { role: 'assistant', content: 'orphaned model reply' },
+      { role: 'user', content: 'How do I configure Claude Code?' },
+      { role: 'assistant', content: 'Choose your operating system.' },
+    ]
+
+    assert.deepEqual(
+      buildAssistantConversation(history, '  What about Windows?  '),
+      [
+        { role: 'user', content: 'How do I configure Claude Code?' },
+        { role: 'assistant', content: 'Choose your operating system.' },
+        { role: 'user', content: 'What about Windows?' },
+      ]
+    )
+  })
+
+  test('bounds context by message count without losing the latest question', () => {
+    const history: AssistantChatMessage[] = Array.from(
+      { length: 20 },
+      (_, index) => ({
+        role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+        content: `message-${index}`,
+      })
+    )
+
+    const conversation = buildAssistantConversation(history, 'latest')
+    assert.ok(conversation.length <= 12)
+    assert.equal(conversation[0]?.role, 'user')
+    assert.deepEqual(conversation.at(-1), {
+      role: 'user',
+      content: 'latest',
+    })
+    assert.equal(
+      conversation.some((message) => message.content === 'message-0'),
+      false
+    )
+    assert.equal(
+      conversation.some((message) => message.content === 'message-19'),
+      true
+    )
+  })
+
+  test('rejects an oversized latest message before making a request', () => {
+    assert.throws(
+      () => buildAssistantConversation([], '问'.repeat(4001)),
+      /between 1 and 4000 characters/
+    )
   })
 })

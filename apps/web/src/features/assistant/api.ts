@@ -30,6 +30,15 @@ type AssistantChatPayload = {
   message?: string
 }
 
+export type AssistantChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+const ASSISTANT_CONVERSATION_MAX_ITEMS = 12
+const ASSISTANT_CONVERSATION_MAX_RUNES = 12_000
+const ASSISTANT_MESSAGE_MAX_RUNES = 4_000
+
 export type AssistantCreditStatus = {
   weekly_credit_usd: number
   limit_quota: number
@@ -132,12 +141,56 @@ export function parseAssistantIntent(
   return ASSISTANT_INTENTS.has(intent) ? intent : undefined
 }
 
+function normalizedAssistantHistoryMessage(
+  message: AssistantChatMessage
+): AssistantChatMessage | null {
+  const content = message.content.trim()
+  if (!content) return null
+  return {
+    role: message.role,
+    content: [...content].slice(0, ASSISTANT_MESSAGE_MAX_RUNES).join(''),
+  }
+}
+
+export function buildAssistantConversation(
+  history: AssistantChatMessage[],
+  currentMessage: string
+): AssistantChatMessage[] {
+  const current = currentMessage.trim()
+  const currentRunes = [...current]
+  if (!current || currentRunes.length > ASSISTANT_MESSAGE_MAX_RUNES) {
+    throw new Error(
+      `Assistant message must be between 1 and ${ASSISTANT_MESSAGE_MAX_RUNES} characters`
+    )
+  }
+
+  const conversation: AssistantChatMessage[] = [
+    { role: 'user', content: current },
+  ]
+  let totalRunes = currentRunes.length
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (conversation.length >= ASSISTANT_CONVERSATION_MAX_ITEMS) break
+    const message = normalizedAssistantHistoryMessage(history[index])
+    if (!message) continue
+    const messageRunes = [...message.content].length
+    if (totalRunes + messageRunes > ASSISTANT_CONVERSATION_MAX_RUNES) break
+    conversation.unshift(message)
+    totalRunes += messageRunes
+  }
+
+  while (conversation[0]?.role === 'assistant') conversation.shift()
+  return conversation
+}
+
 export async function sendAssistantMessage(
-  message: string
+  message: string,
+  history: AssistantChatMessage[] = []
 ): Promise<AssistantReply> {
+  const normalizedMessage = message.trim()
+  const messages = buildAssistantConversation(history, normalizedMessage)
   const response = await api.post<AssistantChatPayload>(
     '/api/assistant/chat',
-    { message },
+    { message: normalizedMessage, messages },
     { skipBusinessError: true, skipErrorHandler: true }
   )
   return {
