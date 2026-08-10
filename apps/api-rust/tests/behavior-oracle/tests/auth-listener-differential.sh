@@ -472,12 +472,19 @@ invalidate_fixture_user_cache() {
   fi
   # Direct SQL fixtures bypass each implementation's application invalidator.
   # Delete only the authoritative per-user cache entry, then prove no other
-  # Valkey key was touched before taking the request-side-effect baseline.
-  valkey_cli_for "$port" --scan | awk '$0 != "user:1"' | LC_ALL=C sort >"$before"
+  # durable Valkey key was touched before taking the request-side-effect
+  # baseline. Fixed-window limiter keys are deliberately excluded because
+  # their short TTL may expire between these two snapshots without a request
+  # mutating application state.
+  valkey_cli_for "$port" --scan |
+    awk '$0 != "user:1" && $0 !~ /^rateLimit:v2:/' |
+    LC_ALL=C sort >"$before"
   deleted=$(valkey_cli_for "$port" del user:1)
   [[ $deleted == 0 || $deleted == 1 ]] || { echo "unexpected user cache DEL result: $deleted" >&2; return 1; }
   [[ $(valkey_cli_for "$port" exists user:1) == 0 ]] || { echo 'fixture user cache survives invalidation' >&2; return 1; }
-  valkey_cli_for "$port" --scan | awk '$0 != "user:1"' | LC_ALL=C sort >"$after"
+  valkey_cli_for "$port" --scan |
+    awk '$0 != "user:1" && $0 !~ /^rateLimit:v2:/' |
+    LC_ALL=C sort >"$after"
   diff -u "$before" "$after"
 }
 snapshot_two_factor_flow_contract() {
@@ -877,7 +884,11 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
   snapshot_self_policy_side_effects "$database" "$valkey_port" "$prefix.disabled.before"
   capture_listener_response "$prefix.disabled-session" -H "authorization: Bearer $policy_session" "$base/api/user/self"
   capture_listener_response "$prefix.disabled-pat" -H 'authorization: Bearer auth-policy-pat' "$base/api/user/self"
-  assert_self_error_contract "$prefix.disabled-session" 401 AUTH_USER_DISABLED
+  # The frozen Go middleware validates an internal dashboard session (and its
+  # cached user status) before the generic user-status policy, so a disabled
+  # session is reported as revoked. PATs resolve the user directly and retain
+  # the dedicated disabled-user error.
+  assert_self_error_contract "$prefix.disabled-session" 401 AUTH_SESSION_REVOKED
   assert_self_error_contract "$prefix.disabled-pat" 401 AUTH_USER_DISABLED
   snapshot_self_policy_side_effects "$database" "$valkey_port" "$prefix.disabled.after"
   assert_self_policy_side_effects_unchanged "$prefix.disabled.before" "$prefix.disabled.after"

@@ -386,7 +386,11 @@ impl PgValkeyDashboardAuth {
         }
         let user = self.user_by_id(identity.user_id).await?;
         if user.status != ENABLED {
-            return Err(AuthError::new(AuthErrorKind::UserDisabled));
+            // Go's `ValidateLoginSession` validates the cached dashboard
+            // session (including user status) before `UserAuth` runs. A
+            // disabled internal session therefore surfaces as revoked;
+            // opaque PATs below retain the dedicated UserDisabled error.
+            return Err(AuthError::new(AuthErrorKind::SessionRevoked));
         }
         if user.auth_version != identity.user_auth_version {
             return Err(AuthError::new(AuthErrorKind::SessionRevoked));

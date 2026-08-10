@@ -480,8 +480,9 @@ async fn dashboard_resolver_preserves_session_pat_and_userauth_boundaries() {
         .await
         .expect("restore valid user");
 
-    // A disabled but otherwise valid session must reach `/self`'s UserAuth
-    // boundary, while the general required resolver remains strict.
+    // Go validates internal sessions (including user status) before its
+    // post-resolution UserAuth policy, so a disabled session is revoked at
+    // the resolver boundary. Opaque PATs above retain AUTH_USER_DISABLED.
     sqlx::query("UPDATE users SET status = 2 WHERE id = 7")
         .execute(&pool)
         .await
@@ -499,8 +500,14 @@ async fn dashboard_resolver_preserves_session_pat_and_userauth_boundaries() {
         .expect("disabled session self response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = json_body(response).await;
-    assert_eq!(body["code"], "AUTH_USER_DISABLED");
-    assert_eq!(body["message"], "User has been banned");
+    assert_eq!(
+        body["code"], "AUTH_SESSION_REVOKED",
+        "disabled internal session follows Go's resolver order"
+    );
+    assert_eq!(
+        body["message"],
+        "Unauthorized, not logged in and no access token provided"
+    );
     assert!(body.get("data").is_none());
     assert_eq!(
         auth.self_user(SecretString::from(session.clone()))

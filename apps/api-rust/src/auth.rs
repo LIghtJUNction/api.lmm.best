@@ -197,7 +197,28 @@ impl DashboardUserView {
     /// Current Go contract projection for `/api/user/login`, `/api/user/auth/refresh`
     /// and `/api/user/self` parity comparisons.
     pub(crate) fn to_legacy_go_shape(&self) -> Value {
-        to_value(self).expect("serialize dashboard user view")
+        let mut value = to_value(self).expect("serialize dashboard user view");
+        let Some(object) = value.as_object_mut() else {
+            return value;
+        };
+
+        // These fields are useful to Rust-only capability decisions, but they
+        // are not part of the frozen Go dashboard-user DTO. Keep them on the
+        // internal view and strip them only at the compatibility boundary so
+        // login, refresh, and `/api/user/self` remain strict-wire compatible.
+        for field in [
+            "developer_access_granted",
+            "trust_level_info",
+            "trust_level_tiers",
+            "onboarding",
+        ] {
+            object.remove(field);
+        }
+        if let Some(Value::Object(permissions)) = object.get_mut("permissions") {
+            permissions.remove("console_activated_at");
+            permissions.remove("docs_access");
+        }
+        value
     }
 
     pub(crate) fn build(user: DashboardUser, facts: DashboardSelfUserFacts) -> Self {
@@ -479,7 +500,7 @@ mod dashboard_user_view_tests {
     }
 
     #[test]
-    fn legacy_go_shape_matches_current_dashboard_access_fields() {
+    fn legacy_go_shape_excludes_rust_only_dashboard_access_fields() {
         let value = DashboardUserView::build(
             dashboard_user(1),
             DashboardSelfUserFacts {
@@ -491,22 +512,12 @@ mod dashboard_user_view_tests {
         )
         .to_legacy_go_shape();
 
-        assert_eq!(value["developer_access_granted"], true);
-        assert_eq!(value["trust_level_info"]["level"], 3);
-        assert_eq!(value["trust_level_tiers"][3]["level"], 3);
-        assert_eq!(value["trust_level_tiers"][3]["min_paid_amount"], 500.0);
-        assert_eq!(
-            value["onboarding"],
-            json!({
-                "activation_complete": true,
-                "paid_activation_complete": true,
-                "credential_complete": true,
-                "first_request_complete": false,
-                "stage": "first_request"
-            })
-        );
-        assert_eq!(value["permissions"]["console_activated_at"], 1);
-        assert_eq!(value["permissions"]["docs_access"], true);
+        assert!(value.get("developer_access_granted").is_none());
+        assert!(value.get("trust_level_info").is_none());
+        assert!(value.get("trust_level_tiers").is_none());
+        assert!(value.get("onboarding").is_none());
+        assert!(value["permissions"].get("console_activated_at").is_none());
+        assert!(value["permissions"].get("docs_access").is_none());
         assert_eq!(value["username"], "alice");
         assert_eq!(value["id"], 7);
     }
