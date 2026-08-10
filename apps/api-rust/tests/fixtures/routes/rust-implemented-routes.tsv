@@ -5,6 +5,7 @@ GET	/api/group/	lmm_api_rs::migration_routes::missing_control_public::group_rout
 GET	/api/status/test	lmm_api_rs::migration_routes::missing_control_tasks::status_test_router
 GET	/api/custom-oauth-provider/	lmm_api_rs::migration_routes::control_admin::control_admin_read_router
 GET	/api/system-info/instances	lmm_api_rs::migration_routes::control_admin::control_admin_read_router
+GET	/api/task/self	lmm_api_rs::migration_routes::missing_control_tasks::self_task_read_router
 GET	/api/system-task/current	lmm_api_rs::migration_routes::control_admin::control_admin_read_router
 GET	/api/system-task/list	lmm_api_rs::migration_routes::control_admin::control_admin_read_router
 GET	/api/system-task/:task_id	lmm_api_rs::migration_routes::control_admin::control_admin_read_router

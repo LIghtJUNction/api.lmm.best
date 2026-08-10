@@ -20,7 +20,7 @@ runtime_root=${LMM_AUTH_LISTENER_TMP_ROOT:-/tmp}
   echo 'LMM_AUTH_LISTENER_TMP_ROOT must be an absolute, non-symlink directory' >&2
   exit 2
 }
-expected_scenarios=41
+expected_scenarios=42
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -619,6 +619,14 @@ CREATE TABLE system_instances (
   started_at BIGINT NOT NULL DEFAULT 0, last_seen_at BIGINT NOT NULL DEFAULT 0,
   created_at BIGINT NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL DEFAULT 0
 );
+CREATE TABLE tasks (
+  id BIGINT PRIMARY KEY, created_at BIGINT, updated_at BIGINT,
+  task_id VARCHAR(191), platform VARCHAR(30), user_id BIGINT,
+  "group" VARCHAR(50), channel_id BIGINT, quota BIGINT, action VARCHAR(40),
+  status VARCHAR(20), fail_reason TEXT, submit_time BIGINT, start_time BIGINT,
+  finish_time BIGINT, progress VARCHAR(20), properties JSON,
+  private_data JSON, data JSON
+);
 CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status BIGINT DEFAULT 1, email TEXT, github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" TEXT DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ, linux_do_id TEXT, setting TEXT DEFAULT '{}', stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1, console_activated_at BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, user_id BIGINT NOT NULL, version BIGINT NOT NULL, user_auth_version BIGINT NOT NULL, status TEXT NOT NULL, refresh_hash CHAR(64) NOT NULL, previous_refresh_hash TEXT, previous_valid_until BIGINT NOT NULL DEFAULT 0, login_method TEXT NOT NULL, ip TEXT, user_agent TEXT, created_at BIGINT NOT NULL, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason TEXT);
 CREATE TABLE two_fas (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id BIGINT NOT NULL, secret TEXT NOT NULL, is_enabled BOOLEAN NOT NULL DEFAULT FALSE, failed_attempts BIGINT DEFAULT 0, locked_until TIMESTAMPTZ, last_used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
@@ -629,7 +637,7 @@ CREATE SEQUENCE tokens_id_seq;
 CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), user_id BIGINT NOT NULL, key VARCHAR(128) UNIQUE, status INTEGER DEFAULT 1, name TEXT DEFAULT '', created_time BIGINT DEFAULT 0, accessed_time BIGINT DEFAULT 0, expired_time BIGINT DEFAULT -1, remain_quota BIGINT DEFAULT 0, unlimited_quota BOOLEAN DEFAULT FALSE, model_limits_enabled BOOLEAN DEFAULT FALSE, model_limits TEXT, allow_ips TEXT DEFAULT '', used_quota BIGINT DEFAULT 0, "group" TEXT DEFAULT '', cross_group_retry BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMPTZ);
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 GRANT USAGE ON SCHEMA public TO lmm_auth_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON options, custom_oauth_providers, setups, system_tasks, system_instances, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, lmm_schema_contract TO lmm_auth_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON options, custom_oauth_providers, setups, system_tasks, system_instances, tasks, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, lmm_schema_contract TO lmm_auth_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON tokens TO lmm_auth_runtime;
 -- Readiness validates these mounted bounty tables before the auth matrix runs.
 -- Keep this fixture least-privilege: the auth differential never exercises
@@ -675,6 +683,8 @@ instance_stale=$((instance_now - 120))
 for database in auth_go auth_rust; do
   psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
     -c "INSERT INTO system_instances (node_name, info, started_at, last_seen_at, created_at, updated_at) VALUES ('parity-online', '{\"region\":\"parity\",\"workers\":2}', $((instance_now - 30)), $instance_now, $((instance_now - 30)), $instance_now), ('parity-stale', '{\"region\":\"parity\",\"workers\":1}', $((instance_now - 300)), $instance_stale, $((instance_now - 300)), $instance_stale)" >/dev/null
+  psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO tasks (id, created_at, updated_at, task_id, platform, user_id, \"group\", channel_id, quota, action, status, fail_reason, submit_time, start_time, finish_time, progress, properties, private_data, data) VALUES (910001, 1700000000, 1700000010, 'parity-task', 'suno', 1, 'default', 0, 0, 'lyrics', 'SUCCESS', '', 1700000000, 1700000001, 1700000010, '100', '{\"input\":\"fixture\",\"upstream_model_name\":\"parity-model\"}', NULL, '{\"result\":\"ok\"}')" >/dev/null
 done
 
 # Go loads the process-wide ratio cache during startup.  Restart only the
@@ -762,6 +772,9 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
       capture_listener_response "$prefix.system-info-instances" -H "authorization: Bearer $token" "$base/api/system-info/instances"
       grep -qx 200 "$prefix.system-info-instances.status"
       jq -e '.success == true and .message == "" and ((.data | map(select(.node_name != "parity-runtime"))) | length == 2) and ([.data[] | select(.node_name == "parity-online" and .status == "online" and .stale_after_seconds == 90 and .info.region == "parity" and .info.workers == 2)] | length == 1) and ([.data[] | select(.node_name == "parity-stale" and .status == "stale" and .info.region == "parity" and .info.workers == 1)] | length == 1)' "$prefix.system-info-instances.json" >/dev/null
+      capture_listener_response "$prefix.task-self" -H "authorization: Bearer $token" "$base/api/task/self?p=1&ps=1&platform=suno"
+      grep -qx 200 "$prefix.task-self.status"
+      jq -e '.success == true and .message == "" and .data.page == 1 and .data.page_size == 1 and .data.total == 1 and (.data.items | length == 1) and .data.items[0].task_id == "parity-task" and .data.items[0].platform == "suno" and .data.items[0].user_id == 1 and .data.items[0].properties.input == "fixture" and .data.items[0].properties.upstream_model_name == "parity-model" and .data.items[0].data.result == "ok" and (.data.items[0] | has("result_url") | not)' "$prefix.task-self.json" >/dev/null
     fi
     capture_listener_response "$prefix.origin-missing" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" "$base/api/user/auth/refresh"
     capture_listener_response "$prefix.origin-evil" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" -H 'origin: https://evil.example' "$base/api/user/auth/refresh"
@@ -837,6 +850,7 @@ assert_listener_response_match a-first.system-task-current
 assert_listener_response_match a-first.system-task-detail
 assert_listener_response_match a-first.oauth-list
 assert_listener_response_match a-first.system-info-instances
+assert_listener_response_match a-first.task-self
 
 # Expire the just-rotated old token in the real database, then prove a replay
 # revokes the family over each TCP listener.  This avoids a wall-clock sleep
@@ -1077,4 +1091,4 @@ jq -cn \
   --argjson scenarios "$scenario_total" \
   --argjson exact_matches "$exact_matches" \
   --argjson mismatches "$mismatch_count" \
-  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list","GET /api/system-task/current","GET /api/system-task/:task_id","GET /api/custom-oauth-provider/","GET /api/system-info/instances"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
+  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list","GET /api/system-task/current","GET /api/system-task/:task_id","GET /api/custom-oauth-provider/","GET /api/system-info/instances","GET /api/task/self"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
