@@ -721,15 +721,40 @@ async fn complete_topup(
         if units <= 0 {
             return fail("无效的充值额度");
         }
-        match sqlx::query(
-            "UPDATE top_ups SET complete_time = $1, status = $2 WHERE id = $3 AND status = $4",
+        // Current Go persists the normalized credited amount on the order
+        // while completing it. Keep the fallback update for older schemas
+        // that predate the settlement columns; those schemas remain readable
+        // during the staged migration, but current schemas get exact parity.
+        let has_credited_quota = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'top_ups' AND column_name = 'credited_quota')",
         )
-        .bind(unix_now())
-        .bind(TOPUP_SUCCESS)
-        .bind(id)
-        .bind(TOPUP_PENDING)
-        .execute(&mut *tx)
-        .await {
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(false);
+        let completed_at = unix_now();
+        let completion = if has_credited_quota {
+            sqlx::query(
+                "UPDATE top_ups SET credited_quota = $1, complete_time = $2, status = $3 WHERE id = $4 AND status = $5",
+            )
+            .bind(units)
+            .bind(completed_at)
+            .bind(TOPUP_SUCCESS)
+            .bind(id)
+            .bind(TOPUP_PENDING)
+            .execute(&mut *tx)
+            .await
+        } else {
+            sqlx::query(
+                "UPDATE top_ups SET complete_time = $1, status = $2 WHERE id = $3 AND status = $4",
+            )
+            .bind(completed_at)
+            .bind(TOPUP_SUCCESS)
+            .bind(id)
+            .bind(TOPUP_PENDING)
+            .execute(&mut *tx)
+            .await
+        };
+        match completion {
             Ok(result) if result.rows_affected() == 1 => {}
             Ok(_) => return fail("系统错误"),
             Err(error) => return fail(legacy_database_error(&error)),
