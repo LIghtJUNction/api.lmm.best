@@ -143,6 +143,7 @@ CREATE SCHEMA $rust_schema AUTHORIZATION $rust_role;
 SQL
 sed "s/public\\./$rust_schema./g" "$repo_root/apps/api-rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql" >"$runtime/baseline.sql"
 psql -h 127.0.0.1 -p "$pg_port" -d "$rust_db" -v ON_ERROR_STOP=1 -f "$runtime/baseline.sql" >/dev/null
+rust_dsn="postgresql://$rust_role@127.0.0.1:$pg_port/$rust_db?options=-csearch_path%3D$rust_schema"
 psql -h 127.0.0.1 -p "$pg_port" -d "$rust_db" -v ON_ERROR_STOP=1 <<SQL >/dev/null
 CREATE TABLE $rust_schema.lmm_schema_contract (singleton BOOLEAN PRIMARY KEY,min_reader_version BIGINT NOT NULL,max_reader_version BIGINT NOT NULL);
 INSERT INTO $rust_schema.lmm_schema_contract VALUES (TRUE,1,1);
@@ -150,7 +151,18 @@ GRANT USAGE,CREATE ON SCHEMA $rust_schema TO $rust_role;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA $rust_schema TO $rust_role;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA $rust_schema TO $rust_role;
 SQL
-rust_dsn="postgresql://$rust_role@127.0.0.1:$pg_port/$rust_db?options=-csearch_path%3D$rust_schema"
+# The normal Rust readiness contract includes the reviewed forward-only
+# open-source-bounty relations even when this matrix exercises only catalog
+# reads. Apply that contract inside the disposable schema so `/readyz` is a
+# real dependency check rather than an unrelated fixture failure.
+sed "s/__LMM_APP_SCHEMA__/$rust_schema/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/open-source-bounty.sql"
+PGOPTIONS="-c search_path=$rust_schema" psql -h 127.0.0.1 -p "$pg_port" -d "$rust_db" \
+  -q -v ON_ERROR_STOP=1 -f "$runtime/open-source-bounty.sql" >/dev/null
+PGOPTIONS="-c search_path=$rust_schema" psql -h 127.0.0.1 -p "$pg_port" -d "$rust_db" -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges, open_source_bounty_ledgers, open_source_bounty_disputes, open_source_bounty_mcp_tokens, open_source_bounty_mcp_confirmations, open_source_bounty_mcp_operations, open_source_bounty_rest_operations TO $rust_role" \
+  >/dev/null
 psql "$rust_dsn" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 INSERT INTO options (key,value) VALUES
  ('SelfUseModeEnabled','false'),
