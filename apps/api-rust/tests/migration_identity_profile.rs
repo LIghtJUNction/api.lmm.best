@@ -170,6 +170,29 @@ async fn profile_setting_null_body_keeps_gin_zero_value_validation() {
 }
 
 #[tokio::test]
+async fn authenticated_profile_handler_errors_preserve_auth_version() {
+    let response = app()
+        .oneshot(
+            Request::put("/api/user/self")
+                .header("authorization", "Bearer listener-verified")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
+    );
+}
+
+#[tokio::test]
 async fn self_oauth_binding_rejects_non_oauth_fields_before_postgres() {
     let response = app()
         .oneshot(
