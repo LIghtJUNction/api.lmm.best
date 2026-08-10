@@ -62,6 +62,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   getAssistantStatus,
   sendAssistantMessage,
+  type AssistantChatMessage,
   type AssistantStatus,
 } from './api'
 import {
@@ -361,7 +362,10 @@ export function AssistantPanel(props: {
     ])
     setSending(true)
     try {
-      const reply = await sendAssistantMessage(message)
+      const history: AssistantChatMessage[] = entries
+        .filter((entry) => !entry.error)
+        .map((entry) => ({ role: entry.role, content: entry.content }))
+      const reply = await sendAssistantMessage(message, history)
       const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
       const suggestedAction = suggestedPresetId
         ? presets.find((preset) => preset.id === suggestedPresetId)?.action
