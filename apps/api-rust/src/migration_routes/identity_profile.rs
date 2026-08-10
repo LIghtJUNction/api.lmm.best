@@ -448,10 +448,26 @@ impl ProfileError {
             message: "identity profile operation failed",
         }
     }
+
+    fn auth_internal(locale: LegacyLocale) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: Some("AUTH_INTERNAL_ERROR"),
+            message: locale.database_error(),
+        }
+    }
 }
 
 impl IntoResponse for ProfileError {
     fn into_response(self) -> Response {
+        // Gin's ApiError/ApiErrorI18n deliberately keep profile business and
+        // database failures at HTTP 200. Only middleware-auth failures carry
+        // an explicit auth code and retain their transport status.
+        let status = if self.code.is_some() {
+            self.status
+        } else {
+            StatusCode::OK
+        };
         let mut body = serde_json::Map::from_iter([
             ("success".to_owned(), Value::Bool(false)),
             ("message".to_owned(), Value::String(self.message.to_owned())),
@@ -459,7 +475,7 @@ impl IntoResponse for ProfileError {
         if let Some(code) = self.code {
             body.insert("code".to_owned(), Value::String(code.to_owned()));
         }
-        (self.status, Json(Value::Object(body))).into_response()
+        (status, Json(Value::Object(body))).into_response()
     }
 }
 
@@ -995,7 +1011,7 @@ async fn authenticated(
         .await
         .map_err(|error| match error {
             ProfileAuthError::Unauthorized => ProfileError::unauthorized(locale(headers)),
-            ProfileAuthError::Internal => ProfileError::internal(),
+            ProfileAuthError::Internal => ProfileError::auth_internal(locale(headers)),
         })
 }
 
@@ -1029,6 +1045,14 @@ impl LegacyLocale {
             Self::En => "Unauthorized, invalid access token",
             Self::ZhCn => "无权进行此操作，access token 无效",
             Self::ZhTw => "無權進行此操作，access token 無效",
+        }
+    }
+
+    fn database_error(self) -> &'static str {
+        match self {
+            Self::En => "Database error, please contact the administrator",
+            Self::ZhCn => "数据库出错，请联系管理员",
+            Self::ZhTw => "資料庫出錯，請聯繫管理員",
         }
     }
 
