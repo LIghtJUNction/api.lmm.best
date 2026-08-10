@@ -133,11 +133,7 @@ export function GettingStarted() {
             icon: KeyRound,
           }
         : onboarding.stage === 'first_request'
-          ? {
-              to: '/playground' as const,
-              label: t('Open AI assistant'),
-              icon: Send,
-            }
+          ? null
           : {
               to: '/dashboard' as const,
               label: t('Open dashboard'),
@@ -394,7 +390,18 @@ export function GettingStarted() {
                       : t('Go to your dashboard to continue.')}
               </p>
             </div>
-            {primaryCommand && PrimaryIcon ? (
+            {onboarding.stage === 'first_request' ? (
+              <Button
+                type='button'
+                className='w-full sm:w-auto'
+                size='lg'
+                onClick={() => requestAssistantOpen('client-setup')}
+              >
+                <Send data-icon='inline-start' aria-hidden='true' />
+                {t('Open AI assistant')}
+                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+              </Button>
+            ) : primaryCommand && PrimaryIcon ? (
               <Button
                 className='w-full sm:w-auto'
                 size='lg'

@@ -103,18 +103,13 @@ function makeRouter() {
     path: '/getting-started',
     component: GettingStarted,
   })
-  const emptyRoutes = [
-    '/wallet',
-    '/support',
-    '/keys',
-    '/playground',
-    '/dashboard',
-  ].map((path) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path,
-      component: () => null,
-    })
+  const emptyRoutes = ['/wallet', '/support', '/keys', '/dashboard'].map(
+    (path) =>
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path,
+        component: () => null,
+      })
   )
   return createRouter({
     routeTree: rootRoute.addChildren([gettingStartedRoute, ...emptyRoutes]),
