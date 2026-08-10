@@ -179,34 +179,26 @@ func GetAvailableGiftsForUser(userId int) ([]GiftWithClaimStatus, error) {
 
 // ClaimGift 用户主动领取礼包。资格校验 + 领取记录 + 加额度保持原子性：
 // MySQL/PostgreSQL 走事务；SQLite 走顺序操作 + 失败回滚（与签到一致）。
-func ClaimGift(userId int, giftId int) (*GiftClaim, error) {
+// alreadyClaimed 返回 true 表示此前已领取过（额度不会重复发放），
+// 调用方应将其视为成功的幂等响应而非错误。
+func ClaimGift(userId int, giftId int) (claim *GiftClaim, alreadyClaimed bool, err error) {
 	user, err := GetUserById(userId, true)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	gift, err := GetGiftById(giftId)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrGiftNotFound
+			return nil, false, ErrGiftNotFound
 		}
-		return nil, err
+		return nil, false, err
 	}
 	now := time.Now().Unix()
 	if err := checkGiftEligibility(gift, user, now); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	// 已领取检查（兜底；并发场景由唯一索引保证）
-	var count int64
-	if err := DB.Model(&GiftClaim{}).Where("gift_id = ? AND user_id = ?", giftId, userId).
-		Count(&count).Error; err != nil {
-		return nil, err
-	}
-	if count > 0 {
-		return nil, ErrGiftAlreadyClaimed
-	}
-
-	claim := &GiftClaim{
+	claim = &GiftClaim{
 		GiftId:    giftId,
 		UserId:    userId,
 		Username:  user.Username,
@@ -214,13 +206,28 @@ func ClaimGift(userId int, giftId int) (*GiftClaim, error) {
 		CreatedAt: now,
 	}
 
+	var createErr error
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
-		return claimGiftWithoutTransaction(claim, userId, gift.Quota)
+		createErr = claimGiftWithoutTransaction(claim, userId, gift.Quota)
+	} else {
+		createErr = claimGiftWithTransaction(claim, userId, gift.Quota)
 	}
-	return claimGiftWithTransaction(claim, userId, gift.Quota)
+	if createErr != nil {
+		// 唯一索引冲突 = 已领取过：返回既有领取记录，让调用方按幂等成功处理
+		if errors.Is(createErr, ErrGiftAlreadyClaimed) {
+			var existing GiftClaim
+			if err := DB.Where("gift_id = ? AND user_id = ?", giftId, userId).
+				First(&existing).Error; err == nil {
+				return &existing, true, nil
+			}
+			return nil, false, createErr
+		}
+		return nil, false, createErr
+	}
+	return claim, false, nil
 }
 
-func claimGiftWithTransaction(claim *GiftClaim, userId int, quota int) (*GiftClaim, error) {
+func claimGiftWithTransaction(claim *GiftClaim, userId int, quota int) error {
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(claim).Error; err != nil {
 			return ErrGiftAlreadyClaimed
@@ -232,23 +239,23 @@ func claimGiftWithTransaction(claim *GiftClaim, userId int, quota int) (*GiftCla
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	go func() {
 		_ = cacheIncrUserQuota(userId, int64(quota))
 	}()
-	return claim, nil
+	return nil
 }
 
 // claimGiftWithoutTransaction 不使用事务执行领取（适用于 SQLite）
-func claimGiftWithoutTransaction(claim *GiftClaim, userId int, quota int) (*GiftClaim, error) {
+func claimGiftWithoutTransaction(claim *GiftClaim, userId int, quota int) error {
 	if err := DB.Create(claim).Error; err != nil {
-		return nil, ErrGiftAlreadyClaimed
+		return ErrGiftAlreadyClaimed
 	}
 	// 使用 db=true 强制直接写入数据库，不使用批量更新
 	if err := IncreaseUserQuota(userId, quota, true); err != nil {
 		DB.Delete(claim)
-		return nil, errors.New("领取失败：更新额度出错")
+		return errors.New("领取失败：更新额度出错")
 	}
-	return claim, nil
+	return nil
 }
