@@ -187,6 +187,7 @@ start_listeners() {
     "LMM_RS_LISTEN_ADDR=127.0.0.1:$rust_port"
     "DATABASE_URL=$rust_dsn"
     "VALKEY_URL=redis://127.0.0.1:$valkey_port/6"
+    "LMM_RS_TEST_VALKEY_PORT=$valkey_port"
     "LMM_SCHEMA_CONTRACT=1"
     'SESSION_SECRET=TransactionOracle-2026!SyntheticOnly'
     'CRYPTO_SECRET=TransactionOracle-Crypto-2026!SyntheticOnly'
