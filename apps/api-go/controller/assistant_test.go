@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,9 @@ func withAssistantSettings(t *testing.T, enabled bool, model string) {
 func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withAssistantSettings(t, true, "server-owned-model")
+	originalServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://api.example.com/"
+	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
 	engine := gin.New()
 	var captured assistantOpenAIRequest
 	var capturedPath string
@@ -58,6 +62,9 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	require.Len(t, captured.Messages, 2)
 	assert.Equal(t, "system", captured.Messages[0].Role)
 	assert.Contains(t, captured.Messages[0].Content, "Never ask for or repeat passwords")
+	assert.Contains(t, captured.Messages[0].Content, "https://api.example.com/v1")
+	assert.Contains(t, captured.Messages[0].Content, "server-owned-model")
+	assert.Contains(t, captured.Messages[0].Content, "Existing API keys are private")
 	assert.Equal(t, "user", captured.Messages[1].Role)
 	assert.Equal(t, "How do I create a key?", captured.Messages[1].Content)
 }

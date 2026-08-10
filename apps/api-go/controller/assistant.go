@@ -16,17 +16,23 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
 const assistantMessageMaxRunes = 4000
 
-const assistantSystemPrompt = `You are the built-in customer assistant for LMM, an AI API service.
+const assistantSystemPromptTemplate = `You are the built-in customer assistant for LMM, an AI API service.
 Answer in the user's language and be concise, accurate, and practical.
 You may explain onboarding review, plans, pricing, discounts, API keys, Base URL and model IDs, cost calculations, open-source bounties and tips, and setup for Claude Code, CC Switch, ChatGPT-compatible clients, Windows, Linux, and macOS.
 Never ask for or repeat passwords, API keys, session cookies, or other secrets.
 Never claim that you created a key, changed an account, contacted an administrator, purchased a plan, or completed any other action. Explain the confirmation step or direct the user to the relevant page instead.
-When information depends on live account state or current pricing, say that the user should confirm it in the console rather than inventing a value.`
+When information depends on live account state or current pricing, say that the user should confirm it in the console rather than inventing a value.
+
+Current service connection facts:
+- OpenAI-compatible Base URL: %s
+- Default assistant model ID: %s
+- Existing API keys are private and unavailable to you. Direct the user to the connection details tool to create and copy a new key with explicit confirmation.`
 
 type assistantChatInput struct {
 	Message string `json:"message"`
@@ -43,6 +49,16 @@ type assistantOpenAIRequest struct {
 	Stream      bool                     `json:"stream"`
 	Temperature float64                  `json:"temperature"`
 	MaxTokens   int                      `json:"max_tokens"`
+}
+
+func buildAssistantSystemPrompt(settings setting.AssistantSettings) string {
+	baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
+	if baseURL == "" {
+		baseURL = "the /v1 endpoint shown in the current console"
+	} else {
+		baseURL += "/v1"
+	}
+	return fmt.Sprintf(assistantSystemPromptTemplate, baseURL, settings.Model)
 }
 
 func writeAssistantError(c *gin.Context, status int, code string, err error) {
@@ -92,7 +108,7 @@ func PrepareAssistantRequest(c *gin.Context) {
 	request := assistantOpenAIRequest{
 		Model: settings.Model,
 		Messages: []assistantOpenAIMessage{
-			{Role: "system", Content: assistantSystemPrompt},
+			{Role: "system", Content: buildAssistantSystemPrompt(settings)},
 			{Role: "user", Content: input.Message},
 		},
 		Stream:      false,
