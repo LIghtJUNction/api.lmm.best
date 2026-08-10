@@ -40,6 +40,7 @@ const TOTP_LOCK_SECONDS: i64 = 5 * 60;
 const ROLE_ADMIN: i64 = 10;
 const ROLE_ROOT: i64 = 100;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const TWO_FACTOR_STATUS_PATH: &str = "/api/user/2fa/status";
 
 /// Identity established by the parent authenticated-user extractor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -233,7 +234,7 @@ pub fn router(state: Identity2FAState) -> Router {
 /// 2FA mutations remain on the isolated candidate router.
 pub fn status_read_router(state: Identity2FAReadState) -> Router {
     Router::new()
-        .route("/api/user/2fa/status", get(status_read))
+        .route(TWO_FACTOR_STATUS_PATH, get(status_read))
         .with_state(state)
         .layer(middleware::map_response(legacy_json_content_type))
 }
