@@ -492,12 +492,31 @@ for my $file (@source_files) {
             next;
         }
         my $path_expression = substr($clean, $opening + 1, $comma - $opening - 1);
-        if ($path_expression !~ /^\s*"((?:\\.|[^"\\])*)"\s*$/s) {
-            $failed |= fail("$file:$line: route path must be a static string literal");
+        my ($raw_path, $route_alias) = (undef, 0);
+        if ($path_expression =~ /^\s*"((?:\\.|[^"\\])*)"\s*$/s) {
+            $raw_path = $1;
+        } elsif ($path_expression =~ /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$/s) {
+            my $constant_name = $1;
+            if ($constant_name !~ /_PATH\z/) {
+                $failed |= fail("$file:$line: route path identifier must use a *_PATH constant");
+            } else {
+                my $constant_pattern = qr{
+                    \bconst\s+\Q$constant_name\E\s*:\s*&str\s*=\s*"((?:\\.|[^"\\])*)"\s*;
+                }x;
+                if ($raw =~ $constant_pattern) {
+                    $raw_path = $1;
+                    $route_alias = 1;
+                } else {
+                    $failed |= fail("$file:$line: route path constant $constant_name must be a local static string");
+                }
+            }
+        } else {
+            $failed |= fail("$file:$line: route path must be a static string literal or a *_PATH constant");
+        }
+        if (!defined $raw_path) {
             pos($clean) = $closing + 1;
             next;
         }
-        my $raw_path = $1;
         my $path = normalize_path($raw_path);
         if (!defined $path) {
             $failed |= fail("$file:$line: unsupported or malformed route path $raw_path");
@@ -514,6 +533,11 @@ for my $file (@source_files) {
         my %declaration_methods;
         for my $call (@$calls) {
             my ($method, $handler) = @$call;
+            # A *_PATH route is an explicitly named non-owning split mount.
+            # Its owning route must still be emitted through a literal path in
+            # this source tree; skipping aliases keeps read-only/state-specific
+            # mounts from being mistaken for duplicate production ownership.
+            next if $route_alias;
             my $candidate_path = normalize_candidate_path($method, $path);
             next if !defined $candidate_path;
             if ($declaration_methods{$method}++) {

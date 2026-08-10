@@ -33,6 +33,8 @@ use secrecy::SecretString;
 
 const ADMIN_ROLE: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const SESSIONS_PATH: &str = "/api/user/sessions";
+const PASSKEY_PATH: &str = "/api/user/passkey";
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -914,7 +916,7 @@ pub fn registration_router(state: IdentitySecurityState) -> Router {
 /// the handler.
 pub fn sessions_read_router(state: IdentitySecurityState) -> Router {
     Router::new()
-        .route("/api/user/sessions", get(list_sessions))
+        .route(SESSIONS_PATH, get(list_sessions))
         .with_state(state)
 }
 
@@ -923,7 +925,7 @@ pub fn sessions_read_router(state: IdentitySecurityState) -> Router {
 /// and persist WebAuthn secrets.
 pub fn passkey_read_router(state: IdentitySecurityState) -> Router {
     Router::new()
-        .route("/api/user/passkey", get(passkey_status))
+        .route(PASSKEY_PATH, get(passkey_status))
         .with_state(state)
 }
 

@@ -39,6 +39,7 @@ const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
 const TOPUP_QUERY_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 const SEARCH_COUNT_HARD_LIMIT: i64 = 10_000;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const TOPUP_HISTORY_PATH: &str = "/api/user/topup";
 
 /// Dependencies owned by this isolated migration slice.
 #[derive(Clone)]
@@ -73,7 +74,7 @@ pub fn read_router(state: IdentityTopupState) -> Router {
 /// write-side transaction differential is complete.
 pub fn admin_read_router(state: IdentityTopupState) -> Router {
     Router::new()
-        .route("/api/user/topup", get(all_topups))
+        .route(TOPUP_HISTORY_PATH, get(all_topups))
         .with_state(state)
 }
 
