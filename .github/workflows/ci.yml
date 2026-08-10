@@ -56,6 +56,9 @@ jobs:
           bun run --filter @lmm/web build
           bun run --filter @lmm/web bundle:check
 
+      - name: Install deployment contract tools
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libarchive-tools
+
       - name: Verify protected production deployment contract
         env:
           TMPDIR: ${{ runner.temp }}
