@@ -22,7 +22,10 @@ declare global {
   interface Window {
     turnstile?: {
       ready?: (callback: () => void) => void
-      render: (element: HTMLElement, options: Record<string, unknown>) => unknown
+      render: (
+        element: HTMLElement,
+        options: Record<string, unknown>
+      ) => unknown
     }
   }
 }
