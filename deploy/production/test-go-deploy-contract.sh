@@ -46,6 +46,10 @@ for literal in \
 	'"$PROBE_BINARY" request' \
 	'run_candidate_migration apply' \
 	'run_candidate_migration verify' \
+  'harden_production_environment_config' \
+  'SESSION_COOKIE_SECURE=true' \
+  'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best' \
+  'TRUSTED_PROXIES=127.0.0.1/32,::1/128' \
   'rollback_layout=%s' \
   'direct Go upgrade unexpectedly found the split core package' \
   'pacman -Rdd --noconfirm lmm-api' \

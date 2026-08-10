@@ -343,6 +343,26 @@ restore_direct_environment_config() {
   mv -Tf -- "$temporary" "$destination"
 }
 
+harden_production_environment_config() {
+  local destination temporary
+  destination=$NEW_CONFIG_DIR/lmm-api-go.env
+  temporary=$destination.$$.hardened
+  [[ -f $destination && ! -L $destination ]] || die 'Go environment file is missing before production hardening'
+  awk '
+    /^[[:space:]]*SESSION_COOKIE_SECURE[[:space:]]*=/ { next }
+    /^[[:space:]]*SESSION_COOKIE_TRUSTED_URL[[:space:]]*=/ { next }
+    /^[[:space:]]*TRUSTED_PROXIES[[:space:]]*=/ { next }
+    { print }
+  ' "$destination" >"$temporary"
+  {
+    printf 'SESSION_COOKIE_SECURE=true\n'
+    printf 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best\n'
+    printf 'TRUSTED_PROXIES=127.0.0.1/32,::1/128\n'
+  } >>"$temporary"
+  chmod 0600 "$temporary"
+  mv -Tf -- "$temporary" "$destination"
+}
+
 remove_old_application_configuration() {
   local name path
   validate_old_configuration_directory
@@ -626,6 +646,7 @@ EOF
     else
       restore_direct_environment_config "$config_restore/lmm-api-go/lmm-api-go.env"
     fi
+    harden_production_environment_config
     systemctl daemon-reload
     pacman -Qkk lmm-api-go >/dev/null
     [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'

@@ -359,6 +359,12 @@ grep -Fqx 'database_schema=lmm_prod_contract' "$confirm_workspace/state/deployme
   fail 'deployment manifest did not freeze the production schema'
 grep -Fqx 'PGOPTIONS="-c search_path=lmm_prod_contract"' \
   "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || fail 'new service config did not preserve the production schema'
+grep -Fqx 'SESSION_COOKIE_SECURE=true' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+  fail 'new service config did not require secure refresh cookies'
+grep -Fqx 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+  fail 'new service config did not pin the trusted public origin'
+grep -Fqx 'TRUSTED_PROXIES=127.0.0.1/32,::1/128' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+  fail 'new service config did not restrict trusted proxies to the local reverse proxy'
 [[ $(readlink "$LMM_DEPLOY_TEST_FRONTEND_ROOT/current") == "releases/$LMM_TEST_NEW_VERSION" ]] || fail 'new frontend was not published'
 [[ -f $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'rollback timer was not armed'
 [[ -f $LMM_DEPLOY_TEST_OLD_CONFIG_DIR/credentials/backup.identity ]] || fail 'auxiliary credentials were removed'
@@ -407,6 +413,12 @@ grep -Fq 'AWAITING_CONFIRMATION' "$direct_confirm_workspace/state/status" || \
 [[ ! -e $LMM_TEST_SERVICE_STATE/core.removed ]] || fail 'direct Go upgrade removed a nonexistent core package'
 [[ -f $LMM_TEST_SERVICE_STATE/new.active && ! -e $LMM_TEST_SERVICE_STATE/old.active ]] || \
   fail 'direct Go upgrade did not preserve the Go service architecture'
+grep -Fqx 'SESSION_COOKIE_SECURE=true' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+  fail 'direct Go upgrade did not require secure refresh cookies'
+grep -Fqx 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+  fail 'direct Go upgrade did not pin the trusted public origin'
+grep -Fqx 'TRUSTED_PROXIES=127.0.0.1/32,::1/128' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+  fail 'direct Go upgrade did not restrict trusted proxies to the local reverse proxy'
 grep -Fqx -- "--property=EnvironmentFile=$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" \
   "$LMM_TEST_SERVICE_STATE/migrate.apply.args" || fail 'direct migration did not use the active Go environment'
 [[ -f $LMM_DEPLOY_TEST_NEW_DROPIN_DIR/50-memory.conf ]] || fail 'direct upgrade removed the Go service drop-in'
@@ -429,6 +441,10 @@ grep -Fq 'ROLLED_BACK' "$direct_rollback_workspace/state/status" || fail 'direct
   fail 'direct rollback did not restore the Go service'
 [[ $(<"$LMM_TEST_SERVICE_STATE/version") == "$LMM_TEST_OLD_VERSION" ]] || \
   fail 'direct rollback did not reinstall the old Go package'
+if grep -Eq '^(SESSION_COOKIE_SECURE|SESSION_COOKIE_TRUSTED_URL|TRUSTED_PROXIES)=' \
+  "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env"; then
+  fail 'direct rollback did not restore the original Go environment'
+fi
 [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'direct rollback left its timer active'
 
 printf 'Go rollback and confirmation state machine verified\n'
