@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use axum::{
     extract::{RawQuery, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -25,6 +25,7 @@ use crate::auth::DashboardAuth;
 const ADMIN_ROLE: i64 = 10;
 const ROOT_ROLE: i64 = 100;
 const MAX_SELF_RANGE_SECONDS: i64 = 30 * 24 * 60 * 60;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// The legacy authentication boundary required by a route family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1240,7 +1241,8 @@ async fn execute_authorized(
     operation: ObservabilityOperation,
     query: BTreeMap<String, String>,
 ) -> Response {
-    match state
+    let dashboard_user = matches!(&principal, ObservabilityPrincipal::User { .. });
+    let response = match state
         .store
         .execute(ObservabilityCall {
             operation,
@@ -1252,6 +1254,11 @@ async fn execute_authorized(
         Ok(data) => success(data),
         Err(ObservabilityStoreError::Legacy(message)) => failure(StatusCode::OK, message),
         Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    if dashboard_user {
+        with_auth_version(response)
+    } else {
+        response
     }
 }
 
@@ -1267,6 +1274,21 @@ async fn execute_raw(
         Err(response) => return response,
     };
     execute_authorized(state, principal, operation, parse_query(raw_query)).await
+}
+
+fn with_auth_version(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+fn with_auth_version_for_user(response: Response, principal: &ObservabilityPrincipal) -> Response {
+    if matches!(principal, ObservabilityPrincipal::User { .. }) {
+        with_auth_version(response)
+    } else {
+        response
+    }
 }
 
 fn parse_query(raw_query: RawQuery) -> BTreeMap<String, String> {
@@ -1380,7 +1402,10 @@ async fn self_quota_dates(
     };
     let query = parse_query(raw_query);
     if self_range_is_too_large(&query) {
-        return failure(StatusCode::OK, "时间跨度不能超过 1 个月");
+        return with_auth_version_for_user(
+            failure(StatusCode::OK, "时间跨度不能超过 1 个月"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
@@ -1402,7 +1427,7 @@ async fn all_flow_quota_dates(
     };
     let query = parse_query(raw_query);
     if let Err(message) = flow_range(&query) {
-        return failure(StatusCode::OK, message);
+        return with_auth_version_for_user(failure(StatusCode::OK, message), &principal);
     }
     execute_authorized(
         &state,
@@ -1424,10 +1449,13 @@ async fn self_flow_quota_dates(
     };
     let query = parse_query(raw_query);
     if let Err(message) = flow_range(&query) {
-        return failure(StatusCode::OK, message);
+        return with_auth_version_for_user(failure(StatusCode::OK, message), &principal);
     }
     if self_range_is_too_large(&query) {
-        return failure(StatusCode::OK, "时间跨度不能超过 1 个月");
+        return with_auth_version_for_user(
+            failure(StatusCode::OK, "时间跨度不能超过 1 个月"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
@@ -1464,10 +1492,16 @@ async fn channel_affinity_usage_cache_stats(
     };
     let query = parse_query(raw_query);
     if query.get("rule_name").is_none_or(String::is_empty) {
-        return failure(StatusCode::BAD_REQUEST, "missing param: rule_name");
+        return with_auth_version_for_user(
+            failure(StatusCode::BAD_REQUEST, "missing param: rule_name"),
+            &principal,
+        );
     }
     if query.get("key_fp").is_none_or(String::is_empty) {
-        return failure(StatusCode::BAD_REQUEST, "missing param: key_fp");
+        return with_auth_version_for_user(
+            failure(StatusCode::BAD_REQUEST, "missing param: key_fp"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
@@ -1487,7 +1521,7 @@ async fn deprecated_log_search(
         Err(response) => return response,
     };
     let _ = principal;
-    failure(StatusCode::OK, "该接口已废弃")
+    with_auth_version(failure(StatusCode::OK, "该接口已废弃"))
 }
 
 async fn self_logs(
@@ -1514,7 +1548,7 @@ async fn deprecated_self_log_search(
         Err(response) => return response,
     };
     let _ = principal;
-    failure(StatusCode::OK, "该接口已废弃")
+    with_auth_version(failure(StatusCode::OK, "该接口已废弃"))
 }
 
 async fn self_log_stats(
@@ -1573,7 +1607,10 @@ async fn perf_metrics(
     };
     let query = parse_query(raw_query);
     if query.get("model").is_none_or(String::is_empty) {
-        return failure(StatusCode::BAD_REQUEST, "model is required");
+        return with_auth_version_for_user(
+            failure(StatusCode::BAD_REQUEST, "model is required"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
