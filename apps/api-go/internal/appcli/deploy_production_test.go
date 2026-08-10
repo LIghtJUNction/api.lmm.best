@@ -8,6 +8,30 @@ import (
 	"testing"
 )
 
+func TestProductionDatabaseCommandKeepsPasswordOutOfArguments(t *testing.T) {
+	databaseURL, environment, err := productionDatabaseCommand(map[string]string{
+		"SQL_DSN": "postgres://app:p%40ssword@database.example/lmm?sslmode=require",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(databaseURL, "p%40ssword") || databaseURL != "postgres://app@database.example/lmm?sslmode=require" {
+		t.Fatalf("database command URL contains credentials: %q", databaseURL)
+	}
+	if !containsString(environment, "PGPASSWORD=p@ssword") {
+		t.Fatal("database password is not available to libpq")
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.T) {
 	root := t.TempDir()
 	envFile := filepath.Join(root, "etc", "lmm-api-go.env")
