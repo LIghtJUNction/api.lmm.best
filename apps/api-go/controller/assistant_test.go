@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -104,4 +106,76 @@ func TestPrepareAssistantRequestRejectsOversizedMessage(t *testing.T) {
 	engine.ServeHTTP(response, request)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
 	assert.Contains(t, response.Body.String(), "ASSISTANT_MESSAGE_TOO_LONG")
+}
+
+func TestCreateAssistantDefaultKeyRequiresConfirmation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"name":"my key"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	CreateAssistantDefaultKey(c)
+	assert.Equal(t, http.StatusUnprocessableEntity, response.Code)
+	assert.Contains(t, response.Body.String(), "ASSISTANT_CONFIRMATION_REQUIRED")
+}
+
+func TestCreateAssistantDefaultKeyForL1Session(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+	user := model.User{
+		Username:           "assistant-key-user",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		ConsoleActivatedAt: 1,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"confirmed":true,"name":"assistant-created"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", user.Id)
+	CreateAssistantDefaultKey(c)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			ID  int    `json:"id"`
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.True(t, payload.Success)
+	assert.Positive(t, payload.Data.ID)
+	assert.True(t, strings.HasPrefix(payload.Data.Key, "sk-"))
+	var token model.Token
+	require.NoError(t, db.First(&token, payload.Data.ID).Error)
+	assert.Equal(t, user.Id, token.UserId)
+	assert.True(t, token.UnlimitedQuota)
+	assert.EqualValues(t, -1, token.ExpiredTime)
+}
+
+func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	user := model.User{
+		Username: "assistant-l0-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	response := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(response)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"confirmed":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("id", user.Id)
+	CreateAssistantDefaultKey(c)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_REQUIRED")
 }

@@ -56,7 +56,10 @@ import {
   sendAssistantMessage,
   type AssistantStatus,
 } from './api'
+import { AssistantCostTool } from './assistant-cost-tool'
 import type { AssistantPresetId } from './assistant-events'
+import { AssistantHandoffTool } from './assistant-handoff-tool'
+import { AssistantKeyTool } from './assistant-key-tool'
 
 type AssistantActionPath =
   | '/getting-started'
@@ -68,6 +71,11 @@ type AssistantActionPath =
 type AssistantAction =
   | { kind: 'route'; label: string; to: AssistantActionPath }
   | { kind: 'email'; label: string; href: string }
+  | {
+      kind: 'tool'
+      label: string
+      tool: 'key' | 'cost' | 'handoff'
+    }
 
 type AssistantPreset = {
   id: AssistantPresetId
@@ -89,7 +97,19 @@ function getBaseUrl(): string {
   return `${window.location.origin}/v1`
 }
 
-function PresetAction({ action }: { action: AssistantAction }) {
+function PresetAction(props: {
+  action: AssistantAction
+  onToolOpen: (tool: 'key' | 'cost' | 'handoff') => void
+}) {
+  const { action } = props
+  if (action.kind === 'tool') {
+    return (
+      <Button variant='outline' onClick={() => props.onToolOpen(action.tool)}>
+        {action.label}
+        <ArrowRight data-icon='inline-end' aria-hidden='true' />
+      </Button>
+    )
+  }
   if (action.kind === 'email') {
     return (
       <Button variant='outline' render={<a href={action.href} />}>
@@ -154,7 +174,11 @@ export function AssistantPanel(props: {
           'Use {{baseUrl}} as the Base URL. Create a key on the API Keys page, then copy an exact model ID from Pricing. Keep the key private because it may only be displayed once.',
           { baseUrl }
         ),
-        action: { kind: 'route', label: t('Create API Key'), to: '/keys' },
+        action: {
+          kind: 'tool',
+          label: t('Create a key safely'),
+          tool: 'key',
+        },
       },
       {
         id: 'client-setup',
@@ -187,9 +211,9 @@ export function AssistantPanel(props: {
           'Estimated cost is input tokens multiplied by the input rate plus output tokens multiplied by the output rate. Cached tokens, images, or tools may have separate rates, so confirm the selected model in Pricing.'
         ),
         action: {
-          kind: 'route',
-          label: t('Open cost reference'),
-          to: '/pricing',
+          kind: 'tool',
+          label: t('Calculate with live pricing'),
+          tool: 'cost',
         },
       },
       {
@@ -199,9 +223,9 @@ export function AssistantPanel(props: {
           'Describe the account, billing, or technical issue and include the page and approximate time. Never include an API key or password in the message.'
         ),
         action: {
-          kind: 'route',
-          label: t('Contact support'),
-          to: '/support',
+          kind: 'tool',
+          label: t('Send to an administrator'),
+          tool: 'handoff',
         },
       },
     ],
@@ -222,6 +246,9 @@ export function AssistantPanel(props: {
     ]
   })
   const [sending, setSending] = useState(false)
+  const [activeTool, setActiveTool] = useState<
+    'key' | 'cost' | 'handoff' | null
+  >(null)
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
     queryFn: getAssistantStatus,
@@ -241,6 +268,7 @@ export function AssistantPanel(props: {
   )
 
   const appendPreset = (preset: AssistantPreset) => {
+    setActiveTool(null)
     setEntries((current) => [
       ...current,
       {
@@ -255,6 +283,11 @@ export function AssistantPanel(props: {
         action: preset.action,
       },
     ])
+  }
+
+  const handleOpenChange = (open: boolean) => {
+    if (!open) setActiveTool(null)
+    props.onOpenChange(open)
   }
 
   const submitMessage = async ({ text }: { text?: string }) => {
@@ -299,7 +332,7 @@ export function AssistantPanel(props: {
   }
 
   return (
-    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+    <Sheet open={props.open} onOpenChange={handleOpenChange}>
       <SheetContent
         className={sideDrawerContentClassName('max-w-none sm:!max-w-[480px]')}
       >
@@ -360,7 +393,10 @@ export function AssistantPanel(props: {
                       <p className='whitespace-pre-wrap'>{entry.content}</p>
                       {entry.action ? (
                         <div>
-                          <PresetAction action={entry.action} />
+                          <PresetAction
+                            action={entry.action}
+                            onToolOpen={setActiveTool}
+                          />
                         </div>
                       ) : null}
                     </MessageContent>
@@ -378,12 +414,32 @@ export function AssistantPanel(props: {
                     </MessageContent>
                   </Message>
                 ) : null}
+                {activeTool === 'key' ? (
+                  <AssistantKeyTool
+                    baseUrl={baseUrl}
+                    developerAccessGranted={
+                      statusQuery.data?.developer_access_granted === true
+                    }
+                  />
+                ) : null}
+                {activeTool === 'cost' ? (
+                  <AssistantCostTool
+                    defaultModel={statusQuery.data?.model ?? ''}
+                    developerAccessGranted={
+                      statusQuery.data?.developer_access_granted === true
+                    }
+                  />
+                ) : null}
+                {activeTool === 'handoff' ? <AssistantHandoffTool /> : null}
                 <div className='border-t pt-3'>
                   <Button
                     type='button'
                     variant='ghost'
                     size='sm'
-                    onClick={() => setEntries([])}
+                    onClick={() => {
+                      setEntries([])
+                      setActiveTool(null)
+                    }}
                     disabled={sending}
                   >
                     <RotateCcw data-icon='inline-start' aria-hidden='true' />

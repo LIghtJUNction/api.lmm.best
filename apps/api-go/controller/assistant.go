@@ -82,6 +82,12 @@ func PrepareAssistantRequest(c *gin.Context) {
 		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_MESSAGE_TOO_LONG", fmt.Errorf("assistant message must be at most %d characters", assistantMessageMaxRunes))
 		return
 	}
+	if userID := c.GetInt("id"); userID > 0 {
+		if err := model.RecordAssistantIntent(userID, input.Message); err != nil {
+			// Product analytics must never make customer support unavailable.
+			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
+		}
+	}
 
 	request := assistantOpenAIRequest{
 		Model: settings.Model,
@@ -146,14 +152,22 @@ func AssistantChat(c *gin.Context) {
 
 func GetAssistantStatus(c *gin.Context) {
 	settings := setting.GetAssistantSettings()
-	credit, err := service.GetAssistantCreditStatus(c.GetInt("id"), time.Now())
+	userID := c.GetInt("id")
+	credit, err := service.GetAssistantCreditStatus(userID, time.Now())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	developerAccessGranted := false
+	if user, userErr := model.GetUserCache(userID); userErr == nil {
+		if access, accessErr := model.GetDeveloperAccessStateForUserBase(user); accessErr == nil {
+			developerAccessGranted = access.Granted
+		}
+	}
 	common.ApiSuccess(c, gin.H{
-		"enabled": settings.Enabled,
-		"model":   settings.Model,
-		"credit":  credit,
+		"enabled":                  settings.Enabled,
+		"model":                    settings.Model,
+		"credit":                   credit,
+		"developer_access_granted": developerAccessGranted,
 	})
 }
