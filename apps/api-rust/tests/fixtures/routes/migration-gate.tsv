@@ -15,7 +15,7 @@ POST	/:mode/mj/submit/video	absent	not-applicable	unmounted	not-applicable	not-a
 GET	/:mode/mj/task/:id/fetch	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/:mode/mj/task/:id/image-seed	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/:mode/mj/task/list-by-condition	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/about	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	apps/api-rust/src/http.rs
+GET	/api/about	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	mount=apps/api-rust/src/http.rs;differential=apps/api-rust/tests/behavior-oracle/tests/public-routes-listener-differential.sh:5/5
 GET	/api/authz/catalog	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/channel/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/channel/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
@@ -89,7 +89,7 @@ GET	/api/deployments/settings	absent	not-applicable	unmounted	not-applicable	not
 POST	/api/deployments/settings/test-connection	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/deployments/test-connection	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/group/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/home_page_content	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	apps/api-rust/src/http.rs
+GET	/api/home_page_content	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	mount=apps/api-rust/src/http.rs;differential=apps/api-rust/tests/behavior-oracle/tests/public-routes-listener-differential.sh:5/5
 GET	/api/log/	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/observability.rs;mount=apps/api-rust/src/migration_routes/observability.rs
 GET	/api/log/channel_affinity_usage_cache	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/observability.rs;mount=apps/api-rust/src/migration_routes/observability.rs
 GET	/api/log/search	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/observability.rs;mount=apps/api-rust/src/migration_routes/observability.rs
@@ -110,7 +110,7 @@ GET	/api/models/missing	absent	not-applicable	unmounted	not-applicable	not-appli
 GET	/api/models/search	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/models/sync_upstream	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/models/sync_upstream/preview	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/notice	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	apps/api-rust/src/http.rs
+GET	/api/notice	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	mount=apps/api-rust/src/http.rs;differential=apps/api-rust/tests/behavior-oracle/tests/public-routes-listener-differential.sh:5/5
 GET	/api/oauth/:provider	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/oauth/email/bind	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/oauth/state	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
@@ -144,7 +144,7 @@ POST	/api/prefill_group/	absent	not-applicable	unmounted	not-applicable	not-appl
 PUT	/api/prefill_group/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 DELETE	/api/prefill_group/:id	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/pricing	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/privacy-policy	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/control_public.rs;mount=apps/api-rust/src/migration_routes/control_public.rs;listener=apps/api-rust/src/main.rs::control_public
+GET	/api/privacy-policy	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/control_public.rs;mount=apps/api-rust/src/migration_routes/control_public.rs;listener=apps/api-rust/src/main.rs::control_public;differential=apps/api-rust/tests/behavior-oracle/tests/public-routes-listener-differential.sh:5/5
 GET	/api/rankings	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/ratio_config	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/ratio_sync/channels	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
@@ -207,7 +207,7 @@ POST	/api/token/batch/keys	present	unverified	mounted	unverified	not-applicable	
 GET	/api/token/search	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	apps/api-rust/src/migration_routes/api_token.rs
 GET	/api/uptime/status	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/usage/token/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/user-agreement	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/control_public.rs;mount=apps/api-rust/src/migration_routes/control_public.rs;listener=apps/api-rust/src/main.rs::control_public
+GET	/api/user-agreement	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/control_public.rs;mount=apps/api-rust/src/migration_routes/control_public.rs;listener=apps/api-rust/src/main.rs::control_public;differential=apps/api-rust/tests/behavior-oracle/tests/public-routes-listener-differential.sh:5/5
 GET	/api/user/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 PUT	/api/user/	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
