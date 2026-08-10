@@ -169,7 +169,7 @@ func (buildRuntime *buildDeployRuntime) build(ctx context.Context, options build
 		return buildDeployResult{}, err
 	}
 	defer os.Remove(temporaryBinaryPath)
-	goEnvironment := append(os.Environ(), "CGO_ENABLED=0", "GOPROXY=off")
+	goEnvironment := append(os.Environ(), "CGO_ENABLED=0")
 	linkerFlags := "-s -w -extldflags=-static -X github.com/QuantumNous/new-api/common.Version=" + version
 	if _, err := buildRuntime.runner.Run(ctx, productionCommand{
 		Name: "go",
