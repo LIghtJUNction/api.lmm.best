@@ -17,7 +17,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::sync::Arc;
 
 use crate::auth::{AuthErrorKind, DashboardAuth};
@@ -253,8 +253,12 @@ async fn update_self(
         .execute(&state.pg)
         .await
         .map_err(|_| ProfileError::internal())?;
-    clear_user_cache(&state, identity.user_id).await;
-    Ok(update_success(request_locale))
+    // `User.Update(false)` in the legacy handler republishes the existing
+    // non-quota user hash after the durable write.  Keep that cache-aside
+    // side effect instead of deleting the hash (a deletion would diverge on
+    // a following setting write and needlessly force a cold refill).
+    refresh_user_cache(&state, identity.user_id).await;
+    Ok(ordinary_update_success())
 }
 
 async fn request_object(request: Request) -> Result<Map<String, Value>, ProfileError> {
@@ -279,7 +283,7 @@ async fn update_self_setting(
     request: &mut Map<String, Value>,
     request_locale: LegacyLocale,
 ) -> Result<Response, ProfileError> {
-    let existing_setting = sqlx::query_scalar::<_, Option<String>>(
+    let raw = sqlx::query_scalar::<_, Option<String>>(
         "SELECT setting FROM users WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(user_id)
@@ -287,25 +291,25 @@ async fn update_self_setting(
     .await
     .map_err(|_| ProfileError::internal())?
     .flatten()
-    .and_then(|raw| serde_json::from_str(&raw).ok());
-    let mut setting: Map<String, Value> = existing_setting.unwrap_or_default();
+    .unwrap_or_default();
+    let mut setting = serde_json::from_str::<LegacyNotificationSetting>(&raw).unwrap_or_default();
     // The legacy handler gives sidebar preference precedence when both exist.
-    let key = if request.contains_key("sidebar_modules") {
-        "sidebar_modules"
-    } else {
-        "language"
-    };
-    if let Some(value) = request.remove(key).filter(Value::is_string) {
-        setting.insert(key.to_owned(), value);
+    if request.contains_key("sidebar_modules") {
+        if let Some(Value::String(value)) = request.remove("sidebar_modules") {
+            setting.sidebar_modules = value;
+        }
+    } else if let Some(Value::String(value)) = request.remove("language") {
+        setting.language = value;
     }
+    let serialized = serialize_legacy_notification_setting(&setting)?;
     sqlx::query("UPDATE users SET setting = $1 WHERE id = $2 AND deleted_at IS NULL")
-        .bind(serde_json::to_string(&setting).map_err(|_| ProfileError::internal())?)
+        .bind(&serialized)
         .bind(user_id)
         .execute(&state.pg)
         .await
         .map_err(|_| ProfileError::internal())?;
-    clear_user_cache(state, user_id).await;
-    Ok(update_success(request_locale))
+    update_user_setting_cache(state, user_id, &serialized).await;
+    Ok(common_update_success(request_locale))
 }
 
 async fn delete_self(
@@ -676,6 +680,12 @@ struct LegacyNotificationSetting {
     accept_unset_ratio_model: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     record_ip_log: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    sidebar_modules: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    billing_preference: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    language: String,
 }
 
 fn is_zero_f64(value: &f64) -> bool {
@@ -725,7 +735,21 @@ fn build_notification_setting(
         }
         _ => return Err(ProfileError::internal()),
     }
-    let mut serialized = serde_json::to_string(&setting).map_err(|_| ProfileError::internal())?;
+    serialize_legacy_notification_setting(&setting)
+}
+
+fn go_json_number(value: f64) -> String {
+    let mut number = value.to_string();
+    if number.ends_with(".0") {
+        number.truncate(number.len() - 2);
+    }
+    number
+}
+
+fn serialize_legacy_notification_setting(
+    setting: &LegacyNotificationSetting,
+) -> Result<String, ProfileError> {
+    let mut serialized = serde_json::to_string(setting).map_err(|_| ProfileError::internal())?;
     // Go's encoding/json renders an integral float64 as an integer token
     // (`2`), while serde_json keeps the explicit decimal (`2.0`). The stored
     // setting is a legacy JSON string, so preserve Go's lexical form as well
@@ -737,18 +761,10 @@ fn build_notification_setting(
             .map_or(serialized.len(), |offset| value_start + offset);
         serialized.replace_range(
             value_start..value_end,
-            &go_json_number(request.quota_warning_threshold),
+            &go_json_number(setting.quota_warning_threshold),
         );
     }
     Ok(serialized)
-}
-
-fn go_json_number(value: f64) -> String {
-    let mut number = value.to_string();
-    if number.ends_with(".0") {
-        number.truncate(number.len() - 2);
-    }
-    number
 }
 
 async fn publish_auth_floor(state: &ProfileState, user_id: i64, version: i64) {
@@ -785,6 +801,12 @@ async fn publish_auth_floor(state: &ProfileState, user_id: i64, version: i64) {
 /// manufacture a cold cache. Keep that cache-aside behavior for this route;
 /// PostgreSQL remains authoritative when Valkey is unavailable.
 async fn update_user_setting_cache(state: &ProfileState, user_id: i64, setting: &str) {
+    update_user_cache_field(state, user_id, "Setting", setting).await;
+}
+
+/// Update one existing legacy user-cache field behind the same auth-version
+/// fence used by Go's `updateUserCacheFieldAtVersion`.
+async fn update_user_cache_field(state: &ProfileState, user_id: i64, field: &str, value: &str) {
     let auth_version = match sqlx::query_scalar::<_, i64>(
         "SELECT COALESCE(auth_version, 0) FROM users WHERE id = $1 AND deleted_at IS NULL",
     )
@@ -795,27 +817,126 @@ async fn update_user_setting_cache(state: &ProfileState, user_id: i64, setting: 
         Ok(Some(version)) if version > 0 => version,
         Ok(_) => return,
         Err(error) => {
-            tracing::warn!(%error, user_id, "profile setting cache version lookup failed");
+            tracing::warn!(%error, user_id, "profile user cache version lookup failed");
             return;
         }
     };
     let Ok(mut connection) = state.valkey.get_multiplexed_async_connection().await else {
-        tracing::warn!(user_id, "profile setting cache connection failed");
+        tracing::warn!(user_id, "profile user cache connection failed");
         return;
     };
     let script = redis::Script::new(
-        r#"local incoming=tonumber(ARGV[1]); local pending=tonumber(redis.call('GET',KEYS[2]) or '0'); local committed=tonumber(redis.call('GET',KEYS[3]) or '0'); local current=tonumber(redis.call('HGET',KEYS[1],'AuthVersion') or '0'); if pending>incoming or committed>incoming or current>incoming then return 0 end; if committed<incoming then redis.call('SET',KEYS[3],ARGV[1]) end; if pending>0 and pending<=incoming then redis.call('DEL',KEYS[2]) end; if redis.call('EXISTS',KEYS[1])==0 then return 1 end; if current~=incoming then return 1 end; redis.call('HSET',KEYS[1],'Setting',ARGV[2]); return 1"#,
+        r#"local incoming=tonumber(ARGV[1]); local pending=tonumber(redis.call('GET',KEYS[2]) or '0'); local committed=tonumber(redis.call('GET',KEYS[3]) or '0'); local current=tonumber(redis.call('HGET',KEYS[1],'AuthVersion') or '0'); if pending>incoming or committed>incoming or current>incoming then return 0 end; if committed<incoming then redis.call('SET',KEYS[3],ARGV[1]) end; if pending>0 and pending<=incoming then redis.call('DEL',KEYS[2]) end; if redis.call('EXISTS',KEYS[1])==0 then return 1 end; if current~=incoming then return 1 end; redis.call('HSET',KEYS[1],ARGV[2],ARGV[3],'CacheSchema','2'); return 1"#,
     );
     if let Err(error) = script
         .key(format!("user:{user_id}"))
         .key(format!("auth:user:fence:{user_id}"))
         .key(format!("auth:user:version:{user_id}"))
         .arg(auth_version)
-        .arg(setting)
+        .arg(field)
+        .arg(value)
         .invoke_async::<i64>(&mut connection)
         .await
     {
-        tracing::warn!(%error, user_id, "profile setting cache update failed");
+        tracing::warn!(%error, user_id, field, "profile user cache update failed");
+    }
+}
+
+/// Republish the complete non-quota user hash after the ordinary self-profile
+/// update.  This mirrors Go's `updateUserCache`/`writeUserCache(..., false)`:
+/// an existing hash is refreshed atomically, while a cold cache is left cold.
+async fn refresh_user_cache(state: &ProfileState, user_id: i64) {
+    let row = match sqlx::query(
+        r#"SELECT "group", COALESCE(email, '') AS email, status, role, username,
+                  COALESCE(setting, '') AS setting, COALESCE(auth_version, 0) AS auth_version
+             FROM users
+            WHERE id = $1 AND deleted_at IS NULL"#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pg)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache refresh query failed");
+            return;
+        }
+    };
+    let group = match row.try_get::<String, _>("group") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache group decode failed");
+            return;
+        }
+    };
+    let email = match row.try_get::<String, _>("email") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache email decode failed");
+            return;
+        }
+    };
+    let status: i32 = match row.try_get("status") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache status decode failed");
+            return;
+        }
+    };
+    let role: i32 = match row.try_get("role") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache role decode failed");
+            return;
+        }
+    };
+    let username = match row.try_get::<String, _>("username") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache username decode failed");
+            return;
+        }
+    };
+    let setting = match row.try_get::<String, _>("setting") {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache setting decode failed");
+            return;
+        }
+    };
+    let auth_version: i64 = match row.try_get("auth_version") {
+        Ok(value) if value > 0 => value,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile user cache auth version decode failed");
+            return;
+        }
+    };
+    let Ok(mut connection) = state.valkey.get_multiplexed_async_connection().await else {
+        tracing::warn!(user_id, "profile user cache refresh connection failed");
+        return;
+    };
+    let script = redis::Script::new(
+        r#"local incoming=tonumber(ARGV[1]); local pending=tonumber(redis.call('GET',KEYS[2]) or '0'); local committed=tonumber(redis.call('GET',KEYS[3]) or '0'); local current=tonumber(redis.call('HGET',KEYS[1],'AuthVersion') or '0'); if pending>incoming or committed>incoming or current>incoming then return 0 end; if committed<incoming then redis.call('SET',KEYS[3],ARGV[1]) end; if pending>0 and pending<=incoming then redis.call('DEL',KEYS[2]) end; if ARGV[9]=='0' and redis.call('EXISTS',KEYS[1])==0 then return 1 end; redis.call('HSET',KEYS[1],'Id',ARGV[2],'Group',ARGV[3],'Email',ARGV[4],'Status',ARGV[5],'Role',ARGV[6],'Username',ARGV[7],'Setting',ARGV[8],'AuthVersion',ARGV[1],'CacheSchema','2'); return 1"#,
+    );
+    if let Err(error) = script
+        .key(format!("user:{user_id}"))
+        .key(format!("auth:user:fence:{user_id}"))
+        .key(format!("auth:user:version:{user_id}"))
+        .arg(auth_version)
+        .arg(user_id)
+        .arg(group)
+        .arg(email)
+        .arg(status)
+        .arg(role)
+        .arg(username)
+        .arg(setting)
+        .arg("0")
+        .invoke_async::<i64>(&mut connection)
+        .await
+    {
+        tracing::warn!(%error, user_id, "profile user cache refresh failed");
     }
 }
 
@@ -982,6 +1103,13 @@ impl LegacyLocale {
             Self::ZhTw => "設定已更新",
         }
     }
+
+    fn common_update_success(self) -> &'static str {
+        match self {
+            Self::En => "Update successful",
+            Self::ZhCn | Self::ZhTw => "更新成功",
+        }
+    }
 }
 
 fn locale(headers: &HeaderMap) -> LegacyLocale {
@@ -1012,6 +1140,33 @@ fn update_success(request_locale: LegacyLocale) -> Response {
         "success": true,
         "message": request_locale.update_success(),
         "data": null,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private, max-age=0"),
+    );
+    response
+}
+
+fn common_update_success(request_locale: LegacyLocale) -> Response {
+    let mut response = Json(serde_json::json!({
+        "success": true,
+        "message": request_locale.common_update_success(),
+        "data": null,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private, max-age=0"),
+    );
+    response
+}
+
+fn ordinary_update_success() -> Response {
+    let mut response = Json(serde_json::json!({
+        "success": true,
+        "message": "",
     }))
     .into_response();
     response.headers_mut().insert(

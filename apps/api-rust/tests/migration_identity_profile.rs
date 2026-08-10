@@ -243,7 +243,7 @@ async fn self_profile_uses_request_locale_for_rejected_unverified_identity() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 18 and Valkey; set LMM_IDENTITY_TEST_DATABASE_URL and LMM_IDENTITY_TEST_VALKEY_URL"]
-async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_cache() {
+async fn profile_preference_write_updates_postgres_and_refreshes_valkey_user_cache() {
     assert_eq!(
         env::var("LMM_IDENTITY_TEST_ALLOW_SCHEMA_RESET").as_deref(),
         Ok("1"),
@@ -274,9 +274,16 @@ async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_c
         .get_multiplexed_async_connection()
         .await
         .expect("connect isolated Valkey");
-    redis::cmd("SET")
+    redis::cmd("HSET")
         .arg("user:7")
-        .arg("stale")
+        .arg("Id")
+        .arg(7)
+        .arg("AuthVersion")
+        .arg(1)
+        .arg("CacheSchema")
+        .arg(2)
+        .arg("Setting")
+        .arg("{}")
         .query_async::<()>(&mut cache)
         .await
         .expect("seed cache");
@@ -304,7 +311,7 @@ async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_c
         .expect("preference response body");
     assert_eq!(
         serde_json::from_slice::<Value>(&body).expect("legacy preference response"),
-        serde_json::json!({"success": true, "message": "Settings updated", "data": null})
+        serde_json::json!({"success": true, "message": "Update successful", "data": null})
     );
     let setting: String = sqlx::query_scalar("SELECT setting FROM users WHERE id = 7")
         .fetch_one(&pool)
@@ -314,12 +321,16 @@ async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_c
         serde_json::from_str::<Value>(&setting).expect("setting JSON")["language"],
         "en"
     );
-    let exists: i64 = redis::cmd("EXISTS")
+    let cached_setting: String = redis::cmd("HGET")
         .arg("user:7")
+        .arg("Setting")
         .query_async(&mut cache)
         .await
-        .expect("cache existence");
-    assert_eq!(exists, 0);
+        .expect("cache setting");
+    assert_eq!(
+        serde_json::from_str::<Value>(&cached_setting).expect("cached setting JSON")["language"],
+        "en"
+    );
 
     let response = application
         .oneshot(

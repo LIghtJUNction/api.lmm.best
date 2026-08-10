@@ -218,6 +218,18 @@ compare_profile_write() {
   grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
 }
 
+compare_self_write() {
+  local name=$1 body=$2 go_token=$3 rust_token=$4 go_code rust_code
+  go_code=$(request_method PUT "$go_port" "$go_token" /api/user/self "$body" "$runtime/go-$name")
+  rust_code=$(request_method PUT "$rust_port" "$rust_token" /api/user/self "$body" "$runtime/rust-$name")
+  [[ $go_code == "$rust_code" ]] || { echo "$name status mismatch: $go_code/$rust_code" >&2; return 1; }
+  jq -S . "$runtime/go-$name.body" >"$runtime/go-$name.json"
+  jq -S . "$runtime/rust-$name.body" >"$runtime/rust-$name.json"
+  diff -u "$runtime/go-$name.json" "$runtime/rust-$name.json"
+  grep -qi '^content-type: application/json' "$runtime/go-$name.headers"
+  grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
+}
+
 compare_profile_write profile-invalid-type '{"notify_type":"sms","quota_warning_threshold":1}' "$go_user" "$rust_user"
 if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
   echo "profile invalid-type DB snapshot mismatch" >&2
@@ -245,6 +257,29 @@ fi
 if [[ "$(valkey_user_hash "$go_valkey_port" "$go_secret")" != "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" ]]; then
   echo "profile setting Valkey user hash mismatch" >&2
   printf '%s\n' "--- go" "$(valkey_user_hash "$go_valkey_port" "$go_secret")" "--- rust" "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" >&2
+  exit 1
+fi
+compare_self_write self-language '{"language":"en"}' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "self language DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
+  exit 1
+fi
+if [[ "$(valkey_user_hash "$go_valkey_port" "$go_secret")" != "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" ]]; then
+  echo "self language Valkey user hash mismatch" >&2
+  printf '%s\n' "--- go" "$(valkey_user_hash "$go_valkey_port" "$go_secret")" "--- rust" "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" >&2
+  exit 1
+fi
+compare_self_write self-sidebar '{"language":"zh-CN","sidebar_modules":"{\"chat\":true}"}' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "self sidebar DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
+  exit 1
+fi
+compare_self_write self-null 'null' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "self null DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
   exit 1
 fi
 go_before=$(snapshot "$go_database"); rust_before=$(snapshot "$rust_database")
@@ -287,4 +322,4 @@ go_root=$(login "$go_port" root); rust_root=$(login "$rust_port" root); go_user=
 compare compliance-off /api/subscription/plans "$go_user" "$rust_user"
 compare non-admin /api/subscription/admin/plans "$go_user" "$rust_user"
 
-jq -cn --arg revision "$legacy_revision" --argjson scenarios 16 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference","PUT /api/user/setting"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" --argjson scenarios 19 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference","PUT /api/user/setting","PUT /api/user/self"],result:"passed"}'
