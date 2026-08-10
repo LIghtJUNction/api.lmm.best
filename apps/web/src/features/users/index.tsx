@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 
+import { AssistantLeadsPanel } from './components/assistant-leads-panel'
 import { DeveloperAccessRequestsPanel } from './components/developer-access-requests-panel'
 import { UsersDeleteDialog } from './components/users-delete-dialog'
 import { UsersMutateDrawer } from './components/users-mutate-drawer'
@@ -40,6 +41,7 @@ function UsersContent() {
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex min-h-0 flex-col gap-6'>
+            <AssistantLeadsPanel />
             <DeveloperAccessRequestsPanel />
             <UsersTable />
           </div>
