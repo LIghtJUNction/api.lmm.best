@@ -45,8 +45,8 @@ crlf_output=$(cd "$runtime" && \
   exit 1
 }
 
-expected_evidence='migration gate evidence: source-present=70 compiled=0 mounted=70 unmounted=286 differential-verified=0 approved=0 production-owned-rust=0 migration-credit=0'
-expected_states='migration gate states: legacy-go=286 mounted-unverified=62 candidate-pending-independent-approval=0 blocked-sol-stop=8 verified-approved=0'
+expected_evidence='migration gate evidence: source-present=71 compiled=0 mounted=71 unmounted=285 differential-verified=0 approved=0 production-owned-rust=0 migration-credit=0'
+expected_states='migration gate states: legacy-go=285 mounted-unverified=63 candidate-pending-independent-approval=0 blocked-sol-stop=8 verified-approved=0'
 [[ $checker_output == *"$expected_evidence"* ]] || {
   echo "migration gate checker did not report the expected evidence counters" >&2
   exit 1
