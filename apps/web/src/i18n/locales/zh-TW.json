@@ -6072,6 +6072,21 @@
     "Other questions": "其他問題",
     "No pending human-support requests.": "沒有待處理的人工支援要求。",
     "Optional resolution note for the user": "給用戶的選填處理備註",
-    "Mark resolved": "標記為已解決"
+    "Mark resolved": "標記為已解決",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "請依工作負載而非標價選擇。我可以根據你的預計用量，比較即時套餐額度、重設週期與目前儲值優惠。",
+    "Compare live plans": "即時比較套餐",
+    "Live plan recommendations require L1": "即時套餐推薦需要 L1 權限",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "只有 L0 受限。提交存取申請，審核通過後助手即可比較目前套餐與優惠。",
+    "Live plan and discount advisor": "即時套餐與優惠顧問",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "輸入你預計每月使用的 API 額度。推薦依據目前套餐額度，而非行銷標籤。",
+    "Expected monthly API credit (USD)": "預計每月 API 額度（USD）",
+    "No subscription plans are currently available.": "目前沒有可用的訂閱套餐。",
+    "Closest fit": "最符合",
+    "Included credit": "包含額度",
+    "Best current top-up discounts": "目前最佳儲值優惠",
+    "save {{percent}}%": "節省 {{percent}}%",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "套餐匹配僅比較包含額度。重設規則、模型權限、付款方式與群組倍率可能影響最終價值；請以結帳頁為準。",
+    "Review plans and exact checkout prices": "查看套餐與準確結帳價格",
+    "Estimated monthly capacity": "預估月度容量"
   }
 }

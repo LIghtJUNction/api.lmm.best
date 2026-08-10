@@ -6072,6 +6072,21 @@
     "Other questions": "その他の質問",
     "No pending human-support requests.": "保留中の有人サポート依頼はありません。",
     "Optional resolution note for the user": "ユーザー向けの任意の対応メモ",
-    "Mark resolved": "解決済みにする"
+    "Mark resolved": "解決済みにする",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "表示価格ではなく用途に合わせて選びましょう。予想使用量に対して、現在のプラン容量、リセット期間、チャージ割引を比較できます。",
+    "Compare live plans": "現在のプランを比較",
+    "Live plan recommendations require L1": "リアルタイムのプラン提案には L1 が必要です",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "制限されるのは L0 のみです。アクセス申請が承認されると、アシスタントが現在のプランと割引を比較できます。",
+    "Live plan and discount advisor": "プラン・割引アドバイザー",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "毎月使用する予定の API クレジットを入力してください。提案は宣伝文句ではなく、現在のプラン容量に基づきます。",
+    "Expected monthly API credit (USD)": "月間 API クレジット見込み（USD）",
+    "No subscription plans are currently available.": "現在利用できるサブスクリプションプランはありません。",
+    "Closest fit": "最も近いプラン",
+    "Included credit": "含まれるクレジット",
+    "Best current top-up discounts": "現在のおすすめチャージ割引",
+    "save {{percent}}%": "{{percent}}% 割引",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "プラン比較は含まれるクレジットのみを基準にしています。リセット規則、モデル権限、支払い方法、グループ倍率によって最終的な価値は変わるため、決済画面の表示を確認してください。",
+    "Review plans and exact checkout prices": "プランと正確な決済価格を確認",
+    "Estimated monthly capacity": "月間容量の目安"
   }
 }

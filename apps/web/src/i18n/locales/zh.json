@@ -6072,6 +6072,21 @@
     "Other questions": "其他问题",
     "No pending human-support requests.": "没有待处理的人工支持请求。",
     "Optional resolution note for the user": "给用户的可选处理备注",
-    "Mark resolved": "标记为已解决"
+    "Mark resolved": "标记为已解决",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "请按工作负载而非标价选择。我可以根据你的预计用量，对比实时套餐额度、重置周期和当前充值优惠。",
+    "Compare live plans": "实时比较套餐",
+    "Live plan recommendations require L1": "实时套餐推荐需要 L1 权限",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "只有 L0 受限。提交访问申请，审核通过后助手即可比较当前套餐和优惠。",
+    "Live plan and discount advisor": "实时套餐与优惠顾问",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "输入你预计每月使用的 API 额度。推荐依据当前套餐额度，而非营销标签。",
+    "Expected monthly API credit (USD)": "预计每月 API 额度（USD）",
+    "No subscription plans are currently available.": "当前没有可用的订阅套餐。",
+    "Closest fit": "最匹配",
+    "Included credit": "包含额度",
+    "Best current top-up discounts": "当前最佳充值优惠",
+    "save {{percent}}%": "节省 {{percent}}%",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "套餐匹配仅比较包含额度。重置规则、模型权限、支付方式和分组倍率可能影响最终价值；请以结算页为准。",
+    "Review plans and exact checkout prices": "查看套餐与准确结算价格",
+    "Estimated monthly capacity": "预计月度容量"
   }
 }
