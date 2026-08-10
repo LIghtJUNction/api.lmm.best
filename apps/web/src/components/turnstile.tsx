@@ -21,11 +21,11 @@ import { useEffect, useRef } from 'react'
 declare global {
   interface Window {
     turnstile?: {
-      ready?: (callback: () => void) => void
       render: (
         element: HTMLElement,
         options: Record<string, unknown>
       ) => unknown
+      remove?: (widgetId: unknown) => void
     }
   }
 }
@@ -49,34 +49,56 @@ export function Turnstile({
     let disposed = false
     let rendered = false
     let poller: number | undefined
+    let retryTimer: number | undefined
+    let widgetId: unknown
+    let renderAttempts = 0
+
+    const stopTimers = () => {
+      if (poller !== undefined) {
+        window.clearInterval(poller)
+        poller = undefined
+      }
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer)
+        retryTimer = undefined
+      }
+    }
 
     const renderWidget = () => {
       if (disposed || rendered || !ref.current || !window.turnstile) return
-      const renderNow = () => {
-        if (disposed || rendered || !ref.current || !window.turnstile) return
-        try {
-          window.turnstile.render(ref.current, {
-            sitekey: siteKey,
-            callback: (token: string) => onVerify(token),
-            'error-callback': () => onExpire?.(),
-            'expired-callback': () => onExpire?.(),
-          })
-          rendered = true
-        } catch {
-          /* The script can expose the API before its widget runtime is ready. */
+      try {
+        widgetId = window.turnstile.render(ref.current, {
+          sitekey: siteKey,
+          callback: (token: string) => onVerify(token),
+          'error-callback': () => onExpire?.(),
+          'expired-callback': () => onExpire?.(),
+        })
+        rendered = true
+        stopTimers()
+      } catch {
+        // The async Turnstile script can expose its API just before the
+        // widget runtime is ready. Retry briefly without calling turnstile.ready:
+        // Cloudflare rejects ready() when api.js is loaded async/defer.
+        renderAttempts += 1
+        if (!disposed && renderAttempts < 20 && retryTimer === undefined) {
+          retryTimer = window.setTimeout(() => {
+            retryTimer = undefined
+            renderWidget()
+          }, 100)
         }
-      }
-
-      if (window.turnstile.ready) {
-        window.turnstile.ready(renderNow)
-      } else {
-        renderNow()
       }
     }
 
     const cleanup = () => {
       disposed = true
-      if (poller !== undefined) window.clearInterval(poller)
+      stopTimers()
+      if (widgetId !== undefined) {
+        try {
+          window.turnstile?.remove?.(widgetId)
+        } catch {
+          // The widget may already have been removed by Turnstile.
+        }
+      }
     }
 
     const scriptId = 'cf-turnstile'

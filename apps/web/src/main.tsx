@@ -99,7 +99,9 @@ const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultPreload: 'intent',
-  defaultPreloadStaleTime: 0,
+  // Avoid re-running every hover preload while auth/session state is settling.
+  // The router-core update also handles an in-flight preload being evicted.
+  defaultPreloadStaleTime: 30_000,
 })
 
 // Register the router instance for type safety
