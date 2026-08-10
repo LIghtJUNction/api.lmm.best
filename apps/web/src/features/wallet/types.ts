@@ -126,6 +126,12 @@ export interface WaffoPayMethod {
  * Topup configuration information
  */
 export interface TopupInfo {
+  /** Whether this account has completed the paid developer-access activation. */
+  developer_access_granted?: boolean
+  /** Whether activation is required before normal console access. */
+  activation_required?: boolean
+  /** Whether at least one activation payment path is configured. */
+  payment_available?: boolean
   /** Whether online topup is enabled */
   enable_online_topup: boolean
   /** Whether Stripe topup is enabled */

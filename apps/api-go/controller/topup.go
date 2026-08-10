@@ -124,13 +124,36 @@ func GetTopUpInfo(c *gin.Context) {
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 	if !access.Granted {
 		paymentAvailable, minPayment := neutralTopUpAvailability()
+		enableOnlineTopUp := isEpayTopUpEnabled() || isFastPayTopUpEnabled()
+		enableStripeTopUp := isStripeTopUpEnabled()
+		enableCreemTopUp := isCreemTopUpEnabled()
+		enableWaffo := isWaffoTopUpEnabled()
+		enableWaffoPancake := isWaffoPancakeTopUpEnabled()
 		common.ApiSuccess(c, neutralTopUpInfo{
-			DeveloperAccessGranted:        false,
-			ActivationRequired:            true,
-			PaymentAvailable:              paymentAvailable,
-			MinPayment:                    minPayment,
+			DeveloperAccessGranted:  false,
+			ActivationRequired:      true,
+			PaymentAvailable:        paymentAvailable,
+			MinPayment:              minPayment,
+			EnableOnlineTopUp:       enableOnlineTopUp,
+			EnableStripeTopUp:       enableStripeTopUp,
+			EnableCreemTopUp:        enableCreemTopUp,
+			EnableWaffoTopUp:        enableWaffo,
+			EnableWaffoPancakeTopUp: enableWaffoPancake,
+			PayMethods:              sanitizedPaymentMethods(availablePaymentMethods(complianceConfirmed)),
+			CreemProducts:           setting.CreemProducts,
+			WaffoPayMethods: func() interface{} {
+				if enableWaffo {
+					return setting.GetWaffoPayMethods()
+				}
+				return nil
+			}(),
+			MinTopUp:                      operation_setting.MinTopUp,
+			StripeMinTopUp:                setting.StripeMinTopUp,
+			WaffoMinTopUp:                 setting.WaffoMinTopUp,
+			WaffoPancakeMinTopUp:          setting.WaffoPancakeMinTopUp,
 			AmountOptions:                 operation_setting.GetPaymentSetting().AmountOptions,
 			Discount:                      operation_setting.GetPaymentSetting().AmountDiscount,
+			TopUpLink:                     common.TopUpLink,
 			PaymentComplianceConfirmed:    complianceConfirmed,
 			PaymentComplianceTermsVersion: operation_setting.CurrentComplianceTermsVersion,
 		})
@@ -143,75 +166,9 @@ func GetTopUpInfo(c *gin.Context) {
 	}
 
 	// 获取支付方式
-	payMethods := operation_setting.PayMethods
-	if !complianceConfirmed {
-		payMethods = []map[string]string{}
-	}
-
-	// 如果启用了 Stripe 支付，添加到支付方法列表
-	if isStripeTopUpEnabled() {
-		// 检查是否已经包含 Stripe
-		hasStripe := false
-		for _, method := range payMethods {
-			if method["type"] == "stripe" {
-				hasStripe = true
-				break
-			}
-		}
-
-		if !hasStripe {
-			stripeMethod := map[string]string{
-				"name":      "Stripe",
-				"type":      "stripe",
-				"color":     "#635BFF",
-				"min_topup": strconv.Itoa(setting.StripeMinTopUp),
-			}
-			payMethods = append(payMethods, stripeMethod)
-		}
-	}
-
-	// Waffo Pancake is displayed above the standard Waffo gateway.
+	payMethods := availablePaymentMethods(complianceConfirmed)
 	enableWaffoPancake := isWaffoPancakeTopUpEnabled()
-	if enableWaffoPancake {
-		hasWaffoPancake := false
-		for _, method := range payMethods {
-			if method["type"] == model.PaymentMethodWaffoPancake {
-				hasWaffoPancake = true
-				break
-			}
-		}
-
-		if !hasWaffoPancake {
-			payMethods = append(payMethods, map[string]string{
-				"name":      "Waffo Pancake",
-				"type":      model.PaymentMethodWaffoPancake,
-				"color":     "#F97316",
-				"min_topup": strconv.Itoa(setting.WaffoPancakeMinTopUp),
-			})
-		}
-	}
-
-	// 如果启用了 Waffo 支付，添加到支付方法列表
 	enableWaffo := isWaffoTopUpEnabled()
-	if enableWaffo {
-		hasWaffo := false
-		for _, method := range payMethods {
-			if method["type"] == model.PaymentMethodWaffo {
-				hasWaffo = true
-				break
-			}
-		}
-
-		if !hasWaffo {
-			waffoMethod := map[string]string{
-				"name":      "Waffo (Global Payment)",
-				"type":      model.PaymentMethodWaffo,
-				"color":     "#3B82F6",
-				"min_topup": strconv.Itoa(setting.WaffoMinTopUp),
-			}
-			payMethods = append(payMethods, waffoMethod)
-		}
-	}
 
 	data := gin.H{
 		"developer_access_granted":         true,
@@ -244,14 +201,93 @@ func GetTopUpInfo(c *gin.Context) {
 }
 
 type neutralTopUpInfo struct {
-	DeveloperAccessGranted        bool            `json:"developer_access_granted"`
-	ActivationRequired            bool            `json:"activation_required"`
-	PaymentAvailable              bool            `json:"payment_available"`
-	MinPayment                    float64         `json:"min_payment"`
-	AmountOptions                 []int           `json:"amount_options"`
-	Discount                      map[int]float64 `json:"discount"`
-	PaymentComplianceConfirmed    bool            `json:"payment_compliance_confirmed"`
-	PaymentComplianceTermsVersion string          `json:"payment_compliance_terms_version"`
+	DeveloperAccessGranted        bool                `json:"developer_access_granted"`
+	ActivationRequired            bool                `json:"activation_required"`
+	PaymentAvailable              bool                `json:"payment_available"`
+	MinPayment                    float64             `json:"min_payment"`
+	EnableOnlineTopUp             bool                `json:"enable_online_topup"`
+	EnableStripeTopUp             bool                `json:"enable_stripe_topup"`
+	EnableCreemTopUp              bool                `json:"enable_creem_topup"`
+	EnableWaffoTopUp              bool                `json:"enable_waffo_topup"`
+	EnableWaffoPancakeTopUp       bool                `json:"enable_waffo_pancake_topup"`
+	PayMethods                    []map[string]string `json:"pay_methods"`
+	CreemProducts                 string              `json:"creem_products"`
+	WaffoPayMethods               interface{}         `json:"waffo_pay_methods"`
+	MinTopUp                      int                 `json:"min_topup"`
+	StripeMinTopUp                int                 `json:"stripe_min_topup"`
+	WaffoMinTopUp                 int                 `json:"waffo_min_topup"`
+	WaffoPancakeMinTopUp          int                 `json:"waffo_pancake_min_topup"`
+	TopUpLink                     string              `json:"topup_link"`
+	AmountOptions                 []int               `json:"amount_options"`
+	Discount                      map[int]float64     `json:"discount"`
+	PaymentComplianceConfirmed    bool                `json:"payment_compliance_confirmed"`
+	PaymentComplianceTermsVersion string              `json:"payment_compliance_terms_version"`
+}
+
+// availablePaymentMethods returns the operator-configured catalog plus any
+// dedicated gateways that are enabled at runtime. The catalog contains only
+// display/quote metadata; gateway credentials remain server-side.
+func availablePaymentMethods(complianceConfirmed bool) []map[string]string {
+	if !complianceConfirmed {
+		return []map[string]string{}
+	}
+
+	payMethods := append([]map[string]string(nil), operation_setting.PayMethods...)
+	appendIfMissing := func(method map[string]string) {
+		for _, existing := range payMethods {
+			if existing["type"] == method["type"] {
+				return
+			}
+		}
+		payMethods = append(payMethods, method)
+	}
+
+	if isStripeTopUpEnabled() {
+		appendIfMissing(map[string]string{
+			"name":      "Stripe",
+			"type":      "stripe",
+			"color":     "#635BFF",
+			"min_topup": strconv.Itoa(setting.StripeMinTopUp),
+		})
+	}
+	if isWaffoPancakeTopUpEnabled() {
+		appendIfMissing(map[string]string{
+			"name":      "Waffo Pancake",
+			"type":      model.PaymentMethodWaffoPancake,
+			"color":     "#F97316",
+			"min_topup": strconv.Itoa(setting.WaffoPancakeMinTopUp),
+		})
+	}
+	if isWaffoTopUpEnabled() {
+		appendIfMissing(map[string]string{
+			"name":      "Waffo (Global Payment)",
+			"type":      model.PaymentMethodWaffo,
+			"color":     "#3B82F6",
+			"min_topup": strconv.Itoa(setting.WaffoMinTopUp),
+		})
+	}
+	return payMethods
+}
+
+func sanitizedPaymentMethods(methods []map[string]string) []map[string]string {
+	allowed := map[string]struct{}{
+		"name": {}, "type": {}, "icon": {}, "color": {}, "min_topup": {},
+		"settlement_unit": {}, "unit_price": {}, "topup_ratio": {},
+	}
+	result := make([]map[string]string, 0, len(methods))
+	for _, method := range methods {
+		public := make(map[string]string)
+		for key, value := range method {
+			if _, ok := allowed[key]; ok {
+				public[key] = value
+			}
+		}
+		if public["name"] == "" || public["type"] == "" {
+			continue
+		}
+		result = append(result, public)
+	}
+	return result
 }
 
 func neutralTopUpAvailability() (bool, float64) {
