@@ -2,6 +2,7 @@
 GET	/api/about	apps/api-rust/src/http.rs:194
 GET	/api/livez	apps/api-rust/src/http.rs:223
 GET	/api/group/	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_control_public.rs:group_router
+GET	/api/ratio_config	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_control_public.rs:ratio_config_router
 GET	/api/status/test	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_control_tasks.rs:status_test_router
 GET	/api/custom-oauth-provider/	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/control_admin.rs:control_admin_read_router
 GET	/api/system-info/instances	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/control_admin.rs:control_admin_read_router
@@ -79,6 +80,7 @@ DELETE	/api/user/:id	apps/api-rust/src/main.rs
 POST	/api/user/manage	apps/api-rust/src/main.rs
 GET	/api/user/self	apps/api-rust/src/auth/http.rs
 GET	/api/user/self/groups	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_catalog.rs
+GET	/api/user/token	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_catalog.rs:token_router
 GET	/api/user/topup	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_identity_topup.rs:admin_read_router
 GET	/api/user/topup/info	apps/api-rust/src/main.rs:221;apps/api-rust/src/migration_routes/missing_identity_topup.rs:69
 GET	/api/user/topup/self	apps/api-rust/src/main.rs:221;apps/api-rust/src/migration_routes/missing_identity_topup.rs:69
