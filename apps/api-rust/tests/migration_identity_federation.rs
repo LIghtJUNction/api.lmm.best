@@ -6,9 +6,9 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::identity_federation::{
-    FederatedLogin, FederatedUser, FederationError, FederationIdentity, FederationMutationPublisher,
-    FederationPrincipal, FederationProviderError, FederationProviders, FederationState,
-    OAuthFlowContext, router, verify_telegram_authorization,
+    FederatedLogin, FederatedUser, FederationError, FederationIdentity,
+    FederationMutationPublisher, FederationPrincipal, FederationProviderError, FederationProviders,
+    FederationState, OAuthFlowContext, bindings_router, router, verify_telegram_authorization,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -225,6 +225,29 @@ async fn callback_rejects_missing_state_before_any_provider_exchange() {
         .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn bindings_read_mount_keeps_the_federation_auth_boundary() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+        .expect("a lazy test pool is valid");
+    let app = bindings_router(FederationState::new(
+        pool,
+        Arc::new(NoIdentity),
+        "test-secret",
+    ));
+
+    let response = app
+        .oneshot(
+            Request::get("/api/user/oauth/bindings")
+                .body(Body::empty())
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

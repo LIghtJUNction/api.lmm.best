@@ -1033,20 +1033,6 @@ fn dashboard_auth_error(locale: LegacyLocale, error: AuthError) -> Response {
         .into_response()
 }
 
-fn unauthorized(message: &'static str) -> Response {
-    let mut response = (
-        StatusCode::UNAUTHORIZED,
-        Json(ErrorEnvelope {
-            success: false,
-            code: "AUTH_UNAUTHORIZED",
-            message,
-        }),
-    )
-        .into_response();
-    disable_cache(&mut response, false);
-    response
-}
-
 fn invalid_login_error(locale: LegacyLocale) -> Response {
     let mut response = Json(FailureEnvelope {
         success: false,
@@ -1149,6 +1135,12 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
         (StatusCode::CREATED, content_length.to_owned()).into_response()
+    }
+
+    const TEST_REGISTRATION_PATH: &str = "/api/user/register";
+
+    fn registration_probe_router() -> Router {
+        Router::new().route(TEST_REGISTRATION_PATH, post(registration_probe))
     }
 
     impl MockAuth {
@@ -2198,7 +2190,7 @@ mod tests {
             AuthHttpState::new(auth.clone(), false)
                 .with_anonymous_body_limit_bytes(16)
                 .with_turnstile_verifier(verifier.clone()),
-            Router::new().route("/api/user/register", post(registration_probe)),
+            registration_probe_router(),
         );
 
         let response = router
@@ -2284,7 +2276,7 @@ mod tests {
         let verifier = Arc::new(MockTurnstile::allowing());
         let response = anonymous_registration_surface(
             AuthHttpState::new(auth.clone(), false).with_turnstile_verifier(verifier.clone()),
-            Router::new().route("/api/user/register", post(registration_probe)),
+            registration_probe_router(),
         )
         .oneshot(
             Request::builder()

@@ -32,6 +32,7 @@ done
 printf '[Service]\nExecStart=/usr/bin/lmm-api\n' >"$root/core-root/usr/lib/systemd/system/lmm-api.service"
 printf 'LMM_API_BACKEND=go\n' >"$root/core-root/etc/lmm-api/backend.conf"
 : >"$root/core-root/etc/lmm-api/lmm-api.env"
+chmod 0700 "$root/core-root/etc/lmm-api"
 chmod 0644 "$root/core-root/usr/lib/systemd/system/lmm-api.service" \
   "$root/core-root/etc/lmm-api/backend.conf"
 chmod 0600 "$root/core-root/etc/lmm-api/lmm-api.env"

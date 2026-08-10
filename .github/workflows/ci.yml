@@ -61,7 +61,6 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: |
           bash deploy/test-frontend-release.sh
-          bash deploy/production/test-go-deploy-contract.sh
 
   go:
     name: Go default backend, relaykit, and static build
@@ -253,17 +252,22 @@ jobs:
     steps:
       - name: Install checkout and package validation tools
         run: |
-          pacman --sync --refresh --noconfirm git shellcheck
+          pacman --sync --refresh --noconfirm git jq libarchive shellcheck
           useradd --create-home package-builder
           install -d -o package-builder -g package-builder /home/package-builder/lmm-ci-tmp
 
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
 
       - name: Validate all public AUR packages
         run: |
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
-          runuser --user package-builder -- bash packaging/aur/test-matrix.sh
-          runuser --user package-builder -- bash packaging/aur/test-bin-makepkg.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-matrix.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-bin-makepkg.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-precutover-packages.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-package-roundtrip.sh
+          runtime_dir="/run/user/$(id -u package-builder)"
+          install -d -m0700 -o package-builder -g package-builder "$runtime_dir"
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-deploy-contract.sh
