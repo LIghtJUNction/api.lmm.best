@@ -323,10 +323,10 @@ func (runtime *productionRuntime) captureDatabaseAccess(ctx context.Context, wor
 	if err != nil {
 		return "", err
 	}
-	childEnvironment := productionChildEnvironment(values, map[string]string{"PGDATABASE": databaseURL})
+	childEnvironment := productionChildEnvironment(values, nil)
 	schemaOutput, err := runtime.runner.Run(ctx, productionCommand{
 		Name: "psql",
-		Args: []string{"-X", "-v", "ON_ERROR_STOP=1", "--no-align", "--tuples-only", "--command", "SELECT pg_catalog.current_schema()"},
+		Args: []string{"-X", "-v", "ON_ERROR_STOP=1", "--no-align", "--tuples-only", "--command", "SELECT pg_catalog.current_schema()", databaseURL},
 		Env:  childEnvironment, Sensitive: true,
 	})
 	if err != nil {
@@ -350,7 +350,7 @@ ORDER BY tokens.unlimited_quota DESC, tokens.remain_quota DESC, tokens.id DESC
 LIMIT 1`
 	tokenOutput, err := runtime.runner.Run(ctx, productionCommand{
 		Name: "psql",
-		Args: []string{"-X", "-v", "ON_ERROR_STOP=1", "--no-align", "--tuples-only", "--command", tokenQuery},
+		Args: []string{"-X", "-v", "ON_ERROR_STOP=1", "--no-align", "--tuples-only", "--command", tokenQuery, databaseURL},
 		Env:  childEnvironment, Sensitive: true,
 	})
 	if err != nil {
