@@ -159,7 +159,7 @@ GET	/api/redemption/search	absent	not-applicable	unmounted	not-applicable	not-ap
 GET	/api/reset_password	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/setup	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/setup	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/status	present	unverified	mounted	blocked-sol-stop	not-applicable	go	blocked-sol-stop	source=apps/api-rust/src/http.rs;mount=apps/api-rust/src/http.rs;stop=latest-independent-sol-review-invalidated-prior-compile-differential-and-approval-credit
+GET	/api/status	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/http.rs;mount=apps/api-rust/src/http.rs;listener=apps/api-rust/src/main.rs;differential=apps/api-rust/tests/behavior-oracle/tests/status-listener-differential.sh:1/1
 GET	/api/status/test	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/stripe/webhook	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/subscription/admin/bind	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/billing_subscriptions.rs;mount=apps/api-rust/src/migration_routes/billing_subscriptions.rs
