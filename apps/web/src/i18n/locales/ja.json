@@ -6160,6 +6160,9 @@
     "OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.": "OpenAI が現在提供している ChatGPT デスクトップ版は Windows と macOS 向けです。Linux ではブラウザで chatgpt.com を使用するか、CC Switch などの API 互換クライアントを選択してください。",
     "Use ChatGPT in your browser": "ブラウザで ChatGPT を使用する",
     "Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.": "対応ブラウザで chatgpt.com を開き、OpenAI アカウントでサインインしてください。Linux 用デスクトップインストーラーは必要ありません。",
-    "Open ChatGPT in browser": "ブラウザで ChatGPT を開く"
+    "Open ChatGPT in browser": "ブラウザで ChatGPT を開く",
+    "Live prices are unavailable, so no estimate is shown.": "リアルタイム価格を取得できないため、見積もりは表示されません。",
+    "No text-token pricing is available": "テキスト Token の価格情報がありません",
+    "This calculator supports models with fixed input and output token rates.": "この計算機は、入力と出力の Token 単価が固定されたモデルに対応しています。"
   }
 }

@@ -6160,6 +6160,9 @@
     "OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.": "OpenAI 目前仅提供 Windows 和 macOS 版 ChatGPT 桌面安装程序。在 Linux 上，请通过浏览器使用 chatgpt.com，或选择 CC Switch 等兼容 API 的客户端。",
     "Use ChatGPT in your browser": "在浏览器中使用 ChatGPT",
     "Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.": "请在受支持的浏览器中打开 chatgpt.com，并登录你的 OpenAI 账户。无需安装 Linux 桌面程序。",
-    "Open ChatGPT in browser": "在浏览器中打开 ChatGPT"
+    "Open ChatGPT in browser": "在浏览器中打开 ChatGPT",
+    "Live prices are unavailable, so no estimate is shown.": "实时价格暂不可用，因此不会显示估算结果。",
+    "No text-token pricing is available": "暂无文本 Token 定价",
+    "This calculator supports models with fixed input and output token rates.": "此计算器支持采用固定输入和输出 Token 费率的模型。"
   }
 }
