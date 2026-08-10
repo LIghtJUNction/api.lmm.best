@@ -1447,35 +1447,34 @@ For commercial licensing, please contact support@quantumnous.com
 
 .playground-editorial .playground-input-shell {
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0;
+  border: 1px solid color-mix(in oklch, var(--foreground) 16%, transparent);
+  border-radius: 1.25rem;
   background: var(--playground-surface);
-  box-shadow: none;
-  transition: border-color 160ms ease;
+  box-shadow:
+    0 1px 0 color-mix(in oklch, var(--foreground) 5%, transparent),
+    0 12px 32px color-mix(in oklch, var(--foreground) 7%, transparent);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .playground-editorial .playground-input-shell:focus-within {
   border-color: var(--console-clay);
-  box-shadow: none;
+  box-shadow:
+    0 0 0 3px color-mix(in oklch, var(--console-clay) 18%, transparent),
+    0 14px 36px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
 .playground-editorial .playground-input-footer {
   border-top: 1px solid var(--border);
-  background: color-mix(in oklch, var(--muted) 66%, transparent);
+  background: color-mix(in oklch, var(--muted) 48%, transparent);
   backdrop-filter: none;
 }
 
 .playground-editorial .playground-input-tools {
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: color-mix(in oklch, var(--background) 78%, transparent);
-  box-shadow: none;
-}
-
-.playground-editorial :where(.group.is-user) {
-  border-radius: 0 0 0.5rem 0;
-  border-color: var(--border);
-  background: color-mix(in oklch, var(--accent) 38%, transparent);
+  border: 0;
+  border-radius: 0.75rem;
+  background: transparent;
   box-shadow: none;
 }
 

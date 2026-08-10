@@ -45,6 +45,31 @@ function formatDiscount(percent: number) {
   return `${Math.round(percent)}%`
 }
 
+function benefitLabel(code: string, t: (key: string) => string) {
+  switch (code) {
+    case 'developer_access':
+      return t('Developer console access')
+    case 'usage_discount':
+      return t('Usage discount')
+    case 'personal_ip_allowlist':
+      return t('One personal IP allowlist entry')
+    case 'standard_access':
+      return t('Standard access')
+    default:
+      return code
+  }
+}
+
+function formatTierBenefits(tier: TrustLevelTier, t: (key: string) => string) {
+  if (tier.benefits_hidden) {
+    return `${tier.benefit_count ?? 0} ${t('benefits hidden')}`
+  }
+  if (tier.benefits?.length) {
+    return tier.benefits.map((benefit) => benefitLabel(benefit, t)).join(' · ')
+  }
+  return t('No additional benefits')
+}
+
 export function TrustLevelPanel({
   user,
   loading = false,
@@ -98,6 +123,12 @@ export function TrustLevelPanel({
       date: formatTimestampToDate(info.next_decay_at),
     })
   }
+  let statusLabel = t('Automatic')
+  if (info?.overridden) {
+    statusLabel = t('Administrator override')
+  } else if (roleAssigned) {
+    statusLabel = t('Role-assigned access')
+  }
 
   return (
     <section className='bg-card overflow-hidden rounded-none border'>
@@ -120,11 +151,7 @@ export function TrustLevelPanel({
               </div>
             </div>
             <Badge variant={info?.overridden ? 'warning' : 'outline'}>
-              {info?.overridden
-                ? t('Administrator override')
-                : roleAssigned
-                  ? t('Role-assigned access')
-                  : t('Automatic')}
+              {statusLabel}
             </Badge>
           </div>
 
@@ -228,6 +255,7 @@ export function TrustLevelPanel({
             {tiers.map((tier: TrustLevelTier) => {
               const active = tier.level === currentLevel
               const automatic = tier.level === automaticLevel
+              const benefitSummary = formatTierBenefits(tier, t)
               return (
                 <div
                   key={tier.level}
@@ -247,12 +275,20 @@ export function TrustLevelPanel({
                     )}
                   </div>
                   <p className='mt-2 font-mono text-xs font-medium'>
-                    {formatDiscount(tier.discount_percent)}
+                    {tier.discount_hidden
+                      ? '?'
+                      : formatDiscount(tier.discount_percent)}
                   </p>
                   <p className='text-muted-foreground mt-1 truncate text-[10px]'>
                     {tier.min_paid_amount === 0
                       ? t('No minimum')
                       : formatCurrencyFromUSD(tier.min_paid_amount)}
+                  </p>
+                  <p
+                    className='text-muted-foreground mt-2 line-clamp-2 text-[10px] leading-4'
+                    title={benefitSummary}
+                  >
+                    {benefitSummary}
                   </p>
                 </div>
               )

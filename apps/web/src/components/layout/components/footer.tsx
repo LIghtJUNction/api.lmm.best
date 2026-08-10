@@ -251,77 +251,33 @@ export function Footer(props: FooterProps) {
       <footer
         className={cn('forge-footer relative z-10 border-t', props.className)}
       >
-        <div className='mx-auto max-w-7xl px-5 py-12 sm:px-8 md:py-16'>
-          <div className='grid gap-12 md:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)] md:gap-16'>
-            <div className='max-w-xl'>
-              <Link to='/' className='group inline-flex items-center gap-3'>
-                <LmmBrandMark className='size-10' title={LMM_BRAND_NAME} />
-                <span className='text-lg font-semibold tracking-[-0.03em]'>
-                  {displayName}
-                </span>
-              </Link>
-              <p className='mt-8 max-w-lg font-serif text-3xl leading-[1.08] tracking-[-0.035em] md:text-4xl'>
-                {t('Open-source work, made accountable')}
-              </p>
-              <p className='forge-footer-muted mt-5 max-w-sm text-sm leading-6'>
-                {t('Open-source bounty collaboration')}
-              </p>
-            </div>
+        <div className='mx-auto max-w-7xl px-5 py-6 sm:px-8'>
+          <div className='flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between'>
+            <Link to='/' className='group inline-flex items-center gap-2.5'>
+              <LmmBrandMark className='size-8' title={LMM_BRAND_NAME} />
+              <span className='font-semibold tracking-[-0.025em]'>
+                {displayName}
+              </span>
+            </Link>
 
-            <div className='grid grid-cols-2 gap-8 sm:gap-12 md:justify-self-end'>
-              <div>
-                <p className='forge-footer-kicker mb-4 text-[11px] font-semibold tracking-[0.18em] uppercase'>
-                  {t('Challenges')}
-                </p>
-                <ul className='space-y-3'>
-                  {[
-                    { text: t('Browse challenges'), href: '/challenges' },
-                    { text: t('How it works'), href: '/#workflow' },
-                    { text: t('Pricing'), href: '/pricing' },
-                  ].map((link) => (
-                    <li key={link.href}>
-                      <FooterLinkItem link={link} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <p className='forge-footer-kicker mb-4 text-[11px] font-semibold tracking-[0.18em] uppercase'>
-                  {t('Terms')}
-                </p>
-                <ul className='space-y-3'>
-                  {[
-                    { text: t('Terms of Service'), href: '/user-agreement' },
-                    { text: t('Privacy Policy'), href: '/privacy-policy' },
-                  ].map((link) => (
-                    <li key={link.href}>
-                      <FooterLinkItem link={link} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
+            <nav
+              aria-label={t('Footer navigation')}
+              className='forge-footer-meta flex flex-wrap gap-x-5 gap-y-2 text-sm'
+            >
+              <Link to='/challenges'>{t('Challenges')}</Link>
+              <Link to='/pricing'>{t('Pricing')}</Link>
+              <Link to='/user-agreement'>{t('Terms of Service')}</Link>
+              <Link to='/privacy-policy'>{t('Privacy Policy')}</Link>
+              <a href='mailto:support@lmm.best'>support@lmm.best</a>
+            </nav>
           </div>
 
-          <div className='forge-footer-rule mt-12 flex flex-col gap-5 border-t pt-5 text-sm sm:flex-row sm:items-center sm:justify-between'>
-            <a
-              href='mailto:support@lmm.best'
-              className='forge-footer-support inline-flex w-fit items-center gap-2 font-medium transition-colors'
-            >
-              <span
-                className='forge-footer-support-dot size-2 rounded-full'
-                aria-hidden='true'
-              />
-              {t('Customer Support')}: support@lmm.best
-            </a>
-            <div className='forge-footer-meta flex flex-wrap gap-x-3 gap-y-1 text-xs sm:justify-end'>
-              <span>
-                &copy; {currentYear} {displayName}.{' '}
-                {props.copyright ?? t('footer.defaultCopyright')}
-              </span>
-              <span aria-hidden='true'>·</span>
-              <span>{t('Open-source bounty collaboration')}</span>
-            </div>
+          <div className='forge-footer-rule forge-footer-meta mt-5 flex flex-wrap items-center justify-between gap-2 border-t pt-4 text-xs'>
+            <span>
+              &copy; {currentYear} {displayName}.{' '}
+              {props.copyright ?? t('footer.defaultCopyright')}
+            </span>
+            <span>{t('Open-source bounty collaboration')}</span>
           </div>
         </div>
       </footer>

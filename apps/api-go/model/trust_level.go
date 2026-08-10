@@ -51,21 +51,64 @@ type TrustLevelInfo struct {
 }
 
 type TrustLevelTier struct {
-	Level                   int     `json:"level"`
-	MinPaidAmount           float64 `json:"min_paid_amount"`
-	RequiresSuccessfulTopUp bool    `json:"requires_successful_top_up"`
-	DiscountPercent         float64 `json:"discount_percent"`
+	Level                   int      `json:"level"`
+	MinPaidAmount           float64  `json:"min_paid_amount"`
+	RequiresSuccessfulTopUp bool     `json:"requires_successful_top_up"`
+	DiscountPercent         float64  `json:"discount_percent"`
+	Benefits                []string `json:"benefits"`
+	BenefitCount            int      `json:"benefit_count"`
+	BenefitsHidden          bool     `json:"benefits_hidden"`
+	DiscountHidden          bool     `json:"discount_hidden"`
+}
+
+var trustLevelBenefits = [...][]string{
+	{"standard_access"},
+	{"developer_access"},
+	{"usage_discount", "personal_ip_allowlist"},
+	{"usage_discount"},
+	{"usage_discount"},
+}
+
+func trustLevelTier(level int) TrustLevelTier {
+	if level < TrustLevelMinUser || level > TrustLevelMaxUser {
+		return TrustLevelTier{}
+	}
+	benefits := append([]string(nil), trustLevelBenefits[level]...)
+	return TrustLevelTier{
+		Level:                   level,
+		MinPaidAmount:           trustLevelThresholds[level],
+		RequiresSuccessfulTopUp: level == TrustLevelMinUser+1,
+		DiscountPercent:         (1 - trustLevelDiscountRatios[level]) * 100,
+		Benefits:                benefits,
+		BenefitCount:            len(benefits),
+	}
 }
 
 func GetTrustLevelTiers() []TrustLevelTier {
 	tiers := make([]TrustLevelTier, 0, TrustLevelMaxUser-TrustLevelMinUser+1)
 	for level := TrustLevelMinUser; level <= TrustLevelMaxUser; level++ {
-		tiers = append(tiers, TrustLevelTier{
-			Level:                   level,
-			MinPaidAmount:           trustLevelThresholds[level],
-			RequiresSuccessfulTopUp: level == TrustLevelMinUser+1,
-			DiscountPercent:         (1 - trustLevelDiscountRatios[level]) * 100,
-		})
+		tiers = append(tiers, trustLevelTier(level))
+	}
+	return tiers
+}
+
+// GetTrustLevelTierViews returns a privacy-preserving view for the current
+// viewer. A tier at or below the viewer's effective level exposes its benefit
+// codes; higher tiers expose only the number of benefits. This keeps the
+// progression discoverable without leaking unreleased higher-level details.
+func GetTrustLevelTierViews(viewerLevel int) []TrustLevelTier {
+	if viewerLevel < TrustLevelMinUser {
+		viewerLevel = TrustLevelMinUser
+	}
+	tiers := GetTrustLevelTiers()
+	for index := range tiers {
+		if tiers[index].Level <= viewerLevel {
+			continue
+		}
+		tiers[index].Benefits = nil
+		tiers[index].BenefitsHidden = true
+		tiers[index].DiscountPercent = 0
+		tiers[index].DiscountHidden = true
 	}
 	return tiers
 }

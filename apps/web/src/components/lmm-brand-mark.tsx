@@ -26,10 +26,7 @@ type LmmBrandMarkProps = SVGProps<SVGSVGElement> & {
   title?: string
 }
 
-/**
- * Three loose input paths becoming one stable route: an original mark for
- * lmm.best's role as an AI API control plane.
- */
+/** A literal L-shaped route ending in one API node. */
 export function LmmBrandMark({
   className,
   title,
@@ -43,39 +40,28 @@ export function LmmBrandMark({
       aria-label={title}
       aria-hidden={title ? undefined : true}
       focusable='false'
-      className={cn('shrink-0 overflow-visible', className)}
+      className={cn('shrink-0', className)}
       {...props}
     >
-      <path
-        d='M8.2 14.1C12.8 6.8 23.6 4.7 34.4 7.1c9.7 2.1 15.4 9.8 13.4 20.8-1.7 9.4-7.6 18-18.2 20.2-9.2 1.9-19.8-2.4-22.1-11.5-1.8-7.2-3.5-15.9.7-22.5Z'
+      <rect
+        x='5'
+        y='5'
+        width='46'
+        height='46'
+        rx='14'
         fill='var(--forge-brand-mark-surface)'
         stroke='var(--forge-brand-mark-ink)'
-        strokeWidth='2.2'
-        strokeLinecap='round'
-        strokeLinejoin='round'
+        strokeWidth='2'
       />
       <path
-        d='M15.4 20.1c3.8-5.1 11.4-7.3 18-4.9 6.1 2.2 9.4 7.7 7.8 13.9-1.9 7.3-9.2 12-16.5 10.7-6.1-1-11.3-5.4-11.8-11.1-.3-3.2.6-6.3 2.5-8.6Z'
-        fill='var(--forge-brand-mark-paper)'
-      />
-      <g
+        d='M18 16v20h20'
         fill='none'
         stroke='var(--forge-brand-mark-ink)'
-        strokeWidth='3.2'
+        strokeWidth='4'
         strokeLinecap='round'
         strokeLinejoin='round'
-      >
-        <path d='M13.4 19.1c6.4-.8 8.6 1.8 11.4 6.3 2.3 3.7 5.5 4.4 9.4 4.3' />
-        <path d='M12.1 28.4c6.1.1 8.6-.1 12.7-3 4.7-3.3 6.7-2.7 10.2-.4' />
-        <path d='M14.1 37.2c5.4-.9 7.8-3.5 10.7-7.8 2.4-3.6 5.9-4.4 9.8-4.3' />
-        <path d='M34.4 27.3c3.4.1 6.1.2 9.2-.7' />
-      </g>
-      <g fill='var(--forge-brand-mark-ink)'>
-        <circle cx='12.8' cy='19.2' r='2.4' />
-        <circle cx='11.8' cy='28.4' r='2.4' />
-        <circle cx='13.5' cy='37.2' r='2.4' />
-        <circle cx='44.1' cy='26.5' r='2.7' />
-      </g>
+      />
+      <circle cx='39' cy='36' r='5' fill='var(--forge-brand-mark-accent)' />
     </svg>
   )
 }

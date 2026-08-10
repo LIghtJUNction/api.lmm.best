@@ -35,7 +35,6 @@ import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { ModelAnalyticsHero } from './components/models/model-analytics-hero'
 import { ModelsChartPreferences } from './components/models/models-chart-preferences'
 import { ModelsFilter } from './components/models/models-filter-dialog'
 import { OverviewDashboard } from './components/overview/overview-dashboard'
@@ -350,9 +349,6 @@ export function Dashboard() {
           {activeSection === 'overview' && <OverviewDashboard />}
           {activeSection === 'models' && (
             <>
-              <FadeIn>
-                <ModelAnalyticsHero />
-              </FadeIn>
               <FadeIn>
                 <Suspense fallback={<LogStatCardsFallback />}>
                   <LazyLogStatCards

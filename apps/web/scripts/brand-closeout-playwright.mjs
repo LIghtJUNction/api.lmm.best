@@ -34,7 +34,8 @@ const outputDirectory = path.resolve(
 )
 const baseUrl = process.env.BRAND_REVIEW_URL ?? 'http://127.0.0.1:4174'
 const themeCookieName = 'vite-ui-theme'
-const accessPolicy = 'Access from China is prohibited.'
+const accessPolicy =
+  'Service access notice: This notice refers only to ISO 3166-1 alpha-2 CN (Mainland China). It does not state service availability for any other location.'
 
 async function fileSha256(filePath) {
   return createHash('sha256')
@@ -52,6 +53,13 @@ const statusPayload = {
     demo_site_enabled: true,
     display_token_stat_enabled: false,
     display_in_currency: false,
+    backend_capabilities: {
+      bounty_public_read: true,
+      bounty_challenge_cancel: false,
+      bounty_notifications: false,
+      self_oauth_unbind: false,
+      responses_websocket: false,
+    },
   },
 }
 
@@ -172,6 +180,27 @@ async function installApiFixtures(page, initialized, authenticated) {
     if (pathname === '/api/notice') json = { success: true, data: '' }
     if (pathname === '/api/home_page_content') {
       json = { success: true, data: '' }
+    }
+    if (pathname === '/api/pricing') {
+      json = {
+        success: true,
+        data: [
+          {
+            id: 1,
+            model_name: 'forge-review-model',
+            quota_type: 0,
+            model_ratio: 1,
+            completion_ratio: 1,
+            enable_groups: ['default'],
+            tags: 'review',
+          },
+        ],
+        vendors: [],
+        group_ratio: { default: 1 },
+        usable_group: { default: { desc: 'Default', ratio: 1 } },
+        supported_endpoint: {},
+        auto_groups: [],
+      }
     }
     if (pathname === '/api/setup') json = setupPayload(initialized)
     if (pathname === '/api/user/auth/refresh') {
@@ -329,11 +358,7 @@ async function verifyPage({
       `${name} did not render the live challenge fixture`
     )
 
-    const illustration = page
-      .locator('section')
-      .first()
-      .locator('div[aria-hidden="true"]')
-      .first()
+    const illustration = page.locator('[data-forge-bounty-art="interactive"]')
     const illustrationBox = await illustration.boundingBox()
     assert.ok(
       illustrationBox &&
@@ -344,7 +369,10 @@ async function verifyPage({
     const illustrationColors = await illustration
       .locator('*')
       .evaluateAll((elements) =>
-        elements.map((element) => getComputedStyle(element).backgroundColor)
+        elements.flatMap((element) => {
+          const style = getComputedStyle(element)
+          return [style.backgroundColor, style.fill, style.stroke]
+        })
       )
     assert.ok(
       illustrationColors.includes('rgb(20, 20, 19)') &&
@@ -403,23 +431,27 @@ async function verifyPage({
   if (pathname === '/pricing') {
     assert.equal(
       new URL(page.url()).pathname,
-      '/challenges',
-      `${name} did not conceal the pricing route before activation`
+      '/pricing',
+      `${name} did not keep the public access route available`
     )
     assert.ok(
-      await page.getByRole('heading', { name: 'Challenges' }).count(),
-      `${name} did not redirect pricing discovery to the challenge board`
+      await page
+        .getByRole('heading', {
+          name: 'Developer access that grows with your work',
+        })
+        .count(),
+      `${name} did not render the public access heading`
     )
   }
 
   if (pathname === '/workspace') {
     assert.ok(
-      await page.getByText('Contributor workspace', { exact: true }).count(),
-      `${name} did not render the pre-activation contributor workspace`
+      new URL(page.url()).pathname === '/getting-started',
+      `${name} did not route an inactive account to getting started`
     )
     assert.ok(
-      await page.getByText('Developer access', { exact: true }).count(),
-      `${name} did not preserve the first-credential activation action`
+      await page.getByRole('heading', { name: 'Getting started' }).count(),
+      `${name} did not render the getting-started heading`
     )
     assert.equal(
       /Model Square|Console|Docs/.test(bodyText),
@@ -481,7 +513,7 @@ try {
     initialized: true,
   })
   await verifyPage({
-    name: 'pricing-concealment',
+    name: 'pricing-public-access',
     pathname: '/pricing',
     viewport: { width: 1440, height: 900 },
     colorScheme: 'light',

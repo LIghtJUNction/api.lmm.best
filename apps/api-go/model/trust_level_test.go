@@ -39,6 +39,23 @@ func TestGetTrustLevelTiersMatchesEvaluationPolicy(t *testing.T) {
 		assert.InDelta(t, tier.DiscountPercent, info.DiscountPercent, 0.0001)
 	}
 	assert.True(t, tiers[TrustLevelMinUser+1].RequiresSuccessfulTopUp)
+	assert.Contains(t, tiers[TrustLevelMinUser+2].Benefits, "personal_ip_allowlist")
+}
+
+func TestGetTrustLevelTierViewsHideHigherBenefits(t *testing.T) {
+	viewer := GetTrustLevelTierViews(TrustLevelMinUser)
+	require.Len(t, viewer, TrustLevelMaxUser+1)
+	assert.NotEmpty(t, viewer[TrustLevelMinUser].Benefits)
+	assert.False(t, viewer[TrustLevelMinUser].BenefitsHidden)
+	assert.Empty(t, viewer[TrustLevelMinUser+1].Benefits)
+	assert.Equal(t, 1, viewer[TrustLevelMinUser+1].BenefitCount)
+	assert.True(t, viewer[TrustLevelMinUser+1].BenefitsHidden)
+	assert.True(t, viewer[TrustLevelMinUser+1].DiscountHidden)
+
+	admin := GetTrustLevelTierViews(TrustLevelAdmin)
+	assert.NotEmpty(t, admin[TrustLevelMaxUser].Benefits)
+	assert.False(t, admin[TrustLevelMaxUser].BenefitsHidden)
+	assert.False(t, admin[TrustLevelMaxUser].DiscountHidden)
 }
 
 func TestEvaluateTrustLevelPaidActivationThresholdsAndDiscounts(t *testing.T) {

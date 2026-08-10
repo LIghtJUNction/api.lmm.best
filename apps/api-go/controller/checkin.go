@@ -20,6 +20,14 @@ func GetCheckinStatus(c *gin.Context) {
 		return
 	}
 	userId := c.GetInt("id")
+	rewardRange, err := model.GetUserCheckinRewardRange(userId)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "系统错误",
+		})
+		return
+	}
 	// 获取月份参数，默认为当前月份
 	month := c.DefaultQuery("month", time.Now().Format("2006-01"))
 
@@ -35,10 +43,15 @@ func GetCheckinStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"enabled":   setting.Enabled,
-			"min_quota": setting.MinQuota,
-			"max_quota": setting.MaxQuota,
-			"stats":     stats,
+			"enabled":           setting.Enabled,
+			"min_quota":         rewardRange.MinQuota,
+			"max_quota":         rewardRange.MaxQuota,
+			"base_min_quota":    rewardRange.BaseMinQuota,
+			"base_max_quota":    rewardRange.BaseMaxQuota,
+			"trust_level":       rewardRange.TrustLevel,
+			"reward_multiplier": rewardRange.Multiplier,
+			"level_multipliers": operation_setting.GetCheckinLevelMultipliers(),
+			"stats":             stats,
 		},
 	})
 }

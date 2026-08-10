@@ -23,6 +23,7 @@ import {
   Outlet,
   redirect,
   useNavigate,
+  useRouterState,
 } from '@tanstack/react-router'
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
 import { useEffect } from 'react'
@@ -53,6 +54,10 @@ import { useAuthStore } from '@/stores/auth-store'
 function RootComponent() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const isHomeIntroSurface = isHomeIntroPath(pathname)
 
   // Load system configuration (logo, system name, etc.) from backend
   useSystemConfig({ autoLoad: true })
@@ -102,8 +107,8 @@ function RootComponent() {
     <ThemeCustomizationProvider>
       <NavigationProgress />
       <Outlet />
-      <Footer />
-      <FeedbackRewardButton />
+      {isHomeIntroSurface && <Footer />}
+      {isHomeIntroSurface && <FeedbackRewardButton />}
       <Toaster closeButton duration={5000} position='top-center' richColors />
       {import.meta.env.DEV &&
         import.meta.env.VITE_ENABLE_DEVTOOLS === 'true' && (
@@ -114,6 +119,10 @@ function RootComponent() {
         )}
     </ThemeCustomizationProvider>
   )
+}
+
+function isHomeIntroPath(pathname: string): boolean {
+  return pathname === '/'
 }
 
 // 缓存 setup 状态检查结果，避免每次导航都重复调用 API

@@ -41,7 +41,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   }, [])
 
   return (
-    <div className='auth-editorial relative min-h-svh max-w-none lg:grid lg:grid-cols-[minmax(31rem,0.92fr)_minmax(31rem,1.08fr)]'>
+    <div className='auth-editorial relative h-svh max-w-none overflow-hidden lg:grid lg:grid-cols-[minmax(31rem,0.92fr)_minmax(31rem,1.08fr)]'>
       <header className='absolute inset-x-0 top-0 z-20 flex min-h-20 items-center justify-between px-4 sm:min-h-24 sm:px-8'>
         <Link
           to='/'
@@ -52,8 +52,8 @@ export function AuthLayout({ children }: AuthLayoutProps) {
         </Link>
         <ThemeSwitch />
       </header>
-      <div className='grid min-h-svh grid-rows-[1fr_auto] lg:col-start-1'>
-        <div className='container flex items-start pt-20 sm:pt-24'>
+      <div className='grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] lg:col-start-1'>
+        <div className='container min-h-0 overflow-y-auto pt-20 sm:pt-24'>
           <div className='mx-auto flex w-full flex-col justify-center space-y-2 px-4 py-8 sm:w-[480px] sm:px-8 sm:py-12'>
             {children}
           </div>

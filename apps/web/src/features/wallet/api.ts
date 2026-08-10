@@ -56,7 +56,14 @@ export function isApiSuccess(response: ApiResponse): boolean {
  * Get topup configuration info
  */
 export async function getTopupInfo(): Promise<TopupInfoResponse> {
-  const res = await api.get('/api/user/topup/info')
+  // Payment availability is optional onboarding decoration.  The caller
+  // renders an inline fallback when this probe is unavailable, so an
+  // inactive/legacy listener must not turn a harmless 401/404 into a global
+  // toast (or a duplicate error on every focus refresh).
+  const res = await api.get('/api/user/topup/info', {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 

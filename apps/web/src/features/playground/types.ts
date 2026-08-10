@@ -28,6 +28,18 @@ export interface MessageVersion {
   content: string
 }
 
+export interface PlaygroundAttachment {
+  kind: 'image' | 'text'
+  name: string
+  mediaType: string
+  url?: string
+}
+
+export interface PlaygroundSubmission {
+  text: string
+  attachments: PlaygroundAttachment[]
+}
+
 export interface Message {
   key: string
   from: MessageRole
@@ -37,6 +49,7 @@ export interface Message {
   completedAt?: number
   durationMs?: number
   sources?: { href: string; title: string }[]
+  attachments?: PlaygroundAttachment[]
   reasoning?: {
     content: string
     duration: number

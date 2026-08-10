@@ -28,6 +28,7 @@ import { CheckinCalendarCard } from './components/checkin-calendar-card'
 import { LanguagePreferencesCard } from './components/language-preferences-card'
 import { LoginSessionsCard } from './components/login-sessions-card'
 import { PasskeyCard } from './components/passkey-card'
+import { PersonalAccessIPCard } from './components/personal-access-ip-card'
 import { ProfileHeader } from './components/profile-header'
 import { ProfileSecurityCard } from './components/profile-security-card'
 import { ProfileSettingsCard } from './components/profile-settings-card'
@@ -82,6 +83,7 @@ export function Profile() {
                   profile={profile}
                   onProfileUpdate={refreshProfile}
                 />
+                <PersonalAccessIPCard profile={profile} loading={loading} />
                 <ProfileSecurityCard profile={profile} loading={loading} />
                 <LoginSessionsCard />
               </div>

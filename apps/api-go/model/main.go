@@ -339,7 +339,7 @@ func mainMigrationModels() []interface{} {
 		&OpenSourceBountyMCPConfirmation{}, &OpenSourceBountyMCPOperation{}, &OpenSourceBountyRESTOperation{},
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
-		&CasbinRule{}, &AuthzRole{},
+		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
 	}
 }
 
@@ -428,6 +428,7 @@ func migrateDBFast() error {
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+		{&PersonalAccessIP{}, "PersonalAccessIP"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
