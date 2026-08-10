@@ -2649,8 +2649,9 @@ mod tests {
         let (status, _, body) = call("GET", "/api/user/token", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(
-            body["error"]["type"], "invalid_request_error",
-            "listener-wide concealment keeps the legacy hidden-route envelope"
+            body,
+            serde_json::json!({"message": "Not Found"}),
+            "unmounted token routes use the listener fallback without exposing route ownership"
         );
     }
 
