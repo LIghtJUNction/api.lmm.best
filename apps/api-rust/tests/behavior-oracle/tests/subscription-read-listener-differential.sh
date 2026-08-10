@@ -230,6 +230,18 @@ compare_self_write() {
   grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
 }
 
+compare_self_delete() {
+  local name=$1 go_token=$2 rust_token=$3 go_code rust_code
+  go_code=$(request_method DELETE "$go_port" "$go_token" /api/user/self '' "$runtime/go-$name")
+  rust_code=$(request_method DELETE "$rust_port" "$rust_token" /api/user/self '' "$runtime/rust-$name")
+  [[ $go_code == "$rust_code" ]] || { echo "$name status mismatch: $go_code/$rust_code" >&2; return 1; }
+  jq -S . "$runtime/go-$name.body" >"$runtime/go-$name.json"
+  jq -S . "$runtime/rust-$name.body" >"$runtime/rust-$name.json"
+  diff -u "$runtime/go-$name.json" "$runtime/rust-$name.json"
+  grep -qi '^content-type: application/json' "$runtime/go-$name.headers"
+  grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
+}
+
 compare_profile_write profile-invalid-type '{"notify_type":"sms","quota_warning_threshold":1}' "$go_user" "$rust_user"
 if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
   echo "profile invalid-type DB snapshot mismatch" >&2
@@ -321,5 +333,11 @@ start_rust
 go_root=$(login "$go_port" root); rust_root=$(login "$rust_port" root); go_user=$(login "$go_port" user); rust_user=$(login "$rust_port" user)
 compare compliance-off /api/subscription/plans "$go_user" "$rust_user"
 compare non-admin /api/subscription/admin/plans "$go_user" "$rust_user"
+compare_self_delete self-delete "$go_user" "$rust_user"
+go_deleted=$(sql "$go_database" "SELECT (deleted_at IS NOT NULL) FROM users WHERE id = 2")
+rust_deleted=$(sql "$rust_database" "SELECT (deleted_at IS NOT NULL) FROM users WHERE id = 2")
+[[ $go_deleted == t && $rust_deleted == t ]]
+[[ "$(valkey_keys "$go_valkey_port" "$go_secret")" != *$'user:2'* ]]
+[[ "$(valkey_keys "$rust_valkey_port" "$rust_secret")" != *$'user:2'* ]]
 
-jq -cn --arg revision "$legacy_revision" --argjson scenarios 19 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference","PUT /api/user/setting","PUT /api/user/self"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" --argjson scenarios 20 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference","PUT /api/user/setting","PUT /api/user/self","DELETE /api/user/self"],result:"passed"}'
