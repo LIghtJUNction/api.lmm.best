@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const PersonalAccessIPMinTrustLevel = TrustLevelMinUser + 2
+const PersonalAccessIPMinTrustLevel = TrustLevelMinUser + 1
 
 var (
-	ErrPersonalAccessIPNotEligible = errors.New("personal IP allowlist requires trust level L2 or higher")
+	ErrPersonalAccessIPNotEligible = errors.New("personal IP allowlist requires trust level L1 or higher")
 	ErrInvalidPersonalAccessIP     = errors.New("IP address must be a public, globally routable address")
 )
 
