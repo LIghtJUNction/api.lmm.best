@@ -13,8 +13,9 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{Extension, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -30,6 +31,7 @@ const DEFAULT_GROUP_RATIOS: &[(&str, f64)] = &[("default", 1.0), ("vip", 1.0), (
 const DEFAULT_GROUP_GROUP_RATIOS: &[(&str, &[(&str, f64)])] =
     &[("vip", &[("edit_this", 0.9)])];
 const DEFAULT_AUTO_GROUPS: &[&str] = &["default"];
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Listener dependencies for the identity-catalogue route family.
 #[derive(Clone)]
@@ -51,8 +53,7 @@ impl IdentityCatalogState {
 /// Routes retained from `controller/group.go` and `controller/user.go`.
 pub fn router(state: IdentityCatalogState) -> Router {
     public_routes()
-        .merge(protected_read_routes())
-        .route("/api/user/token", get(generate_access_token))
+        .merge(authenticated_routes(state.clone()))
         .with_state(state)
 }
 
@@ -70,7 +71,7 @@ pub fn public_router(state: IdentityCatalogState) -> Router {
 /// generation.  The normal listener owns this read slice only after the
 /// shared dashboard-auth service accepts the request.
 pub fn protected_read_router(state: IdentityCatalogState) -> Router {
-    protected_read_routes().with_state(state)
+    authenticated_routes(state.clone()).with_state(state)
 }
 
 fn public_routes() -> Router<IdentityCatalogState> {
@@ -85,6 +86,35 @@ fn protected_read_routes() -> Router<IdentityCatalogState> {
         .route("/api/user/models", get(get_user_models))
 }
 
+fn authenticated_routes(state: IdentityCatalogState) -> Router<IdentityCatalogState> {
+    protected_read_routes()
+        .route("/api/user/token", get(generate_access_token))
+        // Match Go's UserAuth ordering and response header once for all
+        // protected catalogue routes, including token-generation failures.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            catalog_auth_boundary,
+        ))
+}
+
+async fn catalog_auth_boundary(
+    State(state): State<IdentityCatalogState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let user = match authenticated(&state, request.headers()).await {
+        Ok(user) => user,
+        Err(error) => return error.into_response(),
+    };
+    request.extensions_mut().insert(user);
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "auth-version",
+        axum::http::HeaderValue::from_static(AUTH_VERSION),
+    );
+    response
+}
+
 async fn get_public_groups(
     State(state): State<IdentityCatalogState>,
 ) -> Result<Json<LegacySuccess<BTreeMap<String, GroupView>>>, CatalogError> {
@@ -93,9 +123,8 @@ async fn get_public_groups(
 
 async fn get_self_groups(
     State(state): State<IdentityCatalogState>,
-    headers: HeaderMap,
+    Extension(user): Extension<DashboardUser>,
 ) -> Result<Json<LegacySuccess<BTreeMap<String, GroupView>>>, CatalogError> {
-    let user = authenticated(&state, &headers).await?;
     Ok(success(Some(groups_for(&state.pg, &user.group).await?)))
 }
 
@@ -107,10 +136,9 @@ struct ModelsQuery {
 
 async fn get_user_models(
     State(state): State<IdentityCatalogState>,
-    headers: HeaderMap,
+    Extension(user): Extension<DashboardUser>,
     Query(query): Query<ModelsQuery>,
 ) -> Result<Json<LegacySuccess<Vec<String>>>, CatalogError> {
-    let user = authenticated(&state, &headers).await?;
     let config = group_config(&state.pg).await?;
     let usable = usable_groups(&config, &user.group);
     let groups = match query.group.as_str() {
@@ -147,13 +175,11 @@ async fn get_user_models(
 
 async fn generate_access_token(
     State(state): State<IdentityCatalogState>,
+    Extension(_user): Extension<DashboardUser>,
     headers: HeaderMap,
 ) -> Result<Json<LegacySuccess<String>>, CatalogError> {
     let access_token =
         credential(&headers).ok_or_else(|| CatalogError::unauthorized(locale(&headers)))?;
-    // The Go route is inside `UserAuth`, so enforce its role/status policy
-    // before delegating the durable update to the auth service.
-    authenticated(&state, &headers).await?;
     // `generate_personal_access_token` verifies the same bearer session and
     // generates the 29..=32-character legacy base64 token atomically.  Do not
     // reimplement this here: it also owns duplicate detection and user-cache
@@ -616,7 +642,7 @@ fn locale(headers: &HeaderMap) -> Locale {
 #[cfg(test)]
 mod tests {
     use super::{
-        GroupConfig, IdentityCatalogState, auto_groups, default_auto_groups,
+        AUTH_VERSION, GroupConfig, IdentityCatalogState, auto_groups, default_auto_groups,
         default_group_group_ratios, legacy_ratio_value, protected_read_router, public_router,
         router,
     };
@@ -768,6 +794,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("auth-version")
+                .and_then(|value| value.to_str().ok()),
+            Some(AUTH_VERSION)
+        );
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
