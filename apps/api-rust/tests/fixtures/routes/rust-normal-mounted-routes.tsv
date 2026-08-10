@@ -1,6 +1,7 @@
 # method	path	source evidence
 GET	/api/about	apps/api-rust/src/http.rs:194
 GET	/api/livez	apps/api-rust/src/http.rs:223
+GET	/api/group/	apps/api-rust/src/main.rs;apps/api-rust/src/migration_routes/missing_control_public.rs:group_router
 GET	/api/data/	apps/api-rust/src/main.rs:190
 GET	/api/data/flow	apps/api-rust/src/main.rs:190
 GET	/api/data/flow/self	apps/api-rust/src/main.rs:190

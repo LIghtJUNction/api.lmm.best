@@ -1,4 +1,5 @@
 method	path	rust_handler	listener_differential	postgres_evidence	valkey_evidence	decision	notes
+GET	/api/group/	lmm_api_rs::migration_routes::missing_control_public::group_router	accepted real-TCP Go/Rust differential (auth-listener-differential.sh:35/35)	accepted isolated PostgreSQL GroupRatio option read	accepted isolated Valkey snapshot unchanged	mounted-unverified	Administrator auth and deterministic GroupRatio key read are covered; no approval or production ownership transfer
 GET	/api/about	lmm_api_rs::http::about	not reviewed in this auth audit	not reviewed in this auth audit	not reviewed in this auth audit	out of scope	pre-existing public implementation claim; no production ownership
 GET	/api/home_page_content	lmm_api_rs::http::home_page_content	not reviewed in this auth audit	not reviewed in this auth audit	not reviewed in this auth audit	out of scope	pre-existing public implementation claim; no production ownership
 GET	/api/notice	lmm_api_rs::http::notice	not reviewed in this auth audit	not reviewed in this auth audit	not reviewed in this auth audit	out of scope	pre-existing public implementation claim; no production ownership

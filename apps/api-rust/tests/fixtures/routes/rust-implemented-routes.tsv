@@ -1,6 +1,7 @@
 # method	path	Rust handler
 GET	/api/about	lmm_api_rs::http::about
 GET	/api/livez	lmm_api_rs::http::livez
+GET	/api/group/	lmm_api_rs::migration_routes::missing_control_public::group_router
 GET	/api/data/	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/data/flow	lmm_api_rs::migration_routes::observability::observability_read_router
 GET	/api/data/flow/self	lmm_api_rs::migration_routes::observability::observability_read_router
