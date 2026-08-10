@@ -2400,13 +2400,19 @@ async fn list_self_bindings(State(state): State<FederationState>, headers: Heade
         Err(response) => return response,
     };
     match binding_views(&state.pool, actor.user_id).await {
-        Ok(data) => Json(Envelope {
-            success: true,
-            message: "",
-            data: Some(data),
-        })
-        .into_response(),
-        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+        Ok(data) => with_auth_version(
+            Json(Envelope {
+                success: true,
+                message: "",
+                data: Some(data),
+            })
+            .into_response(),
+            true,
+        ),
+        Err(_) => with_auth_version(
+            failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+            true,
+        ),
     }
 }
 
@@ -2421,9 +2427,14 @@ async fn unbind_self(
     };
     let provider_id = match provider_id.parse::<i64>() {
         Ok(provider_id) => provider_id,
-        Err(_) => return failure(StatusCode::OK, "invalid provider id"),
+        Err(_) => {
+            return with_auth_version(failure(StatusCode::OK, "invalid provider id"), true);
+        }
     };
-    delete_binding(&state.pool, actor.user_id, provider_id, "解绑成功").await
+    with_auth_version(
+        delete_binding(&state.pool, actor.user_id, provider_id, "解绑成功").await,
+        true,
+    )
 }
 
 async fn list_admin_bindings(
@@ -2444,19 +2455,27 @@ async fn list_admin_bindings(
     }
     let user_id = match user_id.parse::<i64>() {
         Ok(user_id) => user_id,
-        Err(_) => return failure(StatusCode::OK, "invalid user id"),
+        Err(_) => {
+            return with_auth_version(failure(StatusCode::OK, "invalid user id"), true);
+        }
     };
     if !can_manage_binding_target(&state.pool, actor.role, user_id).await {
-        return failure(StatusCode::OK, "no permission");
+        return with_auth_version(failure(StatusCode::OK, "no permission"), true);
     }
     match binding_views(&state.pool, user_id).await {
-        Ok(data) => Json(Envelope {
-            success: true,
-            message: "",
-            data: Some(data),
-        })
-        .into_response(),
-        Err(_) => failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+        Ok(data) => with_auth_version(
+            Json(Envelope {
+                success: true,
+                message: "",
+                data: Some(data),
+            })
+            .into_response(),
+            true,
+        ),
+        Err(_) => with_auth_version(
+            failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error"),
+            true,
+        ),
     }
 }
 
@@ -2478,16 +2497,23 @@ async fn unbind_admin(
     }
     let user_id = match user_id.parse::<i64>() {
         Ok(user_id) => user_id,
-        Err(_) => return failure(StatusCode::OK, "invalid user id"),
+        Err(_) => {
+            return with_auth_version(failure(StatusCode::OK, "invalid user id"), true);
+        }
     };
     let provider_id = match provider_id.parse::<i64>() {
         Ok(provider_id) => provider_id,
-        Err(_) => return failure(StatusCode::OK, "invalid provider id"),
+        Err(_) => {
+            return with_auth_version(failure(StatusCode::OK, "invalid provider id"), true);
+        }
     };
     if !can_manage_binding_target(&state.pool, actor.role, user_id).await {
-        return failure(StatusCode::OK, "no permission");
+        return with_auth_version(failure(StatusCode::OK, "no permission"), true);
     }
-    delete_binding(&state.pool, user_id, provider_id, "success").await
+    with_auth_version(
+        delete_binding(&state.pool, user_id, provider_id, "success").await,
+        true,
+    )
 }
 
 async fn can_manage_binding_target(pool: &PgPool, actor_role: i64, user_id: i64) -> bool {

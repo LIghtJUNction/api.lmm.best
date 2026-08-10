@@ -257,6 +257,34 @@ async fn federation_user_routes_reject_invalid_identity_before_postgres() {
 }
 
 #[tokio::test]
+async fn binding_mutation_preserves_go_auth_version_after_authentication() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+        .expect("a lazy test pool is valid");
+    let response = router(FederationState::new(
+        pool,
+        Arc::new(BoundIdentity),
+        "test-secret",
+    ))
+    .oneshot(
+        Request::delete("/api/user/oauth/bindings/not-a-provider")
+            .body(Body::empty())
+            .expect("request is valid"),
+    )
+    .await
+    .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
+    );
+}
+
+#[tokio::test]
 async fn telegram_bind_failure_redirect_escapes_untrusted_flow_token() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
