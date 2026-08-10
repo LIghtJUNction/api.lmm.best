@@ -45,8 +45,33 @@ crlf_output=$(cd "$runtime" && \
   exit 1
 }
 
-expected_evidence='migration gate evidence: source-present=68 compiled=0 mounted=68 unmounted=288 differential-verified=0 approved=0 production-owned-rust=0 migration-credit=0'
-expected_states='migration gate states: legacy-go=288 mounted-unverified=60 candidate-pending-independent-approval=0 blocked-sol-stop=8 verified-approved=0'
+# Route migration is intentionally incremental. Derive the exact expected
+# counters from the checked fixture so adding a valid mounted route does not
+# make this checker self-test stale, while still comparing every reported
+# field and gate state verbatim.
+mapfile -t expected_counter_lines < <(awk -F '\t' '
+  NR == 1 { next }
+  {
+    state[$9]++
+    source += $3 == "present"
+    compiled += $4 == "verified"
+    mounted += $5 == "mounted"
+    unmounted += $5 == "unmounted"
+    differential += $6 == "verified"
+    approved += $7 == "approved"
+    production += $8 == "rs"
+  }
+  END {
+    printf "migration gate evidence: source-present=%d compiled=%d mounted=%d unmounted=%d differential-verified=%d approved=%d production-owned-rust=%d migration-credit=%d\n", source, compiled, mounted, unmounted, differential, approved, production, production
+    printf "migration gate states: legacy-go=%d mounted-unverified=%d candidate-pending-independent-approval=%d blocked-sol-stop=%d verified-approved=%d\n", state["legacy-go"], state["mounted-unverified"], state["candidate-pending-independent-approval"], state["blocked-sol-stop"], state["verified-approved"]
+  }
+' "$gate")
+[[ ${#expected_counter_lines[@]} -eq 2 ]] || {
+  echo "failed to derive expected migration gate counters" >&2
+  exit 1
+}
+expected_evidence=${expected_counter_lines[0]}
+expected_states=${expected_counter_lines[1]}
 [[ $checker_output == *"$expected_evidence"* ]] || {
   echo "migration gate checker did not report the expected evidence counters" >&2
   exit 1
@@ -218,6 +243,28 @@ if MIGRATION_GATE_PATH="$invalid_mount_gate" bash "$checker" >/dev/null 2>&1; th
   exit 1
 fi
 
+invalid_registration_mount_gate="$runtime/registration-main-comment-mount.tsv"
+awk -F '\t' 'BEGIN { OFS=FS }
+  NR == 1 { print; next }
+  !changed && $1 == "POST" && $2 == "/api/user/register" {
+    $10="source=apps/api-rust/src/migration_routes/identity_security.rs;mount=apps/api-rust/src/main.rs"
+    changed=1
+  }
+  { print }
+  END { if (!changed) exit 1 }
+' "$gate" >"$invalid_registration_mount_gate"
+if MIGRATION_GATE_PATH="$invalid_registration_mount_gate" bash "$checker" >/dev/null 2>&1; then
+  echo "migration gate checker accepted main.rs comment evidence as a registration route mount" >&2
+  exit 1
+fi
+
+invalid_registration_main="$runtime/main-without-registration-merge.rs"
+sed 's/\.merge(identity_security)/.merge(Router::new())/' "$repo_root/apps/api-rust/src/main.rs" >"$invalid_registration_main"
+if MIGRATION_NORMAL_MAIN_PATH="$invalid_registration_main" bash "$checker" >/dev/null 2>&1; then
+  echo "migration gate checker accepted registration wiring without a normal-listener merge" >&2
+  exit 1
+fi
+
 invalid_plan="$runtime/api-token-admin-scope.tsv"
 awk -F '\t' 'BEGIN { OFS=FS }
   NR == 1 { print; next }
@@ -279,6 +326,21 @@ POST	/api/user/topup/complete	admin	user
 GET	/dashboard/billing/subscription	token	admin
 GET	/dashboard/billing/usage	token	admin
 POST	/pg/chat/completions	user	token
+GET	/api/data/flow/self	user	admin
+GET	/api/data/self	user	admin
+GET	/api/log/self	user	admin
+GET	/api/log/self/search	user	admin
+GET	/api/log/self/stat	user	admin
+GET	/api/log/token	token	admin
+GET	/api/subscription/plans	user	admin
+POST	/api/subscription/balance/pay	user	admin
+POST	/api/subscription/creem/pay	user	admin
+POST	/api/subscription/epay/pay	user	admin
+GET	/api/subscription/epay/return	public	admin
+POST	/api/subscription/epay/return	public	admin
+POST	/api/subscription/fastpay/pay	user	admin
+POST	/api/subscription/stripe/pay	user	admin
+POST	/api/subscription/waffo-pancake/pay	user	admin
 EOF
 
 echo "migration gate checker tests passed"

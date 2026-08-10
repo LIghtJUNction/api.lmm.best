@@ -141,12 +141,12 @@ impl PgControlTaskStore {
                 'fail_reason', COALESCE(fail_reason, ''), 'channel_id', COALESCE(channel_id, 0),\
                 'quota', COALESCE(quota, 0), 'buttons', COALESCE(buttons, ''),\
                 'properties', COALESCE(properties, '')\
-             ) FROM midjourneys\
-             WHERE ($1::bigint IS NULL OR user_id = $1)\
-               AND ($2::bigint IS NULL OR channel_id = $2)\
-               AND ($3 = '' OR mj_id = $3)\
-               AND ($4::bigint IS NULL OR submit_time >= $4)\
-               AND ($5::bigint IS NULL OR submit_time <= $5)\
+             ) FROM midjourneys \
+             WHERE ($1::bigint IS NULL OR user_id = $1) \
+               AND ($2::bigint IS NULL OR channel_id = $2) \
+               AND ($3 = '' OR mj_id = $3) \
+               AND ($4::bigint IS NULL OR submit_time >= $4) \
+               AND ($5::bigint IS NULL OR submit_time <= $5) \
              ORDER BY id DESC LIMIT $6 OFFSET $7",
         )
         .bind(self_user)
@@ -158,13 +158,16 @@ impl PgControlTaskStore {
         .bind(offset)
         .fetch_all(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "midjourney-list", "control task query failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM midjourneys\
-             WHERE ($1::bigint IS NULL OR user_id = $1)\
-               AND ($2::bigint IS NULL OR channel_id = $2)\
-               AND ($3 = '' OR mj_id = $3)\
-               AND ($4::bigint IS NULL OR submit_time >= $4)\
+            "SELECT COUNT(*) FROM midjourneys \
+             WHERE ($1::bigint IS NULL OR user_id = $1) \
+               AND ($2::bigint IS NULL OR channel_id = $2) \
+               AND ($3 = '' OR mj_id = $3) \
+               AND ($4::bigint IS NULL OR submit_time >= $4) \
                AND ($5::bigint IS NULL OR submit_time <= $5)",
         )
         .bind(self_user)
@@ -174,7 +177,10 @@ impl PgControlTaskStore {
         .bind(end)
         .fetch_one(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "midjourney-count", "control task count failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         Ok(page_payload(call.query, rows_to_values(rows)?, total))
     }
 
@@ -201,12 +207,12 @@ impl PgControlTaskStore {
                 'fail_reason', COALESCE(fail_reason, ''), 'submit_time', COALESCE(submit_time, 0),\
                 'start_time', COALESCE(start_time, 0), 'finish_time', COALESCE(finish_time, 0),\
                 'progress', COALESCE(progress, ''), 'properties', properties, 'data', data\
-             ) FROM tasks\
-             WHERE user_id = $1 AND ($2 = '' OR platform = $2)\
-               AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4)\
-               AND ($5 = '' OR action = $5)\
-               AND ($6::bigint IS NULL OR submit_time >= $6)\
-               AND ($7::bigint IS NULL OR submit_time <= $7)\
+             ) FROM tasks \
+             WHERE user_id = $1 AND ($2 = '' OR platform = $2) \
+               AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4) \
+               AND ($5 = '' OR action = $5) \
+               AND ($6::bigint IS NULL OR submit_time >= $6) \
+               AND ($7::bigint IS NULL OR submit_time <= $7) \
              ORDER BY id DESC LIMIT $8 OFFSET $9",
         )
         .bind(user_id)
@@ -220,12 +226,15 @@ impl PgControlTaskStore {
         .bind(offset)
         .fetch_all(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "task-list", "control task query failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND ($2 = '' OR platform = $2)\
-             AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4)\
-             AND ($5 = '' OR action = $5)\
-             AND ($6::bigint IS NULL OR submit_time >= $6)\
+            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND ($2 = '' OR platform = $2) \
+             AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4) \
+             AND ($5 = '' OR action = $5) \
+             AND ($6::bigint IS NULL OR submit_time >= $6) \
              AND ($7::bigint IS NULL OR submit_time <= $7)",
         )
         .bind(user_id)
@@ -237,7 +246,10 @@ impl PgControlTaskStore {
         .bind(end)
         .fetch_one(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "task-count", "control task count failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         Ok(page_payload(call.query, rows_to_values(rows)?, total))
     }
 }

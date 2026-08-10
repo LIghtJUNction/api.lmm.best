@@ -21,6 +21,22 @@ The local split package installs frontend files at
 `/usr/share/lmm-api/frontend-dist`. Deployment publishes immutable frontend
 releases through the installed CLI transaction.
 
+## Historical parity oracle input
+
+Historical Go/Rust differential scripts accept an optional external immutable
+Go source tree through `LMM_GO_ORACLE_ROOT`. Set it to the absolute path of the
+exact revision-named tree, for example:
+
+```bash
+LMM_GO_ORACLE_ROOT=/absolute/path/to/5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
+```
+
+Keep this input outside the repository, require the consumer's existing
+revision and checksum checks to pass, and treat it only as parity evidence.
+Never treat the current dirty `apps/api-go` working tree as a frozen oracle or
+substitute it when `LMM_GO_ORACLE_ROOT` is absent. This contract does not alter
+deployment backup, rollback, or retention requirements.
+
 ## Shared installed package layout
 
 | Purpose | Current path |
@@ -38,6 +54,13 @@ The AUR matrix consists of one core package (`lmm-api-bin` or `lmm-api-git`)
 and a Go and/or Rust provider package. Package installation does not
 authorize starting, restarting, enabling, or switching a service. The service
 unit invokes exactly `/usr/bin/lmm-api serve`.
+
+Before using the transaction on an existing target, verify that the installed
+core really provides this launcher protocol. A legacy `/usr/bin/lmm-api` may be
+the provider binary itself and may start the backend when given an unknown
+subcommand. Such a target is pre-transaction: inspect it with systemd, package,
+process, and sanitized HTTP probes, then upgrade the core package through the
+guarded path before calling `deploy` phases.
 
 ## Production transaction
 
@@ -66,17 +89,27 @@ a persistent ten-minute watchdog armed before switching. A switch ends in
 confirmation produce `CONFIRMED`. Automatic rollback never restores a
 database.
 
-## Existing database backups
+## Existing database and cutover state
 
-`deploy/backup/backup-sqlite-to-archczy.sh` creates an online SQLite backup in
-a temporary directory and publishes a checksum pair to
-`/var/backups/lmm-api/sqlite/<instance>` on ArchCzy. It does not create a
-controller copy. Inspect live configuration and fail closed on any disagreement
-between the configured engine and the selected backup/deployment path.
+`deploy/backup/backup-sqlite-to-archczy.sh` is only for an explicitly verified
+SQLite source. It creates an online SQLite backup in a temporary directory and
+publishes a checksum pair to `/var/backups/lmm-api/sqlite/<instance>` on
+ArchCzy; it does not create a controller copy. Do not invoke it when the live
+service uses PostgreSQL.
 
-The SQLite-to-PostgreSQL cutover remains a separate, explicitly authorized
-maintenance operation. Do not infer production migration or Rust activation
-from the presence of its scripts or artifacts.
+The live service may already use Go with PostgreSQL and dedicated Valkey after a
+historical cutover. Inspect the running process environment, active listeners,
+`/var/lib/lmm-api-cutover`, and `/var/log/lmm-api-cutover` together. A historical
+`SUCCESS_POSTGRES` result is not acceptance when the post-cutover verification
+failed or the current `PG_WRITE_BOUNDARY`/journal is absent; stop and reconcile
+before any migration, backend selection, or rollback. Never infer Rust business
+ownership from PostgreSQL, Valkey, Rust artifacts, or an internal-probe
+rehearsal.
+
+For the 2026-08-09 read-only audit, ArchDmit's running service classified as Go
+with PostgreSQL and Valkey on port 6380, while Rust slots were inactive and the
+business route gate remained Go-owned. This is a time-stamped observation, not
+a substitute for the next preflight.
 
 ## Rust internal-probe blue/green
 

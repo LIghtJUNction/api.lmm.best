@@ -39,6 +39,10 @@ awk -F '\t' '
     if (method == "POST" && path == "/api/user/topup/complete") return "admin"
     if (method == "POST" && path == "/pg/chat/completions") return "user"
     if ((method == "GET" && path == "/api/ratio_sync/channels") || (method == "POST" && path == "/api/ratio_sync/fetch")) return "root"
+    if (method == "GET" && (path == "/api/data/flow/self" || path == "/api/data/self" || path == "/api/log/self" || path == "/api/log/self/search" || path == "/api/log/self/stat" || path == "/api/subscription/plans")) return "user"
+    if (method == "GET" && path == "/api/log/token") return "token"
+    if (method == "POST" && (path == "/api/subscription/balance/pay" || path == "/api/subscription/creem/pay" || path == "/api/subscription/epay/pay" || path == "/api/subscription/fastpay/pay" || path == "/api/subscription/stripe/pay" || path == "/api/subscription/waffo-pancake/pay")) return "user"
+    if ((method == "GET" || method == "POST") && path == "/api/subscription/epay/return") return "public"
     return ""
   }
   function is_api_token_route(method, path) {
@@ -270,9 +274,10 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
     echo "mounted $method $path uses an unsupported ledger/router parameter syntax" >&2
     exit 1
   }
-  # Candidate routers commonly format a route over several lines.  Removing
-  # whitespace makes the exact `.route("/path"` token independent of style.
-  if ! tr -d '[:space:]' <"$source_file" | grep -Fq -- ".route(\"$router_path\""; then
+  # Candidate routers commonly format a route over several lines. Remove
+  # Rust line comments before whitespace so a comment cannot satisfy the
+  # exact `.route("/path"` source-mount check.
+  if ! sed 's#//.*$##' "$source_file" | tr -d '[:space:]' | grep -Fq -- ".route(\"$router_path\""; then
     echo "mounted $method $path lacks exact router mount $router_path in $router_evidence" >&2
     exit 1
   fi
@@ -285,6 +290,38 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
     fi
   fi
 done < <(awk -F '\t' 'NR > 1 && $5 == "mounted" { print }' <(tsv_without_crlf "$gate"))
+
+# Registration is a normal-listener security route. Its gate row proves the
+# route factory contains the exact Axum route; verify the non-comment
+# production wiring separately so a comment in main.rs cannot satisfy the
+# direct-route mount check. The normal listener now composes the complete
+# identity-security router (registration is one route in that router), so do
+# not require the old registration-only factory/merge shape here.
+registration_mount_state=$(awk -F '\t' '
+  NR > 1 && $1 == "POST" && $2 == "/api/user/register" { print $5; found=1 }
+  END { if (!found) exit 1 }
+' <(tsv_without_crlf "$gate")) || {
+  echo "migration gate is missing POST /api/user/register" >&2
+  exit 1
+}
+if [[ $registration_mount_state == mounted ]]; then
+  normal_main="${MIGRATION_NORMAL_MAIN_PATH:-$repo_root/apps/api-rust/src/main.rs}"
+  [[ -f $normal_main && ! -L $normal_main ]] || {
+    echo "mounted registration route requires a regular normal-listener main.rs" >&2
+    exit 1
+  }
+  registration_wiring=$(sed 's#//.*$##' "$normal_main")
+  registration_wiring_compact=$(tr -d '[:space:]' <<<"$registration_wiring")
+  [[ $registration_wiring_compact == *"letidentity_security=lmm_api_rs::migration_routes::identity_security::router("* ]] || {
+    echo "mounted registration route lacks a non-comment full identity-security router construction" >&2
+    exit 1
+  }
+  registration_merge_count=$(grep -oF '.merge(identity_security)' <<<"$registration_wiring_compact" | wc -l)
+  [[ $registration_merge_count -eq 1 ]] || {
+    echo "mounted registration route requires exactly one non-comment identity-security merge" >&2
+    exit 1
+  }
+fi
 
 expected_root_mounts=$'GET\t/api/about\nGET\t/api/home_page_content\nGET\t/api/notice\nGET\t/api/status\nGET\t/api/token/\nPOST\t/api/token/\nPUT\t/api/token/\nDELETE\t/api/token/:id\nGET\t/api/token/:id\nPOST\t/api/token/:id/key\nPOST\t/api/token/batch\nPOST\t/api/token/batch/keys\nGET\t/api/token/search\nGET\t/api/user/self\nPOST\t/api/user/auth/logout\nPOST\t/api/user/auth/refresh\nPOST\t/api/user/login\nGET\t/v1/models\nGET\t/v1beta/models\nGET\t/v1beta/openai/models'
 actual_root_mounts=$(awk -F '\t' -v expected="$expected_root_mounts" '
@@ -314,12 +351,44 @@ diff -u <(printf '%s\n' "$expected_blocked_routes" | LC_ALL=C sort) <(printf '%s
 }
 
 candidate_dir="$repo_root/apps/api-rust/src/migration_routes"
-mapfile -t candidate_files < <(rg --files "$candidate_dir")
-candidate_count=${#candidate_files[@]}
 candidate_mod="$repo_root/apps/api-rust/src/migration_routes.rs"
+
+# Some migration modules are deliberately reusable executors for isolated
+# listener fixtures rather than route factories.  They must remain declared
+# and compile-checked, but requiring a public `router` from them would either
+# invent a route or force a non-production mount.  Keep this list explicit so
+# a newly added helper cannot silently evade the module inventory.
+is_candidate_helper() {
+  case $1 in
+    relay_misc_postgres) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+for helper in relay_misc_postgres; do
+  [[ -f "$candidate_dir/$helper.rs" ]] || {
+    echo "declared migration helper is missing: $helper.rs" >&2
+    exit 1
+  }
+  grep -Eq "^pub mod $helper;$" "$candidate_mod" || {
+    echo "migration helper is not declared: $helper" >&2
+    exit 1
+  }
+done
+
+mapfile -t candidate_files < <(
+  while IFS= read -r candidate_file; do
+    candidate_name=${candidate_file##*/}
+    candidate_name=${candidate_name%.rs}
+    is_candidate_helper "$candidate_name" || printf '%s\n' "$candidate_file"
+  done < <(rg --files "$candidate_dir")
+)
+candidate_count=${#candidate_files[@]}
 mapfile -t declared_candidates < <(
   awk '/^pub mod [a-z0-9_]+;$/ { name=$3; sub(/;$/, "", name); print name }' "$candidate_mod" |
-    LC_ALL=C sort
+    while IFS= read -r candidate_name; do
+      is_candidate_helper "$candidate_name" || printf '%s\n' "$candidate_name"
+    done | LC_ALL=C sort
 )
 declared_candidate_count=${#declared_candidates[@]}
 # shellcheck disable=SC1003 # tr receives the quoted backslash character set.

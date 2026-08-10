@@ -5,7 +5,6 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 config=$repo/deploy/nginx/lmm-api-locations.conf
 server_config=$repo/deploy/nginx/new-api.conf
 mime_types=$repo/deploy/nginx/mime.types
-release=$repo/deploy/frontend-release.sh
 nginx_installer=$repo/deploy/nginx/install-nginx-split.sh
 route_manifest=$repo/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv
 
@@ -81,10 +80,6 @@ if grep -Fq 'listen 9000 ssl;' <<<"$canonical_server"; then
   fail 'the canonical HTTPS server must not also serve the legacy :9000 origin'
 fi
 
-assert_literal 'mv -Tf -- "$temp" "$root/current"' "$release"
-assert_literal 'flock -n 9' "$release"
-assert_literal 'immutable asset collision with different content' "$release"
-assert_literal 'preflight_assets "$stage/static"' "$release"
 assert_literal 'flock -n 9' "$nginx_installer"
 assert_literal 'mv -Tf -- "$temp" "$target"' "$nginx_installer"
 assert_literal 'nginx -t' "$nginx_installer"
@@ -109,7 +104,6 @@ while IFS=$'\t' read -r method route handler; do
   esac
 done < "$route_manifest"
 
-bash -n "$release"
 bash -n "$nginx_installer"
 if command -v nginx >/dev/null; then
   LMM_NGINX_MIME_TYPES="$mime_types" "$repo/deploy/test-nginx-mime.sh"

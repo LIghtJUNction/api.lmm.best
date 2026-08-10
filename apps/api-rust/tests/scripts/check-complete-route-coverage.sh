@@ -107,13 +107,35 @@ my %implemented = route_map($implemented_path, 'Rust implemented ledger', 3, 1);
 my %stubs = route_map($stubs_path, 'legacy stub ledger', 3, 0);
 my %blockers = route_map($blockers_path, 'runtime blocker ledger', 3, 0, 1);
 my %normal = route_map($normal_path, 'normal mount ledger', 3, 1);
+# A frozen legacy endpoint may be mounted on the normal listener when the
+# mount is an explicit, audited compatibility boundary.  Keep the stub ledger
+# entry so coverage continues to classify the Go contract as legacy-501, while
+# allowing the Rust ledger to record that the auth-gated response is reachable.
+my %mounted_frozen_compatibility = map { key(split /\t/, $_) => 1 } (
+  "GET\t/v1/files",
+  "POST\t/v1/files",
+  "DELETE\t/v1/files/:id",
+  "GET\t/v1/files/:id",
+  "GET\t/v1/files/:id/content",
+  "GET\t/v1/fine-tunes",
+  "POST\t/v1/fine-tunes",
+  "GET\t/v1/fine-tunes/:id",
+  "POST\t/v1/fine-tunes/:id/cancel",
+  "GET\t/v1/fine-tunes/:id/events",
+  "POST\t/v1/images/variations",
+  "DELETE\t/v1/models/:model",
+);
 for my $route (keys %stubs) {
   fail("legacy stub is not frozen: $route") unless exists $frozen{$route};
   fail("route is both legacy stub and provider-blocked: $route") if exists $blockers{$route};
 }
 for my $route (keys %blockers) { fail("runtime blocker is not frozen: $route") unless exists $frozen{$route}; }
 for my $route (keys %implemented) {
-  fail("route is both implemented and legacy stub: $route") if exists $stubs{$route};
+  fail("route is both implemented and legacy stub: $route")
+    if exists $stubs{$route}
+      && !(exists $mounted_frozen_compatibility{$route}
+        && exists $normal{$route}
+        && ($implemented{$route}->[2] // '') =~ /(?:relay_misc_frozen|relay_anthropic_gemini)/);
   # A normal listener may have a concrete implementation while the isolated
   # test instance deliberately wires a fail-closed provider adapter for the
   # same route.  The blocker is then test-instance-only, not a contradiction
@@ -157,6 +179,7 @@ open my $inventory, '<', $inventory_path or fail("cannot read Go inventory: $!")
 my (%seen, %classes, %results);
 my $total = 0;
 my $verified = 0;
+my $transport_boundary_verified = 0;
 while (my $line = <$inventory>) {
   chomp $line; next if $line eq '';
   my @fields = split /\t/, $line, -1;
@@ -183,15 +206,19 @@ while (my $line = <$inventory>) {
     exists $frozen{$route} ? 'static-source-candidate-unverified' : 'absent';
   my $diff = $differential{$route};
   my $is_verified = $diff && $diff->{differential_verified} ? 1 : 0;
+  my $is_transport_boundary_verified = $diff && $diff->{transport_boundary_verified} ? 1 : 0;
   my $result = $class eq 'differential-candidate' && $is_verified ? 'scenario-differential-verified' :
     $class eq 'differential-candidate' ? 'differential-pending' : 'no-parity-claim';
   $verified++ if $is_verified && $class eq 'differential-candidate';
+  $transport_boundary_verified++ if $is_transport_boundary_verified;
   $classes{$class}++; $results{$result}++; $total++;
   print encode_json({
     record_type => 'route', method => $method, path => $path, go_handler => $handler, class => $class,
     rust_normal => $rust_normal, rust_test_instance => $rust_test, result => $result,
     evidence => { frozen_go => exists $frozen{$route} ? true : false, rust_implemented => exists $implemented{$route} ? $implemented{$route}->[2] : undef, normal_mount => exists $normal{$route} ? $normal{$route}->[2] : undef, provider_blocked_test_instance => exists $blockers{$route} ? true : false, reason => $reason },
     differential_verified => $is_verified ? true : false,
+    transport_boundary_verified => $is_transport_boundary_verified ? true : false,
+    differential_scope => $diff && exists $diff->{differential_scope} ? $diff->{differential_scope} : undef,
     differences => $diff ? $diff->{differences} : undef,
     mismatch_names => $diff && exists $diff->{mismatch_names} ? $diff->{mismatch_names} : [],
   }), "\n";
@@ -202,6 +229,7 @@ print encode_json({
   record_type => 'summary', total => $total, class_counts => \%classes, result_counts => \%results,
   coverage_complete => $total > 0 ? true : false, differential_candidates => ($classes{'differential-candidate'} // 0),
   differential_verified => $verified,
+  transport_boundary_verified => $transport_boundary_verified,
   differential_results_complete => (($classes{'differential-candidate'} // 0) == $verified) ? true : false,
   parity_claimed => false,
   note => 'coverage_complete means every current Go route was classified; it does not assert Rust/Go behavioral parity.',

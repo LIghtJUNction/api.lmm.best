@@ -220,7 +220,7 @@ fn production_surface(
 ) -> Router {
     let router = Router::new()
         .route("/livez", get(livez))
-        .route("/api/livez", get(livez))
+        .route("/api/livez", get(api_livez))
         .route("/readyz", get(readyz))
         .route("/_internal/build", get(build))
         .route("/api/status", get(status))
@@ -239,14 +239,14 @@ fn production_surface(
     let auth = auth_router(auth)
         .layer(middleware::from_fn(enforce_auth_global_rate_limit))
         // This must wrap the global limiter so its fail-closed 500 and empty
-        // 429 preserve the Go Auth response headers. The surface restriction
-        // remains outside it: intentionally unowned paths are a plain 404 and
-        // never consume a global rate-limit check.
+        // 429 preserve the Go Auth response headers. Account-security and
+        // personal-token routes are now explicit normal-listener mounts; they
+        // must therefore pass through the same auth boundary as the core
+        // routes.
         .layer(middleware::from_fn_with_state(
             auth_legacy_headers,
             attach_auth_legacy_headers,
         ))
-        .layer(middleware::from_fn(restrict_auth_surface))
         .layer(Extension(AuthGlobalRateLimiter(Arc::clone(
             &state.global_api_rate_limiter,
         ))));
@@ -273,12 +273,6 @@ fn finalize_listener(router: Router, state: AppState) -> Router {
     router
         .fallback(root_not_found)
         .method_not_allowed_fallback(root_not_found)
-        // Keep intentionally unmounted legacy auth surfaces concealed even
-        // when a different normal-listener surface owns the surrounding path
-        // space.  The auth router applies the same guard locally, but the
-        // listener-wide guard is needed for `/api/user/token` to avoid a
-        // fallback protocol error instead of Go's 404 contract.
-        .layer(middleware::from_fn(restrict_auth_surface))
         .layer(middleware::from_fn(legacy_models_cors))
         .layer(middleware::from_fn_with_state(boundary, request_boundary))
 }
@@ -320,16 +314,6 @@ pub fn api_global_rate_limited_surface(state: &AppState, surface: Router) -> Rou
         .layer(Extension(AuthGlobalRateLimiter(Arc::clone(
             &state.global_api_rate_limiter,
         ))))
-}
-
-async fn restrict_auth_surface(request: Request, next: Next) -> Response {
-    if matches!(
-        request.uri().path(),
-        "/api/user/login/2fa" | "/api/user/token"
-    ) {
-        return not_found(request).await;
-    }
-    next.run(request).await
 }
 
 async fn enforce_auth_global_rate_limit(
@@ -793,6 +777,26 @@ async fn livez() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+/// Legacy API liveness envelope.  The internal `/livez` probe intentionally
+/// remains the compact `{status:"ok"}` contract; the public `/api/livez`
+/// route is a Go-compatible API read and therefore carries the legacy
+/// success/data fields.
+async fn api_livez() -> Response {
+    let mut response = Json(serde_json::json!({
+        "success": true,
+        "live": true,
+        "message": "",
+    }))
+    .into_response();
+    // Gin's JSON writer includes the charset parameter.  Keep the public
+    // legacy route's wire contract distinct from the compact internal probe.
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+}
+
 async fn readyz(State(state): State<AppState>, request: Request) -> Response {
     if state.runtime.is_draining() {
         tracing::info!(slot = %state.slot, inflight = state.runtime.inflight(), "readiness rejected while slot is draining");
@@ -1050,47 +1054,12 @@ fn trusted_forwarded_header(
     None
 }
 
-async fn not_found(request: Request) -> Response {
-    relay_error_response(
-        StatusCode::NOT_FOUND,
-        format!(
-            "Invalid URL ({} {})",
-            request.method(),
-            request.uri().path()
-        ),
-        "invalid_request_error",
-        "",
-    )
-}
-
 /// Gin's root `NoRoute`/method-mismatch response is deliberately smaller than
-/// the OpenAI-compatible relay error envelope. Keep this listener fallback
-/// separate from `not_found`, which is also used by route-local concealment
-/// paths and must retain its legacy error shape.
+/// the OpenAI-compatible relay error envelope.
 async fn root_not_found(_request: Request) -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({"message": "Not Found"})),
-    )
-        .into_response()
-}
-
-fn relay_error_response(
-    status: StatusCode,
-    message: String,
-    kind: &'static str,
-    code: &'static str,
-) -> Response {
-    (
-        status,
-        Json(serde_json::json!({
-            "error": {
-                "message": message,
-                "type": kind,
-                "param": "",
-                "code": code,
-            },
-        })),
     )
         .into_response()
 }
@@ -1578,7 +1547,11 @@ mod tests {
             None,
             Some(candidates),
         );
-        for path in ["/api/user/topup/info", "/api/user/topup/self"] {
+        for path in [
+            "/api/user/topup/info",
+            "/api/user/topup/self",
+            "/api/user/checkin?month=2026-08",
+        ] {
             let mut request = Request::get(path)
                 .body(Body::empty())
                 .expect("request is valid");
@@ -2633,8 +2606,9 @@ mod tests {
         let (status, _, body) = call("GET", "/api/user/token", None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(
-            body["error"]["type"], "invalid_request_error",
-            "listener-wide concealment keeps the legacy hidden-route envelope"
+            body,
+            serde_json::json!({"message": "Not Found"}),
+            "listener-wide concealment keeps the current Go root 404 envelope"
         );
     }
 

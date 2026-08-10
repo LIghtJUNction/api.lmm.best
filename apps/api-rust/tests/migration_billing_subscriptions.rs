@@ -387,7 +387,10 @@ async fn subscription_maintenance_expires_resets_and_cleans() {
         .fetch_one(&pool)
         .await
         .expect("PostgreSQL version");
-    assert!(version.starts_with("18."), "requires PostgreSQL 18, got {version}");
+    assert!(
+        version.starts_with("18."),
+        "requires PostgreSQL 18, got {version}"
+    );
     reset_schema(&pool).await;
 
     let valkey = redis::Client::open(valkey_url).expect("isolated Valkey URL");
@@ -455,12 +458,11 @@ async fn subscription_maintenance_expires_resets_and_cleans() {
     .expect("reset subscription");
     assert_eq!(reset.0, 0);
     assert!(reset.1 > 0 && reset.2 > current);
-    let remaining_records: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM subscription_pre_consume_records",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("pre-consume count");
+    let remaining_records: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM subscription_pre_consume_records")
+            .fetch_one(&pool)
+            .await
+            .expect("pre-consume count");
     assert_eq!(remaining_records, 1);
     assert_eq!(exists(&mut cache, "user:7").await, 0);
 }

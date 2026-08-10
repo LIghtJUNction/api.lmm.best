@@ -537,24 +537,26 @@ async fn dynamic_midjourney_auth_and_route_status_contract_holds_over_a_real_tcp
         json!({"error":"midjourney_task_not_found"})
     );
 
-    for authorization in [None, Some("Bearer bad-token")] {
-        let mut request = client.post(format!("{base_url}/proxy/mj/submit/imagine"));
-        if let Some(authorization) = authorization {
-            request = request.header("authorization", authorization);
-        }
-        let response = request
-            .json(&json!({"prompt":"cat"}))
-            .send()
-            .await
-            .expect("auth response");
-        assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            response
-                .json::<serde_json::Value>()
+    for path in ["/proxy/mj/submit/imagine", "/mj/submit/imagine"] {
+        for authorization in [None, Some("Bearer bad-token")] {
+            let mut request = client.post(format!("{base_url}{path}"));
+            if let Some(authorization) = authorization {
+                request = request.header("authorization", authorization);
+            }
+            let response = request
+                .json(&json!({"prompt":"cat"}))
+                .send()
                 .await
-                .expect("auth JSON"),
-            json!({"error":{"message":"Invalid token","type":"new_api_error","code":""}})
-        );
+                .expect("auth response");
+            assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                response
+                    .json::<serde_json::Value>()
+                    .await
+                    .expect("auth JSON"),
+                json!({"error":{"message":"Invalid token","type":"new_api_error","code":""}})
+            );
+        }
     }
 
     let wrong_method = client
@@ -635,7 +637,7 @@ async fn pg_adapter_uses_channel_secret_and_only_compatibility_headers_for_mock_
     assert_eq!(response.response.status, StatusCode::OK);
     assert_eq!(response.response.body["result"], "up-1");
     let request = upstream.await.expect("upstream task");
-    assert!(request.starts_with("POST /submit/imagine HTTP/1.1"));
+    assert!(request.starts_with("POST /mj/submit/imagine HTTP/1.1"));
     assert!(
         request.contains("mj-api-secret: channel-mj-secret")
             || request.contains("Mj-Api-Secret: channel-mj-secret")

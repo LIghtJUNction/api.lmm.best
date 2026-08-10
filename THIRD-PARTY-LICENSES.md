@@ -3,7 +3,7 @@
 This file summarizes direct third-party dependencies used by distributed builds of this project.
 It is an engineering compliance artifact and should be kept with Docker images, standalone binaries, frontend bundles, and Electron installers.
 
-Scope: direct dependencies from `go.mod`, `web/package.json`, and `electron/package.json`.
+Scope: direct dependencies from `go.mod` and `apps/web/package.json`.
 Transitive dependencies should be audited before a final external release.
 
 ## Dependency Inventory

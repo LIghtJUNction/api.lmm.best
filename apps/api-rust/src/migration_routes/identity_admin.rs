@@ -3,8 +3,9 @@
 use crate::auth::{DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -40,15 +41,45 @@ impl IdentityAdminState {
 
 /// Routes migrated from `controller/user.go`: list/search/detail/create/update/delete/manage.
 pub fn router(state: IdentityAdminState) -> Router {
+    let auth_boundary = middleware::from_fn_with_state(state.clone(), identity_admin_auth_boundary);
     Router::new()
         .route(
             "/api/user/",
-            get(list_users).post(create_user).put(update_user),
+            get(list_users)
+                .post(create_user)
+                .put(update_user)
+                .route_layer(auth_boundary.clone()),
         )
-        .route("/api/user/search", get(search_users))
-        .route("/api/user/{id}", get(get_user).delete(delete_user))
-        .route("/api/user/manage", post(manage_user))
+        .route(
+            "/api/user/search",
+            get(search_users).route_layer(auth_boundary.clone()),
+        )
+        .route(
+            "/api/user/{id}",
+            get(get_user)
+                .delete(delete_user)
+                .route_layer(auth_boundary.clone()),
+        )
+        .route(
+            "/api/user/manage",
+            post(manage_user).route_layer(auth_boundary),
+        )
+        // The Go UserAuth middleware rejects an anonymous request before
+        // binding path/query/body values.  Run the same admin fence at the
+        // matched-method boundary so malformed IDs and JSON cannot leak Axum
+        // 400/422 responses while unregistered methods retain their 405.
         .with_state(state)
+}
+
+async fn identity_admin_auth_boundary(
+    State(state): State<IdentityAdminState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Err(response) = administrator(&state, request.headers()).await {
+        return response;
+    }
+    next.run(request).await
 }
 
 #[derive(Serialize)]

@@ -104,6 +104,37 @@ Reconcile the reported database engine with the chosen deployer and backup
 method. Fail closed when SQLite, PostgreSQL, MySQL, or configuration evidence
 disagrees. Do not select an engine from stale prose documentation.
 
+### Prove the installed CLI before invoking it
+
+Production may still have an older provider binary at `/usr/bin/lmm-api`. Do
+not assume that `status`, `deploy`, or even `--help` is read-only: a legacy
+binary can interpret an unknown subcommand as a request to start the backend.
+Before invoking any subcommand, inspect the package owner and version, the
+systemd `ExecStart`, the launcher protocol/revision, and the current service
+PID. The canonical service must execute `/usr/bin/lmm-api serve`; the canonical
+operator entry point must expose the `deploy production` transaction.
+
+If the target does not satisfy that protocol, classify it as a pre-transaction
+legacy target. Use `systemctl show`, `readlink`, the running process identity,
+sanitized `/proc/<MainPID>/environ` scheme classification, and explicit HTTP
+probes for read-only inspection. Do not run ambiguous `lmm-api status`,
+`lmm-api deploy`, or no-argument invocations on that target. Upgrade the core
+package through a guarded transaction before using the new phases. If a bad
+probe starts a short-lived process or creates a local database file, preserve
+the evidence, verify the production service remained unchanged, and do not
+delete the artifact without exact ownership and scope confirmation.
+
+### Distinguish database runtime from historical cutover prose
+
+The live service can already run Go against PostgreSQL and the dedicated
+Valkey even when older documentation describes Go/SQLite. The process
+environment, service identity, active database/cache listeners, and durable
+cutover journal are the evidence hierarchy. A PostgreSQL runtime without a
+current verified `PG_WRITE_BOUNDARY`, or with a failed post-cutover result, is
+an unverified state: stop before migration, backend selection, or rollback and
+reconcile it through the cutover coordinator. Never infer Rust readiness from
+the presence of PostgreSQL, Valkey, Rust artifacts, or an old rehearsal.
+
 ## Build once and promote identical bytes
 
 Build and validate once in the controller workspace. Record the Git commit,
@@ -114,6 +145,19 @@ on the target and never substitute a later artifact under the same release ID.
 Use the repository's existing package and release mechanisms only for their
 documented roles. AUR or paru work must preserve the split core/Go/Rust package
 matrix and run its packaging checks before delivery.
+
+Treat a dirty or changing worktree as a release blocker. Freeze the exact
+revision and build manifest before creating the core package, Rust provider,
+migrator, or frontend archive; do not promote a dist directory or binary that
+was built from an unrecorded working-tree state.
+
+The Rust blue/green mechanism owns internal liveness/readiness/build probes
+only. It is not business-route ownership. Before a backend transaction is
+allowed to target `rs`, the migration gate must validate in both source and
+activation modes, every production route must be independently verified and
+approved for Rust, and PostgreSQL, Valkey, authentication, quota, billing,
+streaming, and drain/reconnect evidence must be current. A mounted candidate,
+an active slot link, or a successful `/readyz` probe is insufficient.
 
 ## Require backups before mutation
 

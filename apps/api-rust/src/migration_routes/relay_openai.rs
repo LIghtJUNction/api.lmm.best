@@ -33,6 +33,7 @@ use sqlx::{PgPool, Row};
 
 const MAX_RELAY_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 1024 * 1024;
+const COMPACT_MODEL_SUFFIX: &str = "-openai-compact";
 
 /// Request metadata preserved for the relay service.
 #[derive(Clone, Debug)]
@@ -318,6 +319,7 @@ impl PgOpenAiRelayService {
     ) -> Result<Reservation, OpenAiRelayFailure> {
         let key = token_key(&request.headers).ok_or_else(unauthorized_failure)?;
         let now = epoch_seconds();
+        let selection_model = channel_selection_model(request.endpoint, &request.request.model);
         let mut tx = self.pg.begin().await.map_err(|_| internal_failure())?;
         // Serialize an idempotency key even before a log row exists.  This is
         // transactional and does not create schema drift in the copied DB.
@@ -362,7 +364,7 @@ impl PgOpenAiRelayService {
                LIMIT 1 FOR UPDATE OF t,u,c"#,
         )
         .bind(&key)
-        .bind(&request.request.model)
+        .bind(selection_model)
         .fetch_optional(&mut *tx)
         .await
         .map_err(|_| internal_failure())?
@@ -665,6 +667,14 @@ fn parse_request(
     }
 }
 
+fn channel_selection_model(endpoint: OpenAiRelayEndpoint, model: &str) -> String {
+    if endpoint == OpenAiRelayEndpoint::ResponsesCompact && !model.ends_with(COMPACT_MODEL_SUFFIX) {
+        format!("{model}{COMPACT_MODEL_SUFFIX}")
+    } else {
+        model.to_owned()
+    }
+}
+
 fn completion_request_to_canonical(body: &[u8]) -> Result<CanonicalRequest, RelayConvertError> {
     let value: serde_json::Value = serde_json::from_slice(body).map_err(RelayConvertError::from)?;
     let model = value
@@ -914,7 +924,7 @@ fn epoch_seconds() -> i64 {
 }
 
 fn unauthorized_failure() -> OpenAiRelayFailure {
-    OpenAiRelayFailure::new(StatusCode::UNAUTHORIZED, "", "invalid API key")
+    OpenAiRelayFailure::new(StatusCode::UNAUTHORIZED, "", "Invalid token")
 }
 
 fn no_channel_failure() -> OpenAiRelayFailure {
@@ -1012,12 +1022,28 @@ fn copy_upstream_headers(
 }
 
 fn should_forward_upstream_header(name: &HeaderName) -> bool {
-    name != header::AUTHORIZATION
-        && name != header::HOST
+    name != header::HOST
         && name != header::CONTENT_LENGTH
         && name != "x-new-api-version"
         && name != "x-oneapi-request-id"
         && !is_hop_by_hop(name)
+        && !is_sensitive_client_credential_header(name)
+}
+
+/// Client credentials belong only to the relay authentication boundary.  The
+/// selected channel's server credential is injected after this filter, so an
+/// inbound value cannot override or accompany it at a third-party upstream.
+fn is_sensitive_client_credential_header(name: &HeaderName) -> bool {
+    name.as_str().starts_with("sec-websocket-")
+        || matches!(
+            name.as_str(),
+            "authorization"
+                | "cookie"
+                | "proxy-authorization"
+                | "x-api-key"
+                | "x-goog-api-key"
+                | "api-key"
+        )
 }
 
 fn invalid_target_failure() -> OpenAiRelayFailure {
@@ -1202,6 +1228,61 @@ mod tests {
             url.as_str(),
             "https://upstream.example/channel-prefix/v1/responses/compact"
         );
+    }
+
+    #[test]
+    fn upstream_header_copy_strips_client_credentials_and_injects_channel_credential() {
+        let mut inbound = HeaderMap::new();
+        inbound.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        inbound.insert("x-trace-id", HeaderValue::from_static("trace-123"));
+        for (name, value) in [
+            (header::AUTHORIZATION, "Bearer tenant-token"),
+            (HeaderName::from_static("x-api-key"), "tenant-x-api-key"),
+            (
+                HeaderName::from_static("x-goog-api-key"),
+                "tenant-x-goog-api-key",
+            ),
+            (HeaderName::from_static("api-key"), "tenant-api-key"),
+            (
+                HeaderName::from_static("sec-websocket-protocol"),
+                "responses, openai-insecure-api-key.tenant-token",
+            ),
+            (
+                HeaderName::from_static("sec-websocket-key"),
+                "tenant-websocket-key",
+            ),
+            (header::COOKIE, "session=tenant-session"),
+        ] {
+            inbound.insert(name, HeaderValue::from_static(value));
+        }
+
+        let request = copy_upstream_headers(
+            reqwest::Client::new().post("https://upstream.example/v1/responses"),
+            &inbound,
+            "channel-secret",
+        )
+        .build()
+        .expect("valid upstream request");
+
+        assert_eq!(
+            request.headers()[header::AUTHORIZATION],
+            "Bearer channel-secret"
+        );
+        assert_eq!(request.headers()[header::ACCEPT], "application/json");
+        assert_eq!(request.headers()["x-trace-id"], "trace-123");
+        for name in [
+            "x-api-key",
+            "x-goog-api-key",
+            "api-key",
+            "sec-websocket-protocol",
+            "sec-websocket-key",
+            "cookie",
+        ] {
+            assert!(
+                !request.headers().contains_key(name),
+                "sensitive inbound header leaked upstream: {name}"
+            );
+        }
     }
 
     #[tokio::test]

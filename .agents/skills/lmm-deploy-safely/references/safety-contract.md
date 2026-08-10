@@ -5,7 +5,8 @@
 - Default to `local`.
 - Require explicit current-turn authorization for `test` or `production`.
 - Verify the expected SSH alias, static hostname, role marker, service name,
-  installed package identity, current backend artifact, and frontend symlink.
+  installed package identity, current backend artifact, frontend symlink, and
+  installed CLI protocol/service entry point.
 - Treat host or role disagreement as a stop condition.
 - Preserve the repository's one-branch, one-worktree, one-diff rules. A deploy
   request does not authorize Git repair, branch switching, commit, or push.
@@ -28,6 +29,26 @@
 - Fail when multiple engines are present, when the deployer and live engine
   disagree, or when the engine is unknown for a database-changing release.
 - Never put a DSN in command output, a manifest, `SWAP.md`, or a process title.
+- Treat the running service environment and active listeners as current
+  evidence; historical prose or a previous cutover result is not enough.
+- If the live process uses PostgreSQL but the current `PG_WRITE_BOUNDARY`,
+  cutover journal, or post-cutover verification is missing or failed, stop and
+  reconcile through the coordinator before migration, backend selection, or
+  rollback. Do not silently classify that state as a fresh SQLite migration.
+
+## Legacy CLI safety
+
+- Before invoking `/usr/bin/lmm-api` on a target, verify its package owner,
+  protocol/revision, supported `deploy production` transaction, and the
+  systemd `ExecStart` contract (`/usr/bin/lmm-api serve`).
+- A legacy binary may start the backend for an unknown command. `status`,
+  `deploy`, `--help`, and no-argument calls are not read-only until the
+  protocol is proven.
+- For a legacy target, inspect with `systemctl show`, `readlink`, sanitized
+  process-environment scheme classification, and explicit health probes only.
+  Upgrade the core package through a guarded transaction before using deploy
+  phases. Preserve and report any artifact created by an unsafe probe; remove
+  it only after exact ownership and scope are confirmed.
 
 ## Local acceptance preview override
 
@@ -97,6 +118,20 @@ whose remaining peers have not been verified.
   migrations are compatible with both N and N-1 during the confirmation
   window.
 
+## Rust ownership gate
+
+- The Rust blue/green slots own internal GET/HEAD probes only until the route
+  gate and independent business differential evidence approve production
+  ownership.
+- `migration-gate.tsv` must pass source-mode validation before packaging and
+  activation-mode validation before a Rust switch. Reject inconsistent
+  `legacy-go`/mounted rows, unresolved routes, unverified auth/quota/billing or
+  streaming behavior, and any route without independent approval.
+- PostgreSQL and dedicated Valkey identity, shared rate-limit/session state,
+  background-job singleton behavior, and SSE/WebSocket drain/reconnect are
+  required evidence; a mounted slot, active symlink, or `/readyz` response is
+  not production proof.
+
 ## Cleanup
 
 - Clean only the exact deployment workspace carrying the expected marker and
@@ -118,6 +153,13 @@ whose remaining peers have not been verified.
   scoped cleanup.
 - Existing production contract tests require dual backups, watchdog state, and
   `AWAITING_CONFIRMATION`.
+- A fresh runtime audit reconciles any historical PostgreSQL cutover result and
+  proves the active schema, Valkey endpoint, and forward-only boundary.
+- Frontend-only publication is proven compatible with the current Go API before
+  it is promoted independently of Rust.
 - A local deployment of the identical artifact passes application and frontend
   checks before any test or production promotion.
+- Authenticated canaries and representative business requests pass in addition
+  to generic health checks; browser, SSE, and WebSocket behavior is reviewed
+  when affected by the release.
 - An independent Reviewer approves the deployment behavior and residual risk.

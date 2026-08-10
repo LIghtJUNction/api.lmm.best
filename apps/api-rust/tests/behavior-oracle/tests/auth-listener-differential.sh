@@ -15,7 +15,7 @@ curl_max_time=15
 listener_wait_attempts=${LMM_AUTH_LISTENER_WAIT_ATTEMPTS:-1200}
 approval_mode=${LMM_AUTH_LISTENER_APPROVAL:-0}
 probe_only=${LMM_AUTH_LISTENER_PROBE_ONLY:-0}
-expected_scenarios=33
+expected_scenarios=35
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -139,7 +139,8 @@ valkey_cli_for() {
 }
 write_valkey_config() {
   local config=$1 port=$2 password=$3
-  (umask 077; printf '%s\n' 'bind 127.0.0.1' "port $port" 'save ""' 'appendonly no' 'daemonize no' "dir $runtime" "requirepass $password" >"$config")
+  local socket="${config%.conf}.sock"
+  (umask 077; printf '%s\n' 'bind 127.0.0.1' "port $port" "unixsocket $socket" 'unixsocketperm 600' 'save ""' 'appendonly no' 'daemonize no' "dir $runtime" "requirepass $password" >"$config")
   chmod 600 "$config"
 }
 wait_for_listener() {
@@ -557,9 +558,16 @@ valkey_cli_for "$rust_valkey_port" flushdb >/dev/null
 # privilege runtime role.  The temporary superuser only provisions the fixture.
 # The frozen Go limiter setting is minutes; Rust's equivalent setting is
 # seconds, so the two listeners use 1 and 60 respectively.
+# pgx's TCP connect can remain in EINPROGRESS on this host even while the
+# marker-owned PostgreSQL listener accepts psql connections.  Keep the
+# database loopback-only, but use the runtime-owned Unix socket for the Go
+# oracle; the Rust listener and all side-effect snapshots still use the same
+# PostgreSQL instance and TCP endpoint.  Go-Redis has the same host-specific
+# TCP stall, so its client uses the marker-owned Valkey Unix socket while the
+# Rust client and CLI probes continue to use loopback TCP.
 preflight_port Go_HTTP "$go_port"
-SQL_DSN="postgresql://127.0.0.1:$pg_port/auth_go?sslmode=disable" PORT="$go_port" \
-  REDIS_CONN_STRING="redis://:$go_valkey_password@127.0.0.1:$go_valkey_port" SESSION_SECRET='AuthListener-2026!FixedSyntheticSecret' \
+SQL_DSN="postgresql:///auth_go?host=$runtime&port=$pg_port&sslmode=disable" PORT="$go_port" \
+  REDIS_CONN_STRING="unix://:$go_valkey_password@$runtime/go-valkey.sock" SESSION_SECRET='AuthListener-2026!FixedSyntheticSecret' \
   GLOBAL_API_RATE_LIMIT_ENABLE=true GLOBAL_API_RATE_LIMIT=360 GLOBAL_API_RATE_LIMIT_DURATION=1 \
   SESSION_COOKIE_SECURE=true SESSION_COOKIE_TRUSTED_URL=https://trusted.example \
   PASSWORD_LOGIN_ENABLED=true GIN_MODE=release \
@@ -637,16 +645,13 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
   grep -qx 401 "$prefix.anonymous-refresh.status"
   capture_listener_response "$prefix.anonymous-logout" -X POST -H 'origin: https://trusted.example' "$base/api/user/auth/logout"
   grep -qx 200 "$prefix.anonymous-logout.status"
-  if [[ $base == *":$rust_port" ]]; then
-    # These legacy Go routes remain deliberately unmounted in the Rust
-    # candidate until they receive independent approval.
-    capture_listener_response "$prefix.hidden-login-2fa" -X POST "$base/api/user/login/2fa"
-    grep -qx 404 "$prefix.hidden-login-2fa.status"
-    capture_listener_response "$prefix.hidden-token" "$base/api/user/token"
-    grep -qx 404 "$prefix.hidden-token.status"
-  fi
+  # The account-security and personal-token routes are now composed by the
+  # normal Rust listener. Compare their anonymous contracts over TCP instead
+  # of treating their deliberate pre-migration 404s as the expected result.
+  capture_listener_response "$prefix.login-2fa" -X POST "$base/api/user/login/2fa"
+  capture_listener_response "$prefix.token" "$base/api/user/token"
 done
-for name in input failure anonymous-self anonymous-refresh anonymous-logout; do
+for name in input failure anonymous-self anonymous-refresh anonymous-logout login-2fa token; do
   assert_listener_response_match "$name"
 done
 
@@ -962,7 +967,7 @@ rust_build_input_sha256_after=$(rust_build_input_manifest_sha256)
   exit 1
 }
 
-jq -cn \
+auth_summary=$(jq -cn \
   --arg legacy_revision "$legacy_revision" \
   --arg frozen_go_manifest_sha256 "$frozen_go_manifest_sha256" \
   --arg rust_build_input_sha256 "$rust_build_input_sha256" \
@@ -972,4 +977,28 @@ jq -cn \
   --argjson scenarios "$scenario_total" \
   --argjson exact_matches "$exact_matches" \
   --argjson mismatches "$mismatch_count" \
-  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
+  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/login/2fa","GET /api/user/token","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}')
+
+if [[ -n ${LMM_AUTH_RESULT_DIR:-} ]]; then
+  [[ $LMM_AUTH_RESULT_DIR == /* && $LMM_AUTH_RESULT_DIR != *..* ]] || {
+    echo 'LMM_AUTH_RESULT_DIR must be absolute and contain no ..' >&2
+    exit 2
+  }
+  mkdir -p "$LMM_AUTH_RESULT_DIR"
+  printf '%s\n' "$auth_summary" >"$LMM_AUTH_RESULT_DIR/auth-listener-summary.json"
+  while IFS=$'\t' read -r method path cases; do
+    slug=$(printf '%s-%s' "$method" "$path" | tr '/:?' '___' | tr -cd '[:alnum:]_-')
+    jq -cn --arg method "$method" --arg path "$path" --arg suite "auth-listener-summary.json" \
+      --argjson cases "$cases" --argjson scenarios "$scenario_total" \
+      '{method:$method,path:$path,differential_verified:true,differential_scope:"auth-listener",cases:$cases,suite_scenarios:$scenarios,suite_summary:$suite,real_tcp:true,production_access:true,approval_credit:false,differences:null,mismatch_names:[]}' \
+      >"$LMM_AUTH_RESULT_DIR/auth-listener-$slug.json"
+  done <<'ROUTES'
+POST	/api/user/login	7
+POST	/api/user/login/2fa	4
+GET	/api/user/token	1
+POST	/api/user/auth/refresh	9
+POST	/api/user/auth/logout	3
+GET	/api/user/self	8
+ROUTES
+fi
+printf '%s\n' "$auth_summary"

@@ -233,13 +233,22 @@ async fn crud_routes_dispatch_to_the_frozen_operations_with_legacy_success_envel
         let (status, envelope) = invoke(&app(Arc::clone(&provider)), request).await;
 
         assert_eq!(status, StatusCode::OK, "{} {}", case.method, case.uri);
-        assert_eq!(
-            envelope,
-            json!({"success": true, "message": "", "data": {"fixture": true}}),
-            "{} {}",
-            case.method,
-            case.uri
-        );
+        let expected = match case.operation {
+            CatalogOperation::MissingModels => json!({
+                "success": true,
+                "data": {"fixture": true}
+            }),
+            CatalogOperation::DeleteRedemption => json!({
+                "success": true,
+                "message": ""
+            }),
+            _ => json!({
+                "success": true,
+                "message": "",
+                "data": {"fixture": true}
+            }),
+        };
+        assert_eq!(envelope, expected, "{} {}", case.method, case.uri);
         let calls = provider.calls().expect("calls");
         assert_eq!(calls.len(), 1, "{} {}", case.method, case.uri);
         assert_eq!(
