@@ -7,7 +7,10 @@ mod test_instance;
 use config::Config;
 use http::{ApiTokenMount, AppState, RuntimeState};
 use lmm_api_rs::{
-    auth::{AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth},
+    auth::{
+        AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth,
+        anonymous_registration_surface,
+    },
     migration_routes::{
         admin_catalog::{
             AdminCatalogState, DashboardAdminCatalogAuthorizer, PgCatalogProvider,
@@ -302,10 +305,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The helper owns the exact anonymous mount: .route("/api/user/register", post(register)).
         // Keep this evidence beside the normal-listener wiring so the route
         // ledger cannot mistake the frozen security candidates for ownership.
-        let registration = registration_router(IdentitySecurityState::new(
-            Arc::new(PgValkeySecurityProvider::new(pg.clone(), valkey.clone())),
-            Arc::new(DashboardSecurityAuthorizer::new(Arc::clone(&auth))),
-        ));
+        let registration = http::api_global_rate_limited_surface(
+            &app_state,
+            anonymous_registration_surface(
+                auth_http.clone(),
+                registration_router(IdentitySecurityState::new(
+                    Arc::new(PgValkeySecurityProvider::new(pg.clone(), valkey.clone())),
+                    Arc::new(DashboardSecurityAuthorizer::new(Arc::clone(&auth))),
+                )),
+            ),
+        );
         let billing_subscriptions = billing_subscriptions_router(BillingSubscriptionsState::new(
             pg.clone(),
             Some(valkey.clone()),

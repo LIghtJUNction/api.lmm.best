@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, to_value};
 use thiserror::Error;
 
-pub use http::{AuthHttpState, TurnstileVerifier, auth_router};
+pub use http::{AuthHttpState, TurnstileVerifier, anonymous_registration_surface, auth_router};
 pub use postgres::{AuthConfig, PgValkeyDashboardAuth};
 pub(crate) use token::dashboard_token_candidate;
 

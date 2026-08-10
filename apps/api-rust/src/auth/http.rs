@@ -279,6 +279,64 @@ pub fn auth_router(state: AuthHttpState) -> Router {
         ))
 }
 
+/// Apply the anonymous registration middleware that Go mounts around
+/// `controller.Register`: critical rate limiting, the configured request-body
+/// ceiling, and Turnstile verification all run before the handler can parse
+/// or write registration data.
+pub fn anonymous_registration_surface(state: AuthHttpState, surface: Router) -> Router {
+    let body_limit = state.anonymous_body_limit_bytes;
+    surface
+        .layer(middleware::from_fn_with_state(
+            state,
+            protect_anonymous_registration,
+        ))
+        .layer(DefaultBodyLimit::max(body_limit))
+}
+
+async fn protect_anonymous_registration(
+    State(state): State<AuthHttpState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let metadata = request_metadata(&request);
+    if let Some(response) = critical_rate_limit(&state, &metadata.ip).await {
+        return response;
+    }
+    let registration_uri = request.uri().clone();
+    let (mut parts, body) = request.into_parts();
+    let bounded_body =
+        match Bytes::from_request(Request::from_parts(parts.clone(), body), &state).await {
+            Ok(body) => body,
+            Err(error) if error.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
+                return response;
+            }
+            Err(_) => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::BAD_REQUEST;
+                return response;
+            }
+        };
+    if state.turnstile_check_enabled {
+        let Some(token) = turnstile_token(&registration_uri) else {
+            return turnstile_missing_response();
+        };
+        let verified = match state.turnstile_verifier.as_ref() {
+            Some(verifier) => verifier.verify(&token, &metadata.ip).await,
+            None => false,
+        };
+        if !verified {
+            return turnstile_failure_response();
+        }
+    }
+    if let Ok(content_length) = HeaderValue::from_str(&bounded_body.len().to_string()) {
+        parts.headers.insert(header::CONTENT_LENGTH, content_length);
+    }
+    next.run(Request::from_parts(parts, Body::from(bounded_body)))
+        .await
+}
+
 #[derive(Serialize)]
 struct SuccessEnvelope<T: Serialize> {
     success: bool,
@@ -1106,6 +1164,15 @@ mod tests {
                 .push((token.to_owned(), remote_ip.to_owned()));
             self.allowed
         }
+    }
+
+    async fn registration_probe(request: Request) -> Response {
+        let content_length = request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        (StatusCode::CREATED, content_length.to_owned()).into_response()
     }
 
     impl MockAuth {
@@ -2145,6 +2212,129 @@ mod tests {
                 .expect("turnstile requests lock")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn anonymous_registration_middleware_matches_go_guard_order() {
+        let auth = Arc::new(MockAuth::success());
+        let verifier = Arc::new(MockTurnstile::allowing());
+        let router = anonymous_registration_surface(
+            AuthHttpState::new(auth.clone(), false)
+                .with_anonymous_body_limit_bytes(16)
+                .with_turnstile_verifier(verifier.clone()),
+            Router::new().route("/api/user/register", post(registration_probe)),
+        );
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/register?turnstile=demo-token")
+                    .body(Body::from("012345678901234567"))
+                    .expect("oversized registration request"),
+            )
+            .await
+            .expect("oversized registration response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(
+            verifier
+                .requests
+                .lock()
+                .expect("turnstile requests lock")
+                .is_empty()
+        );
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/register")
+                    .body(Body::from("{}"))
+                    .expect("missing-turnstile registration request"),
+            )
+            .await
+            .expect("missing-turnstile registration response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(response).await["message"],
+            "Turnstile token 为空"
+        );
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/user/register?turnstile=demo-token")
+                    .body(Body::from("{}"))
+                    .expect("verified registration request"),
+            )
+            .await
+            .expect("verified registration response");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            String::from_utf8(
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("verified registration body")
+                    .to_vec(),
+            )
+            .expect("verified registration content length"),
+            "2"
+        );
+        assert_eq!(
+            verifier
+                .requests
+                .lock()
+                .expect("turnstile requests lock")
+                .as_slice(),
+            &[("demo-token".to_owned(), "unknown".to_owned())]
+        );
+        assert_eq!(
+            auth.rate_limit_checks.load(Ordering::Relaxed),
+            3,
+            "every registration attempt is rate limited before body or Turnstile"
+        );
+    }
+
+    #[tokio::test]
+    async fn anonymous_registration_rate_limit_rejects_before_body_and_turnstile() {
+        let auth = Arc::new(MockAuth::success());
+        *auth.rate_limit.lock().expect("rate limit lock") =
+            Ok(CriticalRateLimitOutcome::Rejected {
+                retry_after_seconds: 37,
+            });
+        let verifier = Arc::new(MockTurnstile::allowing());
+        let response = anonymous_registration_surface(
+            AuthHttpState::new(auth.clone(), false).with_turnstile_verifier(verifier.clone()),
+            Router::new().route("/api/user/register", post(registration_probe)),
+        )
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/user/register?turnstile=demo-token")
+                .body(Body::from("012345678901234567"))
+                .expect("rate-limited registration request"),
+        )
+        .await
+        .expect("rate-limited registration response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "37");
+        assert!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("rate-limit body")
+                .is_empty()
+        );
+        assert!(
+            verifier
+                .requests
+                .lock()
+                .expect("turnstile requests lock")
+                .is_empty()
+        );
+        assert_eq!(auth.rate_limit_checks.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
