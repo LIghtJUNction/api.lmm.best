@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "在浏览器中打开 ChatGPT",
     "Live prices are unavailable, so no estimate is shown.": "实时价格暂不可用，因此不会显示估算结果。",
     "No text-token pricing is available": "暂无文本 Token 定价",
-    "This calculator supports models with fixed input and output token rates.": "此计算器支持采用固定输入和输出 Token 费率的模型。"
+    "This calculator supports models with fixed input and output token rates.": "此计算器支持采用固定输入和输出 Token 费率的模型。",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "推荐此套餐，因为不限量额度可覆盖您每月预计使用的 {{amount}}。",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "推荐此套餐，因为它是可覆盖您每月预计使用 {{amount}} 的最小可用额度。",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "没有套餐能完全覆盖您每月预计使用的 {{amount}}；此选项提供当前最高额度。",
+    "Unable to load live subscription plans": "无法加载实时订阅套餐",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "在加载当前额度和价格前，无法提供套餐推荐。",
+    "You can still add wallet funds and use pay-as-you-go billing.": "您仍可充值钱包并按量付费。",
+    "Unable to load current top-up discounts": "无法加载当前充值优惠",
+    "Plan recommendations remain available, but discount details may be outdated.": "套餐推荐仍可使用，但优惠详情可能已过期。",
+    "No top-up discount is currently available.": "当前暂无充值优惠。"
   }
 }

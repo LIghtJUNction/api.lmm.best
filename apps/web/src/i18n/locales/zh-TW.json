@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "在瀏覽器中開啟 ChatGPT",
     "Live prices are unavailable, so no estimate is shown.": "即時價格目前無法使用，因此不會顯示估算結果。",
     "No text-token pricing is available": "目前沒有文字 Token 定價",
-    "This calculator supports models with fixed input and output token rates.": "此計算器支援採用固定輸入與輸出 Token 費率的模型。"
+    "This calculator supports models with fixed input and output token rates.": "此計算器支援採用固定輸入與輸出 Token 費率的模型。",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "推薦此方案，因為不限量額度可涵蓋您每月預估使用的 {{amount}}。",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "推薦此方案，因為它是可涵蓋您每月預估使用 {{amount}} 的最小可用額度。",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "沒有方案能完全涵蓋您每月預估使用的 {{amount}}；此選項提供目前最高額度。",
+    "Unable to load live subscription plans": "無法載入即時訂閱方案",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "在載入目前額度與價格前，無法提供方案建議。",
+    "You can still add wallet funds and use pay-as-you-go billing.": "您仍可儲值錢包並採用隨用隨付計費。",
+    "Unable to load current top-up discounts": "無法載入目前儲值優惠",
+    "Plan recommendations remain available, but discount details may be outdated.": "方案建議仍可使用，但優惠詳情可能已過期。",
+    "No top-up discount is currently available.": "目前沒有儲值優惠。"
   }
 }

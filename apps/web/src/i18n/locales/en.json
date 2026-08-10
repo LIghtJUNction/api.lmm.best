@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "Open ChatGPT in browser",
     "Live prices are unavailable, so no estimate is shown.": "Live prices are unavailable, so no estimate is shown.",
     "No text-token pricing is available": "No text-token pricing is available",
-    "This calculator supports models with fixed input and output token rates.": "This calculator supports models with fixed input and output token rates."
+    "This calculator supports models with fixed input and output token rates.": "This calculator supports models with fixed input and output token rates.",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "Recommended because unlimited capacity covers your {{amount}} monthly estimate.",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.",
+    "Unable to load live subscription plans": "Unable to load live subscription plans",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "Plan recommendations are unavailable until current quotas and prices can be loaded.",
+    "You can still add wallet funds and use pay-as-you-go billing.": "You can still add wallet funds and use pay-as-you-go billing.",
+    "Unable to load current top-up discounts": "Unable to load current top-up discounts",
+    "Plan recommendations remain available, but discount details may be outdated.": "Plan recommendations remain available, but discount details may be outdated.",
+    "No top-up discount is currently available.": "No top-up discount is currently available."
   }
 }

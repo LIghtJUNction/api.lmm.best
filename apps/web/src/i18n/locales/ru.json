@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "Открыть ChatGPT в браузере",
     "Live prices are unavailable, so no estimate is shown.": "Актуальные цены недоступны, поэтому расчёт не отображается.",
     "No text-token pricing is available": "Тарифы по текстовым токенам недоступны",
-    "This calculator supports models with fixed input and output token rates.": "Калькулятор поддерживает модели с фиксированной стоимостью входных и выходных токенов."
+    "This calculator supports models with fixed input and output token rates.": "Калькулятор поддерживает модели с фиксированной стоимостью входных и выходных токенов.",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "Рекомендуется, поскольку безлимитный объём покрывает вашу месячную оценку {{amount}}.",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "Рекомендуется как наименьший доступный объём, покрывающий вашу месячную оценку {{amount}}.",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "Ни один тариф полностью не покрывает вашу месячную оценку {{amount}}; у этого варианта максимальный доступный объём.",
+    "Unable to load live subscription plans": "Не удалось загрузить актуальные тарифные планы",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "Рекомендации недоступны, пока не будут загружены текущие квоты и цены.",
+    "You can still add wallet funds and use pay-as-you-go billing.": "Вы по-прежнему можете пополнить кошелёк и использовать оплату по мере потребления.",
+    "Unable to load current top-up discounts": "Не удалось загрузить текущие скидки на пополнение",
+    "Plan recommendations remain available, but discount details may be outdated.": "Рекомендации по тарифам доступны, но сведения о скидках могут быть устаревшими.",
+    "No top-up discount is currently available.": "Сейчас скидки на пополнение недоступны."
   }
 }
