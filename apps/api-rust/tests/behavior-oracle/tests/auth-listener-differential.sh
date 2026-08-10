@@ -20,7 +20,7 @@ runtime_root=${LMM_AUTH_LISTENER_TMP_ROOT:-/tmp}
   echo 'LMM_AUTH_LISTENER_TMP_ROOT must be an absolute, non-symlink directory' >&2
   exit 2
 }
-expected_scenarios=39
+expected_scenarios=40
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -589,7 +589,10 @@ INSERT INTO lmm_schema_contract VALUES (TRUE, 1, 1);
 CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE custom_oauth_providers (
   id BIGINT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL, icon TEXT,
-  enabled BOOLEAN, client_id TEXT, authorization_endpoint TEXT, scopes TEXT
+  enabled BOOLEAN, client_id TEXT, client_secret TEXT, authorization_endpoint TEXT,
+  token_endpoint TEXT, user_info_endpoint TEXT, scopes TEXT, user_id_field TEXT,
+  username_field TEXT, display_name_field TEXT, email_field TEXT, well_known TEXT,
+  auth_style BIGINT, access_policy TEXT, access_denied_message TEXT
 );
 CREATE TABLE setups (id BIGINT PRIMARY KEY);
 CREATE TABLE system_tasks (
@@ -641,6 +644,8 @@ psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 \
 for database in auth_go auth_rust; do
   psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
     -c "INSERT INTO system_tasks (id, task_id, type, status, active_key, payload, state, result, error, locked_by, created_at, updated_at) VALUES (900001, 'systask_parity_fixture', 'parity_fixture', 'succeeded', 'parity_fixture', '{\"fixture\":true}', '{\"step\":\"done\"}', '{\"updated\":1}', '', '', 1700000000, 1700000010)" >/dev/null
+  psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO custom_oauth_providers (id, name, slug, icon, enabled, client_id, client_secret, authorization_endpoint, token_endpoint, user_info_endpoint, scopes, user_id_field, username_field, display_name_field, email_field, well_known, auth_style, access_policy, access_denied_message) VALUES (900001, 'Parity OAuth', 'parity-oauth', 'shield', TRUE, 'parity-client', 'parity-secret-must-not-leak', 'https://oauth.example/authorize', 'https://oauth.example/token', 'https://oauth.example/userinfo', 'openid profile email', 'sub', 'preferred_username', 'name', 'email', 'https://oauth.example/.well-known/openid-configuration', 0, '', '')" >/dev/null
 done
 
 # Go loads the process-wide ratio cache during startup.  Restart only the
@@ -722,6 +727,9 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
       capture_listener_response "$prefix.system-task-detail" -H "authorization: Bearer $token" "$base/api/system-task/systask_parity_fixture"
       grep -qx 200 "$prefix.system-task-detail.status"
       jq -e '.success == true and .message == "" and .data.task_id == "systask_parity_fixture" and .data.type == "parity_fixture" and .data.payload.fixture == true and .data.state.step == "done" and .data.result.updated == 1' "$prefix.system-task-detail.json" >/dev/null
+      capture_listener_response "$prefix.oauth-list" -H "authorization: Bearer $token" "$base/api/custom-oauth-provider/"
+      grep -qx 200 "$prefix.oauth-list.status"
+      jq -e '.success == true and .message == "" and (.data | length == 1) and .data[0].id == 900001 and .data[0].slug == "parity-oauth" and .data[0].client_id == "parity-client" and (.data[0] | has("client_secret") | not)' "$prefix.oauth-list.json" >/dev/null
     fi
     capture_listener_response "$prefix.origin-missing" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" "$base/api/user/auth/refresh"
     capture_listener_response "$prefix.origin-evil" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" -H 'origin: https://evil.example' "$base/api/user/auth/refresh"
@@ -795,6 +803,7 @@ assert_listener_response_match a-first.status-test
 assert_listener_response_match a-first.system-task-list
 assert_listener_response_match a-first.system-task-current
 assert_listener_response_match a-first.system-task-detail
+assert_listener_response_match a-first.oauth-list
 
 # Expire the just-rotated old token in the real database, then prove a replay
 # revokes the family over each TCP listener.  This avoids a wall-clock sleep
@@ -1035,4 +1044,4 @@ jq -cn \
   --argjson scenarios "$scenario_total" \
   --argjson exact_matches "$exact_matches" \
   --argjson mismatches "$mismatch_count" \
-  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list","GET /api/system-task/current","GET /api/system-task/:task_id"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
+  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list","GET /api/system-task/current","GET /api/system-task/:task_id","GET /api/custom-oauth-provider/"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'

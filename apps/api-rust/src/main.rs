@@ -23,7 +23,7 @@ use lmm_api_rs::{
         },
         control_admin::{
             ControlAdminState, DashboardControlAdminAuthorizer, HttpOAuthDiscoveryClient,
-            system_task_read_router,
+            control_admin_read_router,
         },
         control_public::{
             ControlPublicHttpState, PgControlPublicRepository, ReqwestUptimeKumaClient,
@@ -387,7 +387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let system_task_list = http::api_global_rate_limited_surface_with_legacy_headers(
             &app_state,
-            system_task_read_router(ControlAdminState::new(
+            control_admin_read_router(ControlAdminState::new(
                 pg.clone(),
                 Arc::new(DashboardControlAdminAuthorizer::new(Arc::clone(&auth))),
                 Arc::new(HttpOAuthDiscoveryClient::production().map_err(|_| {
