@@ -17,11 +17,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { Calculator } from 'lucide-react'
+import { Calculator, CircleAlert, RefreshCcw } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -29,9 +36,17 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { getPricing } from '@/features/pricing/api'
 
 import { calculateAssistantTextCost } from './cost-calculator'
@@ -72,9 +87,16 @@ export function AssistantCostTool(props: {
     models.find((model) => model.model_name === modelName) ??
     models.find((model) => model.model_name === props.defaultModel) ??
     models[0]
-  const groups = (selectedModel?.enable_groups ?? []).filter(
-    (name) => pricingQuery.data?.usable_group[name]
-  )
+  const groups = useMemo(() => {
+    if (!selectedModel || !pricingQuery.data) return []
+    const usableGroups = pricingQuery.data.usable_group
+    const enabledGroups = selectedModel.enable_groups.includes('all')
+      ? Object.keys(usableGroups)
+      : selectedModel.enable_groups
+    return enabledGroups
+      .filter((name) => usableGroups[name])
+      .sort((left, right) => left.localeCompare(right))
+  }, [pricingQuery.data, selectedModel])
   const selectedGroup = groups.includes(group) ? group : (groups[0] ?? '')
   const groupRatio = selectedGroup
     ? (pricingQuery.data?.group_ratio[selectedGroup] ?? 1)
@@ -116,13 +138,52 @@ export function AssistantCostTool(props: {
   let calculatorContent: ReactNode
   if (pricingQuery.isLoading) {
     calculatorContent = (
-      <p className='text-muted-foreground text-sm'>{t('Loading...')}</p>
+      <div className='grid gap-3' aria-label={t('Loading...')}>
+        <Skeleton className='h-9 w-full' />
+        <Skeleton className='h-9 w-full' />
+        <div className='grid grid-cols-2 gap-3'>
+          <Skeleton className='h-9 w-full' />
+          <Skeleton className='h-9 w-full' />
+        </div>
+        <Skeleton className='h-20 w-full' />
+      </div>
     )
-  } else if (pricingQuery.isError || !selectedModel) {
+  } else if (pricingQuery.isError) {
     calculatorContent = (
-      <p className='text-destructive text-sm'>
-        {t('Unable to load live pricing')}
-      </p>
+      <Alert variant='destructive'>
+        <CircleAlert aria-hidden='true' />
+        <AlertTitle>{t('Unable to load live pricing')}</AlertTitle>
+        <AlertDescription>
+          {t('Live prices are unavailable, so no estimate is shown.')}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => void pricingQuery.refetch()}
+          >
+            <RefreshCcw data-icon='inline-start' aria-hidden='true' />
+            {t('Retry')}
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  } else if (!selectedModel) {
+    calculatorContent = (
+      <Empty className='min-h-36 border'>
+        <EmptyHeader>
+          <EmptyMedia variant='icon'>
+            <Calculator aria-hidden='true' />
+          </EmptyMedia>
+          <EmptyTitle>{t('No text-token pricing is available')}</EmptyTitle>
+          <EmptyDescription>
+            {t(
+              'This calculator supports models with fixed input and output token rates.'
+            )}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     )
   } else {
     calculatorContent = (
