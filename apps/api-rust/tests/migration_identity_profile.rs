@@ -136,13 +136,36 @@ async fn profile_setting_rejects_an_invalid_notification_type_before_postgres() 
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     assert_eq!(
         serde_json::from_slice::<Value>(&body).expect("JSON failure envelope")["message"],
-        "invalid notification type"
+        "Invalid warning type"
+    );
+}
+
+#[tokio::test]
+async fn profile_setting_null_body_keeps_gin_zero_value_validation() {
+    let response = app()
+        .oneshot(
+            Request::put("/api/user/setting")
+                .header("authorization", "Bearer listener-verified")
+                .header("content-type", "application/json")
+                .body(Body::from("null"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON failure envelope"),
+        serde_json::json!({"success": false, "message": "Invalid warning type"})
     );
 }
 
@@ -281,7 +304,7 @@ async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_c
         .expect("preference response body");
     assert_eq!(
         serde_json::from_slice::<Value>(&body).expect("legacy preference response"),
-        serde_json::json!({"success": true, "message": "Update successful", "data": null})
+        serde_json::json!({"success": true, "message": "Settings updated", "data": null})
     );
     let setting: String = sqlx::query_scalar("SELECT setting FROM users WHERE id = 7")
         .fetch_one(&pool)

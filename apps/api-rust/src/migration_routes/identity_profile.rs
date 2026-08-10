@@ -261,7 +261,16 @@ async fn request_object(request: Request) -> Result<Map<String, Value>, ProfileE
     let bytes = to_bytes(request.into_body(), 1024 * 1024)
         .await
         .map_err(|_| ProfileError::bad_request("invalid parameters"))?;
-    serde_json::from_slice(&bytes).map_err(|_| ProfileError::bad_request("invalid parameters"))
+    match serde_json::from_slice::<Value>(&bytes)
+        .map_err(|_| ProfileError::bad_request("invalid parameters"))?
+    {
+        Value::Object(object) => Ok(object),
+        // encoding/json accepts `null` into a Go struct and leaves all fields
+        // at their zero values; the profile handlers then apply their normal
+        // validation/default behavior.
+        Value::Null => Ok(Map::new()),
+        _ => Err(ProfileError::bad_request("invalid parameters")),
+    }
 }
 
 async fn update_self_setting(
@@ -363,6 +372,14 @@ struct ProfileError {
 }
 
 impl ProfileError {
+    const fn legacy(message: &'static str) -> Self {
+        Self {
+            status: StatusCode::OK,
+            code: None,
+            message,
+        }
+    }
+
     const fn bad_request(message: &'static str) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -468,17 +485,24 @@ async fn update_setting(
 ) -> Result<Response, ProfileError> {
     let request_locale = locale(request.headers());
     let identity = authenticated(&state, request.headers()).await?;
-    let request: UserSettingRequest =
-        serde_json::from_value(Value::Object(request_object(request).await?))
-            .map_err(|_| ProfileError::bad_request("invalid parameters"))?;
-    validate_user_setting(&request)?;
+    let object = match request_object(request).await {
+        Ok(object) => object,
+        Err(_) => return Err(ProfileError::legacy(request_locale.invalid_parameters())),
+    };
+    let request: UserSettingRequest = match serde_json::from_value(Value::Object(object)) {
+        Ok(request) => request,
+        Err(_) => return Err(ProfileError::legacy(request_locale.invalid_parameters())),
+    };
+    validate_user_setting(&request, request_locale)?;
     update_notification_setting(&state, identity, request).await?;
     Ok(update_success(request_locale))
 }
 
 #[derive(Deserialize)]
 struct UserSettingRequest {
+    #[serde(default)]
     notify_type: String,
+    #[serde(default)]
     quota_warning_threshold: f64,
     #[serde(default)]
     webhook_url: String,
@@ -501,16 +525,19 @@ struct UserSettingRequest {
     record_ip_log: bool,
 }
 
-fn validate_user_setting(request: &UserSettingRequest) -> Result<(), ProfileError> {
+fn validate_user_setting(
+    request: &UserSettingRequest,
+    request_locale: LegacyLocale,
+) -> Result<(), ProfileError> {
     if !matches!(
         request.notify_type.as_str(),
         "email" | "webhook" | "bark" | "gotify"
     ) {
-        return Err(ProfileError::bad_request("invalid notification type"));
+        return Err(ProfileError::legacy(request_locale.invalid_setting_type()));
     }
     if !request.quota_warning_threshold.is_finite() || request.quota_warning_threshold <= 0.0 {
-        return Err(ProfileError::bad_request(
-            "quota warning threshold must be greater than zero",
+        return Err(ProfileError::legacy(
+            request_locale.quota_threshold_gt_zero(),
         ));
     }
     match request.notify_type.as_str() {
@@ -518,34 +545,77 @@ fn validate_user_setting(request: &UserSettingRequest) -> Result<(), ProfileErro
             if !request.notification_email.is_empty()
                 && !request.notification_email.contains('@') =>
         {
-            Err(ProfileError::bad_request("invalid notification email"))
+            Err(ProfileError::legacy(request_locale.invalid_email()))
         }
-        "webhook" => validate_http_url(&request.webhook_url, "webhook URL"),
-        "bark" => validate_http_url(&request.bark_url, "Bark URL"),
+        "webhook" => validate_http_url(&request.webhook_url, "webhook URL", request_locale),
+        "bark" => validate_http_url(&request.bark_url, "Bark URL", request_locale),
         "gotify" => {
-            validate_http_url(&request.gotify_url, "Gotify URL")?;
-            if request.gotify_token.is_empty() {
-                return Err(ProfileError::bad_request("Gotify token is required"));
+            if request.gotify_url.is_empty() {
+                return Err(ProfileError::legacy(request_locale.gotify_url_empty()));
             }
+            if request.gotify_token.is_empty() {
+                return Err(ProfileError::legacy(request_locale.gotify_token_empty()));
+            }
+            validate_http_url(&request.gotify_url, "Gotify URL", request_locale)?;
             Ok(())
         }
         _ => Ok(()),
     }
 }
 
-fn validate_http_url(value: &str, label: &'static str) -> Result<(), ProfileError> {
-    let Some(authority_and_path) = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-    else {
-        return Err(ProfileError::bad_request(label));
+fn validate_http_url(
+    value: &str,
+    label: &'static str,
+    request_locale: LegacyLocale,
+) -> Result<(), ProfileError> {
+    let error = || {
+        ProfileError::legacy(match label {
+            "webhook URL" => request_locale.invalid_webhook_url(),
+            "Bark URL" => request_locale.invalid_bark_url(),
+            "Gotify URL" => request_locale.invalid_gotify_url(),
+            _ => "Invalid URL",
+        })
     };
-    let host = authority_and_path.split('/').next().unwrap_or_default();
-    if !host.is_empty() && !value.chars().any(char::is_whitespace) {
-        Ok(())
-    } else {
-        Err(ProfileError::bad_request(label))
+    if value.is_empty() {
+        return Err(ProfileError::legacy(match label {
+            "webhook URL" => request_locale.webhook_url_empty(),
+            "Bark URL" => request_locale.bark_url_empty(),
+            "Gotify URL" => request_locale.gotify_url_empty(),
+            _ => "URL cannot be empty",
+        }));
     }
+    if !is_request_uri(value) {
+        return Err(error());
+    }
+    if matches!(label, "Bark URL" | "Gotify URL")
+        && !value.starts_with("https://")
+        && !value.starts_with("http://")
+    {
+        return Err(ProfileError::legacy(request_locale.url_must_http()));
+    }
+    Ok(())
+}
+
+/// Go's url.ParseRequestURI accepts an absolute URI or an absolute request
+/// path, but rejects bare relative paths and whitespace/control characters.
+fn is_request_uri(value: &str) -> bool {
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    if value.starts_with('/') {
+        return true;
+    }
+    let Some(colon) = value.find(':') else {
+        return false;
+    };
+    colon > 0
+        && value[..colon].chars().enumerate().all(|(index, ch)| {
+            if index == 0 {
+                ch.is_ascii_alphabetic()
+            } else {
+                ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
+            }
+        })
 }
 
 async fn update_notification_setting(
@@ -562,54 +632,9 @@ async fn update_notification_setting(
     .map_err(|_| ProfileError::internal())?
     .flatten()
     .unwrap_or_default();
-    let mut setting = serde_json::from_str::<Map<String, Value>>(&raw).unwrap_or_default();
-    setting.insert(
-        "notify_type".to_owned(),
-        Value::String(request.notify_type.clone()),
-    );
-    setting.insert(
-        "quota_warning_threshold".to_owned(),
-        Value::from(request.quota_warning_threshold),
-    );
-    setting.insert(
-        "accept_unset_model_ratio_model".to_owned(),
-        Value::Bool(request.accept_unset_model_ratio_model),
-    );
-    setting.insert(
-        "record_ip_log".to_owned(),
-        Value::Bool(request.record_ip_log),
-    );
-    if identity.role >= 10 {
-        if let Some(enabled) = request.upstream_model_update_notify_enabled {
-            setting.insert(
-                "upstream_model_update_notify_enabled".to_owned(),
-                Value::Bool(enabled),
-            );
-        }
-    }
-    match request.notify_type.as_str() {
-        "email" => insert_if_nonempty(
-            &mut setting,
-            "notification_email",
-            request.notification_email,
-        ),
-        "webhook" => {
-            insert_if_nonempty(&mut setting, "webhook_url", request.webhook_url);
-            insert_if_nonempty(&mut setting, "webhook_secret", request.webhook_secret);
-        }
-        "bark" => insert_if_nonempty(&mut setting, "bark_url", request.bark_url),
-        "gotify" => {
-            insert_if_nonempty(&mut setting, "gotify_url", request.gotify_url);
-            insert_if_nonempty(&mut setting, "gotify_token", request.gotify_token);
-            setting.insert(
-                "gotify_priority".to_owned(),
-                Value::from(request.gotify_priority.clamp(0, 10)),
-            );
-        }
-        _ => return Err(ProfileError::bad_request("invalid notification type")),
-    }
+    let setting = build_notification_setting(&raw, &request, identity.role)?;
     let updated = sqlx::query("UPDATE users SET setting = $1 WHERE id = $2 AND deleted_at IS NULL")
-        .bind(serde_json::to_string(&setting).map_err(|_| ProfileError::internal())?)
+        .bind(&setting)
         .bind(identity.user_id)
         .execute(&state.pg)
         .await
@@ -617,14 +642,113 @@ async fn update_notification_setting(
     if updated.rows_affected() != 1 {
         return Err(ProfileError::not_found());
     }
-    clear_user_cache(state, identity.user_id).await;
+    update_user_setting_cache(state, identity.user_id, &setting).await;
     Ok(())
 }
 
-fn insert_if_nonempty(setting: &mut Map<String, Value>, key: &str, value: String) {
-    if !value.is_empty() {
-        setting.insert(key.to_owned(), Value::String(value));
+#[derive(Default, Deserialize, Serialize, Debug, PartialEq)]
+struct LegacyNotificationSetting {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notify_type: String,
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    quota_warning_threshold: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    webhook_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    webhook_secret: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    notification_email: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    bark_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    gotify_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    gotify_token: String,
+    #[serde(default)]
+    gotify_priority: i64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    upstream_model_update_notify_enabled: bool,
+    #[serde(
+        default,
+        rename = "accept_unset_model_ratio_model",
+        skip_serializing_if = "is_false"
+    )]
+    accept_unset_ratio_model: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    record_ip_log: bool,
+}
+
+fn is_zero_f64(value: &f64) -> bool {
+    *value == 0.0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn build_notification_setting(
+    raw: &str,
+    request: &UserSettingRequest,
+    role: i64,
+) -> Result<String, ProfileError> {
+    let existing = serde_json::from_str::<LegacyNotificationSetting>(raw).unwrap_or_default();
+    let upstream = if role >= 10 {
+        request
+            .upstream_model_update_notify_enabled
+            .unwrap_or(existing.upstream_model_update_notify_enabled)
+    } else {
+        existing.upstream_model_update_notify_enabled
+    };
+    let mut setting = LegacyNotificationSetting {
+        notify_type: request.notify_type.clone(),
+        quota_warning_threshold: request.quota_warning_threshold,
+        upstream_model_update_notify_enabled: upstream,
+        accept_unset_ratio_model: request.accept_unset_model_ratio_model,
+        record_ip_log: request.record_ip_log,
+        ..LegacyNotificationSetting::default()
+    };
+    match request.notify_type.as_str() {
+        "email" => setting.notification_email = request.notification_email.clone(),
+        "webhook" => {
+            setting.webhook_url = request.webhook_url.clone();
+            setting.webhook_secret = request.webhook_secret.clone();
+        }
+        "bark" => setting.bark_url = request.bark_url.clone(),
+        "gotify" => {
+            setting.gotify_url = request.gotify_url.clone();
+            setting.gotify_token = request.gotify_token.clone();
+            setting.gotify_priority = if !(0..=10).contains(&request.gotify_priority) {
+                5
+            } else {
+                request.gotify_priority
+            };
+        }
+        _ => return Err(ProfileError::internal()),
     }
+    let mut serialized = serde_json::to_string(&setting).map_err(|_| ProfileError::internal())?;
+    // Go's encoding/json renders an integral float64 as an integer token
+    // (`2`), while serde_json keeps the explicit decimal (`2.0`). The stored
+    // setting is a legacy JSON string, so preserve Go's lexical form as well
+    // as its parsed value.
+    if let Some(marker) = serialized.find("\"quota_warning_threshold\":") {
+        let value_start = marker + "\"quota_warning_threshold\":".len();
+        let value_end = serialized[value_start..]
+            .find([',', '}'])
+            .map_or(serialized.len(), |offset| value_start + offset);
+        serialized.replace_range(
+            value_start..value_end,
+            &go_json_number(request.quota_warning_threshold),
+        );
+    }
+    Ok(serialized)
+}
+
+fn go_json_number(value: f64) -> String {
+    let mut number = value.to_string();
+    if number.ends_with(".0") {
+        number.truncate(number.len() - 2);
+    }
+    number
 }
 
 async fn publish_auth_floor(state: &ProfileState, user_id: i64, version: i64) {
@@ -652,6 +776,46 @@ async fn publish_auth_floor(state: &ProfileState, user_id: i64, version: i64) {
             user_id,
             "identity profile Valkey invalidation failed after durable deletion"
         );
+    }
+}
+
+/// Refresh only the setting field of an already-populated legacy user hash.
+///
+/// Go's `UpdateUserSetting` uses an auth-version-fenced HSET and does not
+/// manufacture a cold cache. Keep that cache-aside behavior for this route;
+/// PostgreSQL remains authoritative when Valkey is unavailable.
+async fn update_user_setting_cache(state: &ProfileState, user_id: i64, setting: &str) {
+    let auth_version = match sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(auth_version, 0) FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pg)
+    .await
+    {
+        Ok(Some(version)) if version > 0 => version,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "profile setting cache version lookup failed");
+            return;
+        }
+    };
+    let Ok(mut connection) = state.valkey.get_multiplexed_async_connection().await else {
+        tracing::warn!(user_id, "profile setting cache connection failed");
+        return;
+    };
+    let script = redis::Script::new(
+        r#"local incoming=tonumber(ARGV[1]); local pending=tonumber(redis.call('GET',KEYS[2]) or '0'); local committed=tonumber(redis.call('GET',KEYS[3]) or '0'); local current=tonumber(redis.call('HGET',KEYS[1],'AuthVersion') or '0'); if pending>incoming or committed>incoming or current>incoming then return 0 end; if committed<incoming then redis.call('SET',KEYS[3],ARGV[1]) end; if pending>0 and pending<=incoming then redis.call('DEL',KEYS[2]) end; if redis.call('EXISTS',KEYS[1])==0 then return 1 end; if current~=incoming then return 1 end; redis.call('HSET',KEYS[1],'Setting',ARGV[2]); return 1"#,
+    );
+    if let Err(error) = script
+        .key(format!("user:{user_id}"))
+        .key(format!("auth:user:fence:{user_id}"))
+        .key(format!("auth:user:version:{user_id}"))
+        .arg(auth_version)
+        .arg(setting)
+        .invoke_async::<i64>(&mut connection)
+        .await
+    {
+        tracing::warn!(%error, user_id, "profile setting cache update failed");
     }
 }
 
@@ -707,6 +871,14 @@ enum LegacyLocale {
 }
 
 impl LegacyLocale {
+    fn invalid_parameters(self) -> &'static str {
+        match self {
+            Self::En => "Invalid parameters",
+            Self::ZhCn => "无效的参数",
+            Self::ZhTw => "無效的參數",
+        }
+    }
+
     fn invalid_access_token(self) -> &'static str {
         match self {
             Self::En => "Unauthorized, invalid access token",
@@ -715,10 +887,99 @@ impl LegacyLocale {
         }
     }
 
+    fn invalid_setting_type(self) -> &'static str {
+        match self {
+            Self::En => "Invalid warning type",
+            Self::ZhCn => "无效的预警类型",
+            Self::ZhTw => "無效的預警類型",
+        }
+    }
+
+    fn quota_threshold_gt_zero(self) -> &'static str {
+        match self {
+            Self::En => "Warning threshold must be greater than 0",
+            Self::ZhCn => "预警阈值必须大于0",
+            Self::ZhTw => "預警閾值必須大於0",
+        }
+    }
+
+    fn invalid_webhook_url(self) -> &'static str {
+        match self {
+            Self::En => "Invalid Webhook URL",
+            Self::ZhCn => "无效的Webhook地址",
+            Self::ZhTw => "無效的Webhook位址",
+        }
+    }
+
+    fn webhook_url_empty(self) -> &'static str {
+        match self {
+            Self::En => "Webhook URL cannot be empty",
+            Self::ZhCn => "Webhook地址不能为空",
+            Self::ZhTw => "Webhook位址不能為空",
+        }
+    }
+
+    fn invalid_email(self) -> &'static str {
+        match self {
+            Self::En => "Invalid email address",
+            Self::ZhCn => "无效的邮箱地址",
+            Self::ZhTw => "無效的信箱位址",
+        }
+    }
+
+    fn invalid_bark_url(self) -> &'static str {
+        match self {
+            Self::En => "Invalid Bark push URL",
+            Self::ZhCn => "无效的Bark推送URL",
+            Self::ZhTw => "無效的Bark推送URL",
+        }
+    }
+
+    fn bark_url_empty(self) -> &'static str {
+        match self {
+            Self::En => "Bark push URL cannot be empty",
+            Self::ZhCn => "Bark推送URL不能为空",
+            Self::ZhTw => "Bark推送URL不能為空",
+        }
+    }
+
+    fn invalid_gotify_url(self) -> &'static str {
+        match self {
+            Self::En => "Invalid Gotify server URL",
+            Self::ZhCn => "无效的Gotify服务器地址",
+            Self::ZhTw => "無效的Gotify伺服器位址",
+        }
+    }
+
+    fn gotify_url_empty(self) -> &'static str {
+        match self {
+            Self::En => "Gotify server URL cannot be empty",
+            Self::ZhCn => "Gotify服务器地址不能为空",
+            Self::ZhTw => "Gotify伺服器位址不能為空",
+        }
+    }
+
+    fn gotify_token_empty(self) -> &'static str {
+        match self {
+            Self::En => "Gotify token cannot be empty",
+            Self::ZhCn => "Gotify令牌不能为空",
+            Self::ZhTw => "Gotify令牌不能為空",
+        }
+    }
+
+    fn url_must_http(self) -> &'static str {
+        match self {
+            Self::En => "URL must start with http:// or https://",
+            Self::ZhCn => "URL必须以http://或https://开头",
+            Self::ZhTw => "URL必須以http://或https://開頭",
+        }
+    }
+
     fn update_success(self) -> &'static str {
         match self {
-            Self::En => "Update successful",
-            Self::ZhCn | Self::ZhTw => "更新成功",
+            Self::En => "Settings updated",
+            Self::ZhCn => "设置已更新",
+            Self::ZhTw => "設定已更新",
         }
     }
 }
@@ -762,7 +1023,10 @@ fn update_success(request_locale: LegacyLocale) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{AFF_CODE_LENGTH, generate_aff_code, self_oauth_binding_column};
+    use super::{
+        AFF_CODE_LENGTH, LegacyLocale, UserSettingRequest, build_notification_setting,
+        generate_aff_code, is_request_uri, self_oauth_binding_column, validate_user_setting,
+    };
     use serde_json::{Map, Value};
 
     #[test]
@@ -799,5 +1063,95 @@ mod tests {
             assert_eq!(code.len(), AFF_CODE_LENGTH);
             assert!(code.bytes().all(|byte| byte.is_ascii_alphanumeric()));
         }
+    }
+
+    #[test]
+    fn notification_setting_serialization_matches_go_dto_and_priority_fallback() {
+        let request = UserSettingRequest {
+            notify_type: "gotify".to_owned(),
+            quota_warning_threshold: 2.5,
+            webhook_url: String::new(),
+            webhook_secret: String::new(),
+            notification_email: String::new(),
+            bark_url: String::new(),
+            gotify_url: "https://gotify.example".to_owned(),
+            gotify_token: "token".to_owned(),
+            gotify_priority: 99,
+            upstream_model_update_notify_enabled: None,
+            accept_unset_model_ratio_model: false,
+            record_ip_log: false,
+        };
+        let json = build_notification_setting(
+            r#"{"language":"zh","gotify_priority":7,"upstream_model_update_notify_enabled":true}"#,
+            &request,
+            1,
+        )
+        .expect("notification setting should serialize");
+        let value: Value = serde_json::from_str(&json).expect("serialized setting JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "notify_type": "gotify",
+                "quota_warning_threshold": 2.5,
+                "gotify_url": "https://gotify.example",
+                "gotify_token": "token",
+                "gotify_priority": 5,
+                "upstream_model_update_notify_enabled": true,
+            })
+        );
+    }
+
+    #[test]
+    fn notification_setting_drops_fields_go_fresh_dto_drops() {
+        let request = UserSettingRequest {
+            notify_type: "email".to_owned(),
+            quota_warning_threshold: 1.0,
+            webhook_url: String::new(),
+            webhook_secret: String::new(),
+            notification_email: "ada@example.test".to_owned(),
+            bark_url: String::new(),
+            gotify_url: String::new(),
+            gotify_token: String::new(),
+            gotify_priority: 0,
+            upstream_model_update_notify_enabled: None,
+            accept_unset_model_ratio_model: false,
+            record_ip_log: false,
+        };
+        let json = build_notification_setting(
+            r#"{"language":"zh","billing_preference":"wallet","gotify_priority":7}"#,
+            &request,
+            1,
+        )
+        .expect("notification setting should serialize");
+        let value: Value = serde_json::from_str(&json).expect("serialized setting JSON");
+        assert_eq!(value["notify_type"], "email");
+        assert_eq!(value["notification_email"], "ada@example.test");
+        assert_eq!(value["gotify_priority"], 0);
+        assert!(value.get("language").is_none());
+        assert!(value.get("billing_preference").is_none());
+    }
+
+    #[test]
+    fn setting_validation_matches_go_legacy_http_status_messages() {
+        let request = UserSettingRequest {
+            notify_type: String::new(),
+            quota_warning_threshold: 0.0,
+            webhook_url: String::new(),
+            webhook_secret: String::new(),
+            notification_email: String::new(),
+            bark_url: String::new(),
+            gotify_url: String::new(),
+            gotify_token: String::new(),
+            gotify_priority: 0,
+            upstream_model_update_notify_enabled: None,
+            accept_unset_model_ratio_model: false,
+            record_ip_log: false,
+        };
+        let error = validate_user_setting(&request, LegacyLocale::En).expect_err("invalid type");
+        assert_eq!(error.status, axum::http::StatusCode::OK);
+        assert_eq!(error.message, "Invalid warning type");
+        assert!(is_request_uri("/webhook"));
+        assert!(is_request_uri("https://example.test/hook"));
+        assert!(!is_request_uri("relative/path"));
     }
 }

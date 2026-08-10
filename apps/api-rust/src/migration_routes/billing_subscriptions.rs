@@ -1018,6 +1018,25 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Go's encoding/json writes an integral float64 without a trailing `.0`.
+/// Preserve that lexical form because the legacy user setting is stored as a
+/// JSON string and can be updated by more than one route family.
+fn serialize_legacy_user_setting(setting: &LegacyUserSetting) -> Result<String, serde_json::Error> {
+    let mut serialized = serde_json::to_string(setting)?;
+    if let Some(marker) = serialized.find("\"quota_warning_threshold\":") {
+        let value_start = marker + "\"quota_warning_threshold\":".len();
+        let value_end = serialized[value_start..]
+            .find([',', '}'])
+            .map_or(serialized.len(), |offset| value_start + offset);
+        let mut number = setting.quota_warning_threshold.to_string();
+        if number.ends_with(".0") {
+            number.truncate(number.len() - 2);
+        }
+        serialized.replace_range(value_start..value_end, &number);
+    }
+    Ok(serialized)
+}
+
 async fn update_preference(
     State(state): State<BillingSubscriptionsState>,
     request: Request,
@@ -1038,7 +1057,7 @@ async fn update_preference(
     let preference = normalize_preference(&input.billing_preference);
     let mut setting = serde_json::from_str::<LegacyUserSetting>(&user.setting).unwrap_or_default();
     setting.billing_preference = preference.to_owned();
-    let setting = match serde_json::to_string(&setting) {
+    let setting = match serialize_legacy_user_setting(&setting) {
         Ok(setting) => setting,
         Err(_) => {
             return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误"));
