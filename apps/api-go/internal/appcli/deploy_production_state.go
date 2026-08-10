@@ -425,6 +425,9 @@ func (runtime *productionRuntime) openWorkspace(root string) (productionWorkspac
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return productionWorkspace{}, errors.New("workspace must be a real directory")
 	}
+	if err := requireRealDirectory(runtime.paths.WorkRoot); err != nil {
+		return productionWorkspace{}, errors.New("production work root must be a real directory")
+	}
 	// Arch systemd's DynamicUser layout exposes /var/lib/lmm-api-go as a
 	// managed symlink to /var/lib/private/lmm-api-go.  The workspace itself
 	// must still be a real directory, but rejecting that trusted parent alias

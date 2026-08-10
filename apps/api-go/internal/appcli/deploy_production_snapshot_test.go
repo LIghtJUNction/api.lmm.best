@@ -74,6 +74,34 @@ func TestNativeProductionWorkspaceAcceptsManagedVarLibAlias(t *testing.T) {
 	}
 }
 
+func TestNativeProductionWorkspaceRejectsSymlinkedWorkRoot(t *testing.T) {
+	root := t.TempDir()
+	paths := defaultProductionPaths()
+	paths.WorkRoot = filepath.Join(root, "state", "deploy-work")
+	paths.BackupRoot = filepath.Join(root, "state", "deploy-backups")
+	paths.GlobalLock = filepath.Join(root, "run", "deploy.lock")
+	paths.TransactionLock = filepath.Join(root, "state", "deploy-transaction.lock")
+	runtime := &productionRuntime{
+		paths: paths, runner: &fakeProductionRunner{t: t}, now: time.Now,
+		sleep: func(time.Duration) {}, effectiveUID: func() int { return 0 },
+		hostname: func() (string, error) { return productionExpectedHost, nil }, probeAttempts: 1,
+	}
+	result, err := runtime.createWorkspace(context.Background(), "go-symlink-workroot-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	displacedWorkRoot := filepath.Join(root, "attacker-controlled")
+	if err := os.Rename(paths.WorkRoot, displacedWorkRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(displacedWorkRoot, paths.WorkRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.openWorkspace(result.Workspace); err == nil || !strings.Contains(err.Error(), "work root must be a real directory") {
+		t.Fatalf("symlinked production work root error=%v", err)
+	}
+}
+
 func TestNativeProductionBackupCapturesRollbackFrontendConfigAndPostgres(t *testing.T) {
 	fixture := newProductionFixture(t)
 	if err := os.RemoveAll(fixture.options.BackupDir); err != nil {
