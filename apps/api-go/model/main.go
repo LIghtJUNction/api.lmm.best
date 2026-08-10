@@ -120,6 +120,7 @@ func checkSetup() {
 			common.SysLog("system is not initialized, but root user exists")
 			// Create setup record
 			newSetup := Setup{
+				ID:            SetupSingletonID,
 				Version:       common.Version,
 				InitializedAt: time.Now().Unix(),
 			}
