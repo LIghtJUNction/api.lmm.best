@@ -80,8 +80,6 @@ For commercial licensing, please contact support@quantumnous.com
     --art-foundation: var(--forge-ink-light);
     --art-ink: var(--forge-ink-light);
     --art-muted: var(--forge-muted-ink-light);
-    --art-on-foundation: var(--forge-paper-light);
-    --art-sage: var(--forge-sage-light);
     --art-surface: var(--forge-secondary-light);
     color-scheme: light;
     background: var(--background);
@@ -118,13 +116,11 @@ For commercial licensing, please contact support@quantumnous.com
       transparent
     );
     --art-clay: var(--forge-clay-dark);
-    --art-field: var(--forge-card-dark);
-    --art-foundation: var(--forge-foreground-dark);
+    --art-field: var(--forge-paper-dark);
+    --art-foundation: var(--forge-ink-light);
     --art-ink: var(--forge-foreground-dark);
     --art-muted: var(--forge-muted-ink-dark);
-    --art-on-foundation: var(--forge-surface-dark);
-    --art-sage: var(--forge-sage-dark);
-    --art-surface: var(--forge-surface-dark);
+    --art-surface: var(--forge-cactus-dark);
     color-scheme: dark;
   }
 
@@ -133,38 +129,22 @@ For commercial licensing, please contact support@quantumnous.com
     outline-offset: 3px;
   }
 
-  .auth-art-surface svg path[data-field] {
-    pointer-events: stroke;
-    cursor: crosshair;
-    transition:
-      stroke 160ms ease,
-      opacity 160ms ease;
-  }
-
-  .auth-art-surface svg path[data-field]:hover {
-    stroke: var(--art-clay) !important;
-    opacity: 1;
-  }
-
-  /* The visible auth artwork is a flat editorial handoff. The old field stays
-   * mounted, but is hidden so its pointer contract remains testable without
-   * returning the technical network language to the surface. */
-  .auth-art-editorial {
+  /* A single flat editorial handoff replaces the old technical network:
+   * accent field, organic ivory core, and broad near-black gestures. */
+  .auth-artwork {
     pointer-events: none;
   }
 
-  .auth-art-carrier {
+  .auth-art-core {
     fill: var(--art-field);
   }
 
   .auth-art-left-gesture,
-  .auth-art-right-gesture,
-  .auth-art-core {
+  .auth-art-right-gesture {
     fill: var(--art-foundation);
   }
 
-  .auth-art-contour,
-  .auth-art-paper-line {
+  .auth-art-contour {
     fill: none;
     stroke: var(--art-foundation);
     stroke-linecap: round;
@@ -172,30 +152,11 @@ For commercial licensing, please contact support@quantumnous.com
   }
 
   .auth-art-contour {
-    stroke-width: 7;
-  }
-
-  .auth-art-paper-line {
-    opacity: 0.82;
-    stroke-width: 5;
+    stroke-width: 12;
   }
 
   .auth-art-clay {
     fill: var(--art-clay);
-  }
-
-  .auth-art-foundation {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .auth-art-surface svg > :not(.auth-art-editorial) {
-    opacity: 1;
-    pointer-events: none;
-  }
-
-  .auth-art-surface svg > .auth-art-foundation {
-    opacity: 0;
   }
 
   .auth-art-overlay {

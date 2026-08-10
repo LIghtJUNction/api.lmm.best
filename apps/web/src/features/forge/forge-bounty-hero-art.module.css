@@ -17,13 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 .root {
-  --forge-line: color-mix(in oklch, var(--forge-gesture-ink) 48%, transparent);
-  --forge-line-quiet: color-mix(
-    in oklch,
-    var(--forge-gesture-ink) 24%,
-    transparent
-  );
-
   position: relative;
   min-width: 0;
   overflow: hidden;
@@ -32,30 +25,18 @@ For commercial licensing, please contact support@quantumnous.com
   background: var(--forge-stage);
   box-shadow: none;
   isolation: isolate;
-  touch-action: pan-y;
-}
-
-:global(.dark) .root {
-  --forge-line: color-mix(in oklch, var(--forge-paper) 42%, transparent);
-  --forge-line-quiet: color-mix(in oklch, var(--forge-paper) 22%, transparent);
 }
 
 .artwork {
   display: block;
   width: 100%;
   height: auto;
-  pointer-events: none;
 }
 
-/* Visible editorial illustration: flat field, irregular ivory carrier, and
- * broad near-black gestures. Keep this layer deliberately free of gradients,
- * shadows, hairlines, and decorative geometry. */
+/* Anthropic editorial grammar: one flat accent field, an unoutlined ivory
+ * core, and broad near-black gestures. */
 .anthropicArtwork {
   pointer-events: none;
-}
-
-.ivoryCarrier {
-  fill: var(--forge-paper);
 }
 
 .ivoryCore {
@@ -67,8 +48,7 @@ For commercial licensing, please contact support@quantumnous.com
   fill: var(--forge-gesture-ink);
 }
 
-.gestureContour,
-.paperContour {
+.gestureContour {
   fill: none;
   stroke: var(--forge-gesture-ink);
   stroke-linecap: round;
@@ -76,176 +56,11 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .gestureContour {
-  stroke-width: 7;
-}
-
-.paperContour {
-  stroke-width: 5;
-  opacity: 0.82;
-}
-
-.coreMark {
-  fill: var(--forge-gesture-ink);
+  stroke-width: 12;
 }
 
 .clayMark {
   fill: var(--forge-clay);
-}
-
-.legacyField {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.contributionField,
-.paperLayer {
-  transform-box: fill-box;
-  transform-origin: center;
-  will-change: transform;
-}
-
-.contributionPath,
-.connectorPath,
-.connectorStrong,
-.paperRule,
-.paperRuleQuiet,
-.foundationRule,
-.foundationRuleQuiet {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.contributionPath,
-.connectorPath,
-.connectorStrong {
-  pointer-events: stroke;
-  cursor: crosshair;
-}
-
-.contributionPath {
-  stroke: var(--forge-line-quiet);
-  stroke-width: 1.05;
-  opacity: 0.72;
-  transition:
-    opacity 180ms ease,
-    stroke 180ms ease;
-}
-
-.contributionPath[data-fluid-id='contribution-16'] {
-  stroke: var(--forge-line);
-  stroke-width: 2;
-  opacity: 0.9;
-}
-
-.contributionPath:hover,
-.connectorPath:hover,
-.connectorStrong:hover {
-  stroke: var(--forge-clay);
-  stroke-width: 2.6;
-  opacity: 1;
-}
-
-.root:hover .contributionPath {
-  opacity: 0.9;
-}
-
-.connectorPath {
-  stroke: var(--forge-gesture-ink);
-  stroke-width: 1.7;
-  opacity: 0.78;
-}
-
-.connectorStrong {
-  stroke: var(--forge-clay);
-  stroke-width: 2.7;
-  opacity: 0.95;
-}
-
-.surfaceClay,
-.surfacePaper,
-.surfaceSage,
-.foundationSurface {
-  stroke: none;
-}
-
-.surfaceClay {
-  fill: var(--forge-paper);
-}
-
-.surfacePaper {
-  fill: var(--forge-paper);
-}
-
-.surfaceSage {
-  fill: var(--forge-paper);
-}
-
-.foundationSurface {
-  fill: var(--forge-foundation);
-}
-
-.paperRule,
-.foundationRule {
-  color: var(--forge-foundation-ink);
-  stroke: currentColor;
-  stroke-width: 1.35;
-}
-
-.paperRuleQuiet,
-.foundationRuleQuiet {
-  color: var(--forge-foundation-ink);
-  stroke: currentColor;
-  stroke-width: 1;
-  opacity: 0.42;
-}
-
-.foundationRule,
-.foundationRuleQuiet {
-  color: var(--forge-foundation-ink);
-}
-
-.label,
-.secondaryLabel {
-  fill: var(--forge-gesture-ink);
-  font-family: var(--font-sans);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-}
-
-.secondaryLabel {
-  font-size: 7px;
-  opacity: 0.58;
-}
-
-.foundationLabel {
-  fill: var(--forge-foundation-ink);
-}
-
-.paperLabel {
-  fill: var(--forge-foundation-ink);
-}
-
-.nodeInk,
-.nodeClay,
-.nodeSage {
-  stroke: var(--forge-stage);
-  stroke-width: 1.5;
-}
-
-.nodeInk {
-  fill: var(--forge-ink);
-}
-
-.nodeClay {
-  fill: var(--forge-clay);
-  stroke: var(--forge-ink);
-}
-
-.nodeSage {
-  fill: var(--forge-sage);
-  stroke: var(--forge-ink);
 }
 
 @media (max-width: 767px) {
@@ -254,24 +69,8 @@ For commercial licensing, please contact support@quantumnous.com
   }
 }
 
-@media (prefers-reduced-motion: reduce), (pointer: coarse) {
-  .contributionField,
-  .paperLayer {
-    will-change: auto;
-  }
-
-  .contributionPath {
-    transition: none;
-  }
-}
-
 @media (prefers-contrast: more) {
   .root {
-    border-width: 2px;
-    box-shadow: none;
-  }
-
-  .contributionPath {
-    opacity: 1;
+    border: 2px solid var(--forge-gesture-ink);
   }
 }
