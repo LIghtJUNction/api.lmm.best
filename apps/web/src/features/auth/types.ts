@@ -98,6 +98,12 @@ export interface BackendCapabilities {
   responses_websocket: boolean
 }
 
+export interface AssistantStatus {
+  enabled?: boolean
+  model?: string
+  weekly_credit_usd?: number
+}
+
 export interface SystemStatus {
   success?: boolean
   message?: string
@@ -145,6 +151,7 @@ export interface SystemStatus {
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
     backend_capabilities?: Partial<BackendCapabilities>
+    assistant?: AssistantStatus
     [key: string]: unknown
   }
   // Allow direct access to common properties
@@ -191,6 +198,7 @@ export interface SystemStatus {
   password_register_enabled?: boolean
   custom_oauth_providers?: CustomOAuthProviderInfo[]
   backend_capabilities?: Partial<BackendCapabilities>
+  assistant?: AssistantStatus
   [key: string]: unknown
 }
 

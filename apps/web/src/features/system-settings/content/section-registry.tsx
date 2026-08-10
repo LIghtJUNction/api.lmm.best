@@ -20,6 +20,7 @@ import type { ContentSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { AnnouncementsSection } from './announcements-section'
 import { ApiInfoSection } from './api-info-section'
+import { AssistantSettingsSection } from './assistant-settings-section'
 import { ChatSettingsSection } from './chat-settings-section'
 import { DashboardSection } from './dashboard-section'
 import { DrawingSettingsSection } from './drawing-settings-section'
@@ -90,6 +91,19 @@ const CONTENT_SECTIONS = [
       <UptimeKumaSection
         enabled={settings['console_setting.uptime_kuma_enabled']}
         data={settings['console_setting.uptime_kuma_groups']}
+      />
+    ),
+  },
+  {
+    id: 'assistant',
+    titleKey: 'AI assistant',
+    build: (settings: ContentSettings) => (
+      <AssistantSettingsSection
+        defaultValues={{
+          AssistantEnabled: settings.AssistantEnabled,
+          AssistantModel: settings.AssistantModel,
+          AssistantWeeklyCreditUSD: settings.AssistantWeeklyCreditUSD,
+        }}
       />
     ),
   },
