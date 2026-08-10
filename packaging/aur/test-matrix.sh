@@ -88,7 +88,7 @@ contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-go_release_commit=546910cef6627da7728e3cc4f9648e2c67e96c61
+go_release_commit=c23926968bdc7732ddf5d014ba3639ac86d2d4d1
 readonly go_release_commit
 grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
