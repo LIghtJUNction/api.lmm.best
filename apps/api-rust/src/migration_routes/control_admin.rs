@@ -631,15 +631,16 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
         .with_state(state)
 }
 
-/// Mounts only the read-only system-task listing for the normal listener.
+/// Mounts only the read-only system-task views for the normal listener.
 ///
 /// The broader control-admin router also contains OAuth discovery, task
 /// creation, and instance-management operations. Keeping this route separate
 /// makes the production candidate's PostgreSQL read boundary explicit and
 /// prevents an accidental write or outbound-discovery mount.
-pub fn system_task_list_router(state: ControlAdminState) -> Router {
+pub fn system_task_read_router(state: ControlAdminState) -> Router {
     Router::new()
         .route("/api/system-task/list", get(list_system_tasks))
+        .route("/api/system-task/current", get(current_system_task))
         .with_state(state)
 }
 
