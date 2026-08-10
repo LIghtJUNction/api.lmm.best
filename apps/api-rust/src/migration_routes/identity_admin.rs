@@ -3,6 +3,7 @@
 use crate::auth::{DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
+    body::to_bytes,
     extract::{Extension, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
@@ -11,7 +12,7 @@ use axum::{
 };
 use bcrypt::{DEFAULT_COST, hash};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ const ROLE_ROOT: i64 = 100;
 const STATUS_ENABLED: i64 = 1;
 const STATUS_DISABLED: i64 = 2;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const MAX_BODY_BYTES: usize = 1 << 20;
 // A pending fence must outlive the normal user-cache TTL.  If Valkey becomes
 // unavailable after a database commit, retaining this fence fails closed until
 // the cache can recover from PostgreSQL rather than re-authorizing an old token.
@@ -130,6 +132,15 @@ fn authenticated_response(mut response: Response) -> Response {
         .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
     response
 }
+
+async fn parse_json_body<T: DeserializeOwned>(request: Request) -> Result<T, Response> {
+    let body = to_bytes(request.into_body(), MAX_BODY_BYTES)
+        .await
+        .map_err(|_| fail("参数错误"))?;
+    let mut decoder = serde_json::Deserializer::from_slice(&body);
+    T::deserialize(&mut decoder).map_err(|_| fail("参数错误"))
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -455,8 +466,12 @@ fn has_invalid_user_text(input: &UserInput) -> bool {
 async fn create_user(
     State(state): State<IdentityAdminState>,
     Extension(actor): Extension<DashboardUser>,
-    Json(mut input): Json<UserInput>,
+    request: Request,
 ) -> Response {
+    let mut input: UserInput = match parse_json_body(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
     input.username = input.username.trim().to_owned();
     input.password = input.password.filter(|password| !password.is_empty());
     let Some(password) = input.password.as_deref() else {
@@ -513,8 +528,12 @@ async fn create_user(
 async fn update_user(
     State(state): State<IdentityAdminState>,
     Extension(actor): Extension<DashboardUser>,
-    Json(mut input): Json<UserInput>,
+    request: Request,
 ) -> Response {
+    let mut input: UserInput = match parse_json_body(request).await {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
     let Some(id) = input.id.filter(|id| *id > 0) else {
         return fail("参数错误");
     };
@@ -721,8 +740,12 @@ struct Managed {
 async fn manage_user(
     State(state): State<IdentityAdminState>,
     Extension(actor): Extension<DashboardUser>,
-    Json(request): Json<ManageRequest>,
+    request: Request,
 ) -> Response {
+    let request: ManageRequest = match parse_json_body(request).await {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return internal(),
