@@ -16,13 +16,43 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Check, MessageSquareText, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Check,
+  CheckCircle2,
+  CircleAlert,
+  MessageSquareText,
+  RefreshCw,
+} from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import {
   getAssistantIntentSummary,
@@ -31,6 +61,17 @@ import {
   type AssistantHandoff,
   type AssistantIntentSummary,
 } from '@/features/assistant/api'
+
+const PENDING_HANDOFFS_QUERY_KEY = [
+  'assistant-admin-handoffs',
+  'pending',
+] as const
+const RESOLVED_HANDOFFS_QUERY_KEY = [
+  'assistant-admin-handoffs',
+  'resolved',
+] as const
+const INTENT_SUMMARY_QUERY_KEY = ['assistant-admin-intents', 30] as const
+const EMPTY_INTENTS: AssistantIntentSummary[] = []
 
 const INTENT_LABELS: Record<string, string> = {
   onboarding: 'Onboarding and L1',
@@ -43,46 +84,59 @@ const INTENT_LABELS: Record<string, string> = {
   other: 'Other questions',
 }
 
+function isNotFound(error: unknown): boolean {
+  return (
+    (error as { response?: { status?: number } } | null)?.response?.status ===
+    404
+  )
+}
+
+function HandoffsSkeleton() {
+  return (
+    <div className='grid gap-3' aria-hidden='true'>
+      {[1, 2].map((key) => (
+        <div key={key} className='space-y-3 rounded-lg border p-4'>
+          <div className='flex justify-between gap-3'>
+            <div className='space-y-2'>
+              <Skeleton className='h-4 w-28' />
+              <Skeleton className='h-3 w-52' />
+            </div>
+            <Skeleton className='h-5 w-16' />
+          </div>
+          <Skeleton className='h-12 w-full' />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function AssistantLeadsPanel() {
   const { t, i18n } = useTranslation()
-  const [handoffs, setHandoffs] = useState<AssistantHandoff[]>([])
-  const [intents, setIntents] = useState<AssistantIntentSummary[]>([])
-  const [loading, setLoading] = useState(true)
-  const [available, setAvailable] = useState(true)
-  const [resolving, setResolving] = useState<number | null>(null)
+  const queryClient = useQueryClient()
   const [notes, setNotes] = useState<Record<number, string>>({})
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [pending, summary] = await Promise.all([
-        listAssistantHandoffs('pending'),
-        getAssistantIntentSummary(30),
-      ])
-      setHandoffs(pending)
-      setIntents(summary)
-      setAvailable(true)
-    } catch (error) {
-      const status = (error as { response?: { status?: number } }).response
-        ?.status
-      if (status === 404) {
-        setAvailable(false)
-      } else {
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : t('Unable to load assistant leads')
-        )
-      }
-    } finally {
-      setLoading(false)
-    }
-  }, [t])
+  const pendingQuery = useQuery({
+    queryKey: PENDING_HANDOFFS_QUERY_KEY,
+    queryFn: () => listAssistantHandoffs('pending'),
+    staleTime: 30_000,
+    retry: false,
+  })
+  const resolvedQuery = useQuery({
+    queryKey: RESOLVED_HANDOFFS_QUERY_KEY,
+    queryFn: () => listAssistantHandoffs('resolved'),
+    staleTime: 30_000,
+    retry: false,
+  })
+  const intentsQuery = useQuery({
+    queryKey: INTENT_SUMMARY_QUERY_KEY,
+    queryFn: () => getAssistantIntentSummary(30),
+    staleTime: 30_000,
+    retry: false,
+  })
 
-  useEffect(() => {
-    void load()
-  }, [load])
-
+  const pending = pendingQuery.data ?? []
+  const resolved = resolvedQuery.data ?? []
+  const intents = intentsQuery.data ?? EMPTY_INTENTS
   const totalIntents = useMemo(
     () => intents.reduce((total, item) => total + item.count, 0),
     [intents]
@@ -96,43 +150,165 @@ export function AssistantLeadsPanel() {
     [i18n.language]
   )
 
-  const resolve = async (handoff: AssistantHandoff) => {
-    if (resolving !== null) return
-    setResolving(handoff.id)
-    try {
-      await resolveAssistantHandoff(handoff.id, notes[handoff.id] ?? '')
-      setHandoffs((current) => current.filter((item) => item.id !== handoff.id))
+  const resolveMutation = useMutation({
+    mutationFn: ({
+      handoff,
+      note,
+    }: {
+      handoff: AssistantHandoff
+      note: string
+    }) => resolveAssistantHandoff(handoff.id, note),
+    onSuccess: (updated, { handoff }) => {
+      queryClient.setQueryData<AssistantHandoff[]>(
+        PENDING_HANDOFFS_QUERY_KEY,
+        (current = []) => current.filter((item) => item.id !== handoff.id)
+      )
+      queryClient.setQueryData<AssistantHandoff[]>(
+        RESOLVED_HANDOFFS_QUERY_KEY,
+        (current = []) => [
+          {
+            ...handoff,
+            ...updated,
+            username: updated.username ?? handoff.username,
+            email: updated.email ?? handoff.email,
+          },
+          ...current.filter((item) => item.id !== handoff.id),
+        ]
+      )
+      setNotes((current) => {
+        const next = { ...current }
+        delete next[handoff.id]
+        return next
+      })
       toast.success(t('Support request resolved'))
-    } catch (error) {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: PENDING_HANDOFFS_QUERY_KEY }),
+        queryClient.invalidateQueries({
+          queryKey: RESOLVED_HANDOFFS_QUERY_KEY,
+        }),
+      ])
+    },
+    onError: (error) => {
       toast.error(
         error instanceof Error
           ? error.message
           : t('Unable to resolve support request')
       )
-    } finally {
-      setResolving(null)
-    }
-  }
+    },
+  })
 
-  if (!available) return null
+  const queries = [pendingQuery, resolvedQuery, intentsQuery]
+  if (queries.some((query) => isNotFound(query.error))) return null
 
-  const renderHandoffs = () => {
-    if (loading && handoffs.length === 0) {
+  const firstError = queries.find((query) => query.isError)?.error
+  const isRefreshing = queries.some((query) => query.isFetching)
+  const refresh = () =>
+    Promise.all(queries.map((query) => query.refetch())).then(() => undefined)
+
+  const renderPending = () => {
+    if (pendingQuery.isLoading) return <HandoffsSkeleton />
+    if (pending.length === 0) {
       return (
-        <p className='text-muted-foreground mt-5 text-sm'>{t('Loading...')}</p>
-      )
-    }
-    if (handoffs.length === 0) {
-      return (
-        <p className='text-muted-foreground mt-5 text-sm'>
-          {t('No pending human-support requests.')}
-        </p>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant='icon'>
+              <MessageSquareText aria-hidden='true' />
+            </EmptyMedia>
+            <EmptyTitle>{t('No pending human-support requests.')}</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
       )
     }
     return (
-      <div className='mt-5 grid gap-3'>
-        {handoffs.map((handoff) => (
-          <article key={handoff.id} className='bg-background border p-4'>
+      <div className='grid gap-3'>
+        {pending.map((handoff) => {
+          const isResolving =
+            resolveMutation.isPending &&
+            resolveMutation.variables?.handoff.id === handoff.id
+          return (
+            <article
+              key={handoff.id}
+              className='bg-background rounded-lg border p-4'
+            >
+              <div className='flex flex-wrap items-start justify-between gap-3'>
+                <div className='min-w-0'>
+                  <p className='font-medium'>{handoff.username}</p>
+                  <p className='text-muted-foreground text-xs'>
+                    {handoff.email || t('No email provided')} ·{' '}
+                    {dateTimeFormatter.format(
+                      new Date(handoff.created_at * 1000)
+                    )}
+                  </p>
+                </div>
+                <Badge variant='outline'>{t('Pending')}</Badge>
+              </div>
+              <p className='mt-3 text-sm whitespace-pre-wrap'>
+                {handoff.message}
+              </p>
+              <Textarea
+                className='mt-3'
+                rows={2}
+                maxLength={2000}
+                placeholder={t('Optional resolution note for the user')}
+                value={notes[handoff.id] ?? ''}
+                onChange={(event) =>
+                  setNotes((current) => ({
+                    ...current,
+                    [handoff.id]: event.target.value,
+                  }))
+                }
+              />
+              <div className='mt-3 flex justify-end'>
+                <Button
+                  size='sm'
+                  onClick={() =>
+                    resolveMutation.mutate({
+                      handoff,
+                      note: notes[handoff.id] ?? '',
+                    })
+                  }
+                  disabled={resolveMutation.isPending}
+                >
+                  {isResolving ? (
+                    <RefreshCw
+                      data-icon='inline-start'
+                      className='animate-spin'
+                      aria-hidden='true'
+                    />
+                  ) : (
+                    <Check data-icon='inline-start' aria-hidden='true' />
+                  )}
+                  {t('Mark resolved')}
+                </Button>
+              </div>
+            </article>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const renderResolved = () => {
+    if (resolvedQuery.isLoading) return <HandoffsSkeleton />
+    if (resolved.length === 0) {
+      return (
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant='icon'>
+              <CheckCircle2 aria-hidden='true' />
+            </EmptyMedia>
+            <EmptyTitle>{t('No resolved human-support requests.')}</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      )
+    }
+    return (
+      <div className='grid gap-3'>
+        {resolved.map((handoff) => (
+          <article
+            key={handoff.id}
+            className='bg-background rounded-lg border p-4'
+          >
             <div className='flex flex-wrap items-start justify-between gap-3'>
               <div className='min-w-0'>
                 <p className='font-medium'>{handoff.username}</p>
@@ -143,34 +319,24 @@ export function AssistantLeadsPanel() {
                   )}
                 </p>
               </div>
-              <Badge variant='outline'>{t('Pending')}</Badge>
+              <Badge variant='secondary'>{t('Resolved')}</Badge>
             </div>
             <p className='mt-3 text-sm whitespace-pre-wrap'>
               {handoff.message}
             </p>
-            <Textarea
-              className='mt-3'
-              rows={2}
-              maxLength={2000}
-              placeholder={t('Optional resolution note for the user')}
-              value={notes[handoff.id] ?? ''}
-              onChange={(event) =>
-                setNotes((current) => ({
-                  ...current,
-                  [handoff.id]: event.target.value,
-                }))
-              }
-            />
-            <div className='mt-3 flex justify-end'>
-              <Button
-                size='sm'
-                onClick={() => void resolve(handoff)}
-                disabled={resolving !== null}
-              >
-                <Check data-icon='inline-start' aria-hidden='true' />
-                {t('Mark resolved')}
-              </Button>
-            </div>
+            <Separator className='my-3' />
+            <p className='text-xs font-medium'>
+              {t('Administrator resolution')}
+            </p>
+            <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+              {handoff.admin_note || t('No note provided.')}
+            </p>
+            {handoff.resolved_at > 0 ? (
+              <p className='text-muted-foreground mt-2 text-xs'>
+                {t('Resolved at')}:{' '}
+                {dateTimeFormatter.format(new Date(handoff.resolved_at * 1000))}
+              </p>
+            ) : null}
           </article>
         ))}
       </div>
@@ -178,49 +344,90 @@ export function AssistantLeadsPanel() {
   }
 
   return (
-    <section className='bg-muted/10 border px-5 py-5 sm:px-6'>
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div>
-          <div className='flex items-center gap-2'>
-            <MessageSquareText className='size-4' aria-hidden='true' />
-            <h2 className='text-sm font-semibold'>{t('AI assistant leads')}</h2>
-            <Badge variant='secondary'>{handoffs.length}</Badge>
-          </div>
-          <p className='text-muted-foreground mt-1 text-sm'>
-            {t(
-              'Review explicit human-support requests and recent privacy-minimized intent counts.'
-            )}
-          </p>
+    <Card>
+      <CardHeader>
+        <CardTitle className='flex items-center gap-2'>
+          <MessageSquareText className='size-4' aria-hidden='true' />
+          {t('AI assistant leads')}
+          <Badge variant='secondary'>{pending.length}</Badge>
+        </CardTitle>
+        <CardDescription>
+          {t(
+            'Review explicit human-support requests and recent privacy-minimized intent counts.'
+          )}
+        </CardDescription>
+        <CardAction>
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={() => void refresh()}
+            disabled={isRefreshing}
+          >
+            <RefreshCw
+              data-icon='inline-start'
+              className={isRefreshing ? 'animate-spin' : undefined}
+              aria-hidden='true'
+            />
+            {t('Refresh')}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className='grid gap-4'>
+        {firstError ? (
+          <Alert variant='destructive'>
+            <CircleAlert aria-hidden='true' />
+            <AlertTitle>{t('Unable to load assistant leads')}</AlertTitle>
+            <AlertDescription>
+              {firstError instanceof Error
+                ? firstError.message
+                : t('Unable to load assistant leads')}
+            </AlertDescription>
+            <AlertAction>
+              <Button
+                variant='outline'
+                size='sm'
+                onClick={() => void refresh()}
+                disabled={isRefreshing}
+              >
+                {t('Retry')}
+              </Button>
+            </AlertAction>
+          </Alert>
+        ) : null}
+
+        <div className='flex flex-wrap gap-2' aria-label={t('Intent summary')}>
+          {intentsQuery.isLoading ? (
+            <Skeleton className='h-5 w-36' />
+          ) : (
+            <>
+              <Badge variant='outline'>
+                {t('{{count}} questions in 30 days', { count: totalIntents })}
+              </Badge>
+              {intents.map((item) => (
+                <Badge key={item.intent} variant='secondary'>
+                  {t(INTENT_LABELS[item.intent] ?? 'Other questions')}:{' '}
+                  {item.count}
+                </Badge>
+              ))}
+            </>
+          )}
         </div>
-        <Button
-          variant='outline'
-          size='sm'
-          onClick={() => void load()}
-          disabled={loading}
-        >
-          <RefreshCw
-            data-icon='inline-start'
-            className={loading ? 'animate-spin' : undefined}
-          />
-          {t('Refresh')}
-        </Button>
-      </div>
 
-      <div
-        className='mt-4 flex flex-wrap gap-2'
-        aria-label={t('Intent summary')}
-      >
-        <Badge variant='outline'>
-          {t('{{count}} questions in 30 days', { count: totalIntents })}
-        </Badge>
-        {intents.map((item) => (
-          <Badge key={item.intent} variant='secondary'>
-            {t(INTENT_LABELS[item.intent] ?? 'Other questions')}: {item.count}
-          </Badge>
-        ))}
-      </div>
-
-      {renderHandoffs()}
-    </section>
+        <Tabs defaultValue='pending'>
+          <TabsList>
+            <TabsTrigger value='pending'>
+              {t('Pending')}
+              <Badge variant='secondary'>{pending.length}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value='resolved'>
+              {t('Resolved')}
+              <Badge variant='secondary'>{resolved.length}</Badge>
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value='pending'>{renderPending()}</TabsContent>
+          <TabsContent value='resolved'>{renderResolved()}</TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
   )
 }
