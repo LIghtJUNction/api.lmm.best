@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { getClaudeInstallCommand, getClaudeSessionCommand } from './setup-guide'
+import {
+  getCCSwitchClaudeProviderJSON,
+  getCCSwitchInstallGuide,
+  getClaudeInstallCommand,
+  getClaudeSessionCommand,
+} from './setup-guide'
 
 describe('assistant setup guide', () => {
   test('uses current official install commands for each platform', () => {
@@ -59,6 +64,41 @@ describe('assistant setup guide', () => {
         "export ANTHROPIC_MODEL='model'\"'\"'o'",
         'claude',
       ].join('\n')
+    )
+  })
+
+  test('uses official CC Switch packages for each platform', () => {
+    assert.deepEqual(getCCSwitchInstallGuide('windows'), {
+      artifact: 'CC-Switch-v{version}-Windows.msi',
+      command: null,
+    })
+    assert.deepEqual(getCCSwitchInstallGuide('macos'), {
+      artifact: 'CC-Switch-v{version}-macOS.dmg',
+      command: 'brew install --cask cc-switch',
+    })
+    const linux = getCCSwitchInstallGuide('linux')
+    assert.match(linux.command ?? '', /paru -S cc-switch-bin/)
+    assert.match(linux.command ?? '', /sudo apt install/)
+    assert.match(linux.command ?? '', /AppImage/)
+  })
+
+  test('builds a copyable CC Switch Claude provider configuration', () => {
+    assert.equal(
+      getCCSwitchClaudeProviderJSON(
+        'https://api.lmm.best/',
+        'deepseek-v4-flash'
+      ),
+      JSON.stringify(
+        {
+          env: {
+            ANTHROPIC_AUTH_TOKEN: '<YOUR_API_KEY>',
+            ANTHROPIC_BASE_URL: 'https://api.lmm.best',
+            ANTHROPIC_MODEL: 'deepseek-v4-flash',
+          },
+        },
+        null,
+        2
+      )
     )
   })
 })
