@@ -88,8 +88,12 @@ export function revokeMcpToken() {
   return unwrap<null>(api.delete('/api/open-source-bounties/mcp-token'))
 }
 
-export function listOwnedBounties() {
-  return unwrap<BountyProject[]>(api.get('/api/open-source-bounties/mine'))
+export function listOwnedBounties(archived = false) {
+  return unwrap<BountyProject[]>(
+    api.get(
+      `/api/open-source-bounties/mine?archived=${archived ? 'true' : 'false'}`
+    )
+  )
 }
 
 export function listAcceptedBounties() {
@@ -141,6 +145,18 @@ export function resumeBounty(projectId: number) {
 export function closeBounty(projectId: number) {
   return unwrap<{ project: BountyProject; refunded_quota: number }>(
     api.post(`/api/open-source-bounties/projects/${projectId}/close`)
+  )
+}
+
+export function archiveBounty(projectId: number) {
+  return unwrap<BountyProject>(
+    api.post(`/api/open-source-bounties/projects/${projectId}/archive`)
+  )
+}
+
+export function unarchiveBounty(projectId: number) {
+  return unwrap<BountyProject>(
+    api.post(`/api/open-source-bounties/projects/${projectId}/unarchive`)
   )
 }
 

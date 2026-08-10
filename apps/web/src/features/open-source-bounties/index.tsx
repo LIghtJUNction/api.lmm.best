@@ -84,6 +84,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { getChallengeAcceptanceState } from './acceptance'
 import {
   acceptBounty,
+  archiveBounty,
   cancelChallenge,
   closeBounty,
   createBounty,
@@ -106,6 +107,7 @@ import {
   rotateMcpToken,
   submitChallenge,
   tipChallenge,
+  unarchiveBounty,
   updateBounty,
   withdrawChallenge,
 } from './api'
@@ -185,6 +187,8 @@ const ERROR_KEYS: Record<string, string> = {
     'Enter a GitHub Issue URL ending in /issues/number or a pull request URL ending in /pull/number.',
   OPEN_SOURCE_BOUNTY_DUPLICATE_PULL_REQUEST:
     'This pull request has already been submitted.',
+  OPEN_SOURCE_BOUNTY_ARCHIVE_UNAVAILABLE:
+    'Only completed or closed projects can be archived.',
 }
 
 type DraftForm = {
@@ -285,14 +289,19 @@ export function OpenSourceBounties({
   const [ratingTarget, setRatingTarget] = useState<BountyChallenge | null>(null)
   const [ownerRatingScore, setOwnerRatingScore] = useState(5)
   const [ownerRatingComment, setOwnerRatingComment] = useState('')
+  const [showArchivedOwned, setShowArchivedOwned] = useState(false)
 
   const bountyQuery = useQuery({
     queryKey: BOUNTY_QUERY_KEYS[0],
     queryFn: listBounties,
   })
   const ownedQuery = useQuery({
-    queryKey: BOUNTY_QUERY_KEYS[1],
-    queryFn: listOwnedBounties,
+    queryKey: [...BOUNTY_QUERY_KEYS[1], 'active'],
+    queryFn: () => listOwnedBounties(false),
+  })
+  const archivedOwnedQuery = useQuery({
+    queryKey: [...BOUNTY_QUERY_KEYS[1], 'archived'],
+    queryFn: () => listOwnedBounties(true),
   })
   const acceptedQuery = useQuery({
     queryKey: BOUNTY_QUERY_KEYS[2],
@@ -803,30 +812,67 @@ export function OpenSourceBounties({
               </TabsContent>
 
               <TabsContent value='owned' className='mt-3 sm:mt-4'>
-                {(ownedQuery.data?.length ?? 0) === 0 ? (
+                <div className='mb-4 flex flex-wrap items-center gap-2'>
+                  <Button
+                    variant={showArchivedOwned ? 'outline' : 'secondary'}
+                    size='sm'
+                    onClick={() => setShowArchivedOwned(false)}
+                  >
+                    {t('Active projects')}
+                  </Button>
+                  <Button
+                    variant={showArchivedOwned ? 'secondary' : 'outline'}
+                    size='sm'
+                    onClick={() => setShowArchivedOwned(true)}
+                  >
+                    {t('Archived projects')} (
+                    {archivedOwnedQuery.data?.length ?? 0})
+                  </Button>
+                  <span className='text-muted-foreground text-sm'>
+                    {showArchivedOwned
+                      ? t(
+                          'Archived projects are hidden from your active list and can be restored.'
+                        )
+                      : t(
+                          'Completed and closed projects stay here until you archive them.'
+                        )}
+                  </span>
+                </div>
+                {((showArchivedOwned
+                  ? archivedOwnedQuery.data?.length
+                  : ownedQuery.data?.length) ?? 0) === 0 ? (
                   <Empty className='min-h-72 border'>
                     <EmptyHeader>
                       <EmptyMedia variant='icon'>
                         <HugeiconsIcon icon={SourceCodeIcon} strokeWidth={2} />
                       </EmptyMedia>
                       <EmptyTitle>
-                        {t('You have no bounty projects')}
+                        {showArchivedOwned
+                          ? t('You have no archived bounty projects')
+                          : t('You have no active bounty projects')}
                       </EmptyTitle>
                       <EmptyDescription>
                         {t(
-                          'Create a draft, fund it from your balance, then publish it to the board.'
+                          showArchivedOwned
+                            ? 'Archived projects will appear here.'
+                            : 'Create a draft, fund it from your balance, then publish it to the board.'
                         )}
                       </EmptyDescription>
                     </EmptyHeader>
                     <EmptyContent>
-                      <Button onClick={openCreateDialog}>
-                        {t('Create bounty')}
-                      </Button>
+                      {!showArchivedOwned && (
+                        <Button onClick={openCreateDialog}>
+                          {t('Create bounty')}
+                        </Button>
+                      )}
                     </EmptyContent>
                   </Empty>
                 ) : (
                   <div className='grid gap-4'>
-                    {ownedQuery.data?.map((project) => (
+                    {(showArchivedOwned
+                      ? archivedOwnedQuery.data
+                      : ownedQuery.data
+                    )?.map((project) => (
                       <OwnerProjectCard
                         key={project.id}
                         project={project}
@@ -859,6 +905,20 @@ export function OpenSourceBounties({
                             () => closeBounty(project.id),
                             'Bounty closed and unused escrow refunded.',
                             true
+                          )
+                        }
+                        onArchive={() =>
+                          runAction(
+                            `archive-${project.id}`,
+                            () => archiveBounty(project.id),
+                            'Bounty archived.'
+                          )
+                        }
+                        onUnarchive={() =>
+                          runAction(
+                            `unarchive-${project.id}`,
+                            () => unarchiveBounty(project.id),
+                            'Bounty restored.'
                           )
                         }
                         onDelete={() =>
@@ -1394,6 +1454,8 @@ function OwnerProjectCard(props: {
   onPause: () => void
   onResume: () => void
   onClose: () => void
+  onArchive: () => void
+  onUnarchive: () => void
   onDelete: () => void
 }) {
   const { t } = useTranslation()
@@ -1541,9 +1603,32 @@ function OwnerProjectCard(props: {
             </>
           )}
           {(project.status === 'completed' || project.status === 'closed') && (
-            <Button variant='outline' onClick={props.onReview} disabled={busy}>
-              {t('View lifecycle')}
-            </Button>
+            <>
+              <Button
+                variant='outline'
+                onClick={props.onReview}
+                disabled={busy}
+              >
+                {t('View lifecycle')}
+              </Button>
+              {project.archived_at > 0 ? (
+                <Button
+                  variant='outline'
+                  onClick={props.onUnarchive}
+                  disabled={busy}
+                >
+                  {t('Restore from archive')}
+                </Button>
+              ) : (
+                <Button
+                  variant='outline'
+                  onClick={props.onArchive}
+                  disabled={busy}
+                >
+                  {t('Archive project')}
+                </Button>
+              )}
+            </>
           )}
         </div>
       </div>

@@ -325,6 +325,8 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/projects/:id/pause", controller.PauseOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/resume", controller.ResumeOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/close", middleware.CriticalRateLimit(), controller.CloseOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/archive", controller.ArchiveOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/unarchive", controller.UnarchiveOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/accept", controller.AcceptOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/submit", controller.SubmitOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/withdraw", controller.WithdrawOpenSourceBountyChallenge)

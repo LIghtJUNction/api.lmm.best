@@ -64,6 +64,8 @@ bounty	POST	/api/open-source-bounties/projects/:id/publish	go	unimplemented	keep
 bounty	POST	/api/open-source-bounties/projects/:id/pause	go	unimplemented	keep-go-owner	false	Go bounty pause route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/projects/:id/resume	go	unimplemented	keep-go-owner	false	Go bounty resume route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/projects/:id/close	go	unimplemented	keep-go-owner	false	Go bounty close-and-refund route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/archive	go	unimplemented	keep-go-owner	false	Go owner-only bounty archive route; Rust candidate absent and route is not production-mounted.
+bounty	POST	/api/open-source-bounties/projects/:id/unarchive	go	unimplemented	keep-go-owner	false	Go owner-only bounty archive restore route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/projects/:id/accept	go	unimplemented	keep-go-owner	false	Go bounty challenge acceptance route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/projects/:id/submit	go	unimplemented	keep-go-owner	false	Go bounty submission route; Rust candidate absent and route is not production-mounted.
 bounty	POST	/api/open-source-bounties/challenges/:challenge_id/withdraw	go	unimplemented	keep-go-owner	false	Go bounty challenge withdrawal route; Rust candidate absent and route is not production-mounted.
