@@ -396,7 +396,11 @@ async fn subscription_auth_boundary(
     if let Err(response) = result {
         return response;
     }
-    next.run(request).await
+    // Gin's UserAuth/AdminAuth middleware adds the current auth-version to
+    // every response after authentication, including extractor and handler
+    // failures. Apply it at the boundary so early returns cannot drift from
+    // the Go contract.
+    with_auth_version(next.run(request).await)
 }
 
 fn subscription_method_allowed(path: &str, method: &axum::http::Method) -> bool {
