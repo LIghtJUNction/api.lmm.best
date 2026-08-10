@@ -462,7 +462,7 @@ export function OverviewDashboard() {
       },
       {
         title: t('Send a request'),
-        description: t('Verify routing with Playground or your client'),
+        description: t('Get setup help for your first request'),
         to: '/playground',
         icon: TerminalSquare,
         completed: requestCount > 0,
