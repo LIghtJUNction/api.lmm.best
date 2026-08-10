@@ -15,7 +15,7 @@ use axum::{
     Json, Router,
     body::to_bytes,
     extract::{Query, Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -34,6 +34,7 @@ const DEFAULT_QUOTA_PER_UNIT: i64 = 500_000;
 const DEFAULT_CHECKIN_MIN_QUOTA: i64 = 1_000;
 const DEFAULT_CHECKIN_MAX_QUOTA: i64 = 10_000;
 const LOG_TYPE_SYSTEM: i64 = 4;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 #[async_trait]
 pub trait Clock: Send + Sync {
@@ -424,17 +425,17 @@ async fn checkin_status(
     };
     let (enabled, min, max) = match checkin_config(&state.pg).await {
         Ok(v) => v,
-        Err(_) => return fail("系统错误"),
+        Err(_) => return with_auth_version(fail("系统错误")),
     };
     if !enabled {
-        return fail("签到功能未启用");
+        return with_auth_version(fail("签到功能未启用"));
     }
     // Go's `DefaultQuery` only supplies the current month when the parameter
     // is absent; malformed or empty values are passed through verbatim.
     let requested = query
         .month
         .unwrap_or_else(|| state.calendar.month(state.clock.now()));
-    let rows = match sqlx::query("SELECT checkin_date, quota_awarded FROM checkins WHERE user_id=$1 AND checkin_date >= $2 AND checkin_date <= $3 ORDER BY checkin_date DESC").bind(actor.id).bind(format!("{requested}-01")).bind(format!("{requested}-31")).fetch_all(&state.pg).await { Ok(v)=>v, Err(_)=>return fail("系统错误") };
+    let rows = match sqlx::query("SELECT checkin_date, quota_awarded FROM checkins WHERE user_id=$1 AND checkin_date >= $2 AND checkin_date <= $3 ORDER BY checkin_date DESC").bind(actor.id).bind(format!("{requested}-01")).bind(format!("{requested}-31")).fetch_all(&state.pg).await { Ok(v)=>v, Err(_)=>return with_auth_version(fail("系统错误")) };
     let records: Vec<Value> = rows.iter().map(|r| json!({"checkin_date":r.get::<String,_>("checkin_date"),"quota_awarded":r.get::<i64,_>("quota_awarded")})).collect();
     let total: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(quota_awarded),0) FROM checkins WHERE user_id=$1")
@@ -456,9 +457,16 @@ async fn checkin_status(
     .fetch_one(&state.pg)
     .await
     .unwrap_or(false);
-    checkin_status_ok(
+    with_auth_version(checkin_status_ok(
         json!({"enabled":enabled,"min_quota":min,"max_quota":max,"stats":{"total_quota":total,"total_checkins":count,"checkin_count":records.len(),"checked_in_today":checked,"records":records}}),
-    )
+    ))
+}
+
+fn with_auth_version(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 async fn checkin(State(state): State<IdentityCheckinAffState>, headers: HeaderMap) -> Response {
