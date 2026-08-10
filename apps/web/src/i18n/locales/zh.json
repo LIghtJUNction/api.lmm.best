@@ -6150,6 +6150,8 @@
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放",
     "Resolved": "已解决",
-    "No resolved human-support requests.": "没有已解决的人工支持请求。"
+    "No resolved human-support requests.": "没有已解决的人工支持请求。",
+    "Unable to verify account access": "无法验证账户访问权限",
+    "Retry before using account-specific assistant tools.": "请重试后再使用需要账户权限的助手工具。"
   }
 }

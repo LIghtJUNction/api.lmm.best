@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, RotateCcw } from 'lucide-react'
+import { ArrowRight, CircleAlert, RotateCcw } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -41,8 +41,15 @@ import {
   sideDrawerContentClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Sheet,
   SheetContent,
@@ -50,12 +57,17 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
 
 import {
   getAssistantStatus,
   sendAssistantMessage,
   type AssistantStatus,
 } from './api'
+import {
+  getAssistantAccountAccessState,
+  type AssistantAccountAccessState,
+} from './assistant-access'
 import { AssistantCostTool } from './assistant-cost-tool'
 import type { AssistantPresetId } from './assistant-events'
 import { AssistantHandoffTool } from './assistant-handoff-tool'
@@ -137,6 +149,41 @@ function remainingCreditUSD(status: AssistantStatus | undefined): number {
   }
   return (
     credit.weekly_credit_usd * (credit.remaining_quota / credit.limit_quota)
+  )
+}
+
+function AssistantAccountStatusNotice(props: {
+  state: Extract<AssistantAccountAccessState, 'loading' | 'error'>
+  onRetry: () => void
+}) {
+  const { t } = useTranslation()
+  if (props.state === 'loading') {
+    return (
+      <Card size='sm' aria-label={t('Loading...')}>
+        <CardHeader>
+          <CardTitle className='sr-only'>{t('Loading...')}</CardTitle>
+          <Skeleton className='h-4 w-44' />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className='h-9 w-full' />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  return (
+    <Alert variant='destructive'>
+      <CircleAlert aria-hidden='true' />
+      <AlertTitle>{t('Unable to verify account access')}</AlertTitle>
+      <AlertDescription>
+        {t('Retry before using account-specific assistant tools.')}
+      </AlertDescription>
+      <AlertAction>
+        <Button variant='outline' size='sm' onClick={props.onRetry}>
+          {t('Retry')}
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }
 
@@ -263,6 +310,14 @@ export function AssistantPanel(props: {
     staleTime: 30_000,
     retry: false,
   })
+  const accountAccessState = getAssistantAccountAccessState(
+    statusQuery.data,
+    statusQuery.isError
+  )
+  const accountAccessConfirmed =
+    accountAccessState === 'granted' || accountAccessState === 'restricted'
+  const developerAccessGranted = accountAccessState === 'granted'
+  const accountToolActive = activeTool !== null && activeTool !== 'handoff'
 
   const creditLabel = useMemo(
     () =>
@@ -426,39 +481,37 @@ export function AssistantPanel(props: {
                     </MessageContent>
                   </Message>
                 ) : null}
-                {activeTool === 'key' ? (
+                {accountToolActive && !accountAccessConfirmed ? (
+                  <AssistantAccountStatusNotice
+                    state={accountAccessState === 'error' ? 'error' : 'loading'}
+                    onRetry={() => void statusQuery.refetch()}
+                  />
+                ) : null}
+                {activeTool === 'key' && accountAccessConfirmed ? (
                   <AssistantKeyTool
                     baseUrl={baseUrl}
                     defaultModel={statusQuery.data?.model ?? ''}
-                    developerAccessGranted={
-                      statusQuery.data?.developer_access_granted === true
-                    }
+                    developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
-                {activeTool === 'cost' ? (
+                {activeTool === 'cost' && accountAccessConfirmed ? (
                   <AssistantCostTool
                     defaultModel={statusQuery.data?.model ?? ''}
-                    developerAccessGranted={
-                      statusQuery.data?.developer_access_granted === true
-                    }
+                    developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
                 {activeTool === 'handoff' ? <AssistantHandoffTool /> : null}
-                {activeTool === 'plan' ? (
+                {activeTool === 'plan' && accountAccessConfirmed ? (
                   <AssistantPlanTool
-                    developerAccessGranted={
-                      statusQuery.data?.developer_access_granted === true
-                    }
+                    developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
-                {activeTool === 'setup' ? (
+                {activeTool === 'setup' && accountAccessConfirmed ? (
                   <AssistantSetupTool
                     rootUrl={baseUrl.replace(/\/v1$/, '')}
                     openAIBaseUrl={baseUrl}
                     defaultModel={statusQuery.data?.model ?? ''}
-                    developerAccessGranted={
-                      statusQuery.data?.developer_access_granted === true
-                    }
+                    developerAccessGranted={developerAccessGranted}
                     onCreateKey={() => setActiveTool('key')}
                   />
                 ) : null}

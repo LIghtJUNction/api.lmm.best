@@ -6150,6 +6150,8 @@
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
     "Resolved": "解決済み",
-    "No resolved human-support requests.": "解決済みの有人サポート依頼はありません。"
+    "No resolved human-support requests.": "解決済みの有人サポート依頼はありません。",
+    "Unable to verify account access": "アカウントのアクセス権を確認できません",
+    "Retry before using account-specific assistant tools.": "アカウント固有のアシスタントツールを使用する前に再試行してください。"
   }
 }
