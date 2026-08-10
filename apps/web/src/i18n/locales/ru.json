@@ -6010,6 +6010,14 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Choose a common question or ask anything about using LMM.": "Выберите частый вопрос или спросите что угодно об использовании LMM.",
+    "The AI assistant could not answer right now. Try again or contact support.": "ИИ-помощник сейчас не может ответить. Повторите попытку или обратитесь в поддержку.",
+    "Assistant is thinking...": "Помощник думает…",
+    "Clear conversation": "Очистить диалог",
+    "Ask about plans, setup, keys, or costs...": "Спросите о тарифах, настройке, ключах или стоимости…",
+    "Weekly included credit remaining: {{amount}}": "Остаток еженедельного включённого кредита: {{amount}}",
+    "Weekly included AI credit applies first.": "Сначала используется еженедельный включённый кредит ИИ.",
+    "AI answers may be inaccurate. Never send passwords or API keys.": "Ответы ИИ могут быть неточными. Не отправляйте пароли или API-ключи."
   }
 }

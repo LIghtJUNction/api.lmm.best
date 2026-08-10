@@ -6010,6 +6010,14 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Choose a common question or ask anything about using LMM.": "Choisissez une question fréquente ou posez toute question sur l’utilisation de LMM.",
+    "The AI assistant could not answer right now. Try again or contact support.": "L’assistant IA ne peut pas répondre pour le moment. Réessayez ou contactez l’assistance.",
+    "Assistant is thinking...": "L’assistant réfléchit…",
+    "Clear conversation": "Effacer la conversation",
+    "Ask about plans, setup, keys, or costs...": "Posez une question sur les offres, la configuration, les clés ou les coûts…",
+    "Weekly included credit remaining: {{amount}}": "Crédit hebdomadaire inclus restant : {{amount}}",
+    "Weekly included AI credit applies first.": "Le crédit IA hebdomadaire inclus est utilisé en premier.",
+    "AI answers may be inaccurate. Never send passwords or API keys.": "Les réponses de l’IA peuvent être inexactes. N’envoyez jamais de mots de passe ni de clés API."
   }
 }

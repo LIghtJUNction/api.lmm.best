@@ -6010,6 +6010,14 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Choose a common question or ask anything about using LMM.": "Chọn một câu hỏi thường gặp hoặc hỏi bất kỳ điều gì về cách sử dụng LMM.",
+    "The AI assistant could not answer right now. Try again or contact support.": "Trợ lý AI hiện không thể trả lời. Hãy thử lại hoặc liên hệ hỗ trợ.",
+    "Assistant is thinking...": "Trợ lý đang suy nghĩ…",
+    "Clear conversation": "Xóa cuộc trò chuyện",
+    "Ask about plans, setup, keys, or costs...": "Hỏi về gói, thiết lập, khóa hoặc chi phí…",
+    "Weekly included credit remaining: {{amount}}": "Tín dụng tặng kèm hàng tuần còn lại: {{amount}}",
+    "Weekly included AI credit applies first.": "Tín dụng AI tặng kèm hàng tuần sẽ được sử dụng trước.",
+    "AI answers may be inaccurate. Never send passwords or API keys.": "Câu trả lời của AI có thể không chính xác. Không gửi mật khẩu hoặc khóa API."
   }
 }
