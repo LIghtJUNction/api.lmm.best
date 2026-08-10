@@ -49,6 +49,7 @@ import {
   submitDeveloperAccessRequest,
   type DeveloperAccessRequest,
 } from './api'
+import { claimPendingReviewAssistantPrompt } from './pending-review-assistant'
 import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
@@ -85,6 +86,14 @@ export function GettingStarted() {
       cancelled = true
     }
   }, [onboarding.stage])
+  const pendingRequestId =
+    accessRequest?.status === 'pending' ? accessRequest.id : 0
+  const userId = user?.id ?? 0
+  useEffect(() => {
+    if (!requestLoaded || onboarding.stage !== 'activate') return
+    if (!claimPendingReviewAssistantPrompt(userId, pendingRequestId)) return
+    requestAssistantOpen('onboarding')
+  }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
   const activationMessage = topupLoading
     ? t('Checking payment availability...')
     : topupError
