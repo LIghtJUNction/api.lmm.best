@@ -16,12 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  Alert02Icon,
+  CheckmarkCircle02Icon,
+  MailSend01Icon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, LoaderCircle, Send } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,6 +53,8 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 
 import {
@@ -83,10 +96,14 @@ export function AssistantHandoffTool() {
 
   if (current?.status === 'pending') {
     return (
-      <Card size='sm' className='border-success/40 bg-success/5'>
+      <Card size='sm'>
         <CardHeader>
           <CardTitle className='flex items-center gap-2'>
-            <CheckCircle2 className='text-success size-4' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={CheckmarkCircle02Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
             {t('Administrator follow-up requested')}
           </CardTitle>
           <CardDescription>
@@ -114,15 +131,57 @@ export function AssistantHandoffTool() {
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>
-          {current?.status === 'resolved' ? (
-            <div className='bg-muted/50 rounded-lg border p-3 text-xs'>
-              <p className='font-medium'>{t('Previous request resolved')}</p>
-              {current.admin_note ? (
-                <p className='text-muted-foreground mt-1 whitespace-pre-wrap'>
-                  {current.admin_note}
-                </p>
-              ) : null}
+          {handoffQuery.isLoading ? (
+            <div className='grid gap-2' aria-label={t('Loading...')}>
+              <Skeleton className='h-4 w-40' />
+              <Skeleton className='h-12 w-full' />
             </div>
+          ) : null}
+          {handoffQuery.isError ? (
+            <Alert variant='destructive'>
+              <HugeiconsIcon
+                icon={Alert02Icon}
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+              <AlertTitle>
+                {t('Unable to check support request status')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'You can still review and send your message; the server prevents duplicate pending requests.'
+                )}
+              </AlertDescription>
+              <AlertAction>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={() => void handoffQuery.refetch()}
+                  disabled={handoffQuery.isFetching}
+                >
+                  {handoffQuery.isFetching ? (
+                    <Spinner data-icon='inline-start' />
+                  ) : null}
+                  {t('Retry')}
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : null}
+          {current?.status === 'resolved' ? (
+            <Alert>
+              <HugeiconsIcon
+                icon={CheckmarkCircle02Icon}
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+              <AlertTitle>{t('Previous request resolved')}</AlertTitle>
+              {current.admin_note ? (
+                <AlertDescription className='whitespace-pre-wrap'>
+                  {current.admin_note}
+                </AlertDescription>
+              ) : null}
+            </Alert>
           ) : null}
           <div className='grid gap-1.5'>
             <Label htmlFor='assistant-handoff-message'>
@@ -142,7 +201,12 @@ export function AssistantHandoffTool() {
             onClick={() => setConfirmOpen(true)}
             disabled={!message.trim() || handoffQuery.isLoading}
           >
-            <Send data-icon='inline-start' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={MailSend01Icon}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
             {t('Review message')}
           </Button>
         </CardContent>
@@ -166,9 +230,7 @@ export function AssistantHandoffTool() {
               onClick={() => void submit()}
               disabled={submitting}
             >
-              {submitting ? (
-                <LoaderCircle className='animate-spin' aria-hidden='true' />
-              ) : null}
+              {submitting ? <Spinner data-icon='inline-start' /> : null}
               {t('Confirm and send')}
             </AlertDialogAction>
           </AlertDialogFooter>
