@@ -73,6 +73,8 @@ func TestPersonalAccessIPRequiresL2AndEnforcesOnePerUser(t *testing.T) {
 	assert.Equal(t, "1.1.1.1", record.IP)
 	assert.False(t, mustPersonalAccessIPAllowedForUser(t, highUser.Id, "8.8.8.8"))
 	assert.True(t, mustPersonalAccessIPAllowedForUser(t, highUser.Id, "1.1.1.1"))
+	// A stale record must not regain access when the account is below L2.
+	require.NoError(t, db.Create(&PersonalAccessIP{UserId: lowUser.Id, IP: "1.1.1.1"}).Error)
 	assert.False(t, mustPersonalAccessIPAllowedForUser(t, lowUser.Id, "1.1.1.1"))
 
 	otherLevel := PersonalAccessIPMinTrustLevel

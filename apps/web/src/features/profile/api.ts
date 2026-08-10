@@ -185,7 +185,7 @@ export async function revokeOtherLoginSessions(): Promise<ApiResponse> {
 // ============================================================================
 
 export interface CustomOAuthBinding {
-  provider_id: string
+  provider_id: number | string
   provider_name: string
   external_id?: string
 }
