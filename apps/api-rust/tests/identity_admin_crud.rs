@@ -270,6 +270,36 @@ async fn identity_admin_crud_rejects_invalid_update_input_without_touching_postg
 }
 
 #[tokio::test]
+async fn identity_admin_authenticated_handler_errors_include_auth_version() {
+    let response = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("authorization", "Bearer dashboard-token")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"username":"target"}).to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["auth-version"],
+        "864b7076dbcd0a3c01b5520316720ebf"
+    );
+
+    let unauthenticated = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"username":"target"}).to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert!(!unauthenticated.headers().contains_key("auth-version"));
+}
+
+#[tokio::test]
 async fn identity_admin_crud_retains_legacy_method_contract() {
     let response = app(100)
         .oneshot(
