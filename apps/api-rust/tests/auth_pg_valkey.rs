@@ -7,6 +7,7 @@ use lmm_api_rs::auth::{
     AuthConfig, AuthErrorKind, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth,
     UserAuthPolicyError, auth_router, enforce_user_auth,
 };
+use lmm_api_rs::migration_routes::missing_identity_catalog::{IdentityCatalogState, token_router};
 use lmm_api_rs::{ClientIpKey, RequestContext};
 use secrecy::SecretString;
 use serde_json::Value;
@@ -44,10 +45,17 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
         .await
         .expect("isolated Valkey reset");
 
-    let auth = PgValkeyDashboardAuth::new(pool.clone(), valkey.clone(), integration_config())
-        .expect("auth adapter");
-    let router =
-        auth_router(AuthHttpState::new(Arc::new(auth), false).with_password_login_enabled(true));
+    let auth: Arc<dyn DashboardAuth> = Arc::new(
+        PgValkeyDashboardAuth::new(pool.clone(), valkey.clone(), integration_config())
+            .expect("auth adapter"),
+    );
+    let router = auth_router(
+        AuthHttpState::new(Arc::clone(&auth), false).with_password_login_enabled(true),
+    )
+    .merge(token_router(IdentityCatalogState::new(
+        pool.clone(),
+        Arc::clone(&auth),
+    )));
 
     for (method, uri) in [("POST", "/api/user/login/2fa")] {
         let response = router
