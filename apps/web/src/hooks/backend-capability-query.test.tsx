@@ -226,6 +226,54 @@ describe('backend capability query safety', () => {
     queryClient.clear()
   })
 
+  test('does not query bounty notifications before developer access activation', async () => {
+    useAuthStore.getState().auth.setUser({
+      id: 8,
+      username: 'pending-user',
+      role: 1,
+      developer_access_granted: false,
+    })
+    const gets: string[] = []
+    api.get = (async (url) => {
+      gets.push(url)
+      if (url === '/api/status') {
+        return {
+          data: {
+            success: true,
+            data: { version: 'go', ...cachedNewBackendStatus() },
+          },
+        }
+      }
+      if (url === '/api/notice') return { data: { success: true, data: '' } }
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <I18nextProvider i18n={i18n}>
+            <NotificationsProbe />
+          </I18nextProvider>
+        </QueryClientProvider>
+      )
+      await flushQueries()
+    })
+
+    assert.equal(
+      gets.includes('/api/open-source-bounties/notifications'),
+      false
+    )
+
+    await act(async () => root.unmount())
+    queryClient.clear()
+  })
+
   test('does not issue a public bounty request for signed-in users from cached capabilities', async () => {
     useAuthStore.getState().auth.setUser({
       id: 9,

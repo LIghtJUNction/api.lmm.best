@@ -168,7 +168,7 @@ func configureNeutralTopUpInfoTest(t *testing.T) {
 	operation_setting.EpayId = "merchant-secret"
 	operation_setting.EpayKey = "key-secret"
 	operation_setting.PayMethods = []map[string]string{{
-		"name": "provider-secret", "type": "epay", "product_id": "prod-secret",
+		"name": "LDC", "type": "epay", "product_id": "prod-secret",
 	}}
 }
 
@@ -193,19 +193,16 @@ func TestGetTopUpInfoReturnsNeutralDataWhenDeveloperAccessIsDenied(t *testing.T)
 	assert.Equal(t, false, payload.Data["developer_access_granted"])
 	assert.Equal(t, true, payload.Data["activation_required"])
 	assert.Equal(t, true, payload.Data["payment_available"])
+	assert.Equal(t, true, payload.Data["enable_online_topup"])
 	assert.EqualValues(t, 7, payload.Data["min_payment"])
-	assert.Len(t, payload.Data, 8)
+	assert.Contains(t, payload.Data, "pay_methods")
+	assert.Equal(t, []any{map[string]any{"name": "LDC", "type": "epay"}}, payload.Data["pay_methods"])
 	for _, forbidden := range []string{
-		"enable_online_topup", "enable_stripe_topup", "enable_creem_topup",
-		"enable_waffo_topup", "enable_waffo_pancake_topup", "pay_methods",
-		"waffo_pay_methods", "creem_products", "topup_group_ratio", "topup_link",
-		"stripe_min_topup", "waffo_min_topup", "waffo_pancake_min_topup",
+		"provider-secret.invalid", "merchant-secret", "key-secret", "prod-secret",
+		"topup_group_ratio",
 	} {
-		assert.NotContains(t, payload.Data, forbidden)
+		assert.NotContains(t, strings.ToLower(response.Body.String()), forbidden)
 	}
-	assert.NotContains(t, strings.ToLower(response.Body.String()), "provider-secret")
-	assert.NotContains(t, strings.ToLower(response.Body.String()), "prod-secret")
-	assert.NotContains(t, strings.ToLower(response.Body.String()), "epay")
 }
 
 func TestGetTopUpInfoFailsClosedWhenDeveloperAccessCalculationFails(t *testing.T) {

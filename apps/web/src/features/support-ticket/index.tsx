@@ -415,6 +415,11 @@ export function SupportTicket({
                           <FieldDescription>
                             {t("We'll use this address to reply.")}
                           </FieldDescription>
+                          <FieldDescription>
+                            {t('Support requests are sent to {{email}}.', {
+                              email: SUPPORT_EMAIL,
+                            })}
+                          </FieldDescription>
                           <FieldError>
                             {errors.contactEmail?.message
                               ? t(errors.contactEmail.message)
