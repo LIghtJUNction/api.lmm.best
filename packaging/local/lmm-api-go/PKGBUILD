@@ -60,6 +60,10 @@ package() {
   find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type f -exec chmod 0644 {} +
 
   install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx"
+  install -Dm0644 "${srcdir}/geoip2-country-update.service" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/geoip2-country-update.service"
+  install -Dm0644 "${srcdir}/geoip2-country-update.timer" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/geoip2-country-update.timer"
   install -Dm0644 "${srcdir}/nginx-http-map.conf" \
     "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/http-map.conf"
   install -Dm0644 "${srcdir}/nginx-locations.conf" \
