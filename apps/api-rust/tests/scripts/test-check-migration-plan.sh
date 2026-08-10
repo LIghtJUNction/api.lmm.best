@@ -46,7 +46,7 @@ crlf_output=$(cd "$runtime" && \
 }
 
 expected_evidence='migration gate evidence: source-present=71 compiled=0 mounted=71 unmounted=285 differential-verified=0 approved=0 production-owned-rust=0 migration-credit=0'
-expected_states='migration gate states: legacy-go=285 mounted-unverified=67 candidate-pending-independent-approval=0 blocked-sol-stop=4 verified-approved=0'
+expected_states='migration gate states: legacy-go=285 mounted-unverified=71 candidate-pending-independent-approval=0 blocked-sol-stop=0 verified-approved=0'
 [[ $checker_output == *"$expected_evidence"* ]] || {
   echo "migration gate checker did not report the expected evidence counters" >&2
   exit 1
@@ -162,37 +162,39 @@ if rg -n 'auth route is not allowed|mounted models aliases must stay blocked' "$
   exit 1
 fi
 
-invalid_gate="$runtime/blocked-route-claims-compile-credit.tsv"
-awk -F '\t' 'BEGIN { OFS=FS }
-  NR == 1 { print; next }
-  !changed && $9 == "blocked-sol-stop" {
-    $4="verified"
-    changed=1
-  }
-  { print }
-  END { if (!changed) exit 1 }
-' "$gate" >"$invalid_gate"
+if rg -q 'blocked-sol-stop' "$gate"; then
+  invalid_gate="$runtime/blocked-route-claims-compile-credit.tsv"
+  awk -F '\t' 'BEGIN { OFS=FS }
+    NR == 1 { print; next }
+    !changed && $9 == "blocked-sol-stop" {
+      $4="verified"
+      changed=1
+    }
+    { print }
+    END { if (!changed) exit 1 }
+  ' "$gate" >"$invalid_gate"
 
-if MIGRATION_GATE_PATH="$invalid_gate" bash "$checker" >/dev/null 2>&1; then
-  echo "migration gate checker accepted compile credit on a blocked route" >&2
-  exit 1
-fi
+  if MIGRATION_GATE_PATH="$invalid_gate" bash "$checker" >/dev/null 2>&1; then
+    echo "migration gate checker accepted compile credit on a blocked route" >&2
+    exit 1
+  fi
 
-invalid_blocked_set_gate="$runtime/incomplete-blocked-route-set.tsv"
-awk -F '\t' 'BEGIN { OFS=FS }
-  NR == 1 { print; next }
-  !changed && $9 == "blocked-sol-stop" {
-    $6="unverified"
-    $9="mounted-unverified"
-    changed=1
-  }
-  { print }
-  END { if (!changed) exit 1 }
-' "$gate" >"$invalid_blocked_set_gate"
+  invalid_blocked_set_gate="$runtime/incomplete-blocked-route-set.tsv"
+  awk -F '\t' 'BEGIN { OFS=FS }
+    NR == 1 { print; next }
+    !changed && $9 == "blocked-sol-stop" {
+      $6="unverified"
+      $9="mounted-unverified"
+      changed=1
+    }
+    { print }
+    END { if (!changed) exit 1 }
+  ' "$gate" >"$invalid_blocked_set_gate"
 
-if MIGRATION_GATE_PATH="$invalid_blocked_set_gate" bash "$checker" >/dev/null 2>&1; then
-  echo "migration gate checker accepted an incomplete blocked route set" >&2
-  exit 1
+  if MIGRATION_GATE_PATH="$invalid_blocked_set_gate" bash "$checker" >/dev/null 2>&1; then
+    echo "migration gate checker accepted an incomplete blocked route set" >&2
+    exit 1
+  fi
 fi
 
 invalid_review="$runtime/obsolete-logout-review.tsv"

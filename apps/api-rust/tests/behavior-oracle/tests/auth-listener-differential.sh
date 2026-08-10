@@ -259,7 +259,8 @@ assert_distinct_ports "PostgreSQL:$pg_port" "Go_HTTP:$go_port" "Rust_HTTP:$rust_
 for item in "PostgreSQL:$pg_port" "Go_HTTP:$go_port" "Rust_HTTP:$rust_port" "Go_Valkey:$go_valkey_port" "Rust_Valkey:$rust_valkey_port"; do preflight_port "${item%%:*}" "${item##*:}"; done
 
 assert_frozen_inputs() {
-  [[ -d $legacy_root && ${legacy_root##*/} == "$legacy_revision" && -f $legacy_root/SHA256SUMS && -f $legacy_root/GIT-LS-FILES-S.tsv ]] || { echo 'frozen Go archive or manifest missing' >&2; return 1; }
+  [[ -d $legacy_root && -f $legacy_root/.lmm-go-oracle-revision && -f $legacy_root/SHA256SUMS && -f $legacy_root/GIT-LS-FILES-S.tsv ]] || { echo 'frozen Go archive or manifest missing' >&2; return 1; }
+  [[ $(tr -d '\r\n' <"$legacy_root/.lmm-go-oracle-revision") == "$legacy_revision" ]] || { echo 'frozen Go oracle revision marker does not match the required revision' >&2; return 1; }
   (cd "$legacy_root" && sha256sum --check --status SHA256SUMS) || { echo 'frozen Go content hash verification failed' >&2; return 1; }
   frozen_go_manifest_sha256=$(sha256sum "$legacy_root/SHA256SUMS" "$legacy_root/GIT-LS-FILES-S.tsv" | sha256sum | awk '{print $1}')
   rust_build_input_sha256=$(rust_build_input_manifest_sha256)
