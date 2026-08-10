@@ -49,13 +49,12 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
         PgValkeyDashboardAuth::new(pool.clone(), valkey.clone(), integration_config())
             .expect("auth adapter"),
     );
-    let router = auth_router(
-        AuthHttpState::new(Arc::clone(&auth), false).with_password_login_enabled(true),
-    )
-    .merge(token_router(IdentityCatalogState::new(
-        pool.clone(),
-        Arc::clone(&auth),
-    )));
+    let router =
+        auth_router(AuthHttpState::new(Arc::clone(&auth), false).with_password_login_enabled(true))
+            .merge(token_router(IdentityCatalogState::new(
+                pool.clone(),
+                Arc::clone(&auth),
+            )));
 
     for (method, uri) in [("POST", "/api/user/login/2fa")] {
         let response = router

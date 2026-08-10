@@ -63,17 +63,16 @@ async fn profile_auth_dependency_failures_keep_go_internal_auth_status_and_code(
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
         .expect("valid lazy test URL");
     let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid test URL");
-    let response = router(
-        ProfileState::new(pool, valkey).with_identity_resolver(Arc::new(InternalPrincipal)),
-    )
-    .oneshot(
-        Request::get("/api/user/aff")
-            .header("accept-language", "zh-CN")
-            .body(Body::empty())
-            .expect("request"),
-    )
-    .await
-    .expect("response");
+    let response =
+        router(ProfileState::new(pool, valkey).with_identity_resolver(Arc::new(InternalPrincipal)))
+            .oneshot(
+                Request::get("/api/user/aff")
+                    .header("accept-language", "zh-CN")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
 
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)

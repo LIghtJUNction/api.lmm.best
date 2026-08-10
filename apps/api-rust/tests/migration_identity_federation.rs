@@ -6,9 +6,9 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::identity_federation::{
-    FederatedLogin, FederatedUser, FederationError, FederationIdentity, FederationMutationPublisher,
-    FederationPrincipal, FederationProviderError, FederationProviders, FederationState,
-    OAuthFlowContext, router, verify_telegram_authorization,
+    FederatedLogin, FederatedUser, FederationError, FederationIdentity,
+    FederationMutationPublisher, FederationPrincipal, FederationProviderError, FederationProviders,
+    FederationState, OAuthFlowContext, router, verify_telegram_authorization,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

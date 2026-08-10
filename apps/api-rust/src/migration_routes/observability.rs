@@ -8,15 +8,15 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     extract::{RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
 };
 use secrecy::SecretString;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
@@ -1801,7 +1801,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::Request,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2017,14 +2017,18 @@ mod tests {
     #[tokio::test]
     async fn unavailable_runtime_adapters_fail_closed_without_success_payloads() {
         let query = BTreeMap::new();
-        assert!(UnavailableObservabilityMetrics
-            .query(ObservabilityOperation::PerfMetrics, &query)
-            .await
-            .is_err());
-        assert!(UnavailableObservabilityMaintenance
-            .execute(ObservabilityOperation::ForceGc, &query)
-            .await
-            .is_err());
+        assert!(
+            UnavailableObservabilityMetrics
+                .query(ObservabilityOperation::PerfMetrics, &query)
+                .await
+                .is_err()
+        );
+        assert!(
+            UnavailableObservabilityMaintenance
+                .execute(ObservabilityOperation::ForceGc, &query)
+                .await
+                .is_err()
+        );
 
         let store = PgObservabilityStore::new(
             PgPool::connect_lazy("postgres://unused:unused@localhost/unused").unwrap(),
