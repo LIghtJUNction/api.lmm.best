@@ -625,7 +625,14 @@ func EnrichUsersTrustLevels(users []*User) error {
 		} else {
 			aggregate := aggregates[user.Id]
 			anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-			info = EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, now)
+			info = EvaluateTrustLevelWithActivation(
+				user.Role,
+				user.TrustLevelOverride,
+				aggregate.PaidAmount,
+				aggregate.ActivationComplete || user.ConsoleActivatedAt > 0,
+				anchor,
+				now,
+			)
 		}
 		user.TrustLevelInfo = &info
 	}

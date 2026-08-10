@@ -8,7 +8,7 @@ use axum::{
 use lmm_api_rs::migration_routes::identity_security::{
     IdentitySecurityState, MemorySecurityProvider, PgValkeySecurityProvider, SecurityActor,
     SecurityAuthorizer, SecurityCall, SecurityError, SecurityOperation, SecurityProvider,
-    registration_router, router,
+    passkey_read_router, registration_router, router, sessions_read_router,
 };
 use serde_json::json;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -83,6 +83,30 @@ async fn registration_router_exposes_only_the_completed_anonymous_registration_s
             "message": ""
         })
     );
+}
+
+#[tokio::test]
+async fn read_only_security_mounts_keep_the_auth_boundary() {
+    for (app, path) in [
+        (
+            sessions_read_router(IdentitySecurityState::with_rejecting_authorizer(Arc::new(
+                MemorySecurityProvider::default(),
+            ))),
+            "/api/user/sessions",
+        ),
+        (
+            passkey_read_router(IdentitySecurityState::with_rejecting_authorizer(Arc::new(
+                MemorySecurityProvider::default(),
+            ))),
+            "/api/user/passkey",
+        ),
+    ] {
+        let response = app
+            .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
 
 #[tokio::test]

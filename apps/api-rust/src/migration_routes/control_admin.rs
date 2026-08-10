@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 const ROOT_ROLE: i64 = 100;
 const ADMIN_ROLE: i64 = 10;
+const CUSTOM_OAUTH_COLLECTION_PATH: &str = "/api/custom-oauth-provider/";
 const STALE_INSTANCE_AFTER_SECONDS: i64 = 90;
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
 const DISCOVERY_MAX_RESPONSE_BYTES: usize = 1 << 20;
@@ -597,7 +598,7 @@ impl ControlAdminState {
 /// Routes migrated from `/api/custom-oauth-provider`, `/api/system-task`,
 /// `/api/system-info`, and the administrator half of `/api/task`.
 pub fn control_admin_router(state: ControlAdminState) -> Router {
-    Router::new()
+    control_admin_read_routes()
         .route(
             "/api/custom-oauth-provider/",
             get(list_oauth).post(create_oauth),
@@ -614,10 +615,6 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
             "/api/system-task/log-cleanup",
             post(create_log_cleanup_task),
         )
-        .route("/api/system-task/list", get(list_system_tasks))
-        .route("/api/system-task/current", get(current_system_task))
-        .route("/api/system-task/{task_id}", get(get_system_task))
-        .route("/api/system-info/instances", get(list_instances))
         .route(
             "/api/system-info/stale-instances",
             delete(delete_stale_instances),
@@ -631,6 +628,14 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
         .with_state(state)
 }
 
+fn control_admin_read_routes() -> Router<ControlAdminState> {
+    Router::new()
+        .route("/api/system-task/list", get(list_system_tasks))
+        .route("/api/system-task/current", get(current_system_task))
+        .route("/api/system-task/{task_id}", get(get_system_task))
+        .route("/api/system-info/instances", get(list_instances))
+}
+
 /// Mounts only the read-only control-admin views for the normal listener.
 ///
 /// The broader control-admin router also contains OAuth discovery, task
@@ -638,12 +643,8 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
 /// makes the production candidate's PostgreSQL read boundary explicit and
 /// prevents an accidental write or outbound-discovery mount.
 pub fn control_admin_read_router(state: ControlAdminState) -> Router {
-    Router::new()
-        .route("/api/system-task/list", get(list_system_tasks))
-        .route("/api/system-task/current", get(current_system_task))
-        .route("/api/system-task/{task_id}", get(get_system_task))
-        .route("/api/custom-oauth-provider/", get(list_oauth))
-        .route("/api/system-info/instances", get(list_instances))
+    control_admin_read_routes()
+        .route(CUSTOM_OAUTH_COLLECTION_PATH, get(list_oauth))
         .with_state(state)
 }
 

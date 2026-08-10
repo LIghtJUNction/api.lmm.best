@@ -399,6 +399,7 @@ fn test_namespace(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
+#[cfg(test)]
 fn validate_test_valkey_url(raw: &str) -> Result<(), ConfigError> {
     validate_test_valkey_url_with_port(raw, 6380)
 }
@@ -878,7 +879,7 @@ mod tests {
                 ("TurnstileSiteKey".to_owned(), "site-key".to_owned()),
             ]))
             .expect("matching configuration is accepted");
-        assert_eq!(public.enabled, true);
+        assert!(public.enabled);
         assert_eq!(public.site_key, "site-key");
 
         let disabled = super::turnstile_from_values(false, None)
