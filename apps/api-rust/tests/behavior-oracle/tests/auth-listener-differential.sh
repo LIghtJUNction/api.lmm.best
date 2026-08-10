@@ -15,7 +15,7 @@ curl_max_time=15
 listener_wait_attempts=${LMM_AUTH_LISTENER_WAIT_ATTEMPTS:-1200}
 approval_mode=${LMM_AUTH_LISTENER_APPROVAL:-0}
 probe_only=${LMM_AUTH_LISTENER_PROBE_ONLY:-0}
-expected_scenarios=33
+expected_scenarios=35
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -304,7 +304,7 @@ rust_valkey_config="$runtime/rust-valkey.conf"
 
 normalize_json() {
   jq -S '
-    del(.data.access_token)
+    if (.data? | type) == "object" then del(.data.access_token) else . end
     | if .data.access_expires_at? then .data.access_expires_at = "<EPOCH>" else . end
     | if .data.session? then .data.session.sid = "<SID>" else . end
     | if .data.session? then .data.session.created_at = "<EPOCH>" else . end
@@ -616,6 +616,28 @@ psql -h 127.0.0.1 -p "$pg_port" -d auth_go -v ON_ERROR_STOP=1 \
 psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 \
   -c "INSERT INTO users (id, username, password, display_name, role, status, email, \"group\", setting, auth_version, quota) VALUES (1, 'root', '$root_hash', 'root', 100, 1, '', 'default', '{}', 1, 100000000)" >/dev/null
 
+# Seed one deterministic GroupRatio key in both disposable databases.  The
+# legacy handler enumerates map keys, so a single key avoids Go map iteration
+# order becoming a false differential while still exercising the persisted
+# option read and administrator auth boundary.
+psql -h 127.0.0.1 -p "$pg_port" -d auth_go -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO options (key, value) VALUES ('GroupRatio', '{\"parity\":1}') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO options (key, value) VALUES ('GroupRatio', '{\"parity\":1}') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
+
+# Go loads the process-wide ratio cache during startup.  Restart only the
+# disposable Go listener after the fixture option is seeded so both listeners
+# observe the same authoritative value; no shared service is touched.
+stop_owned_process go_pid
+preflight_port Go_HTTP "$go_port"
+SQL_DSN="postgresql://127.0.0.1:$pg_port/auth_go?sslmode=disable" PORT="$go_port" \
+  REDIS_CONN_STRING="redis://:$go_valkey_password@127.0.0.1:$go_valkey_port" SESSION_SECRET='AuthListener-2026!FixedSyntheticSecret' \
+  GLOBAL_API_RATE_LIMIT_ENABLE=true GLOBAL_API_RATE_LIMIT=360 GLOBAL_API_RATE_LIMIT_DURATION=1 \
+  SESSION_COOKIE_SECURE=true SESSION_COOKIE_TRUSTED_URL=https://trusted.example \
+  PASSWORD_LOGIN_ENABLED=true GIN_MODE=release \
+  "$runtime/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"
+wait_for_listener "$go_port" /api/status go_pid
+
 preflight_port Rust_HTTP "$rust_port"
 DATABASE_URL="postgresql://lmm_auth_runtime@127.0.0.1:$pg_port/auth_rust" VALKEY_URL="redis://:$rust_valkey_password@127.0.0.1:$rust_valkey_port" \
   LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=blue LMM_SCHEMA_CONTRACT=1 SESSION_SECRET='AuthListener-2026!FixedSyntheticSecret' \
@@ -634,6 +656,8 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
   grep -qx 200 "$prefix.failure.status"
   capture_listener_response "$prefix.anonymous-self" "$base/api/user/self"
   grep -qx 401 "$prefix.anonymous-self.status"
+  capture_listener_response "$prefix.anonymous-group" "$base/api/group/"
+  grep -qx 401 "$prefix.anonymous-group.status"
   capture_listener_response "$prefix.anonymous-refresh" -X POST -H 'origin: https://trusted.example' "$base/api/user/auth/refresh"
   grep -qx 401 "$prefix.anonymous-refresh.status"
   capture_listener_response "$prefix.anonymous-logout" -X POST -H 'origin: https://trusted.example' "$base/api/user/auth/logout"
@@ -645,7 +669,7 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
     grep -qx 404 "$prefix.hidden-login-2fa.status"
   fi
 done
-for name in input failure anonymous-self anonymous-refresh anonymous-logout; do
+for name in input failure anonymous-self anonymous-group anonymous-refresh anonymous-logout; do
   assert_listener_response_match "$name"
 done
 
@@ -664,6 +688,11 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
     capture_listener_response "$prefix.self" -H "authorization: Bearer $token" "$base/api/user/self"
     grep -qx 200 "$prefix.self.status"
     jq -e '.success == true and .data.username == "root"' "$prefix.self.json" >/dev/null
+    if [[ $schedule == a-first ]]; then
+      capture_listener_response "$prefix.group" -H "authorization: Bearer $token" "$base/api/group/"
+      grep -qx 200 "$prefix.group.status"
+      jq -e '.success == true and (.data | type == "array")' "$prefix.group.json" >/dev/null
+    fi
     capture_listener_response "$prefix.origin-missing" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" "$base/api/user/auth/refresh"
     capture_listener_response "$prefix.origin-evil" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" -H 'origin: https://evil.example' "$base/api/user/auth/refresh"
     for origin_case in missing evil; do
@@ -731,6 +760,7 @@ for schedule in a-first b-first; do
     assert_listener_response_match "$schedule.$name"
   done
 done
+assert_listener_response_match a-first.group
 
 # Expire the just-rotated old token in the real database, then prove a replay
 # revokes the family over each TCP listener.  This avoids a wall-clock sleep

@@ -500,6 +500,34 @@ impl RatioConfigState {
     }
 }
 
+/// Minimal state for the administrator-only group catalogue endpoint.
+///
+/// The legacy handler enumerates the keys of the process-wide `GroupRatio`
+/// map.  Reading that option directly keeps this normal-listener mount narrow:
+/// it does not expose the broader pricing or model-control candidate surface.
+#[derive(Clone)]
+pub struct GroupState {
+    pg: PgPool,
+    authorizer: Arc<dyn MissingControlAuthorizer>,
+}
+
+impl GroupState {
+    #[must_use]
+    pub fn new(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Self {
+        Self {
+            pg,
+            authorizer: Arc::new(DashboardMissingControlAuthorizer::new(auth)),
+        }
+    }
+}
+
+/// Mounts only `GET /api/group/` for the normal listener.
+pub fn group_router(state: GroupState) -> Router {
+    Router::new()
+        .route("/api/group/", get(groups_direct))
+        .with_state(state)
+}
+
 /// Mounts only `GET /api/ratio_config` for the normal listener.
 pub fn ratio_config_router(state: RatioConfigState) -> Router {
     Router::new()
@@ -541,6 +569,36 @@ async fn groups(State(state): State<MissingControlPublicState>, headers: HeaderM
         return public_user_auth_error(&headers, UserAuthPolicyError::InsufficientPrivilege);
     }
     with_auth_version(public_success(json!(state.groups().await)))
+}
+
+async fn groups_direct(State(state): State<GroupState>, headers: HeaderMap) -> Response {
+    let principal =
+        match require_public_dashboard_authorizer(state.authorizer.as_ref(), &headers).await {
+            Ok(principal) => principal,
+            Err(response) => return response,
+        };
+    if principal.role < ADMIN_ROLE {
+        return public_user_auth_error(&headers, UserAuthPolicyError::InsufficientPrivilege);
+    }
+
+    // Go's `GetGroups` returns the keys of GroupRatio. Invalid or absent
+    // persisted JSON leaves the legacy cache at its empty initial value in the
+    // isolated fixture; preserve that fail-closed read shape here.
+    let groups =
+        sqlx::query_scalar::<_, String>("SELECT value FROM options WHERE key = 'GroupRatio'")
+            .fetch_optional(&state.pg)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|value| serde_json::from_str::<Map<String, Value>>(&value).ok())
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|(group, _)| group)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    with_auth_version(public_success(json!(groups)))
 }
 
 async fn models(State(state): State<MissingControlPublicState>, headers: HeaderMap) -> Response {
@@ -1149,7 +1207,14 @@ async fn require_public_dashboard(
     state: &MissingControlPublicState,
     headers: &HeaderMap,
 ) -> Result<MissingControlPrincipal, Response> {
-    match state.authorizer.principal(headers).await {
+    require_public_dashboard_authorizer(state.authorizer.as_ref(), headers).await
+}
+
+async fn require_public_dashboard_authorizer(
+    authorizer: &dyn MissingControlAuthorizer,
+    headers: &HeaderMap,
+) -> Result<MissingControlPrincipal, Response> {
+    match authorizer.principal(headers).await {
         Ok(principal) => Ok(principal),
         Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
             Err(public_dashboard_unauthorized(headers))

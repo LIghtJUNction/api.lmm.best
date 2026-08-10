@@ -35,7 +35,7 @@ use lmm_api_rs::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
             passkey_read_router, registration_router, sessions_read_router,
         },
-        missing_control_public::{RatioConfigState, ratio_config_router},
+        missing_control_public::{GroupState, RatioConfigState, group_router, ratio_config_router},
         missing_identity_catalog::{
             IdentityCatalogState, protected_read_router as identity_catalog_protected_read_router,
             public_router as identity_catalog_public_router,
@@ -381,6 +381,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &app_state,
             ratio_config_router(RatioConfigState::new(pg.clone(), Arc::clone(&auth))),
         );
+        let groups = http::api_global_rate_limited_surface(
+            &app_state,
+            group_router(GroupState::new(pg.clone(), Arc::clone(&auth))),
+        );
         let mut extra_surface = identity_profile
             .merge(identity_catalog)
             .merge(identity_catalog_protected)
@@ -399,7 +403,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(open_source_bounties)
             .merge(model_lookup)
             .merge(control_public)
-            .merge(ratio_config);
+            .merge(ratio_config)
+            .merge(groups);
         if local_acceptance {
             extra_surface = extra_surface.merge(test_instance::safe_system_config_surface(
                 pg.clone(),
