@@ -118,6 +118,9 @@ active release, latest-known-good snapshot, and any unconfirmed transaction.
 | Component | Backup or state root |
 | --- | --- |
 | nginx split installer | `/var/lib/lmm-api-nginx-deploy/backups` |
+| lmm-api-go edge-policy assets | `/usr/share/lmm-api-go/edge-policy` |
+| edge-policy transaction restore | `<deployment>/config-restore/nginx-edge` |
+| DB-IP country database | `/var/lib/geoip2/DBIP-Country-Lite.mmdb` |
 | fallback nginx installer | `/var/lib/lmm-api-rs-fallback-nginx/backups` |
 | dedicated Valkey installer | `/var/lib/valkey-lmm-api-deploy/backups` |
 | database cutover | `/var/lib/lmm-api-cutover`, `/var/log/lmm-api-cutover` |

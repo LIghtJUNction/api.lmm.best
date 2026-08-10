@@ -13,6 +13,7 @@ readonly BACKUP_ROOT=$ROOT_PREFIX/var/lib/lmm-api-nginx-deploy/backups
 readonly MIME_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-mime.types
 readonly MAP_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-http-map.conf
 readonly LOCATIONS_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-locations.conf
+readonly REGION_POLICY_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-region-policy.conf
 readonly SERVER_TARGET=$ROOT_PREFIX/etc/nginx/conf.d/new-api.conf
 readonly RUST_UPSTREAM_TARGET=$ROOT_PREFIX/etc/nginx/conf.d/lmm-api-rs-active-upstream.conf
 readonly RUST_PROBES_TARGET=$ROOT_PREFIX/etc/nginx/snippets/lmm-api-rs-probe-locations.conf
@@ -30,6 +31,7 @@ declare -Ar SOURCES=(
   [mime]="$SCRIPT_DIR/mime.types"
   [map]="$SCRIPT_DIR/http-map.conf"
   [locations]="$SCRIPT_DIR/lmm-api-locations.conf"
+  [region_policy]="$SCRIPT_DIR/lmm-api-region-policy.conf"
   [server]="$SCRIPT_DIR/new-api.conf"
   [rust_upstream]="$SCRIPT_DIR/../backend-rust/nginx/lmm-api-rs-upstream.conf"
   [rust_probes]="$SCRIPT_DIR/../backend-rust/nginx/lmm-api-rs-probe-locations.conf"
@@ -38,11 +40,12 @@ declare -Ar TARGETS=(
   [mime]="$MIME_TARGET"
   [map]="$MAP_TARGET"
   [locations]="$LOCATIONS_TARGET"
+  [region_policy]="$REGION_POLICY_TARGET"
   [server]="$SERVER_TARGET"
   [rust_upstream]="$RUST_UPSTREAM_TARGET"
   [rust_probes]="$RUST_PROBES_TARGET"
 )
-readonly -a KEYS=(mime map locations rust_upstream rust_probes server)
+readonly -a KEYS=(mime map locations region_policy rust_upstream rust_probes server)
 
 log() { printf '[lmm-api-nginx] %s\n' "$*" >&2; }
 die() { log "$*"; exit 1; }
@@ -95,7 +98,7 @@ restore_backup() {
   local backup=$1 key state mode owner group target
   [[ -f $backup/manifest ]] || return 1
   while read -r key state mode owner group; do
-    case $key in mime|map|locations|rust_upstream|rust_probes|server) ;; *) return 1 ;; esac
+    case $key in mime|map|locations|region_policy|rust_upstream|rust_probes|server) ;; *) return 1 ;; esac
     target=${TARGETS[$key]}
     case $state in
       present)

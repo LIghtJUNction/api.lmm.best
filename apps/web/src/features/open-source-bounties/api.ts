@@ -212,12 +212,23 @@ export function tipChallenge(
 
 export function listBountyNotifications() {
   return unwrap<BountyNotification[]>(
-    api.get('/api/open-source-bounties/notifications')
+    api.get('/api/open-source-bounties/notifications', {
+      // Older production candidates may advertise the capability before the
+      // unified route is mounted. A missing optional notification feed must
+      // not become a global "Not Found" toast or block the bounty page.
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
   )
 }
 
 export function markBountyNotificationsRead() {
-  return unwrap<null>(api.post('/api/open-source-bounties/notifications/read'))
+  return unwrap<null>(
+    api.post('/api/open-source-bounties/notifications/read', undefined, {
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
+  )
 }
 
 export function listReceivedBountyTips() {

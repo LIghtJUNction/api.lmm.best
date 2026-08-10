@@ -773,7 +773,9 @@ func UpdateUser(c *gin.Context) {
 		}
 		if trustLevelSpecified {
 			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).
-				Update("trust_level_override", trustLevelOverride).Error; err != nil {
+				// Trust levels are automatic; accept the legacy field only to clear
+				// stale overrides without allowing a manual freeze.
+				Update("trust_level_override", nil).Error; err != nil {
 				return err
 			}
 		}

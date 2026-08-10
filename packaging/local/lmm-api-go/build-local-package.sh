@@ -61,6 +61,13 @@ install -Dm0644 "$SCRIPT_DIR/PKGBUILD" "$build_dir/PKGBUILD"
 install -Dm0755 "$GO_BINARY" "$build_dir/lmm-api-go"
 install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/lmm-api-go.service" "$build_dir/lmm-api-go.service"
 install -Dm0600 "$REPO_ROOT/packaging/common/lmm-api/lmm-api-go.env" "$build_dir/lmm-api-go.env"
+install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/geoip2-country-update.service" "$build_dir/geoip2-country-update.service"
+install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/geoip2-country-update.timer" "$build_dir/geoip2-country-update.timer"
+install -Dm0644 "$REPO_ROOT/deploy/nginx/http-map.conf" "$build_dir/nginx-http-map.conf"
+install -Dm0644 "$REPO_ROOT/deploy/nginx/lmm-api-locations.conf" "$build_dir/nginx-locations.conf"
+install -Dm0644 "$REPO_ROOT/deploy/nginx/mime.types" "$build_dir/nginx-mime.types"
+install -Dm0644 "$REPO_ROOT/deploy/nginx/new-api.conf" "$build_dir/nginx-new-api.conf"
+install -Dm0644 "$REPO_ROOT/deploy/nginx/lmm-api-region-policy.conf" "$build_dir/nginx-region-policy.conf"
 for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
   install -Dm0644 "$REPO_ROOT/$file" "$build_dir/$file"
 done

@@ -7,8 +7,8 @@ description: Safely inspect, stage, back up, deploy, update, confirm, roll back,
 
 Apply one controlled deployment transaction. Do not infer production authority
 from an earlier turn, a generic request to “update,” or access to an SSH host.
-The installed package exposes one public operator CLI, `/usr/bin/lmm-api`:
-use `lmm-api deploy ...` for deployment phases and `lmm-api serve` for the
+The installed package exposes one public operator CLI, `/usr/bin/lmm-api-go`:
+use `lmm-api-go deploy ...` for deployment phases and `lmm-api-go serve` for the
 systemd service. Do not invoke a source-tree deployment helper or document a
 second public deploy command.
 
@@ -139,6 +139,14 @@ error journal, and record disk/RAM/swap before confirming. Continue a
 read-only check at least every 15 minutes while a release is in its watchdog
 window, and at least hourly during normal operation. A failed check is an
 incident signal; do not hide it by clearing journals or restarting blindly.
+
+The production package also owns the regional edge policy. Its Nginx templates
+and Go-rendered access error page are installed from
+`/usr/share/lmm-api-go/edge-policy` by the native transaction; do not edit
+`/etc/nginx/site-policy`, install a second GeoIP shell hook, or keep the old
+APNIC prefix units. Use `lmm-api-go deploy production edge-policy verify` after
+an activation. The monthly DB-IP update is `lmm-api-go geoip update` via the
+package-owned `geoip2-country-update.timer`.
 
 ## Inspect without exposing secrets
 

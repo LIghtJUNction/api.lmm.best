@@ -361,7 +361,7 @@ grep -Fqx 'PGOPTIONS="-c search_path=lmm_prod_contract"' \
   "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || fail 'new service config did not preserve the production schema'
 grep -Fqx 'SESSION_COOKIE_SECURE=true' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
   fail 'new service config did not require secure refresh cookies'
-grep -Fqx 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+grep -Fqx 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
   fail 'new service config did not pin the trusted public origin'
 grep -Fqx 'TRUSTED_PROXIES=127.0.0.1/32,::1/128' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
   fail 'new service config did not restrict trusted proxies to the local reverse proxy'
@@ -415,7 +415,7 @@ grep -Fq 'AWAITING_CONFIRMATION' "$direct_confirm_workspace/state/status" || \
   fail 'direct Go upgrade did not preserve the Go service architecture'
 grep -Fqx 'SESSION_COOKIE_SECURE=true' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
   fail 'direct Go upgrade did not require secure refresh cookies'
-grep -Fqx 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
+grep -Fqx 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
   fail 'direct Go upgrade did not pin the trusted public origin'
 grep -Fqx 'TRUSTED_PROXIES=127.0.0.1/32,::1/128' "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env" || \
   fail 'direct Go upgrade did not restrict trusted proxies to the local reverse proxy'

@@ -1,0 +1,198 @@
+package model
+
+import (
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm"
+)
+
+const (
+	DeveloperAccessRequestPending  = "pending"
+	DeveloperAccessRequestApproved = "approved"
+	DeveloperAccessRequestRejected = "rejected"
+	maxDeveloperAccessRequestNote  = 2000
+)
+
+var (
+	ErrDeveloperAccessRequestNotFound    = errors.New("解锁申请不存在")
+	ErrDeveloperAccessRequestReviewed    = errors.New("解锁申请已经处理")
+	ErrDeveloperAccessRequestStatus      = errors.New("解锁申请状态无效")
+	ErrDeveloperAccessRequestNoteTooLong = errors.New("解锁申请说明不能超过 2000 个字符")
+)
+
+// DeveloperAccessRequest records the non-payment path to L1 access. The
+// request is deliberately separate from User.TrustLevelOverride: approving a
+// request unlocks L1 without freezing later paid progression at that level.
+type DeveloperAccessRequest struct {
+	Id          int    `json:"id" gorm:"primaryKey"`
+	UserId      int    `json:"user_id" gorm:"not null;index"`
+	Status      string `json:"status" gorm:"type:varchar(20);not null;index"`
+	Reason      string `json:"reason" gorm:"type:text"`
+	AdminUserId int    `json:"admin_user_id" gorm:"index"`
+	AdminNote   string `json:"admin_note" gorm:"type:text"`
+	CreatedAt   int64  `json:"created_at" gorm:"not null;index"`
+	ReviewedAt  int64  `json:"reviewed_at" gorm:"not null;default:0"`
+}
+
+func (DeveloperAccessRequest) TableName() string { return "developer_access_requests" }
+
+type DeveloperAccessRequestView struct {
+	DeveloperAccessRequest
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
+
+func normalizeDeveloperAccessRequestText(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len([]rune(value)) > maxDeveloperAccessRequestNote {
+		return "", ErrDeveloperAccessRequestNoteTooLong
+	}
+	return value, nil
+}
+
+func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
+	if userID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	var request DeveloperAccessRequest
+	err := DB.Where("user_id = ?", userID).Order("id DESC").First(&request).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &request, nil
+}
+
+func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
+	if userID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	normalizedReason, err := normalizeDeveloperAccessRequestText(reason)
+	if err != nil {
+		return nil, err
+	}
+
+	var request DeveloperAccessRequest
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		// Lock the user row before checking for a pending request. This makes
+		// duplicate submissions from two browser tabs collapse to one request
+		// on databases that support row-level locks.
+		var user User
+		if err := lockForUpdate(tx).Where("id = ?", userID).First(&user).Error; err != nil {
+			return err
+		}
+		var pending DeveloperAccessRequest
+		findErr := tx.Where("user_id = ? AND status = ?", userID, DeveloperAccessRequestPending).
+			Order("id DESC").First(&pending).Error
+		if findErr == nil {
+			request = pending
+			return nil
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		request = DeveloperAccessRequest{
+			UserId:    userID,
+			Status:    DeveloperAccessRequestPending,
+			Reason:    normalizedReason,
+			CreatedAt: common.GetTimestamp(),
+		}
+		return tx.Create(&request).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &request, nil
+}
+
+func ListDeveloperAccessRequests(status string, limit int) ([]DeveloperAccessRequestView, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	query := DB.Table("developer_access_requests AS request").
+		Select("request.*, users.username, users.email").
+		Joins("JOIN users ON users.id = request.user_id").
+		Order("request.id DESC").Limit(limit)
+	if status = strings.TrimSpace(status); status != "" {
+		if status != DeveloperAccessRequestPending && status != DeveloperAccessRequestApproved && status != DeveloperAccessRequestRejected {
+			return nil, ErrDeveloperAccessRequestStatus
+		}
+		query = query.Where("request.status = ?", status)
+	}
+	var requests []DeveloperAccessRequestView
+	if err := query.Find(&requests).Error; err != nil {
+		return nil, err
+	}
+	return requests, nil
+}
+
+func ReviewDeveloperAccessRequest(adminUserID int, requestID int, approve bool, note string) (*DeveloperAccessRequest, error) {
+	if adminUserID <= 0 || requestID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	normalizedNote, err := normalizeDeveloperAccessRequestText(note)
+	if err != nil {
+		return nil, err
+	}
+	var request DeveloperAccessRequest
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where("id = ?", requestID).First(&request).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrDeveloperAccessRequestNotFound
+			}
+			return err
+		}
+		if request.Status != DeveloperAccessRequestPending {
+			return ErrDeveloperAccessRequestReviewed
+		}
+		if approve {
+			// This timestamp is the durable non-payment activation fact. It
+			// grants L1, while paid top-ups can still raise the automatic level.
+			result := tx.Model(&User{}).
+				Where("id = ? AND console_activated_at = ?", request.UserId, 0).
+				Update("console_activated_at", time.Now().Unix())
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				var user User
+				if err := tx.Select("id").First(&user, request.UserId).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return ErrDeveloperAccessRequestNotFound
+					}
+					return err
+				}
+			}
+		}
+		now := common.GetTimestamp()
+		status := DeveloperAccessRequestRejected
+		if approve {
+			status = DeveloperAccessRequestApproved
+		}
+		if err := tx.Model(&request).Updates(map[string]interface{}{
+			"status":        status,
+			"admin_user_id": adminUserID,
+			"admin_note":    normalizedNote,
+			"reviewed_at":   now,
+		}).Error; err != nil {
+			return err
+		}
+		request.Status = status
+		request.AdminUserId = adminUserID
+		request.AdminNote = normalizedNote
+		request.ReviewedAt = now
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if approve {
+		_ = InvalidateUserCache(request.UserId)
+	}
+	return &request, nil
+}
