@@ -96,7 +96,7 @@ for output in "$artifacts" "$manifest_dir" "$controller_backup"; do
   [[ ! -e $output && ! -L $output ]] || die "deployment output already exists: $output"
 done
 install -d -m0700 "$new_dir" "$rollback_dir" "$capture_dir" "$manifest_dir" \
-  "$WORKSPACE/tmp" "${controller_backup%/*}"
+  "$WORKSPACE/tmp" "$WORKSPACE/staging" "${controller_backup%/*}"
 
 (
   cd -- "$REPO_ROOT"
