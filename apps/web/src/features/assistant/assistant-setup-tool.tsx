@@ -27,6 +27,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -39,6 +40,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import {
+  getCCSwitchClaudeProviderJSON,
+  getCCSwitchInstallGuide,
   getClaudeInstallCommand,
   getClaudeSessionCommand,
   type AssistantSetupPlatform,
@@ -47,13 +50,19 @@ import {
 const CLAUDE_INSTALL_DOCS = 'https://code.claude.com/docs/en/installation'
 const CLAUDE_DESKTOP_DOCS = 'https://code.claude.com/docs/en/desktop-quickstart'
 const CC_SWITCH_RELEASES = 'https://github.com/farion1231/cc-switch/releases'
+const CC_SWITCH_INSTALL_DOCS =
+  'https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/1-getting-started/1.2-installation.md'
+const CC_SWITCH_PROVIDER_DOCS =
+  'https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/2-providers/2.1-add.md'
+const CC_SWITCH_DESKTOP_DOCS =
+  'https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/2-providers/2.6-claude-desktop.md'
 const CHATGPT_DOWNLOAD = 'https://chatgpt.com/download/'
 const PLATFORM_LABELS: Record<AssistantSetupPlatform, string> = {
   windows: 'Windows',
   macos: 'macOS',
   linux: 'Linux',
 }
-type ClientTab = 'claude-code' | 'cc-switch' | 'chatgpt'
+type ClientTab = 'claude-code' | 'cc-switch' | 'claude-desktop' | 'chatgpt'
 
 function CodeSnippet(props: { label: string; value: string }) {
   return (
@@ -94,6 +103,29 @@ function OfficialLink(props: { href: string; label: string }) {
   )
 }
 
+function SetupStep(props: {
+  number: number
+  title: string
+  description: string
+}) {
+  return (
+    <li className='flex items-start gap-2.5'>
+      <Badge
+        variant='secondary'
+        className='mt-0.5 size-5 shrink-0 justify-center rounded-full p-0'
+      >
+        {props.number}
+      </Badge>
+      <div className='min-w-0'>
+        <p className='text-xs font-medium'>{props.title}</p>
+        <p className='text-muted-foreground mt-0.5 text-xs leading-5'>
+          {props.description}
+        </p>
+      </div>
+    </li>
+  )
+}
+
 export function AssistantSetupTool(props: {
   rootUrl: string
   openAIBaseUrl: string
@@ -107,6 +139,8 @@ export function AssistantSetupTool(props: {
   const model = props.defaultModel || '<MODEL_ID>'
   const installCommand = getClaudeInstallCommand(platform)
   const sessionCommand = getClaudeSessionCommand(platform, props.rootUrl, model)
+  const ccSwitchInstall = getCCSwitchInstallGuide(platform)
+  const ccSwitchConfig = getCCSwitchClaudeProviderJSON(props.rootUrl, model)
 
   return (
     <Card size='sm'>
@@ -130,30 +164,35 @@ export function AssistantSetupTool(props: {
           </div>
         ) : null}
 
+        <div className='mb-3 grid gap-1.5'>
+          <span className='text-muted-foreground text-xs'>{t('Platform')}</span>
+          <div className='flex flex-wrap gap-2' aria-label={t('Platform')}>
+            {(['windows', 'macos', 'linux'] as const).map((item) => (
+              <Button
+                key={item}
+                type='button'
+                size='sm'
+                variant={platform === item ? 'default' : 'outline'}
+                onClick={() => setPlatform(item)}
+              >
+                {PLATFORM_LABELS[item]}
+              </Button>
+            ))}
+          </div>
+        </div>
+
         <Tabs
           value={clientTab}
           onValueChange={(value) => setClientTab(value as ClientTab)}
         >
-          <TabsList className='grid w-full grid-cols-3'>
+          <TabsList className='grid h-auto w-full grid-cols-2'>
             <TabsTrigger value='claude-code'>Claude Code</TabsTrigger>
             <TabsTrigger value='cc-switch'>CC Switch</TabsTrigger>
+            <TabsTrigger value='claude-desktop'>Claude Desktop</TabsTrigger>
             <TabsTrigger value='chatgpt'>ChatGPT</TabsTrigger>
           </TabsList>
 
           <TabsContent value='claude-code' className='mt-3 grid gap-3'>
-            <div className='flex flex-wrap gap-2' aria-label={t('Platform')}>
-              {(['windows', 'macos', 'linux'] as const).map((item) => (
-                <Button
-                  key={item}
-                  type='button'
-                  size='sm'
-                  variant={platform === item ? 'default' : 'outline'}
-                  onClick={() => setPlatform(item)}
-                >
-                  {PLATFORM_LABELS[item]}
-                </Button>
-              ))}
-            </div>
             <CodeSnippet label={t('Install command')} value={installCommand} />
             <CodeSnippet
               label={
@@ -190,26 +229,182 @@ export function AssistantSetupTool(props: {
           </TabsContent>
 
           <TabsContent value='cc-switch' className='mt-3 grid gap-3'>
-            <div className='flex flex-wrap gap-2'>
-              <Badge variant='outline'>Windows · MSI</Badge>
-              <Badge variant='outline'>macOS · DMG / Homebrew</Badge>
-              <Badge variant='outline'>Linux · AppImage / deb / rpm</Badge>
-            </div>
+            <Alert>
+              <AlertTitle>
+                {t('Use official CC Switch downloads only')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'CC Switch is free and open source. An installer asking for payment, top-ups, or account credentials is not official.'
+                )}
+              </AlertDescription>
+            </Alert>
+            {ccSwitchInstall.command ? (
+              <CodeSnippet
+                label={t('Install CC Switch on {{platform}}', {
+                  platform: PLATFORM_LABELS[platform],
+                })}
+                value={ccSwitchInstall.command}
+              />
+            ) : (
+              <div className='bg-muted/40 rounded-lg border p-3 text-xs leading-5'>
+                {t(
+                  'Download {{artifact}} from GitHub Releases, open it, and finish the Windows installer.',
+                  { artifact: ccSwitchInstall.artifact }
+                )}
+              </div>
+            )}
+            <ol className='grid gap-3' aria-label={t('CC Switch setup steps')}>
+              <SetupStep
+                number={1}
+                title={t('Open the Claude provider panel')}
+                description={t(
+                  'Launch CC Switch, select Claude in the app switcher, then click the add button.'
+                )}
+              />
+              <SetupStep
+                number={2}
+                title={t('Add a custom provider')}
+                description={t(
+                  'Choose Custom, enter a recognizable name, and paste the endpoint and API key shown below.'
+                )}
+              />
+              <SetupStep
+                number={3}
+                title={t('Save and enable it')}
+                description={t(
+                  'Save the provider, click Enable on its card, then start or restart Claude Code.'
+                )}
+              />
+              <SetupStep
+                number={4}
+                title={t('Verify with a new terminal')}
+                description={t(
+                  'Run claude in a new terminal and send a short test message. If first-run login appears, enable Skip Claude Code first-run confirmation in CC Switch settings.'
+                )}
+              />
+            </ol>
             <div className='rounded-lg border px-3'>
               <ConnectionValue label={t('Application')} value='Claude' />
               <ConnectionValue label={t('Endpoint')} value={props.rootUrl} />
               <ConnectionValue label={t('API key')} value='<YOUR_API_KEY>' />
               <ConnectionValue label={t('Primary Model')} value={model} />
             </div>
-            <p className='text-muted-foreground text-xs leading-5'>
-              {t(
-                'Install CC Switch from its official releases, add a Claude provider with these values, then enable that provider.'
-              )}
-            </p>
+            <CodeSnippet
+              label={t('Custom Claude provider JSON')}
+              value={ccSwitchConfig}
+            />
             <div className='flex flex-wrap gap-2'>
               <OfficialLink
                 href={CC_SWITCH_RELEASES}
                 label={t('Open official releases')}
+              />
+              <OfficialLink
+                href={CC_SWITCH_INSTALL_DOCS}
+                label={t('Installation manual')}
+              />
+              <OfficialLink
+                href={CC_SWITCH_PROVIDER_DOCS}
+                label={t('Provider manual')}
+              />
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={props.onCreateKey}
+                disabled={!props.developerAccessGranted}
+              >
+                <KeyRound data-icon='inline-start' aria-hidden='true' />
+                {t('Create API key')}
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value='claude-desktop' className='mt-3 grid gap-3'>
+            {platform === 'linux' ? (
+              <Alert>
+                <AlertTitle>
+                  {t(
+                    'CC Switch Desktop provider setup is not available on Linux'
+                  )}
+                </AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'Claude Desktop for Linux is available in beta, but CC Switch currently writes third-party Desktop profiles only on Windows and macOS. Use Claude Code on Linux for this service.'
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <ol
+                  className='grid gap-3'
+                  aria-label={t('Claude Desktop setup steps')}
+                >
+                  <SetupStep
+                    number={1}
+                    title={t('Install Claude Desktop')}
+                    description={t(
+                      'Download the official app for {{platform}}, install it, and launch it once.',
+                      { platform: PLATFORM_LABELS[platform] }
+                    )}
+                  />
+                  <SetupStep
+                    number={2}
+                    title={t('Open Claude Desktop in CC Switch')}
+                    description={t(
+                      'In the CC Switch app switcher, select Claude Desktop. If it is hidden, enable it under Settings, General, Homepage Display.'
+                    )}
+                  />
+                  <SetupStep
+                    number={3}
+                    title={t('Import the Claude Code provider')}
+                    description={t(
+                      'Choose Import existing providers from Claude Code, or add a custom provider with the endpoint and API key below.'
+                    )}
+                  />
+                  <SetupStep
+                    number={4}
+                    title={t('Enable model mapping')}
+                    description={t(
+                      'Turn on Needs model mapping, map the Sonnet role to {{model}}, and enable Claude Desktop local routing.',
+                      { model }
+                    )}
+                  />
+                  <SetupStep
+                    number={5}
+                    title={t('Enable, then restart Desktop')}
+                    description={t(
+                      'Keep CC Switch running, enable the provider, fully quit Claude Desktop, and open it again.'
+                    )}
+                  />
+                </ol>
+                <div className='rounded-lg border px-3'>
+                  <ConnectionValue
+                    label={t('API endpoint root')}
+                    value={props.rootUrl}
+                  />
+                  <ConnectionValue
+                    label={t('API key')}
+                    value='<YOUR_API_KEY>'
+                  />
+                  <ConnectionValue
+                    label={t('Sonnet requested model')}
+                    value={model}
+                  />
+                  <ConnectionValue
+                    label={t('API format')}
+                    value='Anthropic Messages'
+                  />
+                </div>
+              </>
+            )}
+            <div className='flex flex-wrap gap-2'>
+              <OfficialLink
+                href={CLAUDE_DESKTOP_DOCS}
+                label={t('Official Desktop guide')}
+              />
+              <OfficialLink
+                href={CC_SWITCH_DESKTOP_DOCS}
+                label={t('CC Switch Desktop manual')}
               />
               <Button
                 size='sm'
@@ -235,6 +430,22 @@ export function AssistantSetupTool(props: {
                 )}
               </p>
             </div>
+            <ol className='grid gap-3' aria-label={t('ChatGPT setup steps')}>
+              <SetupStep
+                number={1}
+                title={t('Install the official ChatGPT app')}
+                description={t(
+                  'Open the official download page, choose a supported desktop installer, install it, and sign in with your OpenAI account.'
+                )}
+              />
+              <SetupStep
+                number={2}
+                title={t('Use a compatible client for this API')}
+                description={t(
+                  'To spend your balance on this service, use CC Switch, Claude Code, or another OpenAI-compatible client with the values below.'
+                )}
+              />
+            </ol>
             <div className='rounded-lg border px-3'>
               <ConnectionValue
                 label={t('OpenAI-compatible Base URL')}

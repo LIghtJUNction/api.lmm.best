@@ -18,6 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type AssistantSetupPlatform = 'windows' | 'macos' | 'linux'
 
+export type CCSwitchInstallGuide = {
+  artifact: string
+  command: string | null
+}
+
 function quotePOSIX(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`
 }
@@ -56,4 +61,52 @@ export function getClaudeSessionCommand(
     `export ANTHROPIC_MODEL=${quotePOSIX(normalizedModel)}`,
     'claude',
   ].join('\n')
+}
+
+export function getCCSwitchInstallGuide(
+  platform: AssistantSetupPlatform
+): CCSwitchInstallGuide {
+  if (platform === 'windows') {
+    return {
+      artifact: 'CC-Switch-v{version}-Windows.msi',
+      command: null,
+    }
+  }
+  if (platform === 'macos') {
+    return {
+      artifact: 'CC-Switch-v{version}-macOS.dmg',
+      command: 'brew install --cask cc-switch',
+    }
+  }
+  return {
+    artifact: 'CC-Switch-v{version}-Linux-{architecture}.AppImage',
+    command: [
+      '# Arch Linux',
+      'paru -S cc-switch-bin',
+      '',
+      '# Debian / Ubuntu (after downloading the .deb)',
+      'sudo apt install ./CC-Switch-v*-Linux-*.deb',
+      '',
+      '# Universal AppImage (after downloading it)',
+      'chmod +x CC-Switch-v*-Linux-*.AppImage',
+      './CC-Switch-v*-Linux-*.AppImage',
+    ].join('\n'),
+  }
+}
+
+export function getCCSwitchClaudeProviderJSON(
+  rootUrl: string,
+  model: string
+): string {
+  return JSON.stringify(
+    {
+      env: {
+        ANTHROPIC_AUTH_TOKEN: '<YOUR_API_KEY>',
+        ANTHROPIC_BASE_URL: rootUrl.replace(/\/+$/, ''),
+        ANTHROPIC_MODEL: model.trim() || '<MODEL_ID>',
+      },
+    },
+    null,
+    2
+  )
 }
