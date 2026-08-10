@@ -52,6 +52,8 @@ func runProductionDeploy(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "configuration=hardened")
 		_, _ = fmt.Fprintln(stdout, "systemd_reload_required=true")
 		return ExitOK
+	case "edge-policy":
+		return runProductionEdgePolicy(args[1:], stdout, stderr)
 	case "apply", "status", "confirm", "rollback":
 		return runProductionTransaction(args[0], args[1:], stdout, stderr)
 	case "help", "--help", "-h":
@@ -183,7 +185,7 @@ func hardenProductionEnvironment(content []byte) []byte {
 	}
 	kept = append(kept,
 		"SESSION_COOKIE_SECURE=true",
-		"SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best",
+		"SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best",
 		"TRUSTED_PROXIES=127.0.0.1/32,::1/128",
 	)
 	return []byte(strings.Join(kept, "\n") + "\n")

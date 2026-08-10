@@ -1,0 +1,12 @@
+[Unit]
+Description=Monthly DB-IP Lite GeoIP2 Country database update for lmm-api-go
+
+[Timer]
+OnCalendar=*-*-02 03:15:00
+Persistent=true
+RandomizedDelaySec=6h
+AccuracySec=1h
+Unit=geoip2-country-update.service
+
+[Install]
+WantedBy=timers.target

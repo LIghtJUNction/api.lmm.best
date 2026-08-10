@@ -57,6 +57,8 @@ type productionPaths struct {
 	SystemdUnitRoot  string
 	ConfigDir        string
 	DropInDir        string
+	NginxRoot        string
+	EdgeAssetRoot    string
 	InstalledBinary  string
 	PackagedFrontend string
 	MigrationWorkdir string
@@ -80,6 +82,8 @@ func defaultProductionPaths() productionPaths {
 		SystemdUnitRoot:  "/etc/systemd/system",
 		ConfigDir:        "/etc/lmm-api-go",
 		DropInDir:        defaultProductionDropInDir,
+		NginxRoot:        defaultNginxRoot,
+		EdgeAssetRoot:    defaultEdgeAssetRoot,
 		InstalledBinary:  "/usr/bin/lmm-api-go",
 		PackagedFrontend: "/usr/share/lmm-api-go/frontend-dist",
 		MigrationWorkdir: "/var/lib/lmm-api-go",
@@ -214,6 +218,7 @@ type productionManifest struct {
 	MemoryDropInExisted       bool      `json:"memory_dropin_existed"`
 	MemoryDropInRestoreSHA256 string    `json:"memory_dropin_restore_sha256,omitempty"`
 	EnvironmentRestoreSHA256  string    `json:"environment_restore_sha256"`
+	NginxEdgeRestoreSHA256    string    `json:"nginx_edge_restore_sha256,omitempty"`
 }
 
 type productionStatus struct {

@@ -65,6 +65,7 @@ func writeDeployUsage(output io.Writer) {
   %s deploy frontend publish --source DIR --release ID [--root DIR] [--keep N]
   %s deploy frontend rollback [--release ID] [--root DIR] [--keep N]
   %s deploy production harden [--env-file FILE] [--drop-in-dir DIR]
+  %s deploy production edge-policy install|verify [--asset-root DIR] [--backup-dir DIR]
   %s deploy production release --repo DIR --workspace DIR --age-recipient-file FILE \
        --age-identity-file FILE --confirm api.lmm.best [--rollback-package FILE]
   %s deploy production workspace create --deployment-id ID
@@ -85,7 +86,7 @@ func writeDeployUsage(output io.Writer) {
   %s deploy production status --workspace DIR
   %s deploy production confirm --workspace DIR
   %s deploy production rollback --workspace DIR [--reason TEXT]
-`, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName)
+`, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName)
 }
 
 func runFrontendDeploy(args []string, stdout, stderr io.Writer) int {

@@ -356,7 +356,7 @@ harden_production_environment_config() {
   ' "$destination" >"$temporary"
   {
     printf 'SESSION_COOKIE_SECURE=true\n'
-    printf 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best\n'
+    printf 'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best\n'
     printf 'TRUSTED_PROXIES=127.0.0.1/32,::1/128\n'
   } >>"$temporary"
   chmod 0600 "$temporary"

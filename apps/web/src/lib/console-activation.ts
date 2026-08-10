@@ -131,7 +131,10 @@ export function getAuthenticatedLandingRoute(
 }
 
 export function isContributorRoute(pathname: string): boolean {
-  return ['/getting-started', '/wallet', '/profile', '/support'].some(
+  // L0 is intentionally a narrow, non-console surface: the activation
+  // page (which contains the administrator request path), recharge, and
+  // public open-source bounties only.
+  return ['/getting-started', '/wallet', '/open-source-bounties'].some(
     (path) => pathname === path || pathname.startsWith(`${path}/`)
   )
 }

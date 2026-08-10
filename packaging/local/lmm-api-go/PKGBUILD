@@ -24,8 +24,15 @@ source=(
   LICENSE
   NOTICE
   THIRD-PARTY-LICENSES.md
+  nginx-http-map.conf
+  nginx-locations.conf
+  nginx-mime.types
+  nginx-new-api.conf
+  nginx-region-policy.conf
+  geoip2-country-update.service
+  geoip2-country-update.timer
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 prepare() {
   install -d -m0755 "${srcdir}/frontend-dist"
@@ -38,6 +45,10 @@ package() {
   install -Dm0755 "${srcdir}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
   install -Dm0644 "${srcdir}/lmm-api-go.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
+  install -Dm0644 "${srcdir}/geoip2-country-update.service" \
+    "${pkgdir}/usr/lib/systemd/system/geoip2-country-update.service"
+  install -Dm0644 "${srcdir}/geoip2-country-update.timer" \
+    "${pkgdir}/usr/lib/systemd/system/geoip2-country-update.timer"
   install -d -m0700 "${pkgdir}/etc/lmm-api-go"
   install -Dm0600 "${srcdir}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
@@ -47,6 +58,18 @@ package() {
     "${pkgdir}/usr/share/lmm-api-go/frontend-dist/"
   find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type d -exec chmod 0755 {} +
   find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type f -exec chmod 0644 {} +
+
+  install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx"
+  install -Dm0644 "${srcdir}/nginx-http-map.conf" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/http-map.conf"
+  install -Dm0644 "${srcdir}/nginx-locations.conf" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/lmm-api-locations.conf"
+  install -Dm0644 "${srcdir}/nginx-mime.types" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/mime.types"
+  install -Dm0644 "${srcdir}/nginx-new-api.conf" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/new-api.conf"
+  install -Dm0644 "${srcdir}/nginx-region-policy.conf" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/lmm-api-region-policy.conf"
 
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     install -Dm0644 "${srcdir}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
