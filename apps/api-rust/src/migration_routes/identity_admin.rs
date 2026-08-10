@@ -3,8 +3,9 @@
 use crate::auth::{DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -44,12 +45,55 @@ pub fn router(state: IdentityAdminState) -> Router {
     Router::new()
         .route(
             "/api/user/",
-            get(list_users).post(create_user).put(update_user),
+            get(list_users)
+                .post(create_user)
+                .put(update_user)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    admin_auth_boundary,
+                )),
         )
-        .route("/api/user/search", get(search_users))
-        .route("/api/user/{id}", get(get_user).delete(delete_user))
-        .route("/api/user/manage", post(manage_user))
+        .route(
+            "/api/user/search",
+            get(search_users).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                admin_auth_boundary,
+            )),
+        )
+        .route(
+            "/api/user/{id}",
+            get(get_user)
+                .delete(delete_user)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    admin_auth_boundary,
+                )),
+        )
+        .route(
+            "/api/user/manage",
+            post(manage_user).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                admin_auth_boundary,
+            )),
+        )
         .with_state(state)
+}
+
+async fn admin_auth_boundary(
+    State(state): State<IdentityAdminState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let actor = match administrator(&state, request.headers()).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    request.extensions_mut().insert(actor);
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 #[derive(Serialize)]
@@ -281,12 +325,9 @@ struct Page<T> {
 
 async fn list_users(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(_actor): Extension<DashboardUser>,
     Query(query): Query<PageQuery>,
 ) -> Response {
-    if let Err(response) = administrator(&state, &headers).await {
-        return response;
-    }
     let page = query.page();
     let page_size = query.page_size();
     let offset = (page - 1) * page_size;
@@ -316,12 +357,9 @@ async fn list_users(
 
 async fn search_users(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(_actor): Extension<DashboardUser>,
     Query(query): Query<SearchQuery>,
 ) -> Response {
-    if let Err(response) = administrator(&state, &headers).await {
-        return response;
-    }
     let page = query.page.page();
     let page_size = query.page.page_size();
     let offset = (page - 1) * page_size;
@@ -366,13 +404,9 @@ async fn search_users(
 
 async fn get_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Path(id): Path<i64>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1 AND deleted_at IS NULL");
     match sqlx::query_as::<_, UserView>(&sql)
         .bind(id)
@@ -420,13 +454,9 @@ fn has_invalid_user_text(input: &UserInput) -> bool {
 
 async fn create_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Json(mut input): Json<UserInput>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     input.username = input.username.trim().to_owned();
     input.password = input.password.filter(|password| !password.is_empty());
     let Some(password) = input.password.as_deref() else {
@@ -482,13 +512,9 @@ async fn create_user(
 
 async fn update_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Json(mut input): Json<UserInput>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     let Some(id) = input.id.filter(|id| *id > 0) else {
         return fail("参数错误");
     };
@@ -590,13 +616,9 @@ async fn update_user(
 
 async fn delete_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Path(id): Path<i64>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return internal(),
@@ -698,13 +720,9 @@ struct Managed {
 
 async fn manage_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Json(request): Json<ManageRequest>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return internal(),
