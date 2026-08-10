@@ -21,7 +21,8 @@ use axum::{
     routing::get,
 };
 use secrecy::SecretString;
-use serde_json::{Value, json};
+use serde_json::{Map, Number, Value, json};
+use sqlx::PgPool;
 
 use crate::auth::{
     AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, UserAuthPolicyError,
@@ -476,6 +477,40 @@ impl MissingControlPublicState {
     }
 }
 
+/// Minimal state for the public ratio configuration endpoint.
+///
+/// The broader [`MissingControlPublicState`] remains isolated on the
+/// candidate surface because its other routes carry additional control-plane
+/// semantics.  The ratio read itself is a bounded PostgreSQL option lookup,
+/// so the normal listener can mount this one route without exposing those
+/// unrelated candidate paths.
+#[derive(Clone)]
+pub struct RatioConfigState {
+    pg: PgPool,
+    limiter: Arc<dyn MissingControlRateLimiter>,
+}
+
+impl RatioConfigState {
+    #[must_use]
+    pub fn new(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Self {
+        Self {
+            pg,
+            limiter: Arc::new(DashboardMissingControlRateLimiter::new(auth)),
+        }
+    }
+}
+
+/// Mounts only `GET /api/ratio_config` for the normal listener.
+pub fn ratio_config_router(state: RatioConfigState) -> Router {
+    Router::new()
+        .route("/api/ratio_config", get(ratio_config_direct))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            ratio_config_critical_rate_limit,
+        ))
+        .with_state(state)
+}
+
 /// Mount point used by the migration root.
 pub fn missing_control_public_router(state: MissingControlPublicState) -> Router {
     Router::new()
@@ -580,6 +615,72 @@ async fn ratio_config(State(state): State<MissingControlPublicState>) -> Respons
         Some(data) => legacy_json(json!({"success": true, "message": "", "data": data})),
         None => public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用"),
     }
+}
+
+async fn ratio_config_direct(State(state): State<RatioConfigState>) -> Response {
+    let enabled = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM options WHERE key = 'ExposeRatioEnabled'",
+    )
+    .fetch_optional(&state.pg)
+    .await
+    .ok()
+    .flatten()
+    .is_some_and(|value| value == "true");
+    if !enabled {
+        return public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用");
+    }
+
+    let rows = match sqlx::query_as::<_, (String, String)>(
+        "SELECT key, value FROM options WHERE key = ANY($1)",
+    )
+    .bind(vec![
+        "ModelRatio",
+        "CompletionRatio",
+        "CacheRatio",
+        "CreateCacheRatio",
+        "ModelPrice",
+    ])
+    .fetch_all(&state.pg)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用"),
+    };
+    let values = rows
+        .into_iter()
+        .filter_map(|(key, value)| {
+            serde_json::from_str::<BTreeMap<String, f64>>(&value)
+                .ok()
+                .map(|value| (key, go_ratio_map_json(value)))
+        })
+        .collect::<BTreeMap<String, Value>>();
+    let data = json!({
+        "model_ratio": values.get("ModelRatio").cloned().unwrap_or_else(|| json!({})),
+        "completion_ratio": values.get("CompletionRatio").cloned().unwrap_or_else(|| json!({})),
+        "cache_ratio": values.get("CacheRatio").cloned().unwrap_or_else(|| json!({})),
+        "create_cache_ratio": values.get("CreateCacheRatio").cloned().unwrap_or_else(|| json!({})),
+        "model_price": values.get("ModelPrice").cloned().unwrap_or_else(|| json!({})),
+    });
+    legacy_json(json!({"success": true, "message": "", "data": data}))
+}
+
+fn go_ratio_map_json(values: BTreeMap<String, f64>) -> Value {
+    let values = values
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let number = if value.is_finite()
+                && value.fract() == 0.0
+                && value >= i64::MIN as f64
+                && value <= i64::MAX as f64
+            {
+                Number::from(value as i64)
+            } else {
+                Number::from_f64(value)?
+            };
+            Some((key, Value::Number(number)))
+        })
+        .collect::<Map<String, Value>>();
+    Value::Object(values)
 }
 
 async fn token_usage_get(
@@ -701,6 +802,32 @@ async fn critical_rate_limit(
     match critical_rate_limit_response(&state, &client_ip).await {
         Some(response) => response,
         None => next.run(request).await,
+    }
+}
+
+async fn ratio_config_critical_rate_limit(
+    State(state): State<RatioConfigState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let client_ip = request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    match state.limiter.check(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => next.run(request).await,
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => empty_limiter_response(StatusCode::TOO_MANY_REQUESTS, Some(retry_after_seconds)),
+        Err(_) => empty_limiter_response(StatusCode::INTERNAL_SERVER_ERROR, None),
     }
 }
 
@@ -1683,6 +1810,42 @@ mod tests {
                     "model_limits_enabled": true,
                     "expires_at": 0,
                 },
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn normal_ratio_config_read_fails_closed_when_options_are_unavailable() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(1))
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .expect("valid lazy PostgreSQL URL");
+        let response = ratio_config_direct(axum::extract::State(RatioConfigState {
+            pg: pool,
+            limiter: std::sync::Arc::new(AllowMissingControlRateLimiter),
+        }))
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"success": false, "message": "倍率配置接口未启用"})
+        );
+    }
+
+    #[test]
+    fn ratio_map_json_matches_go_integer_number_encoding() {
+        let values = BTreeMap::from([
+            ("fractional".to_owned(), 0.25),
+            ("integral".to_owned(), 2.0),
+        ]);
+        assert_eq!(
+            go_ratio_map_json(values),
+            json!({
+                "fractional": 0.25,
+                "integral": 2,
             })
         );
     }
