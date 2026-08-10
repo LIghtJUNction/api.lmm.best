@@ -233,6 +233,7 @@ seed() {
     case "$mode" in
       checkin-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='false' WHERE key='checkin_setting.enabled'" ;;
       checkin-existing) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO checkins(id,user_id,checkin_date,quota_awarded,created_at) VALUES(1,101,to_char(CURRENT_DATE,'YYYY-MM-DD'),100,0)" ;;
+      aff-code) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_code='ORACLE-AFF-101' WHERE id=101" ;;
       aff-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_quota=499999 WHERE id=101" ;;
       amount-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='3' WHERE key='MinTopUp'" ;;
       redeem*) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO redemptions(id,key,status,quota,created_time,expired_time) VALUES(1,'ORACLE-REDEEM-101',1,300,0,0)" ;;
@@ -260,6 +261,7 @@ route_for() {
     user-groups) printf 'GET\t/api/user/groups\t__NONE__\tanonymous\n' ;;
     self-groups) printf 'GET\t/api/user/self/groups\t__NONE__\tuser101\n' ;;
     user-models) printf 'GET\t/api/user/models\t__NONE__\tuser101\n' ;;
+    aff-code) printf 'GET\t/api/user/aff\t__NONE__\tuser101\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -272,6 +274,7 @@ phase_seed() {
   case "$route:$phase" in
     checkin-status:failure) printf checkin-failure ;;
     topup-self:positive|topup-self:rollback|topup-self:replay) printf topup ;;
+    aff-code:positive|aff-code:failure|aff-code:rollback|aff-code:replay) printf aff-code ;;
     checkin-commit-rollback:failure) printf checkin-existing ;;
     affiliate-transfer:failure) printf aff-failure ;;
     amount-quote:failure) printf amount-failure ;;
@@ -362,7 +365,7 @@ for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
 if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
-  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models ]]; then
+  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -371,7 +374,7 @@ while IFS=$'\t' read -r id; do
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
 done < <(jq -r '.fixtures[].id' "$fixtures")
-if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models ]]; then
+if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code ]]; then
   for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
 fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi
