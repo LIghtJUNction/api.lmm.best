@@ -1033,20 +1033,6 @@ fn dashboard_auth_error(locale: LegacyLocale, error: AuthError) -> Response {
         .into_response()
 }
 
-fn unauthorized(message: &'static str) -> Response {
-    let mut response = (
-        StatusCode::UNAUTHORIZED,
-        Json(ErrorEnvelope {
-            success: false,
-            code: "AUTH_UNAUTHORIZED",
-            message,
-        }),
-    )
-        .into_response();
-    disable_cache(&mut response, false);
-    response
-}
-
 fn invalid_login_error(locale: LegacyLocale) -> Response {
     let mut response = Json(FailureEnvelope {
         success: false,
