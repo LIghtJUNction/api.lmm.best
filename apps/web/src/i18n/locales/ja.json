@@ -6155,6 +6155,11 @@
     "Retry before using account-specific assistant tools.": "アカウント固有のアシスタントツールを使用する前に再試行してください。",
     "Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.": "L0 アクセスの審査中もチャージ割引を確認できます。L1 承認後に最新のサブスクリプション比較を利用できます。",
     "Connection details": "接続情報",
-    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "Base URL はクライアントの接続先、モデル ID は使用するモデルを指定し、API key は各リクエストで送信する秘密の認証情報です。"
+    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "Base URL はクライアントの接続先、モデル ID は使用するモデルを指定し、API key は各リクエストで送信する秘密の認証情報です。",
+    "The official ChatGPT desktop app is not available for Linux": "公式 ChatGPT デスクトップアプリは Linux では利用できません",
+    "OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.": "OpenAI が現在提供している ChatGPT デスクトップ版は Windows と macOS 向けです。Linux ではブラウザで chatgpt.com を使用するか、CC Switch などの API 互換クライアントを選択してください。",
+    "Use ChatGPT in your browser": "ブラウザで ChatGPT を使用する",
+    "Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.": "対応ブラウザで chatgpt.com を開き、OpenAI アカウントでサインインしてください。Linux 用デスクトップインストーラーは必要ありません。",
+    "Open ChatGPT in browser": "ブラウザで ChatGPT を開く"
   }
 }

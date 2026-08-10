@@ -6155,6 +6155,11 @@
     "Retry before using account-specific assistant tools.": "Réessayez avant d’utiliser les outils de l’assistant liés au compte.",
     "Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.": "Les remises de recharge restent disponibles pendant l’examen de l’accès L0. La comparaison en direct des abonnements est accessible après l’approbation L1.",
     "Connection details": "Paramètres de connexion",
-    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "L’URL de base indique au client où se connecter, l’identifiant du modèle sélectionne le modèle et la clé API est le secret transmis avec chaque requête."
+    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "L’URL de base indique au client où se connecter, l’identifiant du modèle sélectionne le modèle et la clé API est le secret transmis avec chaque requête.",
+    "The official ChatGPT desktop app is not available for Linux": "L’application de bureau officielle ChatGPT n’est pas disponible sous Linux",
+    "OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.": "OpenAI fournit actuellement des installateurs de bureau ChatGPT pour Windows et macOS. Sous Linux, utilisez chatgpt.com dans votre navigateur ou un client compatible avec l’API, tel que CC Switch.",
+    "Use ChatGPT in your browser": "Utiliser ChatGPT dans votre navigateur",
+    "Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.": "Ouvrez chatgpt.com dans un navigateur compatible et connectez-vous avec votre compte OpenAI. Aucun installateur de bureau Linux n’est nécessaire.",
+    "Open ChatGPT in browser": "Ouvrir ChatGPT dans le navigateur"
   }
 }

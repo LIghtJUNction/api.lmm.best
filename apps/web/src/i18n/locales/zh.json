@@ -6155,6 +6155,11 @@
     "Retry before using account-specific assistant tools.": "请重试后再使用需要账户权限的助手工具。",
     "Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.": "L0 访问权限审核期间仍可查看充值优惠。L1 审核通过后即可使用实时订阅套餐比较。",
     "Connection details": "连接信息",
-    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "Base URL 告诉客户端连接到哪里，模型 ID 用于选择模型，API key 是每次请求携带的秘密凭证。"
+    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "Base URL 告诉客户端连接到哪里，模型 ID 用于选择模型，API key 是每次请求携带的秘密凭证。",
+    "The official ChatGPT desktop app is not available for Linux": "ChatGPT 官方桌面应用暂不支持 Linux",
+    "OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.": "OpenAI 目前仅提供 Windows 和 macOS 版 ChatGPT 桌面安装程序。在 Linux 上，请通过浏览器使用 chatgpt.com，或选择 CC Switch 等兼容 API 的客户端。",
+    "Use ChatGPT in your browser": "在浏览器中使用 ChatGPT",
+    "Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.": "请在受支持的浏览器中打开 chatgpt.com，并登录你的 OpenAI 账户。无需安装 Linux 桌面程序。",
+    "Open ChatGPT in browser": "在浏览器中打开 ChatGPT"
   }
 }

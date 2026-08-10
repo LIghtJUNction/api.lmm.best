@@ -57,6 +57,7 @@ const CC_SWITCH_PROVIDER_DOCS =
 const CC_SWITCH_DESKTOP_DOCS =
   'https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/2-providers/2.6-claude-desktop.md'
 const CHATGPT_DOWNLOAD = 'https://chatgpt.com/download/'
+const CHATGPT_WEB = 'https://chatgpt.com/'
 const PLATFORM_LABELS: Record<AssistantSetupPlatform, string> = {
   windows: 'Windows',
   macos: 'macOS',
@@ -141,6 +142,7 @@ export function AssistantSetupTool(props: {
   const sessionCommand = getClaudeSessionCommand(platform, props.rootUrl, model)
   const ccSwitchInstall = getCCSwitchInstallGuide(platform)
   const ccSwitchConfig = getCCSwitchClaudeProviderJSON(props.rootUrl, model)
+  const chatGPTDesktopAvailable = platform !== 'linux'
 
   return (
     <Card size='sm'>
@@ -419,6 +421,20 @@ export function AssistantSetupTool(props: {
           </TabsContent>
 
           <TabsContent value='chatgpt' className='mt-3 grid gap-3'>
+            {!chatGPTDesktopAvailable ? (
+              <Alert>
+                <AlertTitle>
+                  {t(
+                    'The official ChatGPT desktop app is not available for Linux'
+                  )}
+                </AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.'
+                  )}
+                </AlertDescription>
+              </Alert>
+            ) : null}
             <div className='bg-muted/40 rounded-lg border p-3'>
               <div className='flex items-center gap-2 text-sm font-medium'>
                 <Terminal className='size-4' aria-hidden='true' />
@@ -433,10 +449,20 @@ export function AssistantSetupTool(props: {
             <ol className='grid gap-3' aria-label={t('ChatGPT setup steps')}>
               <SetupStep
                 number={1}
-                title={t('Install the official ChatGPT app')}
-                description={t(
-                  'Open the official download page, choose a supported desktop installer, install it, and sign in with your OpenAI account.'
-                )}
+                title={
+                  chatGPTDesktopAvailable
+                    ? t('Install the official ChatGPT app')
+                    : t('Use ChatGPT in your browser')
+                }
+                description={
+                  chatGPTDesktopAvailable
+                    ? t(
+                        'Open the official download page, choose a supported desktop installer, install it, and sign in with your OpenAI account.'
+                      )
+                    : t(
+                        'Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.'
+                      )
+                }
               />
               <SetupStep
                 number={2}
@@ -456,8 +482,12 @@ export function AssistantSetupTool(props: {
             </div>
             <div className='flex flex-wrap gap-2'>
               <OfficialLink
-                href={CHATGPT_DOWNLOAD}
-                label={t('Download official ChatGPT')}
+                href={chatGPTDesktopAvailable ? CHATGPT_DOWNLOAD : CHATGPT_WEB}
+                label={
+                  chatGPTDesktopAvailable
+                    ? t('Download official ChatGPT')
+                    : t('Open ChatGPT in browser')
+                }
               />
               <Button
                 size='sm'
