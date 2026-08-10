@@ -15,7 +15,12 @@ curl_max_time=15
 listener_wait_attempts=${LMM_AUTH_LISTENER_WAIT_ATTEMPTS:-1200}
 approval_mode=${LMM_AUTH_LISTENER_APPROVAL:-0}
 probe_only=${LMM_AUTH_LISTENER_PROBE_ONLY:-0}
-expected_scenarios=36
+runtime_root=${LMM_AUTH_LISTENER_TMP_ROOT:-/tmp}
+[[ $runtime_root == /* && -d $runtime_root && ! -L $runtime_root ]] || {
+  echo 'LMM_AUTH_LISTENER_TMP_ROOT must be an absolute, non-symlink directory' >&2
+  exit 2
+}
+expected_scenarios=37
 scenario_total=0
 exact_matches=0
 mismatch_count=0
@@ -224,7 +229,7 @@ cleanup() {
   fi
   rm -f -- "$go_valkey_config" "$rust_valkey_config"
   case "$runtime" in
-    /tmp/lmm-auth-listener.*)
+    "$runtime_root"/lmm-auth-listener.*)
       if [[ ${LMM_KEEP_AUTH_LISTENER_RUNTIME:-0} == 1 ]]; then
         echo "preserved auth listener runtime: $runtime" >&2
       else
@@ -298,7 +303,7 @@ if [[ $probe_only == 1 ]]; then
   jq -cn --arg legacy_revision "$legacy_revision" --arg frozen_go_manifest_sha256 "$frozen_go_manifest_sha256" --arg rust_build_input_sha256 "$rust_build_input_sha256" '{test:"auth-listener-differential",mode:"probe",approval:false,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,result:"passed"}'
   exit 0
 fi
-runtime=$(mktemp -d /tmp/lmm-auth-listener.XXXXXX)
+runtime=$(mktemp -d "$runtime_root/lmm-auth-listener.XXXXXX")
 go_valkey_config="$runtime/go-valkey.conf"
 rust_valkey_config="$runtime/rust-valkey.conf"
 
@@ -587,6 +592,11 @@ CREATE TABLE custom_oauth_providers (
   enabled BOOLEAN, client_id TEXT, authorization_endpoint TEXT, scopes TEXT
 );
 CREATE TABLE setups (id BIGINT PRIMARY KEY);
+CREATE TABLE system_tasks (
+  id BIGINT PRIMARY KEY, task_id VARCHAR(64), type VARCHAR(64), status VARCHAR(32),
+  active_key VARCHAR(64), payload TEXT, state TEXT, result TEXT, error TEXT,
+  locked_by VARCHAR(128), created_at BIGINT, updated_at BIGINT
+);
 CREATE TABLE users (id BIGINT PRIMARY KEY, username TEXT UNIQUE, password TEXT NOT NULL, display_name TEXT, role BIGINT DEFAULT 1, status BIGINT DEFAULT 1, email TEXT, github_id TEXT, discord_id TEXT, oidc_id TEXT, wechat_id TEXT, telegram_id TEXT, access_token TEXT, quota BIGINT DEFAULT 0, used_quota BIGINT DEFAULT 0, request_count BIGINT DEFAULT 0, "group" TEXT DEFAULT 'default', aff_code TEXT, aff_count BIGINT DEFAULT 0, aff_quota BIGINT DEFAULT 0, aff_history BIGINT DEFAULT 0, inviter_id BIGINT, deleted_at TIMESTAMPTZ, linux_do_id TEXT, setting TEXT DEFAULT '{}', stripe_customer TEXT, last_login_at BIGINT DEFAULT 0, auth_version BIGINT NOT NULL DEFAULT 1, console_activated_at BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, user_id BIGINT NOT NULL, version BIGINT NOT NULL, user_auth_version BIGINT NOT NULL, status TEXT NOT NULL, refresh_hash CHAR(64) NOT NULL, previous_refresh_hash TEXT, previous_valid_until BIGINT NOT NULL DEFAULT 0, login_method TEXT NOT NULL, ip TEXT, user_agent TEXT, created_at BIGINT NOT NULL, last_active_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, revoked_at BIGINT NOT NULL DEFAULT 0, revoked_reason TEXT);
 CREATE TABLE two_fas (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id BIGINT NOT NULL, secret TEXT NOT NULL, is_enabled BOOLEAN NOT NULL DEFAULT FALSE, failed_attempts BIGINT DEFAULT 0, locked_until TIMESTAMPTZ, last_used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
@@ -597,7 +607,7 @@ CREATE SEQUENCE tokens_id_seq;
 CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), user_id BIGINT NOT NULL, key VARCHAR(128) UNIQUE, status INTEGER DEFAULT 1, name TEXT DEFAULT '', created_time BIGINT DEFAULT 0, accessed_time BIGINT DEFAULT 0, expired_time BIGINT DEFAULT -1, remain_quota BIGINT DEFAULT 0, unlimited_quota BOOLEAN DEFAULT FALSE, model_limits_enabled BOOLEAN DEFAULT FALSE, model_limits TEXT, allow_ips TEXT DEFAULT '', used_quota BIGINT DEFAULT 0, "group" TEXT DEFAULT '', cross_group_retry BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMPTZ);
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 GRANT USAGE ON SCHEMA public TO lmm_auth_runtime;
-GRANT SELECT, INSERT, UPDATE, DELETE ON options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, lmm_schema_contract TO lmm_auth_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON options, custom_oauth_providers, setups, system_tasks, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, lmm_schema_contract TO lmm_auth_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON tokens TO lmm_auth_runtime;
 -- Readiness validates these mounted bounty tables before the auth matrix runs.
 -- Keep this fixture least-privilege: the auth differential never exercises
@@ -624,6 +634,14 @@ psql -h 127.0.0.1 -p "$pg_port" -d auth_go -v ON_ERROR_STOP=1 \
   -c "INSERT INTO options (key, value) VALUES ('GroupRatio', '{\"parity\":1}') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 psql -h 127.0.0.1 -p "$pg_port" -d auth_rust -v ON_ERROR_STOP=1 \
   -c "INSERT INTO options (key, value) VALUES ('GroupRatio', '{\"parity\":1}') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
+
+# Seed one deterministic root-visible task row. The list endpoint is read-only;
+# this row lets both real listeners exercise payload/state/result JSON decoding
+# without invoking the task runner or any external provider.
+for database in auth_go auth_rust; do
+  psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 \
+    -c "INSERT INTO system_tasks (id, task_id, type, status, active_key, payload, state, result, error, locked_by, created_at, updated_at) VALUES (900001, 'systask_parity_fixture', 'model_update', 'succeeded', 'model_update', '{\"fixture\":true}', '{\"step\":\"done\"}', '{\"updated\":1}', '', '', 1700000000, 1700000010)" >/dev/null
+done
 
 # Go loads the process-wide ratio cache during startup.  Restart only the
 # disposable Go listener after the fixture option is seeded so both listeners
@@ -695,6 +713,9 @@ for base in "http://127.0.0.1:$go_port" "http://127.0.0.1:$rust_port"; do
       capture_listener_response "$prefix.status-test" -H "authorization: Bearer $token" "$base/api/status/test"
       grep -qx 200 "$prefix.status-test.status"
       jq -e '.success == true and .message == "Server is running" and .http_stats.active_connections == 0' "$prefix.status-test.json" >/dev/null
+      capture_listener_response "$prefix.system-task-list" -H "authorization: Bearer $token" "$base/api/system-task/list?limit=1"
+      grep -qx 200 "$prefix.system-task-list.status"
+      jq -e '.success == true and .message == "" and (.data | length == 1) and .data[0].task_id == "systask_parity_fixture" and .data[0].payload.fixture == true and .data[0].state.step == "done" and .data[0].result.updated == 1' "$prefix.system-task-list.json" >/dev/null
     fi
     capture_listener_response "$prefix.origin-missing" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" "$base/api/user/auth/refresh"
     capture_listener_response "$prefix.origin-evil" -X POST -H "cookie: $cookie" -H "x-auth-session: $sid" -H 'origin: https://evil.example' "$base/api/user/auth/refresh"
@@ -765,6 +786,7 @@ for schedule in a-first b-first; do
 done
 assert_listener_response_match a-first.group
 assert_listener_response_match a-first.status-test
+assert_listener_response_match a-first.system-task-list
 
 # Expire the just-rotated old token in the real database, then prove a replay
 # revokes the family over each TCP listener.  This avoids a wall-clock sleep
@@ -1005,4 +1027,4 @@ jq -cn \
   --argjson scenarios "$scenario_total" \
   --argjson exact_matches "$exact_matches" \
   --argjson mismatches "$mismatch_count" \
-  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'
+  '{test:"auth-listener-differential",mode:"full",approval:$approval,legacy_revision:$legacy_revision,frozen_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_sha256:$rust_build_input_sha256,rust_binary_sha256:$rust_binary_sha256,expected_scenarios:$expected_scenarios,scenarios:$scenarios,exact_matches:$exact_matches,mismatches:$mismatches,postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,random_isolated_ports:true,owned_listener_lifecycle:true,password_protected_valkey:true,curl_timeouts:true,covered_routes:["POST /api/user/login","POST /api/user/auth/refresh","POST /api/user/auth/logout","GET /api/user/self","GET /api/group/","GET /api/status/test","GET /api/system-task/list"],self_policy_cases:["session-role-0-403","pat-role-0-403","pat-role-2-401","session-disabled-401","pat-disabled-401"],self_policy_rejections_read_only:true,refresh_pair_multiset:["a-first","b-first"],origin_rejection_no_cache_headers:true,two_factor_durable_flow_and_side_effects:true,hidden_routes_404:true,expired_refresh_replay:true,global_limiter_429:true,acl_revoke_restore:["users","user_sessions","two_fas","casbin_rule"],auth_flow_insert_revoke_restore:true,valkey_stop_restore:true,result:"passed"}'

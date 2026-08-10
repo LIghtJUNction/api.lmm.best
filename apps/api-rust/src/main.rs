@@ -21,6 +21,10 @@ use lmm_api_rs::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
             spawn_maintenance as spawn_subscription_maintenance,
         },
+        control_admin::{
+            ControlAdminState, DashboardControlAdminAuthorizer, HttpOAuthDiscoveryClient,
+            system_task_list_router,
+        },
         control_public::{
             ControlPublicHttpState, PgControlPublicRepository, ReqwestUptimeKumaClient,
             control_public_router,
@@ -381,6 +385,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )),
             )),
         );
+        let system_task_list = http::api_global_rate_limited_surface_with_legacy_headers(
+            &app_state,
+            system_task_list_router(ControlAdminState::new(
+                pg.clone(),
+                Arc::new(DashboardControlAdminAuthorizer::new(Arc::clone(&auth))),
+                Arc::new(HttpOAuthDiscoveryClient::production().map_err(|_| {
+                    io::Error::other("failed to initialize OAuth discovery client")
+                })?),
+            )),
+        );
         let open_source_bounties =
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
         // The single-model GET is a read-only static catalogue lookup. Keep
@@ -430,6 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(billing_subscriptions)
             .merge(observability)
             .merge(status_test)
+            .merge(system_task_list)
             .merge(open_source_bounties)
             .merge(model_lookup)
             .merge(control_public)
