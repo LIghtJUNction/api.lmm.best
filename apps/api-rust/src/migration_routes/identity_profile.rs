@@ -877,14 +877,14 @@ async fn refresh_user_cache(state: &ProfileState, user_id: i64) {
             return;
         }
     };
-    let status: i32 = match row.try_get("status") {
+    let status: i64 = match row.try_get("status") {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(%error, user_id, "profile user cache status decode failed");
             return;
         }
     };
-    let role: i32 = match row.try_get("role") {
+    let role: i64 = match row.try_get("role") {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(%error, user_id, "profile user cache role decode failed");
