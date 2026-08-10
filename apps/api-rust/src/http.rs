@@ -322,6 +322,25 @@ pub fn api_global_rate_limited_surface(state: &AppState, surface: Router) -> Rou
         ))))
 }
 
+/// Adds the API global limiter and the legacy version/request-id response
+/// headers to a narrow normal-listener surface.
+pub fn api_global_rate_limited_surface_with_legacy_headers(
+    state: &AppState,
+    surface: Router,
+) -> Router {
+    surface
+        .layer(middleware::from_fn(enforce_auth_global_rate_limit))
+        .layer(Extension(AuthGlobalRateLimiter(Arc::clone(
+            &state.global_api_rate_limiter,
+        ))))
+        .layer(middleware::from_fn_with_state(
+            AuthLegacyHeaderState {
+                version: state.status.version().to_owned(),
+            },
+            attach_auth_legacy_headers,
+        ))
+}
+
 async fn restrict_auth_surface(request: Request, next: Next) -> Response {
     if matches!(request.uri().path(), "/api/user/login/2fa") {
         return not_found(request).await;

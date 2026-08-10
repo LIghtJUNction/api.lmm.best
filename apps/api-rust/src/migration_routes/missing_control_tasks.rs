@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{RawQuery, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -28,6 +28,7 @@ const ROOT_ROLE: i64 = 100;
 const USER_ROLE: i64 = 1;
 const DEFAULT_PAGE_SIZE: i64 = 10;
 const MAX_PAGE_SIZE: i64 = 100;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// The three legacy task collections selected by the HTTP boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,6 +82,38 @@ pub trait ControlTaskStore: Send + Sync {
 pub trait ControlTaskStatusProbe: Send + Sync {
     /// Checks dependencies and returns the direct legacy `http_stats` object.
     async fn test_status(&self) -> Result<Value, ControlTaskStatusError>;
+}
+
+/// Provides the process-owned statistics object used by the administrator
+/// status route.  The provider is kept outside the PostgreSQL adapter so the
+/// route cannot manufacture a counter for a listener that has no runtime
+/// boundary.
+pub type ControlTaskStatsProvider = Arc<dyn Fn() -> Value + Send + Sync>;
+
+/// PostgreSQL and listener-runtime implementation of the status probe.
+#[derive(Clone)]
+pub struct PgControlTaskStatusProbe {
+    pg: PgPool,
+    stats: ControlTaskStatsProvider,
+}
+
+impl PgControlTaskStatusProbe {
+    /// Builds a status probe from the application database and runtime stats.
+    #[must_use]
+    pub fn new(pg: PgPool, stats: ControlTaskStatsProvider) -> Self {
+        Self { pg, stats }
+    }
+}
+
+#[async_trait]
+impl ControlTaskStatusProbe for PgControlTaskStatusProbe {
+    async fn test_status(&self) -> Result<Value, ControlTaskStatusError> {
+        sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(&self.pg)
+            .await
+            .map_err(|_| ControlTaskStatusError::DatabaseUnavailable)?;
+        Ok((self.stats)())
+    }
 }
 
 /// PostgreSQL implementation of the task listing boundary.
@@ -269,6 +302,24 @@ pub struct MissingControlTasksState {
     status: Arc<dyn ControlTaskStatusProbe>,
 }
 
+/// State for the independently mountable administrator status route.
+#[derive(Clone)]
+pub struct ControlTaskStatusState {
+    authorizer: Arc<dyn ObservabilityAuthorizer>,
+    status: Arc<dyn ControlTaskStatusProbe>,
+}
+
+impl ControlTaskStatusState {
+    /// Builds the status route state from application-owned dependencies.
+    #[must_use]
+    pub fn new(
+        authorizer: Arc<dyn ObservabilityAuthorizer>,
+        status: Arc<dyn ControlTaskStatusProbe>,
+    ) -> Self {
+        Self { authorizer, status }
+    }
+}
+
 impl MissingControlTasksState {
     /// Builds route state from application-owned persistence, authorization,
     /// and process-health adapters.
@@ -296,6 +347,13 @@ pub fn missing_control_tasks_router(state: MissingControlTasksState) -> Router {
         .route("/api/mj/self", get(self_midjourney))
         .route("/api/task/self", get(self_tasks))
         .route("/api/status/test", get(test_status))
+        .with_state(state)
+}
+
+/// Builds only `GET /api/status/test` for the normal listener.
+pub fn status_test_router(state: ControlTaskStatusState) -> Router {
+    Router::new()
+        .route("/api/status/test", get(status_test_only))
         .with_state(state)
 }
 
@@ -373,11 +431,25 @@ async fn test_status(
     State(state): State<MissingControlTasksState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authorize(&state.authorizer, &headers, ObservabilityAccess::Admin).await
-    {
+    test_status_response(&state.authorizer, &state.status, &headers).await
+}
+
+async fn status_test_only(
+    State(state): State<ControlTaskStatusState>,
+    headers: HeaderMap,
+) -> Response {
+    test_status_response(&state.authorizer, &state.status, &headers).await
+}
+
+async fn test_status_response(
+    authorizer: &Arc<dyn ObservabilityAuthorizer>,
+    status: &Arc<dyn ControlTaskStatusProbe>,
+    headers: &HeaderMap,
+) -> Response {
+    if let Err(response) = authorize(authorizer, headers, ObservabilityAccess::Admin).await {
         return response;
     }
-    match state.status.test_status().await {
+    let response = match status.test_status().await {
         Ok(http_stats) => Json(json!({
             "success": true,
             "message": "Server is running",
@@ -403,7 +475,15 @@ async fn test_status(
             })),
         )
             .into_response(),
-    }
+    };
+    with_auth_version(response)
+}
+
+fn with_auth_version(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 async fn authorize(
