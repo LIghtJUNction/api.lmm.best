@@ -253,7 +253,7 @@ jobs:
     steps:
       - name: Install checkout and package validation tools
         run: |
-          pacman --sync --refresh --noconfirm git shellcheck
+          pacman --sync --refresh --noconfirm git libarchive shellcheck
           useradd --create-home package-builder
           install -d -o package-builder -g package-builder /home/package-builder/lmm-ci-tmp
 
@@ -265,7 +265,7 @@ jobs:
       - name: Validate all public AUR packages
         run: |
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
-          runuser --user package-builder -- bash packaging/aur/test-matrix.sh
-          runuser --user package-builder -- bash packaging/aur/test-bin-makepkg.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-matrix.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-bin-makepkg.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-precutover-packages.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-package-roundtrip.sh
