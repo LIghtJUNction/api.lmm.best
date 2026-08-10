@@ -21,6 +21,7 @@ GET	/api/subscription/plans	apps/api-rust/src/main.rs
 GET	/api/subscription/self	apps/api-rust/src/main.rs
 PUT	/api/subscription/self/preference	apps/api-rust/src/main.rs
 GET	/api/home_page_content	apps/api-rust/src/http.rs:195
+GET	/api/privacy-policy	apps/api-rust/src/main.rs:control_public;apps/api-rust/src/migration_routes/control_public.rs:control_public_router
 GET	/api/open-source-bounties	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/projects/:id	apps/api-rust/src/main.rs
 GET	/api/open-source-bounties/config	apps/api-rust/src/main.rs
@@ -46,6 +47,7 @@ GET	/api/log/stat	apps/api-rust/src/main.rs:190
 GET	/api/log/token	apps/api-rust/src/main.rs:190
 GET	/api/notice	apps/api-rust/src/http.rs:193
 GET	/api/status	apps/api-rust/src/http.rs:192
+GET	/api/user-agreement	apps/api-rust/src/main.rs:control_public;apps/api-rust/src/migration_routes/control_public.rs:control_public_router
 GET	/api/token/	apps/api-rust/src/main.rs
 POST	/api/token/	apps/api-rust/src/main.rs
 PUT	/api/token/	apps/api-rust/src/main.rs
