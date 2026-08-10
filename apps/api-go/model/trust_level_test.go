@@ -328,3 +328,22 @@ func TestEnrichUsersTrustLevelsQueriesOnlyOrdinaryUsersWithoutOverrides(t *testi
 	assert.NotContains(t, counter.countSQL, "34")
 	assert.NotContains(t, counter.countSQL, "35")
 }
+
+func TestEnrichUsersTrustLevelsHonorsConsoleActivation(t *testing.T) {
+	previousDB := DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	require.NoError(t, db.AutoMigrate(&TopUp{}))
+	t.Cleanup(func() {
+		DB = previousDB
+		sqlDB, _ := db.DB()
+		_ = sqlDB.Close()
+	})
+
+	users := []*User{{Id: 36, Role: common.RoleCommonUser, ConsoleActivatedAt: 1}}
+	require.NoError(t, EnrichUsersTrustLevels(users))
+	require.NotNil(t, users[0].TrustLevelInfo)
+	assert.Equal(t, TrustLevelMinUser+1, users[0].TrustLevelInfo.Level)
+	assert.Equal(t, TrustLevelMinUser+1, users[0].TrustLevelInfo.AutomaticLevel)
+}
