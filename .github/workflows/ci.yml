@@ -268,4 +268,5 @@ jobs:
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-bin-makepkg.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-precutover-packages.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-package-roundtrip.sh
+          install -d -m0700 /run/user/0
           env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-deploy-contract.sh
