@@ -325,6 +325,27 @@ async fn identity_admin_authenticates_before_malformed_json_binding() {
         .expect("response");
     assert_eq!(non_administrator.status(), StatusCode::FORBIDDEN);
     assert!(!non_administrator.headers().contains_key("auth-version"));
+
+    let authenticated = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("authorization", "Bearer dashboard-token")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(authenticated.status(), StatusCode::OK);
+    assert_eq!(
+        authenticated.headers()["auth-version"],
+        "864b7076dbcd0a3c01b5520316720ebf"
+    );
+    let body = axum::body::to_bytes(authenticated.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body: Value = serde_json::from_slice(&body).expect("JSON envelope");
+    assert_eq!(body["success"], false);
 }
 
 #[tokio::test]
