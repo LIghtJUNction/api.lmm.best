@@ -77,11 +77,15 @@ copy_package_payload() {
       direct:lmm-api-go:/etc/|direct:lmm-api-go:/etc/lmm-api-go/|\
       direct:lmm-api-go:/usr/|direct:lmm-api-go:/usr/bin/|direct:lmm-api-go:/usr/bin/lmm-api-go|\
       direct:lmm-api-go:/usr/lib/|direct:lmm-api-go:/usr/lib/systemd/|direct:lmm-api-go:/usr/lib/systemd/system/|\
+      direct:lmm-api-go:/usr/lib/systemd/system/geoip2-country-update.service|\
+      direct:lmm-api-go:/usr/lib/systemd/system/geoip2-country-update.timer|\
       direct:lmm-api-go:/usr/lib/systemd/system/lmm-api-go.service|direct:lmm-api-go:/usr/share/|\
       direct:lmm-api-go:/usr/share/doc/|direct:lmm-api-go:/usr/share/doc/lmm-api-go/|\
       direct:lmm-api-go:/usr/share/doc/lmm-api-go/*|direct:lmm-api-go:/usr/share/licenses/|\
       direct:lmm-api-go:/usr/share/licenses/lmm-api-go/|direct:lmm-api-go:/usr/share/licenses/lmm-api-go/*|\
-      direct:lmm-api-go:/usr/share/lmm-api-go/|direct:lmm-api-go:/usr/share/lmm-api-go/frontend-dist/|\
+      direct:lmm-api-go:/usr/share/lmm-api-go/|direct:lmm-api-go:/usr/share/lmm-api-go/edge-policy/|\
+      direct:lmm-api-go:/usr/share/lmm-api-go/edge-policy/*|\
+      direct:lmm-api-go:/usr/share/lmm-api-go/frontend-dist/|\
       direct:lmm-api-go:/usr/share/lmm-api-go/frontend-dist/*) ;;
       *) die "package exposes an unexpected path: $package:$logical_source" ;;
     esac
