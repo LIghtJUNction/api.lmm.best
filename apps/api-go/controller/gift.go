@@ -26,7 +26,8 @@ func GetAvailableGifts(c *gin.Context) {
 	})
 }
 
-// ClaimGift 用户主动领取限时礼包（幂等，重复领取返回已领取）
+// ClaimGift 用户主动领取限时礼包。接口幂等：重复领取不会重复发放额度，
+// 返回 200 与已有领取记录（data.already_claimed 为 true）。
 func ClaimGift(c *gin.Context) {
 	userId := c.GetInt("id")
 	giftId, err := strconv.Atoi(c.Param("id"))
@@ -34,9 +35,20 @@ func ClaimGift(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	claim, err := model.ClaimGift(userId, giftId)
+	claim, alreadyClaimed, err := model.ClaimGift(userId, giftId)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if alreadyClaimed {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "已领取过该礼包",
+			"data": gin.H{
+				"claim":           claim,
+				"already_claimed": true,
+			},
+		})
 		return
 	}
 	model.RecordLog(userId, model.LogTypeTopup,
@@ -44,7 +56,10 @@ func ClaimGift(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "领取成功",
-		"data":    claim,
+		"data": gin.H{
+			"claim":           claim,
+			"already_claimed": false,
+		},
 	})
 }
 

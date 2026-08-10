@@ -71,8 +71,9 @@ func TestClaimGiftSuccess(t *testing.T) {
 	user := createGiftTestUser(t, "gift_user_ok", now-10*86400, 500)
 	gift := createTestGift(t, 1000, now-3600, now+86400, 100, 7)
 
-	claim, err := ClaimGift(user.Id, gift.Id)
+	claim, alreadyClaimed, err := ClaimGift(user.Id, gift.Id)
 	require.NoError(t, err)
+	require.False(t, alreadyClaimed)
 	require.Equal(t, 1000, claim.Quota)
 
 	updated, err := GetUserById(user.Id, true)
@@ -86,10 +87,15 @@ func TestClaimGiftDuplicateRejected(t *testing.T) {
 	user := createGiftTestUser(t, "gift_user_dup", 0, 0)
 	gift := createTestGift(t, 100, now-3600, now+86400, 0, 0)
 
-	_, err := ClaimGift(user.Id, gift.Id)
+	first, alreadyClaimed, err := ClaimGift(user.Id, gift.Id)
 	require.NoError(t, err)
-	_, err = ClaimGift(user.Id, gift.Id)
-	require.ErrorIs(t, err, ErrGiftAlreadyClaimed)
+	require.False(t, alreadyClaimed)
+
+	// 重复领取：幂等返回已有记录，不重复发放额度
+	second, alreadyClaimed, err := ClaimGift(user.Id, gift.Id)
+	require.NoError(t, err)
+	require.True(t, alreadyClaimed)
+	require.Equal(t, first.Quota, second.Quota)
 
 	updated, err := GetUserById(user.Id, true)
 	require.NoError(t, err)
@@ -102,11 +108,11 @@ func TestClaimGiftWindowEnforced(t *testing.T) {
 	user := createGiftTestUser(t, "gift_user_window", 0, 0)
 
 	notStarted := createTestGift(t, 100, now+3600, now+86400, 0, 0)
-	_, err := ClaimGift(user.Id, notStarted.Id)
+	_, _, err := ClaimGift(user.Id, notStarted.Id)
 	require.ErrorIs(t, err, ErrGiftNotStarted)
 
 	expired := createTestGift(t, 100, now-86400, now-3600, 0, 0)
-	_, err = ClaimGift(user.Id, expired.Id)
+	_, _, err = ClaimGift(user.Id, expired.Id)
 	require.ErrorIs(t, err, ErrGiftExpired)
 }
 
@@ -117,7 +123,7 @@ func TestClaimGiftEligibilityGates(t *testing.T) {
 	user := createGiftTestUser(t, "gift_user_gate", now-86400, 10)
 	gift := createTestGift(t, 100, now-3600, now+86400, 100, 7)
 
-	_, err := ClaimGift(user.Id, gift.Id)
+	_, _, err := ClaimGift(user.Id, gift.Id)
 	require.ErrorIs(t, err, ErrGiftNotEligible)
 }
 
@@ -129,7 +135,7 @@ func TestClaimGiftDisabledRejected(t *testing.T) {
 	gift.Enabled = false
 	require.NoError(t, UpdateGift(gift))
 
-	_, err := ClaimGift(user.Id, gift.Id)
+	_, _, err := ClaimGift(user.Id, gift.Id)
 	require.ErrorIs(t, err, ErrGiftNotFound)
 }
 
@@ -137,15 +143,59 @@ func TestGetAvailableGiftsForUser(t *testing.T) {
 	setupGiftTestDB(t)
 	now := time.Now().Unix()
 	user := createGiftTestUser(t, "gift_user_list", 0, 0)
-	active := createTestGift(t, 100, now-3600, now+86400, 0, 0)
-	createTestGift(t, 100, now-86400*10, now-86400*9, 0, 0) // 过期太久，不展示
 
-	_, err := ClaimGift(user.Id, active.Id)
+	// 快乐路径：有效且可领取
+	active := createTestGift(t, 100, now-3600, now+86400, 0, 0)
+	// 过期超过 7 天宽限期：不展示
+	createTestGift(t, 100, now-86400*10, now-86400*9, 0, 0)
+	// 刚过期（宽限期内）：展示但不可领取
+	recentlyExpired := createTestGift(t, 100, now-86400*2, now-3600, 0, 0)
+	// 不满足门槛：展示但不可领取
+	ineligibleByGates := createTestGift(t, 100, now-3600, now+86400, 1, 1)
+	// 禁用：不展示
+	disabled := createTestGift(t, 100, now-3600, now+86400, 0, 0)
+	disabled.Enabled = false
+	require.NoError(t, UpdateGift(disabled))
+
+	_, _, err := ClaimGift(user.Id, active.Id)
 	require.NoError(t, err)
 
 	gifts, err := GetAvailableGiftsForUser(user.Id)
 	require.NoError(t, err)
-	require.Len(t, gifts, 1)
-	require.True(t, gifts[0].Claimed)
-	require.True(t, gifts[0].Eligible)
+	require.Len(t, gifts, 3)
+
+	var activeGift, expiredGift, gateGift *GiftWithClaimStatus
+	for i := range gifts {
+		switch gifts[i].Id {
+		case active.Id:
+			activeGift = &gifts[i]
+		case recentlyExpired.Id:
+			expiredGift = &gifts[i]
+		case ineligibleByGates.Id:
+			gateGift = &gifts[i]
+		case disabled.Id:
+			t.Fatalf("disabled gift %d should not be listed", disabled.Id)
+		}
+	}
+	require.NotNil(t, activeGift)
+	require.NotNil(t, expiredGift)
+	require.NotNil(t, gateGift)
+
+	t.Run("active gift is claimed and eligible", func(t *testing.T) {
+		require.True(t, activeGift.Claimed)
+		require.True(t, activeGift.Eligible)
+		require.Empty(t, activeGift.Reason)
+	})
+
+	t.Run("recently expired gift is listed but ineligible", func(t *testing.T) {
+		require.False(t, expiredGift.Claimed)
+		require.False(t, expiredGift.Eligible)
+		require.Equal(t, ErrGiftExpired.Error(), expiredGift.Reason)
+	})
+
+	t.Run("gift failing gates is listed but ineligible", func(t *testing.T) {
+		require.False(t, gateGift.Claimed)
+		require.False(t, gateGift.Eligible)
+		require.Equal(t, ErrGiftNotEligible.Error(), gateGift.Reason)
+	})
 }
