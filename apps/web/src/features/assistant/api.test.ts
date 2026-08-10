@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { parseAssistantReply } from './api'
+import { parseAssistantIntent, parseAssistantReply } from './api'
 
 describe('assistant response parsing', () => {
   test('extracts the first assistant message', () => {
@@ -40,5 +40,12 @@ describe('assistant response parsing', () => {
       () => parseAssistantReply({ choices: [] }),
       /Assistant returned no answer/
     )
+  })
+
+  test('accepts only known assistant intent headers', () => {
+    assert.equal(parseAssistantIntent(' client_setup '), 'client_setup')
+    assert.equal(parseAssistantIntent('HUMAN_SUPPORT'), 'human_support')
+    assert.equal(parseAssistantIntent('unknown-intent'), undefined)
+    assert.equal(parseAssistantIntent(undefined), undefined)
   })
 })

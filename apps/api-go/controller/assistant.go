@@ -22,6 +22,8 @@ import (
 
 const assistantMessageMaxRunes = 4000
 
+const assistantIntentHeader = "X-LMM-Assistant-Intent"
+
 const assistantSystemPromptTemplate = `You are the built-in customer assistant for LMM, an AI API service.
 Answer in the user's language and be concise, accurate, and practical.
 You may explain onboarding review, plans, pricing, discounts, API keys, Base URL and model IDs, cost calculations, open-source bounties and tips, and setup for Claude Code, CC Switch, ChatGPT-compatible clients, Windows, Linux, and macOS.
@@ -98,6 +100,8 @@ func PrepareAssistantRequest(c *gin.Context) {
 		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_MESSAGE_TOO_LONG", fmt.Errorf("assistant message must be at most %d characters", assistantMessageMaxRunes))
 		return
 	}
+	intent := model.ClassifyAssistantIntent(input.Message)
+	c.Header(assistantIntentHeader, intent)
 	if userID := c.GetInt("id"); userID > 0 {
 		if err := model.RecordAssistantIntent(userID, input.Message); err != nil {
 			// Product analytics must never make customer support unavailable.

@@ -55,6 +55,7 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	engine.ServeHTTP(response, request)
 
 	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.Equal(t, model.AssistantIntentAPIKey, response.Header().Get(assistantIntentHeader))
 	assert.Equal(t, "/v1/chat/completions", capturedPath)
 	assert.Equal(t, "default", capturedGroup)
 	assert.Equal(t, "server-owned-model", captured.Model)

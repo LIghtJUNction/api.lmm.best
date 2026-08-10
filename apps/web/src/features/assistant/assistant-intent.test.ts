@@ -1,0 +1,39 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+
+import { getAssistantPresetForIntent } from './assistant-intent'
+
+describe('assistant retention actions', () => {
+  test('maps actionable intents to the matching guided flow', () => {
+    assert.equal(getAssistantPresetForIntent('onboarding'), 'onboarding')
+    assert.equal(getAssistantPresetForIntent('plan_purchase'), 'plan')
+    assert.equal(getAssistantPresetForIntent('api_key'), 'api-key')
+    assert.equal(getAssistantPresetForIntent('client_setup'), 'client-setup')
+    assert.equal(getAssistantPresetForIntent('cost'), 'cost')
+    assert.equal(getAssistantPresetForIntent('bounty'), 'bounty')
+    assert.equal(getAssistantPresetForIntent('human_support'), 'human')
+  })
+
+  test('does not force an action for general questions', () => {
+    assert.equal(getAssistantPresetForIntent('other'), undefined)
+    assert.equal(getAssistantPresetForIntent(undefined), undefined)
+  })
+})
