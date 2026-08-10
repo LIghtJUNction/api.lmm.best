@@ -6,9 +6,9 @@ use axum::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::identity_federation::{
-    FederatedLogin, FederatedUser, FederationError, FederationIdentity, FederationPrincipal,
-    FederationProviderError, FederationProviders, FederationState, OAuthFlowContext, router,
-    verify_telegram_authorization,
+    FederatedLogin, FederatedUser, FederationError, FederationIdentity, FederationMutationPublisher,
+    FederationPrincipal, FederationProviderError, FederationProviders, FederationState,
+    OAuthFlowContext, router, verify_telegram_authorization,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -48,6 +48,29 @@ impl FederationIdentity for BoundIdentity {
 
     async fn verify_email_code(&self, _: &str, _: &str) -> Result<bool, FederationError> {
         Ok(false)
+    }
+
+    async fn validate_session_reference(
+        &self,
+        user_id: i64,
+        session_id: &str,
+    ) -> Result<(), FederationError> {
+        (user_id == 7 && session_id == "session-7")
+            .then_some(())
+            .ok_or(FederationError::Unauthorized)
+    }
+}
+
+struct RecordingMutationPublisher;
+
+#[async_trait]
+impl FederationMutationPublisher for RecordingMutationPublisher {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    async fn publish_user(&self, _: i64) -> Result<(), FederationError> {
+        Ok(())
     }
 }
 
@@ -124,6 +147,16 @@ impl FederationProviders for GithubBoundary {
         })
     }
 
+    async fn validate_existing_login(
+        &self,
+        provider: &str,
+        subject: &str,
+    ) -> Result<(), FederationError> {
+        (provider == "telegram" && subject == "12345")
+            .then_some(())
+            .ok_or(FederationError::Internal)
+    }
+
     fn telegram_bot_token(&self) -> Option<String> {
         Some("test-bot-token".to_owned())
     }
@@ -142,7 +175,7 @@ async fn isolated_postgres() -> sqlx::PgPool {
         .connect(&database_url)
         .await
         .expect("connect isolated PostgreSQL");
-    sqlx::query("DROP TABLE IF EXISTS auth_flows, users CASCADE")
+    sqlx::query("DROP TABLE IF EXISTS auth_flows, external_identity_claims, users CASCADE")
         .execute(&pool)
         .await
         .expect("reset isolated identity tables");
@@ -158,6 +191,12 @@ async fn isolated_postgres() -> sqlx::PgPool {
     .execute(&pool)
     .await
     .expect("create auth_flows");
+    sqlx::query(
+        "CREATE TABLE external_identity_claims (provider TEXT NOT NULL, subject TEXT NOT NULL, user_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (provider, subject), UNIQUE (provider, user_id))",
+    )
+    .execute(&pool)
+    .await
+    .expect("create external identity claims");
     sqlx::query("INSERT INTO users (id, github_id, status) VALUES (7, '', 1)")
         .execute(&pool)
         .await
@@ -419,13 +458,15 @@ async fn oauth_bind_callback_consumes_postgres_state_and_claims_the_account_once
     let pool = isolated_postgres().await;
     let app = router(
         FederationState::new(pool.clone(), Arc::new(BoundIdentity), "test-secret")
-            .with_providers(Arc::new(GithubBoundary)),
+            .with_providers(Arc::new(GithubBoundary))
+            .with_mutation_publisher(Arc::new(RecordingMutationPublisher)),
     );
 
     let state_response = app
         .clone()
         .oneshot(
             Request::post("/api/oauth/state")
+                .header("authorization", "Bearer listener-verified")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"provider":"github","intent":"bind"}"#))
                 .expect("state request is valid"),
