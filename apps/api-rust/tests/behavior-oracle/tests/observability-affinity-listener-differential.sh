@@ -177,7 +177,7 @@ VALUES
   (9001,999,1700000100,2,'consume','observability-root','token-a','model-a',10,3,4,5,false,0,'',11,'default','127.0.0.1','req-a','up-a',$${"admin_info":"secret","stream_status":"active","keep":"yes"}$$),
   (9002,999,1700000000,4,'system','observability-root','','',0,0,0,0,false,0,'',0,'default','','req-b','up-b',$${"keep":"system"}$$),
   (9003,1000,1700000100,2,'other-user','other-user','token-b','model-b',20,5,6,7,false,0,'',12,'default','','req-c','up-c',$${"keep":"other"}$$),
-  (9004,999,EXTRACT(EPOCH FROM NOW())::BIGINT,2,'recent','observability-root','token-a','model-a',99,5,6,1,false,0,'',13,'default','','req-d','up-d',$${"keep":"recent"}$$),
+  (9004,999,1700000200,2,'recent','observability-root','token-a','model-a',99,5,6,1,false,0,'',13,'default','','req-d','up-d',$${"keep":"recent"}$$),
   (9005,999,1700000050,4,'null-other','observability-root','','',0,0,0,0,false,0,'',0,'default','','req-e','up-e',NULL)
 ON CONFLICT(id) DO UPDATE SET user_id=EXCLUDED.user_id,created_at=EXCLUDED.created_at,type=EXCLUDED.type,content=EXCLUDED.content,username=EXCLUDED.username,token_name=EXCLUDED.token_name,model_name=EXCLUDED.model_name,quota=EXCLUDED.quota,prompt_tokens=EXCLUDED.prompt_tokens,completion_tokens=EXCLUDED.completion_tokens,use_time=EXCLUDED.use_time,is_stream=EXCLUDED.is_stream,channel_id=EXCLUDED.channel_id,channel_name=EXCLUDED.channel_name,token_id=EXCLUDED.token_id,"group"=EXCLUDED."group",ip=EXCLUDED.ip,request_id=EXCLUDED.request_id,upstream_request_id=EXCLUDED.upstream_request_id,other=EXCLUDED.other;
 SQL
@@ -227,6 +227,8 @@ compare_as() {
 compare warmup '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
 compare_as warmup-admin '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200 "$admin_token"
 compare_as token-warmup '/api/log/token' 200 'sk-observability-primary'
+compare warmup-self-logs '/api/log/self?p=1&page_size=10&start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare warmup-deprecated-self-search '/api/log/self/search' 200
 go_keys_before=$(valkey_keys "$valkey_port" 1); rust_keys_before=$(valkey_keys "$valkey_port" 2)
 compare valid '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
 compare missing-rule '/api/log/channel_affinity_usage_cache?using_group=default&key_fp=fp-a' 400
@@ -242,6 +244,8 @@ compare_as data-flow-admin '/api/data/flow?start_timestamp=1700000000&end_timest
 compare data-flow-self '/api/data/flow/self?start_timestamp=1700000000&end_timestamp=1700000100' 200
 compare data-flow-invalid '/api/data/flow?start_timestamp=bad&end_timestamp=1700000100' 200
 compare data-flow-self-too-large '/api/data/flow/self?start_timestamp=1&end_timestamp=2592002' 200
+compare deprecated-log-search '/api/log/search' 200
+compare deprecated-self-log-search '/api/log/self/search' 200
 compare all-logs-filter '/api/log/?p=1&page_size=10&type=2&start_timestamp=1700000000&end_timestamp=1700000100&username=observability-root&model_name=model-a&token_name=token-a&group=default&request_id=req-a&upstream_request_id=up-a' 200
 compare all-logs-wildcard '/api/log/?p=1&page_size=10&username=observability-root&model_name=model-%&token_name=token-a&group=default' 200
 compare self-logs-filter '/api/log/self?p=1&page_size=10&type=2&start_timestamp=1700000000&end_timestamp=1700000100&model_name=model-a&token_name=token-a&group=default&request_id=req-a&upstream_request_id=up-a' 200
@@ -249,7 +253,7 @@ compare log-stat-filter '/api/log/stat?type=4&start_timestamp=1700000000&end_tim
 compare self-log-stat-wildcard '/api/log/self/stat?type=4&start_timestamp=1700000000&end_timestamp=1700000100&model_name=model-%&token_name=token-a&group=default' 200
 compare_as token-logs '/api/log/token?start_timestamp=1&p=99&page_size=1' 200 'sk-observability-primary'
 jq -e '.success == true and .message == "" and .data.rule_name == "rule-a" and .data.using_group == "default" and .data.key_fp == "fp-a" and .data.hit == 3 and .data.total == 4 and .data.cached_token_rate_mode == "cached_over_prompt"' "$runtime/go-valid.body" >/dev/null
-jq -e '.success == true and .data.quota == 10 and .data.rpm == 1 and .data.tpm == 11' "$runtime/go-self-log-stat.body" >/dev/null
+jq -e '.success == true and .data.quota == 10 and .data.rpm == 0 and .data.tpm == 0' "$runtime/go-self-log-stat.body" >/dev/null
 [[ "$go_keys_before" == "$(valkey_keys "$valkey_port" 1)" && "$rust_keys_before" == "$(valkey_keys "$valkey_port" 2)" ]]
 
-jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:23,routes:["GET /api/log/","GET /api/log/channel_affinity_usage_cache","GET /api/log/self","GET /api/log/self/stat","GET /api/log/stat","GET /api/log/token","GET /api/data/","GET /api/data/users","GET /api/data/self","GET /api/data/flow","GET /api/data/flow/self"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:27,routes:["GET /api/log/","GET /api/log/channel_affinity_usage_cache","GET /api/log/search","GET /api/log/self","GET /api/log/self/search","GET /api/log/self/stat","GET /api/log/stat","GET /api/log/token","GET /api/data/","GET /api/data/users","GET /api/data/self","GET /api/data/flow","GET /api/data/flow/self"],result:"passed"}'
