@@ -20,6 +20,27 @@ func (edgePolicyTestRunner) Run(_ context.Context, command productionCommand) ([
 	return nil, nil
 }
 
+type legacyPolicyStateRunner struct{}
+
+func (legacyPolicyStateRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
+	if command.Name == "systemctl" && len(command.Args) >= 2 {
+		switch command.Args[0] {
+		case "is-active":
+			return nil, errors.New("unit inactive in test")
+		case "is-enabled":
+			return []byte("static\n"), nil
+		}
+	}
+	return nil, nil
+}
+
+func TestRejectActiveLegacyPolicyIgnoresInactiveStaticUnits(t *testing.T) {
+	runtime := &productionRuntime{runner: legacyPolicyStateRunner{}}
+	if err := runtime.rejectActiveLegacyPolicy(context.Background()); err != nil {
+		t.Fatalf("rejectActiveLegacyPolicy() returned an error for inactive static units: %v", err)
+	}
+}
+
 func TestEdgePolicyInstallBacksUpRemovesLegacyAndRestores(t *testing.T) {
 	root := t.TempDir()
 	assets := filepath.Join(root, "assets")
