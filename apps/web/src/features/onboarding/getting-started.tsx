@@ -23,6 +23,7 @@ import {
   Circle,
   KeyRound,
   LayoutDashboard,
+  MessageCircleQuestion,
   Send,
   Wallet,
 } from 'lucide-react'
@@ -35,6 +36,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
+import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
 import { useTopupInfo } from '@/features/wallet/hooks/use-topup-info'
 import { getTopupAvailability } from '@/features/wallet/lib/payment'
@@ -133,7 +135,7 @@ export function GettingStarted() {
         : onboarding.stage === 'first_request'
           ? {
               to: '/playground' as const,
-              label: t('Open playground'),
+              label: t('Open AI assistant'),
               icon: Send,
             }
           : {
@@ -208,6 +210,39 @@ export function GettingStarted() {
                 </Badge>
               </div>
             </div>
+          </section>
+
+          <section className='bg-primary/5 flex flex-col gap-4 border px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-8'>
+            <div className='flex max-w-2xl items-start gap-3'>
+              <span className='bg-primary text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-full'>
+                <MessageCircleQuestion aria-hidden='true' />
+              </span>
+              <div>
+                <h3 className='text-sm font-semibold'>
+                  {t('Need help with the next step?')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Ask about administrator review, plans, API keys, client setup, or open-source bounties.'
+                  )}
+                </p>
+              </div>
+            </div>
+            <Button
+              type='button'
+              className='w-full sm:w-auto'
+              onClick={() =>
+                requestAssistantOpen(
+                  onboarding.stage === 'activate' ? 'onboarding' : 'api-key'
+                )
+              }
+            >
+              <MessageCircleQuestion
+                data-icon='inline-start'
+                aria-hidden='true'
+              />
+              {t('Ask AI assistant')}
+            </Button>
           </section>
 
           <section className='border'>
