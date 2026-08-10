@@ -15,6 +15,7 @@ mkdir -p \
   "$root/core-root/etc/lmm-api" \
   "$root/core-root/usr/share/licenses/lmm-api" \
   "$root/go-root/usr/lib/lmm-api/backends/go"
+chmod 0700 "$root/core-root/etc/lmm-api"
 chmod 0755 "$root/core-root/usr" "$root/core-root/usr/bin" "$root/core-root/usr/lib" \
   "$root/core-root/usr/lib/systemd" "$root/core-root/usr/lib/systemd/system" \
   "$root/core-root/usr/share" "$root/core-root/usr/share/licenses" \

@@ -82,6 +82,7 @@ type OpenSourceBountyProject struct {
 	UpdatedAt          int64  `json:"updated_at" gorm:"bigint;not null"`
 	PublishedAt        int64  `json:"published_at" gorm:"bigint;not null;default:0;index"`
 	ClosedAt           int64  `json:"closed_at" gorm:"bigint;not null;default:0"`
+	ArchivedAt         int64  `json:"archived_at" gorm:"bigint;not null;default:0;index"`
 }
 
 func (OpenSourceBountyProject) TableName() string { return "open_source_bounty_projects" }
@@ -690,6 +691,58 @@ func closeOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSource
 	return project, refundedQuota, err
 }
 
+// ArchiveOpenSourceBounty hides a completed or closed bounty from the owner's
+// default project list without deleting its lifecycle, evidence, or ledger.
+// Archiving is intentionally reversible so it cannot be used as a destructive
+// substitute for deleting a draft.
+func ArchiveOpenSourceBounty(ownerUserId int, projectId int) (*OpenSourceBountyProject, error) {
+	return setOpenSourceBountyArchived(ownerUserId, projectId, true)
+}
+
+// UnarchiveOpenSourceBounty restores an archived completed or closed bounty to
+// the owner's active project list.
+func UnarchiveOpenSourceBounty(ownerUserId int, projectId int) (*OpenSourceBountyProject, error) {
+	return setOpenSourceBountyArchived(ownerUserId, projectId, false)
+}
+
+func setOpenSourceBountyArchived(ownerUserId int, projectId int, archived bool) (*OpenSourceBountyProject, error) {
+	if ownerUserId <= 0 || projectId <= 0 {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
+	}
+	var project OpenSourceBountyProject
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).
+			Where("id = ? AND owner_user_id = ?", projectId, ownerUserId).
+			First(&project).Error; err != nil {
+			return bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
+		}
+		if project.Status != OpenSourceBountyStatusCompleted && project.Status != OpenSourceBountyStatusClosed {
+			return bountyError("OPEN_SOURCE_BOUNTY_ARCHIVE_UNAVAILABLE", "only completed or closed bounties can be archived")
+		}
+		alreadyArchived := project.ArchivedAt > 0
+		if alreadyArchived == archived {
+			return nil
+		}
+		updates := map[string]interface{}{"archived_at": int64(0), "updated_at": common.GetTimestamp()}
+		if archived {
+			updates["archived_at"] = common.GetTimestamp()
+		}
+		if err := tx.Model(&project).Updates(updates).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	action := "Unarchived"
+	if archived {
+		action = "Archived"
+	}
+	RecordLog(ownerUserId, LogTypeSystem, fmt.Sprintf("%s open-source bounty %d", action, projectId))
+	return GetOpenSourceBountyProject(projectId)
+}
+
 func GetOpenSourceBountyProject(projectId int) (*OpenSourceBountyProject, error) {
 	var project OpenSourceBountyProject
 	if err := DB.First(&project, "id = ?", projectId).Error; err != nil {
@@ -880,8 +933,19 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 }
 
 func ListOwnedOpenSourceBounties(ownerUserId int) ([]OpenSourceBountyProjectView, error) {
+	return ListOwnedOpenSourceBountiesFiltered(ownerUserId, false)
+}
+
+// ListOwnedOpenSourceBountiesFiltered returns either active (default) or
+// archived owner projects. Keeping the filter in SQL prevents archived rows
+// from consuming pagination/list rendering capacity.
+func ListOwnedOpenSourceBountiesFiltered(ownerUserId int, archived bool) ([]OpenSourceBountyProjectView, error) {
 	views := make([]OpenSourceBountyProjectView, 0)
-	if err := openSourceBountyProjectQuery().Where("p.owner_user_id = ?", ownerUserId).
+	archiveFilter := "p.archived_at = 0"
+	if archived {
+		archiveFilter = "p.archived_at > 0"
+	}
+	if err := openSourceBountyProjectQuery().Where("p.owner_user_id = ? AND "+archiveFilter, ownerUserId).
 		Order("p.created_at DESC, p.id DESC").Scan(&views).Error; err != nil {
 		return nil, err
 	}
@@ -896,7 +960,7 @@ func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBoun
 	if view.Id == 0 {
 		return nil, bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
 	}
-	if (view.Status == OpenSourceBountyStatusDraft || view.Status == OpenSourceBountyStatusClosed) && view.OwnerUserId != viewerUserId {
+	if (view.Status == OpenSourceBountyStatusDraft || view.Status == OpenSourceBountyStatusClosed || view.ArchivedAt > 0) && view.OwnerUserId != viewerUserId {
 		return nil, bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
 	}
 	views := []OpenSourceBountyProjectView{view}

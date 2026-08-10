@@ -215,6 +215,7 @@ export interface BountyProject {
   updated_at: number
   published_at: number
   closed_at: number
+  archived_at: number
   active_challenge_count: number
   approved_challenge_count: number
   owner_rating_average: number
