@@ -115,9 +115,20 @@ seed() {
 }
 snapshot() {
   local database=$1
-  sql "$database" "SELECT jsonb_build_object('options',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY key) FROM (SELECT key,value FROM options WHERE key LIKE 'payment_setting.%') x),'[]'::jsonb),'plans',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM (SELECT id,title,enabled,sort_order FROM subscription_plans) x),'[]'::jsonb),'subscriptions',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM (SELECT id,user_id,plan_id,status,amount_used FROM user_subscriptions) x),'[]'::jsonb))" | jq -S .
+  sql "$database" "SELECT jsonb_build_object('options',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY key) FROM (SELECT key,value FROM options WHERE key LIKE 'payment_setting.%') x),'[]'::jsonb),'plans',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM (SELECT id,title,enabled,sort_order FROM subscription_plans) x),'[]'::jsonb),'subscriptions',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM (SELECT id,user_id,plan_id,status,amount_used FROM user_subscriptions) x),'[]'::jsonb),'users',COALESCE((SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM (SELECT id,setting FROM users WHERE id IN (1,2)) x),'[]'::jsonb))" | jq -S .
 }
 valkey_keys() { VALKEYCLI_AUTH="$2" valkey-cli -h 127.0.0.1 -p "$1" --scan | LC_ALL=C sort; }
+valkey_user_hash() {
+  VALKEYCLI_AUTH="$2" valkey-cli -h 127.0.0.1 -p "$1" --raw HGETALL user:2 |
+    paste - - | LC_ALL=C sort
+}
+seed_user_cache() {
+  local port=$1 secret=$2
+  VALKEYCLI_AUTH="$secret" valkey-cli -h 127.0.0.1 -p "$port" HSET user:2 \
+    Id 2 Group default Email '' Quota 100000000 Status 1 Role 1 Username user \
+    Setting '{}' AuthVersion 1 CacheSchema 2 >/dev/null
+  VALKEYCLI_AUTH="$secret" valkey-cli -h 127.0.0.1 -p "$port" EXPIRE user:2 60 >/dev/null
+}
 
 cp -a "$legacy_root/." "$go_build/source"
 mkdir -p "$go_build/source/web/dist"
@@ -162,11 +173,30 @@ start_rust
 
 login() { curl --connect-timeout 2 --max-time 10 -fsS -H 'content-type: application/json' -d "{\"username\":\"$2\",\"password\":\"password\"}" "http://127.0.0.1:$1/api/user/login" | jq -er '.data.access_token | strings'; }
 go_root=$(login "$go_port" root); rust_root=$(login "$rust_port" root); go_user=$(login "$go_port" user); rust_user=$(login "$rust_port" user)
-request() { local base=$1 token=$2 path=$3 out=$4; curl --connect-timeout 2 --max-time 10 -sS -D "$out.headers" -o "$out.body" -w '%{http_code}' -H 'accept: application/json' -H "authorization: Bearer $token" "http://127.0.0.1:$base$path"; }
+seed_user_cache "$go_valkey_port" "$go_secret"
+seed_user_cache "$rust_valkey_port" "$rust_secret"
+request_method() {
+  local method=$1 base=$2 token=$3 path=$4 body=$5 out=$6
+  curl --connect-timeout 2 --max-time 10 -sS -X "$method" -D "$out.headers" -o "$out.body" -w '%{http_code}' \
+    -H 'accept: application/json' -H 'content-type: application/json' -H "authorization: Bearer $token" \
+    --data-binary "$body" "http://127.0.0.1:$base$path"
+}
+request() { request_method GET "$1" "$2" "$3" '' "$4"; }
 compare() {
   local name=$1 path=$2 go_token=$3 rust_token=$4 go_code rust_code
   go_code=$(request "$go_port" "$go_token" "$path" "$runtime/go-$name")
   rust_code=$(request "$rust_port" "$rust_token" "$path" "$runtime/rust-$name")
+  [[ $go_code == "$rust_code" ]] || { echo "$name status mismatch: $go_code/$rust_code" >&2; return 1; }
+  jq -S . "$runtime/go-$name.body" >"$runtime/go-$name.json"
+  jq -S . "$runtime/rust-$name.body" >"$runtime/rust-$name.json"
+  diff -u "$runtime/go-$name.json" "$runtime/rust-$name.json"
+  grep -qi '^content-type: application/json' "$runtime/go-$name.headers"
+  grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
+}
+compare_write() {
+  local name=$1 body=$2 go_token=$3 rust_token=$4 go_code rust_code
+  go_code=$(request_method PUT "$go_port" "$go_token" /api/subscription/self/preference "$body" "$runtime/go-$name")
+  rust_code=$(request_method PUT "$rust_port" "$rust_token" /api/subscription/self/preference "$body" "$runtime/rust-$name")
   [[ $go_code == "$rust_code" ]] || { echo "$name status mismatch: $go_code/$rust_code" >&2; return 1; }
   jq -S . "$runtime/go-$name.body" >"$runtime/go-$name.json"
   jq -S . "$runtime/rust-$name.body" >"$runtime/rust-$name.json"
@@ -183,6 +213,25 @@ compare root-plans /api/subscription/admin/plans "$go_root" "$rust_root"
 compare self /api/subscription/self "$go_user" "$rust_user"
 [[ "$go_before" == "$(snapshot "$go_database")" && "$rust_before" == "$(snapshot "$rust_database")" ]]
 [[ "$go_valkey_before" == "$(valkey_keys "$go_valkey_port" "$go_secret")" && "$rust_valkey_before" == "$(valkey_keys "$rust_valkey_port" "$rust_secret")" ]]
+compare_write preference-valid '{"billing_preference":" wallet_only "}' "$go_user" "$rust_user"
+go_after_preference=$(snapshot "$go_database"); rust_after_preference=$(snapshot "$rust_database")
+if [[ "$go_after_preference" != "$rust_after_preference" ]]; then
+  echo "preference DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$go_after_preference" "--- rust" "$rust_after_preference" >&2
+  exit 1
+fi
+go_cache_after_preference=$(valkey_user_hash "$go_valkey_port" "$go_secret"); rust_cache_after_preference=$(valkey_user_hash "$rust_valkey_port" "$rust_secret")
+if [[ "$go_cache_after_preference" != "$rust_cache_after_preference" ]]; then
+  echo "preference Valkey user hash mismatch" >&2
+  printf '%s\n' "--- go" "$go_cache_after_preference" "--- rust" "$rust_cache_after_preference" >&2
+  exit 1
+fi
+compare_write preference-invalid '{"billing_preference":7}' "$go_user" "$rust_user"
+compare_write preference-empty '{}' "$go_user" "$rust_user"
+[[ "$(snapshot "$go_database")" == "$(snapshot "$rust_database")" ]]
+[[ "$(valkey_user_hash "$go_valkey_port" "$go_secret")" == "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" ]]
+compare_write preference-null 'null' "$go_user" "$rust_user"
+compare_write preference-array '[]' "$go_user" "$rust_user"
 sql "$go_database" "UPDATE options SET value='false' WHERE key='payment_setting.compliance_confirmed'"
 sql "$rust_database" "UPDATE options SET value='false' WHERE key='payment_setting.compliance_confirmed'"
 kill "$go_pid" "$rust_pid" 2>/dev/null || true
@@ -194,4 +243,4 @@ go_root=$(login "$go_port" root); rust_root=$(login "$rust_port" root); go_user=
 compare compliance-off /api/subscription/plans "$go_user" "$rust_user"
 compare non-admin /api/subscription/admin/plans "$go_user" "$rust_user"
 
-jq -cn --arg revision "$legacy_revision" --argjson scenarios 5 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/self"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" --argjson scenarios 10 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/self","PUT /api/subscription/self/preference"],result:"passed"}'

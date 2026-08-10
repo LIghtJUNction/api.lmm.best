@@ -7,6 +7,7 @@
 use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
+    body::to_bytes,
     extract::{Path, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
@@ -1019,12 +1020,20 @@ fn is_false(value: &bool) -> bool {
 
 async fn update_preference(
     State(state): State<BillingSubscriptionsState>,
-    headers: HeaderMap,
-    Json(input): Json<PreferenceRequest>,
+    request: Request,
 ) -> Response {
+    let headers = request.headers().clone();
     let user = match identity(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
+    };
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(body) => body,
+        Err(_) => return with_auth_version(failure(StatusCode::OK, "参数错误")),
+    };
+    let input = match parse_preference_request(&body) {
+        Ok(input) => input,
+        Err(()) => return with_auth_version(failure(StatusCode::OK, "参数错误")),
     };
     let preference = normalize_preference(&input.billing_preference);
     let mut setting = serde_json::from_str::<LegacyUserSetting>(&user.setting).unwrap_or_default();
@@ -1037,15 +1046,46 @@ async fn update_preference(
     };
     let updated = sqlx::query("UPDATE users SET setting = $2 WHERE id = $1 AND deleted_at IS NULL")
         .bind(user.id)
-        .bind(setting)
+        .bind(&setting)
         .execute(&state.pg)
         .await;
     match updated {
         Ok(result) if result.rows_affected() == 0 => {
             with_auth_version(failure(StatusCode::NOT_FOUND, "用户不存在"))
         }
-        Ok(_) => with_auth_version(ok(json!({"billing_preference": preference}))),
+        Ok(_) => {
+            // Go updates an existing user hash in place after the durable
+            // setting write. Keep the same cache-aside side effect while
+            // preserving whichever legacy cache schema populated the hash
+            // (the Rust model cache currently uses schema 2, while older Go
+            // deployments may still have schema 4).
+            update_user_setting_cache(&state, user.id, &setting).await;
+            with_auth_version(ok(json!({"billing_preference": preference})))
+        }
         Err(_) => with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
+    }
+}
+
+/// Gin's `ShouldBindJSON` binds into a struct with a zero-value string field:
+/// an omitted or null `billing_preference` is accepted and normalized, unknown
+/// fields are ignored, while a non-string field or a non-object JSON value is
+/// rejected with the legacy HTTP-200 error envelope. Axum's `Json<T>` extractor
+/// has different status/error semantics, so perform that small compatibility
+/// decode after the dashboard auth boundary has run.
+fn parse_preference_request(body: &[u8]) -> Result<PreferenceRequest, ()> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| ())?;
+    match value {
+        Value::Null => Ok(PreferenceRequest {
+            billing_preference: String::new(),
+        }),
+        Value::Object(mut object) => match object.remove("billing_preference") {
+            None | Some(Value::Null) => Ok(PreferenceRequest {
+                billing_preference: String::new(),
+            }),
+            Some(Value::String(billing_preference)) => Ok(PreferenceRequest { billing_preference }),
+            Some(_) => Err(()),
+        },
+        _ => Err(()),
     }
 }
 fn normalize_preference(value: &str) -> &'static str {
@@ -1704,6 +1744,55 @@ async fn evict_user_cache(valkey: Option<&redis::Client>, user_id: i64) {
         .query_async(&mut connection)
         .await;
 }
+
+/// Refresh only the setting field of an already-populated legacy user hash.
+///
+/// Go's `UpdateUserSetting` performs this as an auth-version-fenced HSET and
+/// deliberately leaves a cold/missing hash alone. The fence prevents a stale
+/// asynchronous cache fill from overwriting a newer snapshot; preserving the
+/// existing CacheSchema field keeps Rust's schema-2 model cache compatible
+/// with a hash that was populated by either runtime.
+async fn update_user_setting_cache(state: &BillingSubscriptionsState, user_id: i64, setting: &str) {
+    let Some(client) = state.valkey.as_ref() else {
+        return;
+    };
+    let auth_version = match sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(auth_version, 0) FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pg)
+    .await
+    {
+        Ok(Some(version)) if version > 0 => version,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "subscription preference cache version lookup failed");
+            return;
+        }
+    };
+    let Ok(mut connection) = client.get_multiplexed_async_connection().await else {
+        tracing::warn!(user_id, "subscription preference cache connection failed");
+        return;
+    };
+    // Keep this script in lockstep with Go's updateUserCacheFieldAtVersion:
+    // security fences win, committed floors are monotonic, and a cold cache is
+    // not manufactured by a setting-only update.
+    let script = redis::Script::new(
+        r#"local incoming=tonumber(ARGV[1]); local pending=tonumber(redis.call('GET',KEYS[2]) or '0'); local committed=tonumber(redis.call('GET',KEYS[3]) or '0'); local current=tonumber(redis.call('HGET',KEYS[1],'AuthVersion') or '0'); if pending>incoming or committed>incoming or current>incoming then return 0 end; if committed<incoming then redis.call('SET',KEYS[3],ARGV[1]) end; if pending>0 and pending<=incoming then redis.call('DEL',KEYS[2]) end; if redis.call('EXISTS',KEYS[1])==0 then return 1 end; if current~=incoming then return 1 end; redis.call('HSET',KEYS[1],'Setting',ARGV[2]); return 1"#,
+    );
+    if let Err(error) = script
+        .key(format!("{USER_CACHE_PREFIX}{user_id}"))
+        .key(format!("auth:user:fence:{user_id}"))
+        .key(format!("auth:user:version:{user_id}"))
+        .arg(auth_version)
+        .arg(setting)
+        .invoke_async::<i64>(&mut connection)
+        .await
+    {
+        tracing::warn!(%error, user_id, "subscription preference cache update failed");
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1714,7 +1803,10 @@ fn now() -> i64 {
 mod tests {
     use chrono::{Local, TimeZone};
 
-    use super::{LegacyUserSetting, Plan, end_time, next_reset, normalize_preference};
+    use super::{
+        LegacyUserSetting, Plan, end_time, next_reset, normalize_preference,
+        parse_preference_request,
+    };
 
     fn local_timestamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
         Local
@@ -1763,6 +1855,30 @@ mod tests {
         }
         assert_eq!(normalize_preference("unexpected"), "subscription_first");
         assert_eq!(normalize_preference("quota"), "subscription_first");
+    }
+
+    #[test]
+    fn preference_request_binding_matches_gin_zero_value_contract() {
+        assert_eq!(
+            parse_preference_request(br#"{"billing_preference":" wallet_only "}"#)
+                .expect("valid preference")
+                .billing_preference,
+            " wallet_only "
+        );
+        assert_eq!(
+            parse_preference_request(br#"{}"#)
+                .expect("omitted field is a zero value")
+                .billing_preference,
+            ""
+        );
+        assert_eq!(
+            parse_preference_request(br#"{"billing_preference":null}"#)
+                .expect("null string is a zero value")
+                .billing_preference,
+            ""
+        );
+        assert!(parse_preference_request(br#"{"billing_preference":7}"#).is_err());
+        assert!(parse_preference_request(br#"[]"#).is_err());
     }
 
     #[test]
