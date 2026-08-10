@@ -158,7 +158,7 @@ VALUES (1, 'east', 'observability-channel-east')
 ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name, key = EXCLUDED.key;
 INSERT INTO tokens (id, user_id, key, status, name)
 VALUES
-  (11, 999, 'sk-observability-primary', 1, 'primary'),
+  (11, 999, 'observability', 1, 'primary'),
   (22, 1000, 'sk-observability-admin', 1, 'admin-token')
 ON CONFLICT(id) DO UPDATE SET user_id = EXCLUDED.user_id, key = EXCLUDED.key, status = EXCLUDED.status, name = EXCLUDED.name, deleted_at = NULL;
 INSERT INTO quota_data (id, user_id, username, node_name, token_id, use_group, channel_id, model_name, created_at, count, quota, token_used)
@@ -226,6 +226,7 @@ compare_as() {
 # side-effect snapshot so those auth entries are not attributed to this read.
 compare warmup '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
 compare_as warmup-admin '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200 "$admin_token"
+compare_as token-warmup '/api/log/token' 200 'sk-observability-primary'
 go_keys_before=$(valkey_keys "$valkey_port" 1); rust_keys_before=$(valkey_keys "$valkey_port" 2)
 compare valid '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
 compare missing-rule '/api/log/channel_affinity_usage_cache?using_group=default&key_fp=fp-a' 400
@@ -241,8 +242,14 @@ compare_as data-flow-admin '/api/data/flow?start_timestamp=1700000000&end_timest
 compare data-flow-self '/api/data/flow/self?start_timestamp=1700000000&end_timestamp=1700000100' 200
 compare data-flow-invalid '/api/data/flow?start_timestamp=bad&end_timestamp=1700000100' 200
 compare data-flow-self-too-large '/api/data/flow/self?start_timestamp=1&end_timestamp=2592002' 200
+compare all-logs-filter '/api/log/?p=1&page_size=10&type=2&start_timestamp=1700000000&end_timestamp=1700000100&username=observability-root&model_name=model-a&token_name=token-a&group=default&request_id=req-a&upstream_request_id=up-a' 200
+compare all-logs-wildcard '/api/log/?p=1&page_size=10&username=observability-root&model_name=model-%&token_name=token-a&group=default' 200
+compare self-logs-filter '/api/log/self?p=1&page_size=10&type=2&start_timestamp=1700000000&end_timestamp=1700000100&model_name=model-a&token_name=token-a&group=default&request_id=req-a&upstream_request_id=up-a' 200
+compare log-stat-filter '/api/log/stat?type=4&start_timestamp=1700000000&end_timestamp=1700000100&username=observability-root&model_name=model-a&token_name=token-a&group=default' 200
+compare self-log-stat-wildcard '/api/log/self/stat?type=4&start_timestamp=1700000000&end_timestamp=1700000100&model_name=model-%&token_name=token-a&group=default' 200
+compare_as token-logs '/api/log/token?start_timestamp=1&p=99&page_size=1' 200 'sk-observability-primary'
 jq -e '.success == true and .message == "" and .data.rule_name == "rule-a" and .data.using_group == "default" and .data.key_fp == "fp-a" and .data.hit == 3 and .data.total == 4 and .data.cached_token_rate_mode == "cached_over_prompt"' "$runtime/go-valid.body" >/dev/null
 jq -e '.success == true and .data.quota == 10 and .data.rpm == 1 and .data.tpm == 11' "$runtime/go-self-log-stat.body" >/dev/null
 [[ "$go_keys_before" == "$(valkey_keys "$valkey_port" 1)" && "$rust_keys_before" == "$(valkey_keys "$valkey_port" 2)" ]]
 
-jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:15,routes:["GET /api/log/channel_affinity_usage_cache","GET /api/log/self","GET /api/log/self/stat","GET /api/data/","GET /api/data/users","GET /api/data/self","GET /api/data/flow","GET /api/data/flow/self"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:23,routes:["GET /api/log/","GET /api/log/channel_affinity_usage_cache","GET /api/log/self","GET /api/log/self/stat","GET /api/log/stat","GET /api/log/token","GET /api/data/","GET /api/data/users","GET /api/data/self","GET /api/data/flow","GET /api/data/flow/self"],result:"passed"}'
