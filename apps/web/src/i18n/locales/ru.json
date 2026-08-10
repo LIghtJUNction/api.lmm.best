@@ -6150,6 +6150,8 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Масштаб",
     "Resolved": "Решённые",
-    "No resolved human-support requests.": "Нет решённых запросов в службу поддержки."
+    "No resolved human-support requests.": "Нет решённых запросов в службу поддержки.",
+    "Unable to verify account access": "Не удалось проверить доступ к аккаунту",
+    "Retry before using account-specific assistant tools.": "Повторите попытку перед использованием инструментов помощника, связанных с аккаунтом."
   }
 }
