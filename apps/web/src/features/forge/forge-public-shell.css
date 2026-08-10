@@ -109,7 +109,7 @@ For commercial licensing, please contact support@quantumnous.com
   --forge-paper: var(--forge-paper-dark);
   --forge-ink: var(--forge-foreground-dark);
   --forge-gesture-ink: var(--forge-ink-light);
-  --forge-stage: var(--forge-stage-dark);
+  --forge-stage: var(--forge-cactus-dark);
   --forge-foundation: var(--forge-paper-dark);
   --forge-foundation-ink: var(--forge-ink-light);
   --forge-chart-text: color-mix(
