@@ -211,6 +211,8 @@ rust_valkey_before=$(valkey_keys "$rust_valkey_port" "$rust_secret")
 compare user-plans /api/subscription/plans "$go_user" "$rust_user"
 compare root-plans /api/subscription/admin/plans "$go_root" "$rust_root"
 compare self /api/subscription/self "$go_user" "$rust_user"
+compare admin-user-subscriptions /api/subscription/admin/users/1/subscriptions "$go_root" "$rust_root"
+compare admin-invalid-user /api/subscription/admin/users/0/subscriptions "$go_root" "$rust_root"
 [[ "$go_before" == "$(snapshot "$go_database")" && "$rust_before" == "$(snapshot "$rust_database")" ]]
 [[ "$go_valkey_before" == "$(valkey_keys "$go_valkey_port" "$go_secret")" && "$rust_valkey_before" == "$(valkey_keys "$rust_valkey_port" "$rust_secret")" ]]
 compare_write preference-valid '{"billing_preference":" wallet_only "}' "$go_user" "$rust_user"
@@ -243,4 +245,4 @@ go_root=$(login "$go_port" root); rust_root=$(login "$rust_port" root); go_user=
 compare compliance-off /api/subscription/plans "$go_user" "$rust_user"
 compare non-admin /api/subscription/admin/plans "$go_user" "$rust_user"
 
-jq -cn --arg revision "$legacy_revision" --argjson scenarios 10 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/self","PUT /api/subscription/self/preference"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" --argjson scenarios 12 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference"],result:"passed"}'
