@@ -641,6 +641,7 @@ pub fn system_task_read_router(state: ControlAdminState) -> Router {
     Router::new()
         .route("/api/system-task/list", get(list_system_tasks))
         .route("/api/system-task/current", get(current_system_task))
+        .route("/api/system-task/{task_id}", get(get_system_task))
         .with_state(state)
 }
 
