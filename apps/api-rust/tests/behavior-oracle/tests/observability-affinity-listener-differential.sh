@@ -81,7 +81,8 @@ go_valkey_url="redis://127.0.0.1:$valkey_port/1"
 rust_valkey_url="redis://127.0.0.1:$valkey_port/2"
 session_secret='ObservabilityAffinity-2026!SyntheticSessionSecret'
 crypto_secret='ObservabilityAffinity-2026!SyntheticCryptoSecret'
-dashboard_token='observability-root-pat-000000001'
+dashboard_token='obs-root-pat-000000000000000001'
+admin_token='obs-admin-pat-000000000000000002'
 
 pid_start() { [[ -r /proc/$1/stat ]] && awk '{print $22}' "/proc/$1/stat"; }
 record_pid() {
@@ -150,7 +151,26 @@ for database in "$go_database" "$rust_database"; do
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -f "$runtime/bounty.sql" >/dev/null
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c 'CREATE TABLE IF NOT EXISTS lmm_schema_contract(singleton BOOLEAN PRIMARY KEY,min_reader_version BIGINT NOT NULL,max_reader_version BIGINT NOT NULL); INSERT INTO lmm_schema_contract VALUES(true,1,1) ON CONFLICT(singleton) DO NOTHING;' >/dev/null
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS console_activated_at BIGINT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS access_token TEXT;' >/dev/null
-  psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c "INSERT INTO users (id,username,password,role,status,access_token,auth_version,console_activated_at) VALUES (999,'observability-root','unused-password',100,1,'$dashboard_token',1,0) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,role=EXCLUDED.role,status=EXCLUDED.status,access_token=EXCLUDED.access_token,auth_version=EXCLUDED.auth_version,console_activated_at=EXCLUDED.console_activated_at;" >/dev/null
+  psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c "INSERT INTO users (id,username,password,role,status,access_token,auth_version,console_activated_at) VALUES (999,'observability-root','unused-password',100,1,'$dashboard_token',1,0),(1000,'observability-admin','unused-password',10,1,'$admin_token',1,0) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,role=EXCLUDED.role,status=EXCLUDED.status,access_token=EXCLUDED.access_token,auth_version=EXCLUDED.auth_version,console_activated_at=EXCLUDED.console_activated_at;" >/dev/null
+  psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+INSERT INTO channels (id, name, key)
+VALUES (1, 'east', 'observability-channel-east')
+ON CONFLICT(id) DO UPDATE SET name = EXCLUDED.name, key = EXCLUDED.key;
+INSERT INTO tokens (id, user_id, key, status, name)
+VALUES
+  (11, 999, 'sk-observability-primary', 1, 'primary'),
+  (22, 1000, 'sk-observability-admin', 1, 'admin-token')
+ON CONFLICT(id) DO UPDATE SET user_id = EXCLUDED.user_id, key = EXCLUDED.key, status = EXCLUDED.status, name = EXCLUDED.name, deleted_at = NULL;
+INSERT INTO quota_data (id, user_id, username, node_name, token_id, use_group, channel_id, model_name, created_at, count, quota, token_used)
+VALUES
+  (9101, 999, 'observability-root', 'node-a', 11, 'default', 1, 'model-a', 1700000000, 2, 100, 40),
+  (9102, 999, 'observability-root', 'node-a', 11, 'default', 1, 'model-a', 1700000000, 1, 50, 20),
+  (9103, 1000, 'observability-admin', 'node-b', 22, 'vip', 1, 'model-b', 1700000000, 3, 70, 30),
+  (9104, 999, 'observability-root', 'node-a', 0, '', 0, 'model-empty', 1700000000, 4, 5, 2),
+  (9105, 999, 'observability-root', 'node-a', 11, 'default', 2, 'model-b', 1700000100, 1, 200, 80),
+  (9106, 999, 'observability-root', 'node-a', 11, 'default', 1, 'model-c', 1700003600, 1, 300, 120)
+ON CONFLICT(id) DO UPDATE SET user_id = EXCLUDED.user_id, username = EXCLUDED.username, node_name = EXCLUDED.node_name, token_id = EXCLUDED.token_id, use_group = EXCLUDED.use_group, channel_id = EXCLUDED.channel_id, model_name = EXCLUDED.model_name, created_at = EXCLUDED.created_at, count = EXCLUDED.count, quota = EXCLUDED.quota, token_used = EXCLUDED.token_used;
+SQL
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
 INSERT INTO logs (id,user_id,created_at,type,content,username,token_name,model_name,quota,prompt_tokens,completion_tokens,use_time,is_stream,channel_id,channel_name,token_id,"group",ip,request_id,upstream_request_id,other)
 VALUES
@@ -176,13 +196,23 @@ env -i PATH="$PATH" HOME="$HOME" LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_R
 wait_listener "$rust_port" rust_pid /readyz
 
 request() {
-  local engine=$1 port=$2 name=$3 path=$4 prefix="$runtime/$1-$3"
+  local engine=$1 port=$2 name=$3 path=$4 token=${5:-$dashboard_token} prefix="$runtime/$1-$3"
   curl --connect-timeout 2 --max-time 10 -sS -D "$prefix.headers" -o "$prefix.body" -w '%{http_code}' \
-    -H "authorization: Bearer $dashboard_token" -H 'accept: application/json' "http://127.0.0.1:$port$path" >"$prefix.status"
+    -H "authorization: Bearer $token" -H 'accept: application/json' "http://127.0.0.1:$port$path" >"$prefix.status"
 }
 compare() {
   local name=$1 path=$2 expected=$3
   request go "$go_port" "$name" "$path"; request rust "$rust_port" "$name" "$path"
+  for engine in go rust; do
+    [[ $(<"$runtime/$engine-$name.status") == "$expected" ]] || return 1
+    jq -S . "$runtime/$engine-$name.body" >"$runtime/$engine-$name.sorted"
+    grep -qi '^content-type: application/json' "$runtime/$engine-$name.headers"
+  done
+  diff -u "$runtime/go-$name.sorted" "$runtime/rust-$name.sorted"
+}
+compare_as() {
+  local name=$1 path=$2 expected=$3 token=$4
+  request go "$go_port" "$name" "$path" "$token"; request rust "$rust_port" "$name" "$path" "$token"
   for engine in go rust; do
     [[ $(<"$runtime/$engine-$name.status") == "$expected" ]] || return 1
     jq -S . "$runtime/$engine-$name.body" >"$runtime/$engine-$name.sorted"
@@ -195,14 +225,24 @@ compare() {
 # authenticated request. Warm both listeners before taking the route-level
 # side-effect snapshot so those auth entries are not attributed to this read.
 compare warmup '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
+compare_as warmup-admin '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200 "$admin_token"
 go_keys_before=$(valkey_keys "$valkey_port" 1); rust_keys_before=$(valkey_keys "$valkey_port" 2)
 compare valid '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
 compare missing-rule '/api/log/channel_affinity_usage_cache?using_group=default&key_fp=fp-a' 400
 compare missing-key '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default' 400
 compare self-logs '/api/log/self?p=1&page_size=10&start_timestamp=1700000000&end_timestamp=1700000100' 200
 compare self-log-stat '/api/log/self/stat?type=2&start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare data-all '/api/data/?start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare data-all-filter '/api/data/?start_timestamp=1700000000&end_timestamp=1700000100&username=observability-root' 200
+compare data-users '/api/data/users?start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare data-self '/api/data/self?start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare data-flow-root '/api/data/flow?start_timestamp=1700000000&end_timestamp=1700000100&username=observability-root' 200
+compare_as data-flow-admin '/api/data/flow?start_timestamp=1700000000&end_timestamp=1700000100' 200 "$admin_token"
+compare data-flow-self '/api/data/flow/self?start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare data-flow-invalid '/api/data/flow?start_timestamp=bad&end_timestamp=1700000100' 200
+compare data-flow-self-too-large '/api/data/flow/self?start_timestamp=1&end_timestamp=2592002' 200
 jq -e '.success == true and .message == "" and .data.rule_name == "rule-a" and .data.using_group == "default" and .data.key_fp == "fp-a" and .data.hit == 3 and .data.total == 4 and .data.cached_token_rate_mode == "cached_over_prompt"' "$runtime/go-valid.body" >/dev/null
 jq -e '.success == true and .data.quota == 10 and .data.rpm == 1 and .data.tpm == 11' "$runtime/go-self-log-stat.body" >/dev/null
 [[ "$go_keys_before" == "$(valkey_keys "$valkey_port" 1)" && "$rust_keys_before" == "$(valkey_keys "$valkey_port" 2)" ]]
 
-jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:5,routes:["GET /api/log/channel_affinity_usage_cache","GET /api/log/self","GET /api/log/self/stat"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:15,routes:["GET /api/log/channel_affinity_usage_cache","GET /api/log/self","GET /api/log/self/stat","GET /api/data/","GET /api/data/users","GET /api/data/self","GET /api/data/flow","GET /api/data/flow/self"],result:"passed"}'

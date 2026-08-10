@@ -45,7 +45,7 @@ pub enum ObservabilityAccess {
 ///
 /// Route handlers never infer this value from role-like request headers.  A
 /// production adapter must resolve it from the server-side session or API-token
-/// authority before these unmounted routes are composed into the listener.
+/// authority before these candidate routes are composed into a listener.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ObservabilityPrincipal {
     /// An unauthenticated visitor accepted by the public pricing gate.
@@ -277,7 +277,7 @@ pub struct ObservabilityCall {
     pub query: BTreeMap<String, String>,
 }
 
-/// Backend boundary for the 21 unmounted route candidates.
+/// Backend boundary for the observability route candidates.
 #[async_trait]
 pub trait ObservabilityStore: Send + Sync {
     /// Executes one already-authorized observation or maintenance operation.
@@ -287,7 +287,7 @@ pub trait ObservabilityStore: Send + Sync {
 /// Runtime metrics boundary for process-owned metric reads.
 ///
 /// The Go implementation combines persisted buckets with hot in-memory and
-/// Valkey counters.  That ownership stays outside this unmounted HTTP slice so
+/// Valkey counters. That ownership stays outside this process-metrics HTTP slice so
 /// the eventual listener can inject the process-wide collector rather than
 /// create a second, divergent collector here.
 #[async_trait]
@@ -354,8 +354,10 @@ impl ObservabilityMaintenance for UnavailableObservabilityMaintenance {
 
 /// PostgreSQL implementation for the dashboard and usage-audit records.
 ///
-/// Construct this with the process-wide metrics and maintenance services when
-/// the root listener gains ownership.  It is deliberately not mounted here.
+/// Construct this with the process-wide metrics and maintenance services for a
+/// candidate router. The normal listener uses [`Self::postgres_read_only`] so
+/// process metrics and filesystem maintenance remain outside its read-only
+/// surface.
 #[derive(Clone)]
 pub struct PgObservabilityStore {
     pg: PgPool,
@@ -487,22 +489,34 @@ impl PgObservabilityStore {
         let start = integer_query(&call.query, "start_timestamp");
         let end = integer_query(&call.query, "end_timestamp");
         match call.operation {
-            ObservabilityOperation::AllQuotaDates => self
-                .json_rows("SELECT jsonb_build_object('model_name', model_name, 'created_at', created_at, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE created_at >= $1 AND created_at <= $2 GROUP BY model_name, created_at", start, end)
-                .await,
+            ObservabilityOperation::AllQuotaDates => {
+                let username = call.query.get("username").cloned().unwrap_or_default();
+                if username.is_empty() {
+                    self.json_rows("SELECT jsonb_build_object('id', 0, 'user_id', 0, 'username', '', 'model_name', model_name, 'created_at', created_at, 'use_group', '', 'token_id', 0, 'channel_id', 0, 'node_name', '', 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE created_at >= $1 AND created_at <= $2 GROUP BY model_name, created_at", start, end).await
+                } else {
+                    self.json_rows_for_username("SELECT jsonb_build_object('id', 0, 'user_id', user_id, 'username', username, 'model_name', model_name, 'created_at', created_at, 'use_group', '', 'token_id', 0, 'channel_id', 0, 'node_name', '', 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE username = $1 AND created_at >= $2 AND created_at <= $3 GROUP BY user_id, username, model_name, created_at", &username, start, end).await
+                }
+            }
             ObservabilityOperation::QuotaDatesByUser => self
-                .json_rows("SELECT jsonb_build_object('username', username, 'created_at', created_at, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE created_at >= $1 AND created_at <= $2 GROUP BY username, created_at", start, end)
+                .json_rows("SELECT jsonb_build_object('id', 0, 'user_id', 0, 'username', username, 'model_name', '', 'created_at', created_at, 'use_group', '', 'token_id', 0, 'channel_id', 0, 'node_name', '', 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE created_at >= $1 AND created_at <= $2 GROUP BY username, created_at", start, end)
                 .await,
             ObservabilityOperation::SelfQuotaDates => {
                 let user_id = user_id(&call.principal)?;
-                self.json_rows_for_user("SELECT jsonb_build_object('user_id', user_id, 'username', username, 'model_name', model_name, 'created_at', created_at, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 GROUP BY user_id, username, model_name, created_at", user_id, start, end).await
+                self.json_rows_for_user("SELECT jsonb_build_object('id', 0, 'user_id', user_id, 'username', username, 'model_name', model_name, 'created_at', created_at, 'use_group', '', 'token_id', 0, 'channel_id', 0, 'node_name', '', 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 GROUP BY user_id, username, model_name, created_at", user_id, start, end).await
             }
             ObservabilityOperation::AllFlowQuotaDates | ObservabilityOperation::SelfFlowQuotaDates => {
-                let user_filter = match call.operation {
-                    ObservabilityOperation::SelfFlowQuotaDates => Some(user_id(&call.principal)?),
-                    _ => None,
+                let (user_filter, role) = match call.operation {
+                    ObservabilityOperation::SelfFlowQuotaDates => {
+                        (Some(user_id(&call.principal)?), None)
+                    }
+                    ObservabilityOperation::AllFlowQuotaDates => match &call.principal {
+                        ObservabilityPrincipal::User { role, .. } => (None, Some(*role)),
+                        _ => return Err(ObservabilityStoreError::Unavailable),
+                    },
+                    _ => unreachable!(),
                 };
-                self.flow_rows(start, end, user_filter).await
+                let username = call.query.get("username").cloned().unwrap_or_default();
+                self.flow_rows(start, end, user_filter, role, &username).await
             }
             ObservabilityOperation::AllLogs | ObservabilityOperation::SelfLogs | ObservabilityOperation::LogsByToken => self.logs(call, start, end).await,
             ObservabilityOperation::SelfLogStats | ObservabilityOperation::LogStats => self.stats(call, start, end).await,
@@ -542,15 +556,35 @@ impl PgObservabilityStore {
         Ok(values(rows))
     }
 
+    async fn json_rows_for_username(
+        &self,
+        sql: &str,
+        username: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let rows = sqlx::query(sql)
+            .bind(username)
+            .bind(start)
+            .bind(end)
+            .fetch_all(&self.pg)
+            .await
+            .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(values(rows))
+    }
+
     async fn flow_rows(
         &self,
         start: i64,
         end: i64,
         user_id: Option<i64>,
+        role: Option<i64>,
+        username: &str,
     ) -> Result<Value, ObservabilityStoreError> {
         let rows = match user_id {
-            Some(user_id) => sqlx::query("SELECT jsonb_build_object('token_id', token_id, 'use_group', use_group, 'model_name', model_name, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE user_id = $1 AND use_group <> '' AND created_at >= $2 AND created_at <= $3 GROUP BY token_id, use_group, model_name ORDER BY SUM(quota) DESC").bind(user_id).bind(start).bind(end).fetch_all(&self.pg).await,
-            None => sqlx::query("SELECT jsonb_build_object('user_id', user_id, 'username', username, 'use_group', use_group, 'model_name', model_name, 'channel_id', channel_id, 'count', SUM(count), 'quota', SUM(quota), 'token_used', SUM(token_used)) FROM quota_data WHERE use_group <> '' AND created_at >= $1 AND created_at <= $2 GROUP BY user_id, username, use_group, model_name, channel_id ORDER BY SUM(quota) DESC").bind(start).bind(end).fetch_all(&self.pg).await,
+            Some(user_id) => sqlx::query("SELECT jsonb_strip_nulls(jsonb_build_object('token_id', NULLIF(q.token_id, 0), 'token_name', NULLIF(t.name, ''), 'use_group', q.use_group, 'model_name', q.model_name, 'count', SUM(q.count), 'quota', SUM(q.quota), 'token_used', SUM(q.token_used))) FROM quota_data q LEFT JOIN tokens t ON t.id = q.token_id AND t.deleted_at IS NULL WHERE q.user_id = $1 AND q.use_group <> '' AND q.created_at >= $2 AND q.created_at <= $3 GROUP BY q.token_id, t.name, q.use_group, q.model_name ORDER BY SUM(q.quota) DESC").bind(user_id).bind(start).bind(end).fetch_all(&self.pg).await,
+            None if role.unwrap_or(0) >= ROOT_ROLE => sqlx::query("SELECT jsonb_strip_nulls(jsonb_build_object('user_id', NULLIF(q.user_id, 0), 'username', NULLIF(q.username, ''), 'node_name', NULLIF(q.node_name, ''), 'token_id', NULLIF(q.token_id, 0), 'token_name', NULLIF(t.name, ''), 'use_group', q.use_group, 'model_name', q.model_name, 'channel_id', NULLIF(q.channel_id, 0), 'channel_name', CASE WHEN q.channel_id > 0 THEN COALESCE(NULLIF(c.name, ''), 'channel-' || q.channel_id::text) END, 'count', SUM(q.count), 'quota', SUM(q.quota), 'token_used', SUM(q.token_used))) FROM quota_data q LEFT JOIN tokens t ON t.id = q.token_id AND t.deleted_at IS NULL LEFT JOIN channels c ON c.id = q.channel_id WHERE q.use_group <> '' AND q.created_at >= $1 AND q.created_at <= $2 AND ($3 = '' OR q.username = $3) GROUP BY q.user_id, q.username, q.node_name, q.token_id, t.name, q.use_group, q.model_name, q.channel_id, c.name ORDER BY SUM(q.quota) DESC").bind(start).bind(end).bind(username).fetch_all(&self.pg).await,
+            None => sqlx::query("SELECT jsonb_strip_nulls(jsonb_build_object('user_id', NULLIF(q.user_id, 0), 'username', NULLIF(q.username, ''), 'use_group', q.use_group, 'model_name', q.model_name, 'channel_id', NULLIF(q.channel_id, 0), 'channel_name', CASE WHEN q.channel_id > 0 THEN COALESCE(NULLIF(c.name, ''), 'channel-' || q.channel_id::text) END, 'count', SUM(q.count), 'quota', SUM(q.quota), 'token_used', SUM(q.token_used))) FROM quota_data q LEFT JOIN channels c ON c.id = q.channel_id WHERE q.use_group <> '' AND q.created_at >= $1 AND q.created_at <= $2 AND ($3 = '' OR q.username = $3) GROUP BY q.user_id, q.username, q.use_group, q.model_name, q.channel_id, c.name ORDER BY SUM(q.quota) DESC").bind(start).bind(end).bind(username).fetch_all(&self.pg).await,
         }.map_err(|_| ObservabilityStoreError::Unavailable)?;
         Ok(values(rows))
     }
@@ -827,7 +861,7 @@ pub fn observability_read_router(state: ObservabilityState) -> Router {
     observability_read_routes().with_state(state)
 }
 
-/// Builds the unmounted observability and maintenance candidate routes.
+/// Builds the full observability and maintenance candidate router.
 ///
 /// `/api/system-info` and `/api/system-task` are intentionally absent: their
 /// PostgreSQL-backed ownership is already established in `control_admin`.
