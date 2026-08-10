@@ -41,7 +41,8 @@ use lmm_api_rs::{
         },
         missing_control_public::{GroupState, RatioConfigState, group_router, ratio_config_router},
         missing_control_tasks::{
-            ControlTaskStatusState, PgControlTaskStatusProbe, status_test_router,
+            ControlTaskSelfState, ControlTaskStatusState, PgControlTaskStatusProbe,
+            PgControlTaskStore, self_task_read_router, status_test_router,
         },
         missing_identity_catalog::{
             IdentityCatalogState, protected_read_router as identity_catalog_protected_read_router,
@@ -385,6 +386,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )),
             )),
         );
+        let identity_task_self = http::api_global_rate_limited_surface(
+            &app_state,
+            self_task_read_router(ControlTaskSelfState::new(
+                Arc::new(PgControlTaskStore::new(pg.clone())),
+                Arc::new(DashboardObservabilityAuthorizer::new(
+                    Arc::clone(&auth),
+                    Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
+                )),
+            )),
+        );
         let system_task_list = http::api_global_rate_limited_surface_with_legacy_headers(
             &app_state,
             control_admin_read_router(ControlAdminState::new(
@@ -444,6 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(billing_subscriptions)
             .merge(observability)
             .merge(status_test)
+            .merge(identity_task_self)
             .merge(system_task_list)
             .merge(open_source_bounties)
             .merge(model_lookup)
