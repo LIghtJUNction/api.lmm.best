@@ -244,11 +244,24 @@ func (runtime *productionRuntime) rejectActiveLegacyPolicy(ctx context.Context) 
 		if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", unit}}); err == nil {
 			return fmt.Errorf("legacy policy unit is active; stop it before migration: %s", unit)
 		}
-		if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-enabled", "--quiet", unit}}); err == nil {
+		output, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-enabled", unit}})
+		if err == nil && legacyPolicyUnitIsEnabled(output) {
 			return fmt.Errorf("legacy policy unit is enabled; disable it before migration: %s", unit)
 		}
 	}
 	return nil
+}
+
+func legacyPolicyUnitIsEnabled(output []byte) bool {
+	switch strings.TrimSpace(string(output)) {
+	case "enabled", "enabled-runtime", "linked", "linked-runtime", "alias", "generated":
+		return true
+	default:
+		// systemctl reports inactive static units as "static" with a successful
+		// exit status. Static means the unit can be started by another unit; it
+		// does not mean that this legacy policy is enabled.
+		return false
+	}
 }
 
 func (runtime *productionRuntime) restoreEdgePolicyBackup(ctx context.Context, root, expectedDigest string) error {
