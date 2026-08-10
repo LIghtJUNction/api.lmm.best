@@ -339,10 +339,11 @@ fn evaluate_trust_level(role: i64, facts: DashboardSelfUserFacts) -> TrustLevelI
     let (level, inactivity_decay_steps, next_decay_at) =
         if let Some(override_level) = facts.trust_level_override {
             (
-                (0..=4)
-                    .contains(&override_level)
-                    .then_some(override_level)
-                    .unwrap_or(0),
+                if (0..=4).contains(&override_level) {
+                    override_level
+                } else {
+                    0
+                },
                 0,
                 None,
             )

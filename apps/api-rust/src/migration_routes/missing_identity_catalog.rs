@@ -297,8 +297,8 @@ async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
             .map(|(k, v)| ((*k).to_owned(), *v))
             .collect()
     });
-    let group_ratios = nested_number_map(values.get("GroupGroupRatio"))
-        .unwrap_or_else(|| default_group_group_ratios());
+    let group_ratios =
+        nested_number_map(values.get("GroupGroupRatio")).unwrap_or_else(default_group_group_ratios);
     let special = nested_string_map(values.get("group_ratio_setting.group_special_usable_group"))
         .or_else(|| special_from_legacy_setting(values.get("group_ratio_setting")))
         .unwrap_or_default();
