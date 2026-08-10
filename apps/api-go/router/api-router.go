@@ -33,6 +33,10 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/about", controller.GetAbout)
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
+		// Nginx auth_request target for the mainland-China direct-access gate.
+		// The handler additionally requires a loopback peer and a valid dashboard
+		// credential, so this route is not a public policy oracle.
+		apiRouter.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
@@ -90,6 +94,9 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/sessions/revoke-others", middleware.DisableCache(), controller.RevokeOtherLoginSessions)
 				selfRoute.GET("/self/groups", controller.GetUserGroups)
 				selfRoute.GET("/self", controller.GetSelf)
+				selfRoute.GET("/access-ip", middleware.DisableCache(), controller.GetPersonalAccessIP)
+				selfRoute.PUT("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SetPersonalAccessIP)
+				selfRoute.DELETE("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.DeletePersonalAccessIP)
 				selfRoute.GET("/models", controller.GetUserModels)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
@@ -325,6 +332,12 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
+
+		financeRoute := apiRouter.Group("/finance")
+		financeRoute.Use(middleware.AdminAuth(), middleware.DisableCache())
+		{
+			financeRoute.GET("/export", controller.ExportFinancialData)
+		}
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 

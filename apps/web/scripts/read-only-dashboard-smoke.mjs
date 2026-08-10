@@ -33,19 +33,34 @@ const playwrightEntry = (() => {
     try {
       return require.resolve('playwright', { paths: [nodePrefix] })
     } catch (error) {
-      throw new Error(
-        'Playwright is not available locally; use the machine-provided Playwright to run this smoke check (no repository dependency is added).',
-        { cause: error }
-      )
+      try {
+        return require.resolve('playwright', {
+          paths: ['/usr/lib/node_modules'],
+        })
+      } catch {
+        throw new Error(
+          'Playwright is not available locally; use the machine-provided Playwright to run this smoke check (no repository dependency is added).',
+          { cause: error }
+        )
+      }
     }
   }
 })()
 const { chromium } = (await import(playwrightEntry)).default
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
+const viewportMatch = /^([1-9]\d*)x([1-9]\d*)$/.exec(
+  process.env.DASHBOARD_SMOKE_VIEWPORT ?? ''
+)
+const viewport = viewportMatch
+  ? { width: Number(viewportMatch[1]), height: Number(viewportMatch[2]) }
+  : { width: 1440, height: 900 }
+const outputSuffix = process.env.DASHBOARD_SMOKE_OUTPUT_SUFFIX
+  ? `-${process.env.DASHBOARD_SMOKE_OUTPUT_SUFFIX}`
+  : ''
 const outputDirectory = path.resolve(
   scriptDirectory,
-  '../test-results/read-only-dashboard-smoke'
+  `../test-results/read-only-dashboard-smoke${outputSuffix}`
 )
 const now = Math.floor(Date.now() / 1000)
 const baseUrl = process.env.DASHBOARD_SMOKE_URL ?? 'http://127.0.0.1:4174'
@@ -60,6 +75,13 @@ const authFixture = {
     username: 'readonly_smoke_user',
     role: 10,
     display_name: 'Read-only Smoke User',
+    developer_access_granted: true,
+    onboarding: {
+      activation_complete: true,
+      credential_complete: true,
+      first_request_complete: true,
+      stage: 'complete',
+    },
   },
   session: {
     sid: 'smoke-dashboard-session',
@@ -388,7 +410,7 @@ let context
 try {
   browser = await chromium.launch({ headless: true })
   context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
+    viewport,
     recordHar: {
       path: path.join(outputDirectory, 'dashboard-network.har'),
       mode: 'full',

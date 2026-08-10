@@ -320,6 +320,17 @@ export function CheckinCalendarCard({
                     ? `${t('Today')} +${formatQuotaWithCurrency(todayAward)}`
                     : t('Check in daily to receive random quota rewards')}
                 </p>
+                {checkinData?.trust_level !== undefined &&
+                checkinData.min_quota !== undefined &&
+                checkinData.max_quota !== undefined ? (
+                  <p className='text-muted-foreground mt-1 text-[11px] sm:text-xs'>
+                    {t('Reward range for level {{level}}: {{min}}–{{max}}', {
+                      level: checkinData.trust_level,
+                      min: formatQuotaWithCurrency(checkinData.min_quota),
+                      max: formatQuotaWithCurrency(checkinData.max_quota),
+                    })}
+                  </p>
+                ) : null}
               </div>
             </button>
             <Button

@@ -577,7 +577,7 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"setting":                  user.Setting,
 		"stripe_customer":          user.StripeCustomer,
 		"trust_level_info":         accessSnapshot.TrustLevel,
-		"trust_level_tiers":        model.GetTrustLevelTiers(),
+		"trust_level_tiers":        model.GetTrustLevelTierViews(accessSnapshot.TrustLevel.Level),
 		"onboarding": gin.H{
 			"activation_complete":      onboarding.ActivationComplete,
 			"paid_activation_complete": onboarding.PaidActivationComplete,

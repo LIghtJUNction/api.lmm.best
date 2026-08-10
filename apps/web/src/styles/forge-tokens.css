@@ -48,6 +48,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   --forge-brand-mark-surface: var(--forge-cactus-light);
   --forge-brand-mark-paper: var(--forge-paper-light);
   --forge-brand-mark-ink: var(--forge-ink-light);
+  --forge-brand-mark-accent: var(--forge-clay-light);
 
   --forge-chart-text-light: color-mix(
     in oklch,
@@ -127,6 +128,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 }
 
 .dark {
+  --forge-brand-mark-accent: var(--forge-clay-dark);
   --forge-code-heading: var(--forge-clay-dark);
   --forge-code-emphasis: var(--forge-extra-terra-dark);
   --forge-code-link: var(--forge-extra-mist-dark);

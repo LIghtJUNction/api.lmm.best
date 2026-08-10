@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { FileTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -80,9 +81,34 @@ export function PlaygroundMessageContent({
     sources,
   } = getMessageContentState(message, versionContent)
   const isError = isErrorMessage(message)
+  const attachments = message.attachments ?? []
+  const hasAttachments = attachments.length > 0
   const isMessageFinal =
     message.status !== MESSAGE_STATUS.LOADING &&
     message.status !== MESSAGE_STATUS.STREAMING
+  let renderedMessageContent: ReactNode = null
+
+  if (showMessageContent) {
+    renderedMessageContent = isSourceVisible ? (
+      <CodeBlock
+        code={versionContent}
+        className='my-0 group-[.is-assistant]:w-full group-[.is-assistant]:max-w-[78ch]'
+        collapsedLines={24}
+        defaultCollapsed={false}
+        language='markdown'
+        maxExpandedLines={48}
+        showLineNumbers
+        showToolbar
+        title={t('Raw response')}
+      >
+        <CodeBlockCopyButton />
+      </CodeBlock>
+    ) : (
+      <MessageContent variant='flat' className={cn(getMessageContentStyles())}>
+        <Response final={isMessageFinal}>{displayContent}</Response>
+      </MessageContent>
+    )
+  }
 
   return (
     <div
@@ -134,30 +160,44 @@ export function PlaygroundMessageContent({
         </>
       )}
 
-      {!isError && showMessageContent && (
+      {!isError && (showMessageContent || hasAttachments) && (
         <>
-          {isSourceVisible ? (
-            <CodeBlock
-              code={versionContent}
-              className='my-0 group-[.is-assistant]:w-full group-[.is-assistant]:max-w-[78ch]'
-              collapsedLines={24}
-              defaultCollapsed={false}
-              language='markdown'
-              maxExpandedLines={48}
-              showLineNumbers
-              showToolbar
-              title={t('Raw response')}
+          {hasAttachments && (
+            <div
+              className={cn(
+                'mb-3 flex max-w-2xl flex-wrap gap-2',
+                alignment === 'right' && 'self-end justify-end'
+              )}
             >
-              <CodeBlockCopyButton />
-            </CodeBlock>
-          ) : (
-            <MessageContent
-              variant='flat'
-              className={cn(getMessageContentStyles())}
-            >
-              <Response final={isMessageFinal}>{displayContent}</Response>
-            </MessageContent>
+              {attachments.map((attachment) =>
+                attachment.kind === 'image' && attachment.url ? (
+                  <figure
+                    className='border-border/80 bg-muted/30 overflow-hidden rounded-xl border'
+                    key={`${attachment.kind}:${attachment.name}:${attachment.url}`}
+                  >
+                    <img
+                      alt={attachment.name}
+                      className='max-h-72 max-w-full object-contain sm:max-w-md'
+                      loading='lazy'
+                      src={attachment.url}
+                    />
+                    <figcaption className='text-muted-foreground max-w-72 truncate border-t px-2.5 py-1.5 text-xs'>
+                      {attachment.name}
+                    </figcaption>
+                  </figure>
+                ) : (
+                  <div
+                    className='border-border/80 bg-muted/35 text-foreground flex max-w-72 items-center gap-2 rounded-lg border px-3 py-2 text-sm'
+                    key={`${attachment.kind}:${attachment.name}:${attachment.mediaType}`}
+                  >
+                    <FileTextIcon className='text-muted-foreground size-4 shrink-0' />
+                    <span className='truncate'>{attachment.name}</span>
+                  </div>
+                )
+              )}
+            </div>
           )}
+          {renderedMessageContent}
           <MessageMetadata alignment={alignment} message={message} />
           {actions}
         </>

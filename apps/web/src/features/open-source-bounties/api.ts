@@ -56,7 +56,15 @@ export async function listBounties() {
     total: number
     page: number
     page_size: number
-  }>(api.get('/api/open-source-bounties?page=1&page_size=50'))
+  }>(
+    api.get('/api/open-source-bounties?page=1&page_size=50', {
+      // Public challenges are optional on deployments that have not mounted
+      // the bounty candidate yet.  ChallengeList owns the inline fallback;
+      // never surface a probe 401/404 as a global toast.
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
+  )
   return { ...result, items: result.items ?? [] }
 }
 

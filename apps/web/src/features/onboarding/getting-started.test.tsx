@@ -11,6 +11,8 @@ import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 
+import type { ApiRequestConfig } from '@/lib/api'
+
 const domWindow = new Window({ url: 'https://console.example.test/' })
 for (const key of [
   'window',
@@ -122,11 +124,19 @@ function makeRouter() {
 
 async function renderPage(
   topupResponse: Promise<{ data: Record<string, unknown> }>,
-  bountyCapability = false
+  bountyCapability = false,
+  bountyResponse: { data: Record<string, unknown> } | Error = {
+    data: {
+      success: true,
+      data: { items: [], total: 0, page: 1, page_size: 50 },
+    },
+  }
 ) {
   const gets: string[] = []
-  api.get = (async (url) => {
+  const getConfigs: Array<ApiRequestConfig | undefined> = []
+  api.get = (async (url, config) => {
     gets.push(url)
+    getConfigs.push(config)
     if (url === '/api/user/self') {
       return { data: { success: true, data: user } }
     }
@@ -148,19 +158,17 @@ async function renderPage(
       }
     }
     if (url.startsWith('/api/open-source-bounties?')) {
-      return {
-        data: {
-          success: true,
-          data: { items: [], total: 0, page: 1, page_size: 50 },
-        },
-      }
+      if (bountyResponse instanceof Error) throw bountyResponse
+      return bountyResponse
     }
     return { data: { success: true, data: [] } }
   }) as typeof api.get
   useAuthStore.getState().auth.setUser(user)
 
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // Keep the test honest: ChallengeList must disable retries itself for a
+    // best-effort route probe, rather than relying on a test-only default.
+    defaultOptions: { queries: { retry: 3 } },
   })
   const router = makeRouter()
   const container = document.createElement('div')
@@ -176,7 +184,7 @@ async function renderPage(
     )
     await flushEffects()
   })
-  return { container, root, queryClient, gets }
+  return { container, root, queryClient, gets, getConfigs }
 }
 
 async function unmountPage(page: Awaited<ReturnType<typeof renderPage>>) {
@@ -263,6 +271,39 @@ describe('getting started payment availability', () => {
       page.gets.some((url) => url.startsWith('/api/open-source-bounties?')),
       true
     )
+    await unmountPage(page)
+  })
+
+  test('keeps unavailable optional probes inline and does not retry them', async () => {
+    const page = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      true,
+      new Error('Not Found')
+    )
+    await act(flushEffects)
+
+    const bountyCalls = page.gets.filter((url) =>
+      url.startsWith('/api/open-source-bounties?')
+    )
+    assert.equal(bountyCalls.length, 1)
+    assert.equal(
+      page.container.textContent?.includes(
+        'Challenges are temporarily unavailable.'
+      ),
+      true
+    )
+
+    const topupConfig = page.getConfigs.find(
+      (_, index) => page.gets[index] === '/api/user/topup/info'
+    )
+    assert.equal(topupConfig?.skipBusinessError, true)
+    assert.equal(topupConfig?.skipErrorHandler, true)
+
+    const bountyConfig = page.getConfigs.find((_, index) =>
+      page.gets[index].startsWith('/api/open-source-bounties?')
+    )
+    assert.equal(bountyConfig?.skipBusinessError, true)
+    assert.equal(bountyConfig?.skipErrorHandler, true)
     await unmountPage(page)
   })
 })

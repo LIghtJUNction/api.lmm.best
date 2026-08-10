@@ -16,29 +16,40 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { type ComponentProps, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import {
   PromptInput,
+  PromptInputAttachment,
+  PromptInputAttachments,
   PromptInputFooter,
   PromptInputTextarea,
   type PromptInputMessage,
+  usePromptInputAttachments,
 } from '@/components/ai-elements/prompt-input'
 
-import { getSubmittableInputText } from '../../lib'
+import {
+  getSubmittableInputText,
+  PLAYGROUND_ATTACHMENT_ACCEPT,
+  PLAYGROUND_MAX_FILE_BYTES,
+  PLAYGROUND_MAX_FILES,
+  preparePlaygroundSubmission,
+} from '../../lib'
 import type {
   ModelOption,
   GroupOption,
   ParameterEnabled,
   PlaygroundConfig,
+  PlaygroundSubmission,
 } from '../../types'
 import { PlaygroundInputControls } from './playground-input-controls'
 import { PlaygroundInputTools } from './playground-input-tools'
 
 interface PlaygroundInputProps {
   config: PlaygroundConfig
-  onSubmit: (text: string) => void
+  onSubmit: (submission: PlaygroundSubmission) => void | Promise<void>
   onStop?: () => void
   disabled?: boolean
   isGenerating?: boolean
@@ -60,6 +71,18 @@ interface PlaygroundInputProps {
     value: boolean
   ) => void
   parameterEnabled: ParameterEnabled
+}
+
+function PlaygroundInputControlsWithAttachments(
+  props: ComponentProps<typeof PlaygroundInputControls>
+) {
+  const attachments = usePromptInputAttachments()
+  return (
+    <PlaygroundInputControls
+      {...props}
+      attachmentCount={attachments.files.length}
+    />
+  )
 }
 
 export function PlaygroundInput({
@@ -84,19 +107,33 @@ export function PlaygroundInput({
   const { t } = useTranslation()
   const [text, setText] = useState('')
 
-  const handleSubmit = (message: PromptInputMessage) => {
+  const handleSubmit = async (message: PromptInputMessage) => {
     const submittableText = getSubmittableInputText(message, disabled)
 
-    if (!submittableText) return
-    onSubmit(submittableText)
+    if (submittableText === null) return
+    let submission: PlaygroundSubmission
+    try {
+      submission = preparePlaygroundSubmission(message)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Request error occurred')
+      )
+      throw error
+    }
+    await onSubmit(submission)
     setText('')
   }
 
   return (
     <div className='grid shrink-0 gap-4 px-1 md:pb-4'>
       <PromptInput
+        accept={PLAYGROUND_ATTACHMENT_ACCEPT}
         className='relative'
+        maxFiles={PLAYGROUND_MAX_FILES}
+        maxFileSize={PLAYGROUND_MAX_FILE_BYTES}
+        multiple
         groupClassName='playground-input-shell'
+        onError={(error) => toast.error(t(error.message))}
         onSubmit={handleSubmit}
       >
         <PromptInputTextarea
@@ -111,8 +148,16 @@ export function PlaygroundInput({
           value={text}
         />
 
+        <div className='flex flex-wrap gap-2 px-4 pb-3 empty:hidden'>
+          <PromptInputAttachments>
+            {(attachment) => (
+              <PromptInputAttachment data={attachment} key={attachment.id} />
+            )}
+          </PromptInputAttachments>
+        </div>
+
         <PromptInputFooter className='playground-input-footer px-3 py-2.5'>
-          <PlaygroundInputControls
+          <PlaygroundInputControlsWithAttachments
             disabled={disabled}
             groups={groups}
             groupValue={groupValue}

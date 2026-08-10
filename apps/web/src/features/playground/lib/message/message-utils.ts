@@ -24,6 +24,7 @@ import type {
   MessageVersion,
   ChatCompletionMessage,
   ContentPart,
+  PlaygroundAttachment,
 } from '../../types'
 
 /**
@@ -76,13 +77,15 @@ export function updateCurrentVersionContent(
  */
 export function createUserMessage(
   content: string,
-  createdAt: number = Date.now()
+  createdAt: number = Date.now(),
+  attachments: PlaygroundAttachment[] = []
 ): Message {
   return {
     key: nanoid(),
     from: MESSAGE_ROLES.USER,
     versions: [createMessageVersion(content)],
     createdAt,
+    ...(attachments.length > 0 ? { attachments } : {}),
   }
 }
 
@@ -154,9 +157,13 @@ export function getTextContent(content: string | ContentPart[]): string {
  */
 export function formatMessageForAPI(message: Message): ChatCompletionMessage {
   const currentVersion = getCurrentVersion(message)
+  const imageUrls =
+    message.attachments
+      ?.filter((attachment) => attachment.kind === 'image' && attachment.url)
+      .map((attachment) => attachment.url as string) ?? []
   return {
     role: message.from,
-    content: currentVersion.content,
+    content: buildMessageContent(currentVersion.content, imageUrls),
   }
 }
 
@@ -169,6 +176,16 @@ export function isValidMessage(message: Message): boolean {
 
   // Exclude empty assistant messages (loading/streaming placeholders)
   if (message.from === MESSAGE_ROLES.ASSISTANT && !hasMessageContent(message)) {
+    return false
+  }
+
+  if (
+    message.from === MESSAGE_ROLES.USER &&
+    !hasMessageContent(message) &&
+    !message.attachments?.some(
+      (attachment) => attachment.kind === 'image' && attachment.url
+    )
+  ) {
     return false
   }
 

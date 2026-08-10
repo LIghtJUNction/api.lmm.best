@@ -105,3 +105,24 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
   )
   return res.data
 }
+
+export type FinanceExportFormat = 'zip' | 'text'
+
+export async function fetchFinanceExport(
+  format: FinanceExportFormat,
+  days = 30
+) {
+  const endTimestamp = Math.floor(Date.now() / 1000)
+  const startTimestamp = endTimestamp - days * 24 * 60 * 60
+  return api.get<Blob>('/api/finance/export', {
+    params: {
+      format,
+      start_timestamp: startTimestamp,
+      end_timestamp: endTimestamp,
+    },
+    responseType: 'blob',
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+}

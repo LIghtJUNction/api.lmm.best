@@ -48,6 +48,10 @@ export interface TrustLevelTier {
   level: number
   min_paid_amount: number
   discount_percent: number
+  benefits?: string[]
+  benefit_count?: number
+  benefits_hidden?: boolean
+  discount_hidden?: boolean
 }
 
 export type OnboardingStage =

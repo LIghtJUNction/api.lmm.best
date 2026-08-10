@@ -205,9 +205,27 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		result.Message = kitutil.MaskSensitiveInfo(result.Message)
 	}
 	if result.Message == "" {
-		result.Message = string(e.errorType)
+		result.Message = fallbackOpenAIErrorMessage(e)
 	}
 	return result
+}
+
+func fallbackOpenAIErrorMessage(err *NewAPIError) string {
+	if err == nil {
+		return "request failed; please retry."
+	}
+	if err.Err != nil {
+		if message := strings.TrimSpace(err.Err.Error()); message != "" {
+			return kitutil.MaskSensitiveInfo(message)
+		}
+	}
+	if err.StatusCode >= http.StatusInternalServerError {
+		return fmt.Sprintf("upstream request failed (HTTP %d); please retry.", err.StatusCode)
+	}
+	if err.StatusCode >= http.StatusBadRequest {
+		return fmt.Sprintf("request failed (HTTP %d).", err.StatusCode)
+	}
+	return "request failed; please retry."
 }
 
 func (e *NewAPIError) ToClaudeError() ClaudeError {

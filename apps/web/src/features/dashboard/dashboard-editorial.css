@@ -155,67 +155,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   backdrop-filter: none;
 }
 
-.dashboard-editorial-mark {
-  color: var(--dashboard-mark-ink);
-  opacity: 0.92;
-}
-
-.dashboard-editorial-mark-carrier {
-  fill: var(--dashboard-mark-paper);
-  stroke: var(--dashboard-mark-ink);
-  stroke-width: 1.5;
-}
-
-.dashboard-editorial-mark-gesture {
-  fill: none;
-  stroke: var(--dashboard-mark-ink);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 11;
-}
-
-.dashboard-editorial-mark-contour {
-  fill: none;
-  stroke: var(--dashboard-mark-muted);
-  stroke-linecap: round;
-  stroke-width: 1.25;
-}
-
-.dashboard-editorial-mark-accent {
-  fill: var(--dashboard-clay);
-}
-
-.dashboard-analytics-art {
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-height: 8rem;
-  background: var(--dashboard-wash);
-}
-
-.dashboard-analytics-art-carrier {
-  fill: var(--dashboard-mark-paper);
-}
-
-.dashboard-analytics-art-gesture {
-  fill: none;
-  stroke: var(--dashboard-mark-ink);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 18;
-}
-
-.dashboard-analytics-art-contour {
-  fill: none;
-  stroke: var(--dashboard-mark-muted);
-  stroke-linecap: round;
-  stroke-width: 3;
-}
-
-.dashboard-analytics-art-accent {
-  fill: var(--dashboard-clay);
-}
-
 .dashboard-editorial-code {
   background: color-mix(in oklch, var(--foreground) 5%, transparent);
 }

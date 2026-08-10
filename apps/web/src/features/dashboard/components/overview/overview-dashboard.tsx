@@ -169,41 +169,6 @@ function buildCurlCommand(args: {
   ].join('\n')
 }
 
-function SetupGuideBackdrop(props: { compact?: boolean }) {
-  return (
-    <svg
-      className={cn(
-        'dashboard-editorial-mark pointer-events-none absolute top-0 right-0',
-        props.compact
-          ? 'h-full w-[36%] opacity-35 sm:w-[46%] sm:opacity-45'
-          : 'h-56 w-[38%] opacity-40 sm:w-[54%] sm:opacity-55'
-      )}
-      viewBox='0 0 520 240'
-      preserveAspectRatio='xMidYMid slice'
-      aria-hidden='true'
-    >
-      <path
-        className='dashboard-editorial-mark-carrier'
-        d='M282 16C351 1 472 20 511 67c26 32-1 104-37 139-44 43-137 43-197 21-60-23-84-74-62-120 14-29 34-73 67-91Z'
-      />
-      <path
-        className='dashboard-editorial-mark-gesture'
-        d='M277 179C314 151 331 112 353 77c18-29 38-44 53-41 21 4 8 43-16 66-30 29-54 31-71 16-13-12-9-40 22-51 35-13 68 11 102 33 29 19 53 25 76 16'
-      />
-      <path
-        className='dashboard-editorial-mark-contour'
-        d='M302 36c49-21 123-11 165 15M283 52c58-21 130-7 183 25M267 75c67-15 137 3 190 40M253 103c68-8 129 11 176 44M252 132c59 3 109 21 149 50'
-      />
-      <circle
-        className='dashboard-editorial-mark-accent'
-        cx='472'
-        cy='52'
-        r='10'
-      />
-    </svg>
-  )
-}
-
 function StartStepItem(props: {
   step: StartStep
   index: number
@@ -605,7 +570,6 @@ export function OverviewDashboard() {
         <CardStaggerContainer className='grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
           <CardStaggerItem className='dashboard-editorial-panel bg-card h-full overflow-hidden border'>
             <div className='relative h-full overflow-hidden p-4 sm:p-5'>
-              <SetupGuideBackdrop />
               <div className='relative grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem]'>
                 <div className='flex min-w-0 flex-col gap-5'>
                   <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -681,7 +645,6 @@ export function OverviewDashboard() {
         <CardStaggerContainer>
           <CardStaggerItem className='dashboard-editorial-panel bg-card overflow-hidden border'>
             <div className='relative overflow-hidden px-4 py-3 sm:px-5'>
-              <SetupGuideBackdrop compact />
               <div className='relative flex flex-wrap items-center justify-between gap-3'>
                 <div className='flex min-w-0 items-center gap-3'>
                   <span className='bg-background/70 flex size-9 shrink-0 items-center justify-center rounded-none border'>

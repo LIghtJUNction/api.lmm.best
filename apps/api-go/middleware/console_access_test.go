@@ -28,6 +28,8 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodPost, "/api/open-source-bounties/challenges/9/rate-owner"},
 		{http.MethodPost, "/api/open-source-bounties/challenges/9/disputes"},
 		{http.MethodGet, "/api/user/topup/info"},
+		{http.MethodGet, "/api/user/checkin"},
+		{http.MethodPost, "/api/user/checkin"},
 		{http.MethodPost, "/api/user/stripe/pay"},
 		{http.MethodGet, "/api/user/aff"},
 		{http.MethodPut, "/api/user/self"},

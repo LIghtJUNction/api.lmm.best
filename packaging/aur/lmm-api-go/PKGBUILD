@@ -41,7 +41,6 @@ package() {
   install -Dm0755 "${srcdir}/lmm-api-go-bin" "${pkgdir}/usr/bin/lmm-api-go"
   install -Dm0644 "${shared}/lmm-api-go.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
-  install -d -m0700 "${pkgdir}/etc/lmm-api-go"
   install -Dm0600 "${shared}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
 

@@ -16,112 +16,98 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { Braces, Check, Gauge, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-const ART_WIDTH = 720
-const ART_HEIGHT = 900
-
-const AUTH_ARTWORK = (
-  <g className='auth-artwork' aria-hidden='true'>
-    <path
-      className='auth-art-core'
-      d='M 352 383 C 386 360 438 371 462 406 C 486 442 466 486 428 504 C 388 522 342 503 325 464 C 311 432 323 401 352 383 Z'
-    />
-    <path
-      className='auth-art-left-gesture'
-      d='M -32 510 C 34 486 91 454 148 417 C 200 383 246 358 296 366 C 319 369 338 381 349 398 C 358 412 352 428 338 434 C 321 441 303 429 286 423 C 260 414 232 425 203 445 C 151 482 103 526 45 551 C 15 565 -11 565 -32 554 Z'
-    />
-    <path
-      className='auth-art-right-gesture'
-      d='M 752 548 C 699 534 650 510 605 484 C 568 462 535 449 505 455 C 483 459 467 474 461 491 C 457 504 464 516 477 519 C 491 522 503 511 517 503 C 538 491 560 498 584 514 C 625 541 661 575 709 593 C 729 601 744 599 752 588 Z'
-    />
-    <path
-      className='auth-art-contour'
-      d='M 148 503 C 194 476 230 454 267 448 C 292 444 312 450 330 465 M 489 503 C 520 503 548 514 575 534 C 596 550 614 556 636 554'
-    />
-    <circle className='auth-art-clay' cx='432' cy='466' r='9' />
-  </g>
-)
+const REQUEST_LINES = [
+  ['POST', '/v1/chat/completions'],
+  ['model', 'gpt-4o'],
+  ['stream', 'true'],
+] as const
 
 export function AuthArtPanel() {
   const { t } = useTranslation()
-  const [activeInsight, setActiveInsight] = useState(0)
-  const insights = [
+
+  const capabilities = [
     {
-      label: t('Authentication'),
-      title: t('Build in public. Earn access.'),
-      body: t('Verified open-source work becomes usable model access.'),
+      icon: ShieldCheck,
+      title: t('Protected access'),
+      detail: t('Sessions, API keys, and account controls in one place.'),
     },
     {
-      label: t('Security'),
-      title: t('Security'),
-      body: t('Protect login and registration with Cloudflare Turnstile'),
-    },
-    {
-      label: t('API.LMM.BEST / TOKEN SERVICE'),
-      title: t('API.LMM.BEST / TOKEN SERVICE'),
-      body: t('stable access layer'),
+      icon: Gauge,
+      title: t('Visible usage'),
+      detail: t('Track model calls, latency, and spend without guesswork.'),
     },
   ]
-  const selectedInsight = insights[activeInsight] ?? insights[0]
 
   return (
-    <aside
-      aria-label={t('LMM / OPEN-SOURCE BOUNTY FIELD')}
-      className='relative h-full min-h-0 overflow-visible p-4'
-    >
-      <div className='auth-art-surface pointer-events-auto absolute inset-4 overflow-hidden rounded-none border [border-color:var(--art-border)] bg-[var(--art-surface)] text-[var(--art-ink)] select-none'>
-        <svg
-          viewBox={`0 0 ${ART_WIDTH} ${ART_HEIGHT}`}
-          preserveAspectRatio='xMidYMid meet'
-          focusable='false'
-          aria-hidden='true'
-          className='h-full w-full'
-          xmlns='http://www.w3.org/2000/svg'
-        >
-          {AUTH_ARTWORK}
-        </svg>
+    <aside className='bg-card text-card-foreground flex h-full flex-col overflow-hidden rounded-[1.75rem] border p-8 xl:p-10'>
+      <div className='flex items-center justify-between gap-4 text-xs font-semibold tracking-[0.14em] uppercase'>
+        <span className='text-muted-foreground'>{t('LMM API Console')}</span>
+        <span className='text-success flex items-center gap-2 tracking-normal normal-case'>
+          <span className='bg-success size-2 rounded-full' aria-hidden='true' />
+          {t('Operational')}
+        </span>
+      </div>
 
-        <div className='auth-art-overlay'>
-          <div
-            id='auth-art-insight-panel'
-            role='tabpanel'
-            aria-labelledby={`auth-art-tab-${activeInsight}`}
-            aria-live='polite'
-            className='auth-art-overlay-card'
-          >
-            <div className='auth-art-overlay-index'>
-              0{activeInsight + 1} / 03
-            </div>
-            <h2 className='auth-art-overlay-title'>{selectedInsight.title}</h2>
-            <p className='auth-art-overlay-copy'>{selectedInsight.body}</p>
+      <div className='my-auto max-w-2xl py-10'>
+        <p className='text-muted-foreground mb-4 flex items-center gap-2 text-sm font-medium'>
+          <Braces className='size-4' aria-hidden='true' />
+          {t('A clear route from key to response')}
+        </p>
+        <h2 className='max-w-xl font-serif text-4xl leading-[1.04] tracking-[-0.04em] text-balance xl:text-5xl'>
+          {t('One endpoint. Clear controls. No mystery.')}
+        </h2>
+        <p className='text-muted-foreground mt-5 max-w-lg text-base leading-7'>
+          {t(
+            'Choose a model, send a compatible request, and see exactly how access and usage are managed.'
+          )}
+        </p>
+
+        <div className='bg-background/65 mt-9 overflow-hidden rounded-2xl border'>
+          <div className='border-b px-5 py-3 text-xs font-semibold tracking-[0.12em] uppercase'>
+            {t('Request preview')}
           </div>
-
-          <div
-            className='auth-art-tabs'
-            role='tablist'
-            aria-label={t('Authentication')}
-          >
-            {insights.map((insight, index) => (
-              <button
-                id={`auth-art-tab-${index}`}
-                key={insight.label}
-                type='button'
-                role='tab'
-                aria-controls='auth-art-insight-panel'
-                aria-selected={activeInsight === index}
-                className='auth-art-tab'
-                data-active={activeInsight === index}
-                onClick={() => setActiveInsight(index)}
+          <dl className='divide-y font-mono text-sm'>
+            {REQUEST_LINES.map(([label, value]) => (
+              <div
+                className='grid grid-cols-[5.5rem_1fr] gap-4 px-5 py-3.5'
+                key={label}
               >
-                <span className='auth-art-tab-number'>0{index + 1}</span>
-                <span className='auth-art-tab-label'>{insight.label}</span>
-              </button>
+                <dt className='text-muted-foreground'>{label}</dt>
+                <dd className='truncate'>{value}</dd>
+              </div>
             ))}
+          </dl>
+          <div className='bg-muted/40 flex items-center justify-between gap-4 border-t px-5 py-3.5 text-sm'>
+            <span className='text-muted-foreground'>{t('Response')}</span>
+            <span className='text-success flex items-center gap-2 font-medium'>
+              <Check className='size-4' aria-hidden='true' />
+              200 · {t('stream ready')}
+            </span>
           </div>
         </div>
+
+        <div className='mt-4 grid gap-4 sm:grid-cols-2'>
+          {capabilities.map(({ icon: Icon, title, detail }) => (
+            <section className='rounded-2xl border p-4' key={title}>
+              <Icon
+                className='text-muted-foreground size-5'
+                aria-hidden='true'
+              />
+              <h3 className='mt-4 text-sm font-semibold'>{title}</h3>
+              <p className='text-muted-foreground mt-1.5 text-sm leading-6'>
+                {detail}
+              </p>
+            </section>
+          ))}
+        </div>
       </div>
+
+      <p className='text-muted-foreground border-t pt-5 text-xs leading-5'>
+        {t('Open-source infrastructure for accountable model access.')}
+      </p>
     </aside>
   )
 }

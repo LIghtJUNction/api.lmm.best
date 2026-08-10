@@ -29,6 +29,15 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+export interface PersonalAccessIPPolicy {
+  ip: string
+  current_ip: string
+  current_ip_allowed: boolean
+  eligible: boolean
+  minimum_trust_level: number
+  production_cn_linkage: boolean
+}
+
 /**
  * User profile data
  */
@@ -81,6 +90,8 @@ export interface UserProfile {
   telegram_id?: string
   /** LinuxDO ID (OAuth) */
   linux_do_id?: string
+  /** Effective trust level returned by the authenticated self endpoint */
+  trust_level_info?: import('@/stores/auth-store').TrustLevelInfo
 }
 
 /**
@@ -222,6 +233,15 @@ export interface CheckinStats {
 export interface CheckinStatusResponse {
   /** Whether check-in feature is enabled */
   enabled: boolean
+  /** Effective reward range for the current user's trust level */
+  min_quota?: number
+  max_quota?: number
+  /** Configured base range before trust-level scaling */
+  base_min_quota?: number
+  base_max_quota?: number
+  /** Effective trust level and multiplier used for this user */
+  trust_level?: number
+  reward_multiplier?: number
   /** Check-in statistics */
   stats: CheckinStats
 }

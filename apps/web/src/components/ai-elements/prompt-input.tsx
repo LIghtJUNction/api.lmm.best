@@ -453,6 +453,25 @@ export type PromptInputProps = Omit<
   groupClassName?: string
 }
 
+export function matchesFileAccept(file: File, accept?: string): boolean {
+  if (!accept?.trim()) return true
+
+  const filename = file.name.toLowerCase()
+  const mediaType = file.type.toLowerCase()
+
+  return accept
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .some((pattern) => {
+      if (pattern.startsWith('.')) return filename.endsWith(pattern)
+      if (pattern.endsWith('/*')) {
+        return mediaType.startsWith(pattern.slice(0, -1))
+      }
+      return mediaType === pattern
+    })
+}
+
 export const PromptInput = ({
   className,
   groupClassName,
@@ -494,16 +513,7 @@ export const PromptInput = ({
   }, [])
 
   const matchesAccept = useCallback(
-    (f: File) => {
-      if (!accept || accept.trim() === '') {
-        return true
-      }
-      if (accept.includes('image/*')) {
-        return f.type.startsWith('image/')
-      }
-      // NOTE: keep simple; expand as needed
-      return true
-    },
+    (file: File) => matchesFileAccept(file, accept),
     [accept]
   )
 

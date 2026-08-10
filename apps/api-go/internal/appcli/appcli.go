@@ -48,6 +48,8 @@ func Dispatch(args []string, version string, stdout, stderr io.Writer) Result {
 		return dispatchMigration(args[1:], stdout, stderr)
 	case "request":
 		return Result{ExitCode: RunRequest(args[1:], version, stdout, stderr)}
+	case "deploy":
+		return Result{ExitCode: RunDeploy(args[1:], stdout, stderr)}
 	case "status":
 		return Result{ExitCode: runRouteCommand(args[1:], "/api/status", version, stdout, stderr)}
 	case "doctor":
@@ -106,6 +108,11 @@ func WriteUsage(output io.Writer) {
   lmm-api-go [serve] [server options]
   lmm-api-go migrate --apply|--verify
   lmm-api-go request [request options] [URL-or-path]
+  lmm-api-go deploy build --repo DIR --workspace DIR [--production]
+  lmm-api-go deploy frontend publish --source DIR --release ID [--root DIR] [--keep N]
+  lmm-api-go deploy frontend rollback [--release ID] [--root DIR] [--keep N]
+  lmm-api-go deploy production apply [release options]
+  lmm-api-go deploy production status|confirm|rollback --workspace DIR
   lmm-api-go status [request options]
   lmm-api-go doctor [request options]
   lmm-api-go version
@@ -114,5 +121,6 @@ func WriteUsage(output io.Writer) {
 The lmm-api-go executable is the Go backend itself. Migration mode is explicit:
 --apply may change the database, while --verify is read-only. The request, status,
 and doctor commands use the binary's native HTTP client and do not initialize the
-server, database, or cache.`)
+server, database, or cache. Deployment commands are implemented by this binary;
+they do not delegate release state to shell scripts.`)
 }
