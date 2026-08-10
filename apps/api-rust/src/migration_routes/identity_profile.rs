@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::to_bytes,
-    extract::{Path, Request, State},
+    extract::{Extension, Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, put},
 };
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use crate::auth::{AuthErrorKind, DashboardAuth};
 
 const ROLE_ROOT: i64 = 100;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Authenticated identity supplied by the listener after token validation.
 #[derive(Clone, Copy, Debug)]
@@ -143,7 +145,32 @@ pub fn router(state: ProfileState) -> Router {
             "/api/user/bindings/{binding_type}",
             delete(clear_self_oauth_binding),
         )
+        // Go's UserAuth runs before the handler's body binding and publishes
+        // Auth-Version on every downstream response. Inject the verified
+        // principal once so profile handlers do not re-query auth or trust
+        // client-supplied identity headers.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            profile_auth_boundary,
+        ))
         .with_state(state)
+}
+
+async fn profile_auth_boundary(
+    State(state): State<ProfileState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let identity = match authenticated(&state, request.headers()).await {
+        Ok(identity) => identity,
+        Err(error) => return error.into_response(),
+    };
+    request.extensions_mut().insert(identity);
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 fn self_oauth_binding_column(binding_type: &str) -> Option<(&'static str, &'static str)> {
@@ -160,10 +187,9 @@ fn self_oauth_binding_column(binding_type: &str) -> Option<(&'static str, &'stat
 
 async fn clear_self_oauth_binding(
     State(state): State<ProfileState>,
-    headers: HeaderMap,
+    Extension(identity): Extension<ProfileIdentity>,
     Path(binding_type): Path<String>,
 ) -> Result<Response, ProfileError> {
-    let identity = authenticated(&state, &headers).await?;
     let Some((column, provider)) = self_oauth_binding_column(&binding_type) else {
         // Go's controller keeps this legacy API error at HTTP 200 and exposes
         // only the success/message envelope for invalid binding names.
@@ -217,10 +243,10 @@ async fn clear_self_oauth_binding(
 
 async fn update_self(
     State(state): State<ProfileState>,
+    Extension(identity): Extension<ProfileIdentity>,
     request: Request,
 ) -> Result<Response, ProfileError> {
     let request_locale = locale(request.headers());
-    let identity = authenticated(&state, request.headers()).await?;
     let mut request = request_object(request).await?;
     if request.contains_key("sidebar_modules") || request.contains_key("language") {
         return update_self_setting(&state, identity.user_id, &mut request, request_locale).await;
@@ -314,9 +340,8 @@ async fn update_self_setting(
 
 async fn delete_self(
     State(state): State<ProfileState>,
-    headers: HeaderMap,
+    Extension(identity): Extension<ProfileIdentity>,
 ) -> Result<Json<Success<()>>, ProfileError> {
-    let identity = authenticated(&state, &headers).await?;
     let mut transaction = state
         .pg
         .begin()
@@ -440,9 +465,8 @@ impl IntoResponse for ProfileError {
 
 async fn get_aff_code(
     State(state): State<ProfileState>,
-    headers: HeaderMap,
+    Extension(identity): Extension<ProfileIdentity>,
 ) -> Result<Json<Success<String>>, ProfileError> {
-    let identity = authenticated(&state, &headers).await?;
     let existing =
         sqlx::query_scalar::<_, Option<String>>("SELECT aff_code FROM users WHERE id = $1")
             .bind(identity.user_id)
@@ -485,10 +509,10 @@ fn generate_aff_code() -> String {
 
 async fn update_setting(
     State(state): State<ProfileState>,
+    Extension(identity): Extension<ProfileIdentity>,
     request: Request,
 ) -> Result<Response, ProfileError> {
     let request_locale = locale(request.headers());
-    let identity = authenticated(&state, request.headers()).await?;
     let object = match request_object(request).await {
         Ok(object) => object,
         Err(_) => return Err(ProfileError::legacy(request_locale.invalid_parameters())),
