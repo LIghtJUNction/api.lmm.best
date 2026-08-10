@@ -57,7 +57,7 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	for _, expected := range []string{
 		"SQL_DSN=postgres://private",
 		"SESSION_COOKIE_SECURE=true",
-		"SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best",
+		"SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best",
 		"TRUSTED_PROXIES=127.0.0.1/32,::1/128",
 	} {
 		if !strings.Contains(string(environment), expected) {

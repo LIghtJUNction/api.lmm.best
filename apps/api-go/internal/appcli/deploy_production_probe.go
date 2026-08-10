@@ -292,6 +292,11 @@ func (runtime *productionRuntime) healthCheck(ctx context.Context, workspace pro
 	if err := runtime.verifyFrontendPermissions(); err != nil {
 		return err
 	}
+	if manifest.NginxEdgeRestoreSHA256 != "" {
+		if err := runtime.verifyEdgePolicy(ctx, runtime.paths.EdgeAssetRoot); err != nil {
+			return err
+		}
+	}
 	if err := runtime.probeRelease(ctx, manifest, manifest.ExpectedVersion, manifest.FrontendIndexSHA256); err != nil {
 		return err
 	}

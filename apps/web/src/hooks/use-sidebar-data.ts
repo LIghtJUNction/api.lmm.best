@@ -74,14 +74,9 @@ export function useSidebarData(): SidebarData {
               icon: Wallet,
             },
             {
-              title: t('Profile'),
-              url: '/profile',
-              icon: User,
-            },
-            {
-              title: t('Support'),
-              url: '/support',
-              icon: LifeBuoy,
+              title: t('Open-source bounties'),
+              url: '/open-source-bounties',
+              icon: Compass,
             },
           ],
         },

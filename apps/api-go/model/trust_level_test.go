@@ -38,7 +38,7 @@ func TestGetTrustLevelTiersMatchesEvaluationPolicy(t *testing.T) {
 		assert.Equal(t, tier.Level, info.Level)
 		assert.InDelta(t, tier.DiscountPercent, info.DiscountPercent, 0.0001)
 	}
-	assert.True(t, tiers[TrustLevelMinUser+1].RequiresSuccessfulTopUp)
+	assert.False(t, tiers[TrustLevelMinUser+1].RequiresSuccessfulTopUp)
 	assert.Contains(t, tiers[TrustLevelMinUser+2].Benefits, "personal_ip_allowlist")
 }
 
@@ -226,11 +226,11 @@ func TestLocalAcceptanceDeveloperAccessPreservesPaidActivationFact(t *testing.T)
 		SetLocalAcceptanceDeveloperAccess(previousCapability)
 	})
 
-	state := ordinaryDeveloperAccessState(false)
+	state := ordinaryDeveloperAccessState(false, false)
 	assert.True(t, state.Granted)
 	assert.False(t, state.PaidActivationComplete)
 
-	paidState := ordinaryDeveloperAccessState(true)
+	paidState := ordinaryDeveloperAccessState(true, false)
 	assert.True(t, paidState.Granted)
 	assert.True(t, paidState.PaidActivationComplete)
 }
@@ -262,6 +262,30 @@ func TestFreshUserAccessSnapshotUsesOneBoundedAggregateQuery(t *testing.T) {
 	assert.Equal(t, 1, counter.queries)
 	assert.Contains(t, strings.ToLower(counter.countSQL), "sum(")
 	assert.NotContains(t, strings.ToLower(counter.countSQL), "select *")
+}
+
+func TestManualConsoleActivationUnlocksL1WithoutPaidTopUp(t *testing.T) {
+	previousDB := DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	require.NoError(t, db.AutoMigrate(&TopUp{}))
+	t.Cleanup(func() {
+		DB = previousDB
+		sqlDB, _ := db.DB()
+		_ = sqlDB.Close()
+	})
+
+	user := &User{Id: 42, Role: common.RoleCommonUser, ConsoleActivatedAt: 1}
+	snapshot, err := GetFreshUserAccessSnapshot(user)
+	require.NoError(t, err)
+	assert.Equal(t, TrustLevelMinUser+1, snapshot.TrustLevel.Level)
+	assert.True(t, snapshot.DeveloperAccess.Granted)
+	assert.False(t, snapshot.DeveloperAccess.PaidActivationComplete)
+
+	info, err := GetTrustLevelInfoForUser(user)
+	require.NoError(t, err)
+	assert.Equal(t, TrustLevelMinUser+1, info.Level)
 }
 
 func TestEnrichUsersTrustLevelsQueriesOnlyOrdinaryUsersWithoutOverrides(t *testing.T) {

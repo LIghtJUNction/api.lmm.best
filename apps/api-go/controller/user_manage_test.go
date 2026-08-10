@@ -65,7 +65,7 @@ func performManageUserRequestAsRole(t *testing.T, body string, role int) *httpte
 	return recorder
 }
 
-func TestManageUserTrustLevelOverrideValidation(t *testing.T) {
+func TestManageUserTrustLevelRemainsAutomatic(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	user := model.User{
 		Username: "managed-trust-user", Password: "password", Role: common.RoleCommonUser,
@@ -79,11 +79,7 @@ func TestManageUserTrustLevelOverrideValidation(t *testing.T) {
 
 		var updated model.User
 		require.NoError(t, db.First(&updated, user.Id).Error)
-		if value == -1 {
-			assert.Nil(t, updated.TrustLevelOverride)
-		} else if assert.NotNil(t, updated.TrustLevelOverride) {
-			assert.Equal(t, value, *updated.TrustLevelOverride)
-		}
+		assert.Nil(t, updated.TrustLevelOverride)
 	}
 
 	for _, value := range []int{-2, 5} {

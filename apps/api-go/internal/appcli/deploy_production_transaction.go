@@ -123,6 +123,13 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if err != nil {
 		return productionStatus{}, err
 	}
+	nginxEdgeRestoreSHA256 := ""
+	if runtime.paths.EdgeAssetRoot != "" {
+		nginxEdgeRestoreSHA256, err = runtime.captureEdgePolicyBackup(filepath.Join(workspace.configRestore, "nginx-edge"))
+		if err != nil {
+			return productionStatus{}, fmt.Errorf("capture nginx edge-policy restore state: %w", err)
+		}
+	}
 	databaseSchema, err := runtime.captureDatabaseAccess(ctx, workspace, archivedEnvironment)
 	if err != nil {
 		return productionStatus{}, err
@@ -145,6 +152,7 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 		BackupDir: options.BackupDir, DatabaseSchema: databaseSchema, DeadlineUTC: deadline,
 		MemoryDropInExisted: memoryExisted, MemoryDropInRestoreSHA256: memoryRestoreSHA256,
 		EnvironmentRestoreSHA256: environmentRestoreSHA256,
+		NginxEdgeRestoreSHA256:   nginxEdgeRestoreSHA256,
 	}
 	if err := runtime.writeManifest(workspace, manifest); err != nil {
 		return productionStatus{}, fmt.Errorf("write deployment manifest: %w", err)
@@ -196,6 +204,11 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	}
 	if err := runtime.restoreConfiguration(workspace, manifest); err != nil {
 		return productionStatus{}, err
+	}
+	if manifest.NginxEdgeRestoreSHA256 != "" {
+		if err := runtime.applyEdgePolicyAssets(ctx, runtime.paths.EdgeAssetRoot, filepath.Join(workspace.configRestore, "nginx-edge"), true); err != nil {
+			return productionStatus{}, fmt.Errorf("install managed nginx edge policy: %w", err)
+		}
 	}
 	if err := hardenProductionConfiguration(productionHardenOptions{
 		EnvFile:   filepath.Join(runtime.paths.ConfigDir, "lmm-api-go.env"),
@@ -395,6 +408,11 @@ func (runtime *productionRuntime) rollback(ctx context.Context, workspace produc
 	}
 	if err := runtime.restoreConfiguration(workspace, manifest); err != nil {
 		return fail(err)
+	}
+	if manifest.NginxEdgeRestoreSHA256 != "" {
+		if err := runtime.restoreEdgePolicyBackup(ctx, filepath.Join(workspace.configRestore, "nginx-edge"), manifest.NginxEdgeRestoreSHA256); err != nil {
+			return fail(fmt.Errorf("restore nginx edge policy: %w", err))
+		}
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"daemon-reload"}}); err != nil {
 		return fail(fmt.Errorf("reload systemd for rollback: %w", err))

@@ -141,6 +141,9 @@ async function renderPage(
       return { data: { success: true, data: user } }
     }
     if (url === '/api/user/topup/info') return topupResponse
+    if (url === '/api/user/developer-access/request') {
+      return { data: { success: true, data: null } }
+    }
     if (url === '/api/status') {
       return {
         data: {
@@ -218,17 +221,21 @@ describe('getting started payment availability', () => {
     await unmountPage(page)
   })
 
-  test('offers support only when availability fails or is confirmed empty', async () => {
+  test('offers the administrator request path when payment is unavailable', async () => {
     for (const response of [
       { data: { success: false, message: 'offline' } },
       { data: { success: true, data: emptyTopupInfo } },
     ]) {
       const page = await renderPage(Promise.resolve(response))
       const expected = response.data.success
-        ? 'Online payment is temporarily unavailable. Contact support before attempting to add funds.'
-        : 'Payment availability could not be verified. Contact support before attempting to add funds.'
+        ? 'Online payment is temporarily unavailable. You can submit an administrator unlock request instead.'
+        : 'Payment availability could not be verified. You can submit an administrator unlock request instead.'
       assert.equal(page.container.textContent?.includes(expected), true)
-      assert.ok(page.container.querySelector('a[href="/support"]'))
+      assert.equal(
+        page.container.textContent?.includes('Choose how to unlock access'),
+        true
+      )
+      assert.ok(page.container.querySelector('button'))
       assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
       await unmountPage(page)
     }
@@ -253,7 +260,7 @@ describe('getting started payment availability', () => {
     assert.ok(page.container.querySelector('a[href="/wallet"]'))
     assert.equal(
       page.container.textContent?.includes(
-        'Any successful external top-up activates access.'
+        'Choose either automatic activation after adding funds or an administrator unlock request.'
       ),
       true
     )
