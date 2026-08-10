@@ -4,7 +4,7 @@ use crate::auth::{DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -19,6 +19,7 @@ const ROLE_ADMIN: i64 = 10;
 const ROLE_ROOT: i64 = 100;
 const STATUS_ENABLED: i64 = 1;
 const STATUS_DISABLED: i64 = 2;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 // A pending fence must outlive the normal user-cache TTL.  If Valkey becomes
 // unavailable after a database commit, retaining this fence fails closed until
 // the cache can recover from PostgreSQL rather than re-authorizing an old token.
@@ -60,20 +61,30 @@ struct Envelope<T: Serialize> {
 }
 
 fn ok<T: Serialize>(data: Option<T>) -> Response {
-    Json(Envelope {
-        success: true,
-        message: String::new(),
-        data,
-    })
-    .into_response()
+    authenticated_response(
+        Json(Envelope {
+            success: true,
+            message: String::new(),
+            data,
+        })
+        .into_response(),
+    )
 }
 fn fail(message: impl Into<String>) -> Response {
-    Json(Envelope::<()> {
-        success: false,
-        message: message.into(),
-        data: None,
-    })
-    .into_response()
+    authenticated_response(
+        Json(Envelope::<()> {
+            success: false,
+            message: message.into(),
+            data: None,
+        })
+        .into_response(),
+    )
+}
+fn authenticated_response(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 fn unauthorized() -> Response {
     (
