@@ -66,6 +66,7 @@ const detail: BountyProjectDetail = {
     updated_at: 0,
     published_at: 0,
     closed_at: 0,
+    archived_at: 0,
     active_challenge_count: 2,
     approved_challenge_count: 0,
     owner_rating_average: 0,
