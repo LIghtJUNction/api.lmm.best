@@ -132,7 +132,11 @@ fi
 
 TMPDIR=$TMPDIR "$here/test-go-rollback-state-machine.sh"
 TMPDIR=$TMPDIR "$here/test-precutover-capture.sh"
-TMPDIR=$TMPDIR "$here/test-precutover-packages.sh"
+if command -v makepkg >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
+  TMPDIR=$TMPDIR "$here/test-precutover-packages.sh"
+else
+  printf 'pre-cutover package reconstruction skipped: Arch makepkg/pacman unavailable\n'
+fi
 "$here/test-backup-promotion-contract.sh"
 "$repo/deploy/test-frontend-release.sh"
 
