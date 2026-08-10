@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -42,8 +43,56 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 
 import { createAssistantDefaultKey, type AssistantCreatedKey } from './api'
+
+function ConnectionValue(props: {
+  label: string
+  value: string
+  secret?: boolean
+}) {
+  return (
+    <div className='flex items-center justify-between gap-2 py-2'>
+      <span className='text-muted-foreground shrink-0 text-xs'>
+        {props.label}
+      </span>
+      <div className='flex min-w-0 items-center gap-1.5'>
+        <code
+          className={
+            props.secret
+              ? 'min-w-0 flex-1 text-xs break-all'
+              : 'min-w-0 flex-1 truncate text-xs'
+          }
+        >
+          {props.value}
+        </code>
+        <CopyButton value={props.value} size='sm' />
+      </div>
+    </div>
+  )
+}
+
+function ConnectionDetails(props: {
+  baseUrl: string
+  model: string
+  apiKey?: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className='rounded-lg border px-3'>
+      <ConnectionValue label={t('Base URL')} value={props.baseUrl} />
+      <Separator />
+      <ConnectionValue label={t('Model ID')} value={props.model} />
+      {props.apiKey ? (
+        <>
+          <Separator />
+          <ConnectionValue label={t('API key')} value={props.apiKey} secret />
+        </>
+      ) : null}
+    </div>
+  )
+}
 
 export function AssistantKeyTool(props: {
   baseUrl: string
@@ -74,21 +123,6 @@ export function AssistantKeyTool(props: {
     }
   }
 
-  if (!props.developerAccessGranted) {
-    return (
-      <Card size='sm' className='border-dashed'>
-        <CardHeader>
-          <CardTitle>{t('API key creation requires L1')}</CardTitle>
-          <CardDescription>
-            {t(
-              'Only L0 is restricted. Ask an administrator to approve L1, then return here to create a key.'
-            )}
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    )
-  }
-
   if (created) {
     return (
       <Card size='sm' className='border-success/40 bg-success/5'>
@@ -102,37 +136,11 @@ export function AssistantKeyTool(props: {
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>
-          <div className='grid gap-1'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Base URL')}
-            </span>
-            <div className='bg-background flex items-center gap-2 rounded-lg border p-2'>
-              <code className='min-w-0 flex-1 truncate text-xs'>
-                {props.baseUrl}
-              </code>
-              <CopyButton value={props.baseUrl} size='sm' />
-            </div>
-          </div>
-          <div className='grid gap-1'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Model ID')}
-            </span>
-            <div className='bg-background flex items-center gap-2 rounded-lg border p-2'>
-              <code className='min-w-0 flex-1 truncate text-xs'>{model}</code>
-              <CopyButton value={model} size='sm' />
-            </div>
-          </div>
-          <div className='grid gap-1'>
-            <span className='text-muted-foreground text-xs'>
-              {t('API key')}
-            </span>
-            <div className='bg-background flex items-center gap-2 rounded-lg border p-2'>
-              <code className='min-w-0 flex-1 text-xs break-all'>
-                {created.key}
-              </code>
-              <CopyButton value={created.key} size='sm' />
-            </div>
-          </div>
+          <ConnectionDetails
+            baseUrl={props.baseUrl}
+            model={model}
+            apiKey={created.key}
+          />
         </CardContent>
       </Card>
     )
@@ -142,52 +150,67 @@ export function AssistantKeyTool(props: {
     <>
       <Card size='sm'>
         <CardHeader>
-          <CardTitle>{t('Create a default API key')}</CardTitle>
+          <CardTitle>
+            {props.developerAccessGranted
+              ? t('Create a default API key')
+              : t('Connection details')}
+          </CardTitle>
           <CardDescription>
             {t(
-              'This creates one unlimited, non-expiring key. Your wallet balance still limits actual usage.'
+              'Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.'
             )}
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>
-          <div className='rounded-lg border px-3'>
-            <div className='flex items-center justify-between gap-2 border-b py-2'>
-              <span className='text-muted-foreground text-xs'>
-                {t('Base URL')}
-              </span>
-              <div className='flex min-w-0 items-center gap-1.5'>
-                <code className='truncate text-xs'>{props.baseUrl}</code>
-                <CopyButton value={props.baseUrl} size='sm' />
+          <ConnectionDetails baseUrl={props.baseUrl} model={model} />
+          {props.developerAccessGranted ? (
+            <>
+              <p className='text-muted-foreground text-xs leading-5'>
+                {t(
+                  'This creates one unlimited, non-expiring key. Your wallet balance still limits actual usage.'
+                )}
+              </p>
+              <div className='grid gap-1.5'>
+                <Label htmlFor='assistant-key-name'>{t('Key name')}</Label>
+                <Input
+                  id='assistant-key-name'
+                  value={name}
+                  maxLength={50}
+                  autoComplete='off'
+                  onChange={(event) => setName(event.target.value)}
+                />
               </div>
-            </div>
-            <div className='flex items-center justify-between gap-2 py-2'>
-              <span className='text-muted-foreground text-xs'>
-                {t('Model ID')}
-              </span>
-              <div className='flex min-w-0 items-center gap-1.5'>
-                <code className='truncate text-xs'>{model}</code>
-                <CopyButton value={model} size='sm' />
+              <Button
+                type='button'
+                onClick={() => setConfirmOpen(true)}
+                disabled={!name.trim()}
+              >
+                <KeyRound data-icon='inline-start' aria-hidden='true' />
+                {t('Review key creation')}
+              </Button>
+            </>
+          ) : (
+            <div className='grid gap-3 rounded-lg border border-dashed p-3'>
+              <div>
+                <p className='text-xs font-medium'>
+                  {t('API key creation requires L1')}
+                </p>
+                <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                  {t(
+                    'Only L0 is restricted. Ask an administrator to approve L1, then return here to create a key.'
+                  )}
+                </p>
               </div>
+              <Button
+                variant='outline'
+                size='sm'
+                render={<Link to='/getting-started' />}
+              >
+                {t('View onboarding status')}
+                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+              </Button>
             </div>
-          </div>
-          <div className='grid gap-1.5'>
-            <Label htmlFor='assistant-key-name'>{t('Key name')}</Label>
-            <Input
-              id='assistant-key-name'
-              value={name}
-              maxLength={50}
-              autoComplete='off'
-              onChange={(event) => setName(event.target.value)}
-            />
-          </div>
-          <Button
-            type='button'
-            onClick={() => setConfirmOpen(true)}
-            disabled={!name.trim()}
-          >
-            <KeyRound data-icon='inline-start' aria-hidden='true' />
-            {t('Review key creation')}
-          </Button>
+          )}
         </CardContent>
       </Card>
 
