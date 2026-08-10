@@ -1,7 +1,8 @@
-//! Unmounted observability and maintenance route candidates.
+//! Observability and maintenance route candidates.
 //!
-//! This module is compiled for migration tests but is not composed into the
-//! production listener until its frozen Go behavior has been approved.
+//! The normal listener composes only the PostgreSQL/Valkey-backed read subset;
+//! the remaining candidates stay behind migration/test boundaries until their
+//! frozen Go behavior has been independently verified and approved.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -560,13 +561,85 @@ impl PgObservabilityStore {
         start: i64,
         end: i64,
     ) -> Result<Value, ObservabilityStoreError> {
-        const LOG_JSON: &str = "jsonb_build_object('id', id, 'user_id', user_id, 'created_at', created_at, 'type', type, 'content', content, 'username', username, 'token_name', token_name, 'model_name', model_name, 'quota', quota, 'prompt_tokens', prompt_tokens, 'completion_tokens', completion_tokens, 'channel', channel, 'token_id', token_id, 'group', \"group\")";
-        let rows = match call.operation {
-            ObservabilityOperation::SelfLogs => sqlx::query(&format!("SELECT {LOG_JSON} FROM logs WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY id DESC LIMIT 100")).bind(user_id(&call.principal)?).bind(start).bind(end).fetch_all(&self.pg).await,
-            ObservabilityOperation::LogsByToken => sqlx::query(&format!("SELECT {LOG_JSON} FROM logs WHERE token_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY id DESC LIMIT 100")).bind(token_id(&call.principal)?).bind(start).bind(end).fetch_all(&self.pg).await,
-            _ => sqlx::query(&format!("SELECT {LOG_JSON} FROM logs WHERE created_at >= $1 AND created_at <= $2 ORDER BY id DESC LIMIT 100")).bind(start).bind(end).fetch_all(&self.pg).await,
-        }.map_err(|_| ObservabilityStoreError::Unavailable)?;
-        Ok(json!({"page": 1, "page_size": 100, "total": rows.len(), "items": values(rows)}))
+        // The legacy wire field is named `channel`, while PostgreSQL stores it
+        // as `channel_id`.  Keep the alias in SQL so a missing column cannot
+        // turn every authenticated log read into the generic 500 envelope.
+        const LOG_JSON: &str = "jsonb_build_object('id', id, 'user_id', user_id, 'created_at', created_at, 'type', type, 'content', content, 'username', username, 'token_name', token_name, 'model_name', model_name, 'quota', quota, 'prompt_tokens', prompt_tokens, 'completion_tokens', completion_tokens, 'use_time', use_time, 'is_stream', is_stream, 'channel', channel_id, 'channel_name', '', 'token_id', token_id, 'group', \"group\", 'ip', ip, 'request_id', request_id, 'upstream_request_id', upstream_request_id, 'other', other)";
+        let (page, page_size, offset) = page_query(&call.query);
+        let (rows, total, normalize_self) = match call.operation {
+            ObservabilityOperation::SelfLogs => {
+                let user_id = user_id(&call.principal)?;
+                let rows = sqlx::query(&format!(
+                    "SELECT {LOG_JSON} FROM logs WHERE user_id = $1 AND ($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3) ORDER BY id DESC LIMIT $4 OFFSET $5"
+                ))
+                .bind(user_id)
+                .bind(start)
+                .bind(end)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(&self.pg)
+                .await;
+                let total = sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM logs WHERE user_id = $1 AND ($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3)",
+                )
+                .bind(user_id)
+                .bind(start)
+                .bind(end)
+                .fetch_one(&self.pg)
+                .await;
+                (rows, total, true)
+            }
+            ObservabilityOperation::LogsByToken => {
+                let token_id = token_id(&call.principal)?;
+                let rows = sqlx::query(&format!(
+                    "SELECT {LOG_JSON} FROM logs WHERE token_id = $1 AND ($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3) ORDER BY id DESC LIMIT $4 OFFSET $5"
+                ))
+                .bind(token_id)
+                .bind(start)
+                .bind(end)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(&self.pg)
+                .await;
+                let total = sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM logs WHERE token_id = $1 AND ($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3)",
+                )
+                .bind(token_id)
+                .bind(start)
+                .bind(end)
+                .fetch_one(&self.pg)
+                .await;
+                (rows, total, false)
+            }
+            _ => {
+                let rows = sqlx::query(&format!(
+                    "SELECT {LOG_JSON} FROM logs WHERE ($1 = 0 OR created_at >= $1) AND ($2 = 0 OR created_at <= $2) ORDER BY id DESC LIMIT $3 OFFSET $4"
+                ))
+                .bind(start)
+                .bind(end)
+                .bind(page_size)
+                .bind(offset)
+                .fetch_all(&self.pg)
+                .await;
+                let total = sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM logs WHERE ($1 = 0 OR created_at >= $1) AND ($2 = 0 OR created_at <= $2)",
+                )
+                .bind(start)
+                .bind(end)
+                .fetch_one(&self.pg)
+                .await;
+                (rows, total, false)
+            }
+        };
+        let rows = rows.map_err(|_| ObservabilityStoreError::Unavailable)?;
+        let total = total.map_err(|_| ObservabilityStoreError::Unavailable)?;
+        let items = values(rows);
+        let items = if normalize_self {
+            normalize_self_log_items(items, offset)
+        } else {
+            items
+        };
+        Ok(json!({"page": page, "page_size": page_size, "total": total, "items": items}))
     }
 
     async fn stats(
@@ -575,13 +648,50 @@ impl PgObservabilityStore {
         start: i64,
         end: i64,
     ) -> Result<Value, ObservabilityStoreError> {
-        let rows = match call.operation {
-            ObservabilityOperation::SelfLogStats => sqlx::query("SELECT COALESCE(SUM(quota), 0) AS quota, COUNT(*) AS rpm, COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0) AS tpm FROM logs WHERE user_id = $1 AND type = 2 AND created_at >= $2 AND created_at <= $3").bind(user_id(&call.principal)?).bind(start).bind(end).fetch_one(&self.pg).await,
-            _ => sqlx::query("SELECT COALESCE(SUM(quota), 0) AS quota, COUNT(*) AS rpm, COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0) AS tpm FROM logs WHERE type = 2 AND created_at >= $1 AND created_at <= $2").bind(start).bind(end).fetch_one(&self.pg).await,
-        }.map_err(|_| ObservabilityStoreError::Unavailable)?;
-        Ok(
-            json!({"quota": rows.try_get::<i64, _>("quota").map_err(|_| ObservabilityStoreError::Unavailable)?, "rpm": rows.try_get::<i64, _>("rpm").map_err(|_| ObservabilityStoreError::Unavailable)?, "tpm": rows.try_get::<i64, _>("tpm").map_err(|_| ObservabilityStoreError::Unavailable)?}),
+        let username = match call.operation {
+            ObservabilityOperation::SelfLogStats => match &call.principal {
+                ObservabilityPrincipal::User { username, .. } => username.clone(),
+                _ => return Err(ObservabilityStoreError::Unavailable),
+            },
+            _ => call.query.get("username").cloned().unwrap_or_default(),
+        };
+        let model_name = call.query.get("model_name").cloned().unwrap_or_default();
+        let token_name = call.query.get("token_name").cloned().unwrap_or_default();
+        let channel = integer_query(&call.query, "channel");
+        let group = call.query.get("group").cloned().unwrap_or_default();
+        let quota_row = sqlx::query(
+            "SELECT COALESCE(SUM(quota), 0)::BIGINT AS quota FROM logs WHERE type = 2 AND ($1 = '' OR username = $1) AND ($2 = '' OR model_name = $2) AND ($3 = '' OR token_name = $3) AND ($4 = 0 OR channel_id = $4) AND ($5 = '' OR \"group\" = $5) AND ($6 = 0 OR created_at >= $6) AND ($7 = 0 OR created_at <= $7)",
         )
+        .bind(&username)
+        .bind(&model_name)
+        .bind(&token_name)
+        .bind(channel)
+        .bind(&group)
+        .bind(start)
+        .bind(end)
+        .fetch_one(&self.pg)
+        .await
+        .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        // Go's SumUsedQuota applies the 60-second window only to rpm/tpm,
+        // while quota follows the caller's explicit date range.
+        let recent_cutoff = chrono::Utc::now().timestamp().saturating_sub(60);
+        let rate_row = sqlx::query(
+            "SELECT COUNT(*) AS rpm, (COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0))::BIGINT AS tpm FROM logs WHERE type = 2 AND ($1 = '' OR username = $1) AND ($2 = '' OR model_name = $2) AND ($3 = '' OR token_name = $3) AND ($4 = 0 OR channel_id = $4) AND ($5 = '' OR \"group\" = $5) AND created_at >= $6",
+        )
+        .bind(&username)
+        .bind(&model_name)
+        .bind(&token_name)
+        .bind(channel)
+        .bind(&group)
+        .bind(recent_cutoff)
+        .fetch_one(&self.pg)
+        .await
+        .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        Ok(json!({
+            "quota": quota_row.try_get::<i64, _>("quota").map_err(|_| ObservabilityStoreError::Unavailable)?,
+            "rpm": rate_row.try_get::<i64, _>("rpm").map_err(|_| ObservabilityStoreError::Unavailable)?,
+            "tpm": rate_row.try_get::<i64, _>("tpm").map_err(|_| ObservabilityStoreError::Unavailable)?,
+        }))
     }
 }
 
@@ -590,6 +700,54 @@ fn integer_query(query: &BTreeMap<String, String>, key: &str) -> i64 {
         .get(key)
         .and_then(|value| value.parse().ok())
         .map_or(0, |value| value)
+}
+
+fn page_query(query: &BTreeMap<String, String>) -> (i64, i64, i64) {
+    let page = query
+        .get("p")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|page| *page >= 1)
+        .unwrap_or(1);
+    let page_size = ["page_size", "ps", "size"]
+        .into_iter()
+        .filter_map(|key| query.get(key))
+        .find_map(|value| value.parse::<i64>().ok().filter(|size| *size > 0))
+        .unwrap_or(10)
+        .min(100);
+    let offset = page.saturating_sub(1).saturating_mul(page_size);
+    (page, page_size, offset)
+}
+
+fn normalize_self_log_items(mut items: Value, offset: i64) -> Value {
+    let Some(rows) = items.as_array_mut() else {
+        return items;
+    };
+    for (index, row) in rows.iter_mut().enumerate() {
+        let Some(object) = row.as_object_mut() else {
+            continue;
+        };
+        object.insert(
+            "id".to_owned(),
+            json!(offset.saturating_add(index as i64).saturating_add(1)),
+        );
+        let raw_other = match object.get("other") {
+            Some(Value::String(raw_other)) => raw_other,
+            _ => "",
+        };
+        let mut other = serde_json::from_str::<serde_json::Map<String, Value>>(raw_other)
+            .map(Value::Object)
+            .unwrap_or(Value::Null);
+        if let Value::Object(map) = &mut other {
+            map.remove("admin_info");
+            map.remove("audit_info");
+            map.remove("stream_status");
+        }
+        object.insert(
+            "other".to_owned(),
+            Value::String(serde_json::to_string(&other).unwrap_or_default()),
+        );
+    }
+    items
 }
 
 fn user_id(principal: &ObservabilityPrincipal) -> Result<i64, ObservabilityStoreError> {

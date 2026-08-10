@@ -151,6 +151,16 @@ for database in "$go_database" "$rust_database"; do
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c 'CREATE TABLE IF NOT EXISTS lmm_schema_contract(singleton BOOLEAN PRIMARY KEY,min_reader_version BIGINT NOT NULL,max_reader_version BIGINT NOT NULL); INSERT INTO lmm_schema_contract VALUES(true,1,1) ON CONFLICT(singleton) DO NOTHING;' >/dev/null
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c 'ALTER TABLE users ADD COLUMN IF NOT EXISTS console_activated_at BIGINT NOT NULL DEFAULT 0; ALTER TABLE users ADD COLUMN IF NOT EXISTS access_token TEXT;' >/dev/null
   psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 -c "INSERT INTO users (id,username,password,role,status,access_token,auth_version,console_activated_at) VALUES (999,'observability-root','unused-password',100,1,'$dashboard_token',1,0) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,role=EXCLUDED.role,status=EXCLUDED.status,access_token=EXCLUDED.access_token,auth_version=EXCLUDED.auth_version,console_activated_at=EXCLUDED.console_activated_at;" >/dev/null
+  psql -h 127.0.0.1 -p "$pg_port" -U postgres -d "$database" -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+INSERT INTO logs (id,user_id,created_at,type,content,username,token_name,model_name,quota,prompt_tokens,completion_tokens,use_time,is_stream,channel_id,channel_name,token_id,"group",ip,request_id,upstream_request_id,other)
+VALUES
+  (9001,999,1700000100,2,'consume','observability-root','token-a','model-a',10,3,4,5,false,0,'',11,'default','127.0.0.1','req-a','up-a',$${"admin_info":"secret","stream_status":"active","keep":"yes"}$$),
+  (9002,999,1700000000,4,'system','observability-root','','',0,0,0,0,false,0,'',0,'default','','req-b','up-b',$${"keep":"system"}$$),
+  (9003,1000,1700000100,2,'other-user','other-user','token-b','model-b',20,5,6,7,false,0,'',12,'default','','req-c','up-c',$${"keep":"other"}$$),
+  (9004,999,EXTRACT(EPOCH FROM NOW())::BIGINT,2,'recent','observability-root','token-a','model-a',99,5,6,1,false,0,'',13,'default','','req-d','up-d',$${"keep":"recent"}$$),
+  (9005,999,1700000050,4,'null-other','observability-root','','',0,0,0,0,false,0,'',0,'default','','req-e','up-e',NULL)
+ON CONFLICT(id) DO UPDATE SET user_id=EXCLUDED.user_id,created_at=EXCLUDED.created_at,type=EXCLUDED.type,content=EXCLUDED.content,username=EXCLUDED.username,token_name=EXCLUDED.token_name,model_name=EXCLUDED.model_name,quota=EXCLUDED.quota,prompt_tokens=EXCLUDED.prompt_tokens,completion_tokens=EXCLUDED.completion_tokens,use_time=EXCLUDED.use_time,is_stream=EXCLUDED.is_stream,channel_id=EXCLUDED.channel_id,channel_name=EXCLUDED.channel_name,token_id=EXCLUDED.token_id,"group"=EXCLUDED."group",ip=EXCLUDED.ip,request_id=EXCLUDED.request_id,upstream_request_id=EXCLUDED.upstream_request_id,other=EXCLUDED.other;
+SQL
 done
 
 cache_key=$'new-api:channel_affinity_usage_cache_stats:v1:rule-a\ndefault\nfp-a'
@@ -189,7 +199,10 @@ go_keys_before=$(valkey_keys "$valkey_port" 1); rust_keys_before=$(valkey_keys "
 compare valid '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default&key_fp=fp-a' 200
 compare missing-rule '/api/log/channel_affinity_usage_cache?using_group=default&key_fp=fp-a' 400
 compare missing-key '/api/log/channel_affinity_usage_cache?rule_name=rule-a&using_group=default' 400
+compare self-logs '/api/log/self?p=1&page_size=10&start_timestamp=1700000000&end_timestamp=1700000100' 200
+compare self-log-stat '/api/log/self/stat?type=2&start_timestamp=1700000000&end_timestamp=1700000100' 200
 jq -e '.success == true and .message == "" and .data.rule_name == "rule-a" and .data.using_group == "default" and .data.key_fp == "fp-a" and .data.hit == 3 and .data.total == 4 and .data.cached_token_rate_mode == "cached_over_prompt"' "$runtime/go-valid.body" >/dev/null
+jq -e '.success == true and .data.quota == 10 and .data.rpm == 1 and .data.tpm == 11' "$runtime/go-self-log-stat.body" >/dev/null
 [[ "$go_keys_before" == "$(valkey_keys "$valkey_port" 1)" && "$rust_keys_before" == "$(valkey_keys "$valkey_port" 2)" ]]
 
-jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:3,routes:["GET /api/log/channel_affinity_usage_cache"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" '{test:"observability-affinity-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:5,routes:["GET /api/log/channel_affinity_usage_cache","GET /api/log/self","GET /api/log/self/stat"],result:"passed"}'
