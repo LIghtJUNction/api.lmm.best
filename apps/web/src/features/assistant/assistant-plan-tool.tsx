@@ -18,10 +18,25 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, CircleDollarSign, Sparkles, Tag } from 'lucide-react'
+import type { TFunction } from 'i18next'
+import {
+  ArrowRight,
+  CircleAlert,
+  CircleDollarSign,
+  PackageSearch,
+  RefreshCcw,
+  Sparkles,
+  Tag,
+} from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,8 +46,17 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import { getPublicPlans } from '@/features/subscriptions/api'
 import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
 import { getTopupInfo } from '@/features/wallet/api'
@@ -56,6 +80,30 @@ function formatPlanPrice(amount: number, currency: string, locale: string) {
   }
 }
 
+function getRecommendationMessage(
+  t: TFunction,
+  monthlyCreditUSD: number | null,
+  expectedCreditUSD: number,
+  amount: string
+) {
+  if (monthlyCreditUSD === null) {
+    return t(
+      'Recommended because unlimited capacity covers your {{amount}} monthly estimate.',
+      { amount }
+    )
+  }
+  if (monthlyCreditUSD >= expectedCreditUSD) {
+    return t(
+      'Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.',
+      { amount }
+    )
+  }
+  return t(
+    'No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.',
+    { amount }
+  )
+}
+
 export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   const { t, i18n } = useTranslation()
   const [expectedCredit, setExpectedCredit] = useState('20')
@@ -73,6 +121,8 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
     retry: false,
   })
   const expected = Number(expectedCredit)
+  const normalizedExpected =
+    Number.isFinite(expected) && expected > 0 ? expected : 0
   const quotaPerUnit = getCurrencyDisplay().config.quotaPerUnit
   const comparisons = useMemo(
     () =>
@@ -88,11 +138,6 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
     [topupQuery.data?.data?.discount]
   )
 
-  const loading =
-    topupQuery.isLoading ||
-    (props.developerAccessGranted && plansQuery.isLoading)
-  const noPlans =
-    props.developerAccessGranted && !loading && comparisons.length === 0
   let planContent: ReactNode = (
     <div className='grid gap-2'>
       {comparisons.slice(0, 3).map((comparison) => {
@@ -137,6 +182,16 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
                 )}
               </strong>
             </div>
+            {comparison.recommended ? (
+              <p className='text-muted-foreground text-xs leading-5'>
+                {getRecommendationMessage(
+                  t,
+                  comparison.monthlyCreditUSD,
+                  normalizedExpected,
+                  formatCreditBalance(normalizedExpected)
+                )}
+              </p>
+            ) : null}
           </div>
         )
       })}
@@ -150,14 +205,101 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
         )}
       </div>
     )
-  } else if (loading) {
+  } else if (plansQuery.isLoading) {
     planContent = (
-      <p className='text-muted-foreground text-sm'>{t('Loading...')}</p>
+      <div className='grid gap-2' aria-label={t('Loading...')}>
+        <Skeleton className='h-24 w-full' />
+        <Skeleton className='h-20 w-full' />
+      </div>
     )
-  } else if (noPlans) {
+  } else if (plansQuery.isError) {
     planContent = (
-      <p className='text-muted-foreground text-sm'>
-        {t('No subscription plans are currently available.')}
+      <Alert variant='destructive'>
+        <CircleAlert aria-hidden='true' />
+        <AlertTitle>{t('Unable to load live subscription plans')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Plan recommendations are unavailable until current quotas and prices can be loaded.'
+          )}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => void plansQuery.refetch()}
+          >
+            <RefreshCcw data-icon='inline-start' aria-hidden='true' />
+            {t('Retry')}
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  } else if (comparisons.length === 0) {
+    planContent = (
+      <Empty className='min-h-36 border'>
+        <EmptyHeader>
+          <EmptyMedia variant='icon'>
+            <PackageSearch aria-hidden='true' />
+          </EmptyMedia>
+          <EmptyTitle>
+            {t('No subscription plans are currently available.')}
+          </EmptyTitle>
+          <EmptyDescription>
+            {t('You can still add wallet funds and use pay-as-you-go billing.')}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  }
+
+  let topupContent: ReactNode
+  if (topupQuery.isLoading) {
+    topupContent = (
+      <Skeleton className='h-14 w-full' aria-label={t('Loading...')} />
+    )
+  } else if (topupQuery.isError) {
+    topupContent = (
+      <Alert>
+        <CircleAlert aria-hidden='true' />
+        <AlertTitle>{t('Unable to load current top-up discounts')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Plan recommendations remain available, but discount details may be outdated.'
+          )}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => void topupQuery.refetch()}
+          >
+            <RefreshCcw data-icon='inline-start' aria-hidden='true' />
+            {t('Retry')}
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  } else if (offers.length > 0) {
+    topupContent = (
+      <div className='flex flex-wrap gap-2'>
+        {offers.slice(0, 3).map((offer) => (
+          <Badge key={offer.amount} variant='outline'>
+            {formatCreditBalance(offer.amount)} ·{' '}
+            {t('save {{percent}}%', {
+              percent: new Intl.NumberFormat(i18n.language, {
+                maximumFractionDigits: 1,
+              }).format(offer.savingsPercent),
+            })}
+          </Badge>
+        ))}
+      </div>
+    )
+  } else {
+    topupContent = (
+      <p className='text-muted-foreground text-xs'>
+        {t('No top-up discount is currently available.')}
       </p>
     )
   }
@@ -195,26 +337,17 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
 
         {planContent}
 
-        {offers.length > 0 ? (
-          <div className='bg-muted/40 grid gap-2 rounded-lg border p-3'>
-            <div className='flex items-center gap-2 text-sm font-medium'>
-              <Tag className='size-4' aria-hidden='true' />
-              {t('Best current top-up discounts')}
-            </div>
-            <div className='flex flex-wrap gap-2'>
-              {offers.slice(0, 3).map((offer) => (
-                <Badge key={offer.amount} variant='outline'>
-                  {formatCreditBalance(offer.amount)} ·{' '}
-                  {t('save {{percent}}%', {
-                    percent: new Intl.NumberFormat(i18n.language, {
-                      maximumFractionDigits: 1,
-                    }).format(offer.savingsPercent),
-                  })}
-                </Badge>
-              ))}
-            </div>
+        <Separator />
+        <section className='grid gap-2' aria-labelledby='assistant-topup-title'>
+          <div
+            id='assistant-topup-title'
+            className='flex items-center gap-2 text-sm font-medium'
+          >
+            <Tag className='size-4' aria-hidden='true' />
+            {t('Best current top-up discounts')}
           </div>
-        ) : null}
+          {topupContent}
+        </section>
 
         <p className='text-muted-foreground text-xs leading-5'>
           {t(

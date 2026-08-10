@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "Mở ChatGPT trong trình duyệt",
     "Live prices are unavailable, so no estimate is shown.": "Giá trực tiếp hiện không khả dụng nên chưa thể hiển thị ước tính.",
     "No text-token pricing is available": "Không có giá token văn bản khả dụng",
-    "This calculator supports models with fixed input and output token rates.": "Công cụ này hỗ trợ các mô hình có mức giá cố định cho token đầu vào và đầu ra."
+    "This calculator supports models with fixed input and output token rates.": "Công cụ này hỗ trợ các mô hình có mức giá cố định cho token đầu vào và đầu ra.",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "Đề xuất vì dung lượng không giới hạn đáp ứng mức sử dụng ước tính {{amount}} mỗi tháng của bạn.",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "Đề xuất vì đây là dung lượng khả dụng nhỏ nhất đáp ứng mức sử dụng ước tính {{amount}} mỗi tháng của bạn.",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "Không có gói nào đáp ứng hoàn toàn mức sử dụng ước tính {{amount}} mỗi tháng; tùy chọn này có dung lượng khả dụng cao nhất.",
+    "Unable to load live subscription plans": "Không thể tải các gói đăng ký hiện tại",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "Không thể đề xuất gói cho đến khi tải được hạn mức và giá hiện tại.",
+    "You can still add wallet funds and use pay-as-you-go billing.": "Bạn vẫn có thể nạp tiền vào ví và sử dụng hình thức thanh toán theo mức dùng.",
+    "Unable to load current top-up discounts": "Không thể tải ưu đãi nạp tiền hiện tại",
+    "Plan recommendations remain available, but discount details may be outdated.": "Đề xuất gói vẫn khả dụng, nhưng thông tin ưu đãi có thể đã cũ.",
+    "No top-up discount is currently available.": "Hiện không có ưu đãi nạp tiền."
   }
 }

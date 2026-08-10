@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "ブラウザで ChatGPT を開く",
     "Live prices are unavailable, so no estimate is shown.": "リアルタイム価格を取得できないため、見積もりは表示されません。",
     "No text-token pricing is available": "テキスト Token の価格情報がありません",
-    "This calculator supports models with fixed input and output token rates.": "この計算機は、入力と出力の Token 単価が固定されたモデルに対応しています。"
+    "This calculator supports models with fixed input and output token rates.": "この計算機は、入力と出力の Token 単価が固定されたモデルに対応しています。",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "無制限の容量で月間見積もり {{amount}} をカバーできるため、おすすめです。",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "月間見積もり {{amount}} をカバーできる最小の利用可能容量であるため、おすすめです。",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "月間見積もり {{amount}} を完全にカバーするプランはありません。この選択肢が現在利用できる最大容量です。",
+    "Unable to load live subscription plans": "最新のサブスクリプションプランを読み込めません",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "現在のクォータと価格を読み込めるまで、プランを提案できません。",
+    "You can still add wallet funds and use pay-as-you-go billing.": "ウォレットに入金し、従量課金を引き続き利用できます。",
+    "Unable to load current top-up discounts": "現在のチャージ割引を読み込めません",
+    "Plan recommendations remain available, but discount details may be outdated.": "プランの提案は利用できますが、割引情報が古い可能性があります。",
+    "No top-up discount is currently available.": "現在利用できるチャージ割引はありません。"
   }
 }

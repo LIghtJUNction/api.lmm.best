@@ -6163,6 +6163,15 @@
     "Open ChatGPT in browser": "Ouvrir ChatGPT dans le navigateur",
     "Live prices are unavailable, so no estimate is shown.": "Les tarifs en direct sont indisponibles, aucune estimation ne peut donc être affichée.",
     "No text-token pricing is available": "Aucun tarif par jeton texte n’est disponible",
-    "This calculator supports models with fixed input and output token rates.": "Ce calculateur prend en charge les modèles avec des tarifs fixes par jeton en entrée et en sortie."
+    "This calculator supports models with fixed input and output token rates.": "Ce calculateur prend en charge les modèles avec des tarifs fixes par jeton en entrée et en sortie.",
+    "Recommended because unlimited capacity covers your {{amount}} monthly estimate.": "Recommandé, car la capacité illimitée couvre votre estimation mensuelle de {{amount}}.",
+    "Recommended as the smallest available capacity that covers your {{amount}} monthly estimate.": "Recommandé, car il s’agit de la plus petite capacité disponible couvrant votre estimation mensuelle de {{amount}}.",
+    "No plan fully covers your {{amount}} monthly estimate; this option has the highest available capacity.": "Aucune offre ne couvre entièrement votre estimation mensuelle de {{amount}} ; cette option offre la capacité disponible la plus élevée.",
+    "Unable to load live subscription plans": "Impossible de charger les abonnements actuels",
+    "Plan recommendations are unavailable until current quotas and prices can be loaded.": "Les recommandations sont indisponibles tant que les quotas et tarifs actuels ne peuvent pas être chargés.",
+    "You can still add wallet funds and use pay-as-you-go billing.": "Vous pouvez toujours approvisionner votre portefeuille et utiliser la facturation à l’usage.",
+    "Unable to load current top-up discounts": "Impossible de charger les remises de recharge actuelles",
+    "Plan recommendations remain available, but discount details may be outdated.": "Les recommandations restent disponibles, mais les remises affichées peuvent être obsolètes.",
+    "No top-up discount is currently available.": "Aucune remise de recharge n’est disponible actuellement."
   }
 }
