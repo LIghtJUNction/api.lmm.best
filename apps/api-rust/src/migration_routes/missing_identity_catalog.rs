@@ -219,6 +219,17 @@ async fn generate_access_token(
 ) -> Result<Json<LegacySuccess<String>>, CatalogError> {
     let access_token =
         credential(&headers).ok_or_else(|| CatalogError::unauthorized(locale(&headers)))?;
+    // The current Go listener's outer ConsoleAccessGate hides this developer
+    // surface until trust-level activation. Keep the same 404 boundary rather
+    // than issuing a management token to a merely authenticated account.
+    let user_view = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(access_token.clone()))
+        .await
+        .map_err(|error| CatalogError::from_auth(error, locale(&headers)))?;
+    if !user_view.developer_access_granted {
+        return Err(CatalogError::not_found());
+    }
     // `generate_personal_access_token` verifies the same bearer session and
     // generates the 29..=32-character legacy base64 token atomically.  Do not
     // reimplement this here: it also owns duplicate detection and user-cache
@@ -490,6 +501,14 @@ struct CatalogError {
 }
 
 impl CatalogError {
+    fn not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code: None,
+            message: "Not Found".to_owned(),
+        }
+    }
+
     fn unauthorized(locale: Locale) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,

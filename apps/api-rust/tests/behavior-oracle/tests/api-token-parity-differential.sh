@@ -39,7 +39,17 @@ build_root=${TMPDIR:-/dev/shm}
 [[ -d $build_root && -w $build_root ]] || { echo "temporary build directory is not writable: $build_root" >&2; exit 1; }
 # PostgreSQL requires a normal filesystem for its data directory on this host;
 # the frozen Go build is the only sizeable transient tree and belongs in RAM.
-runtime=$(mktemp -d /tmp/lmm-api-token-parity.XXXXXX)
+runtime_root=${LMM_API_TOKEN_PARITY_RUNTIME_ROOT:-/tmp}
+[[ $runtime_root == /* && $runtime_root != *..* ]] || {
+  echo 'LMM_API_TOKEN_PARITY_RUNTIME_ROOT must be an absolute path without ..' >&2
+  exit 2
+}
+mkdir -p -- "$runtime_root"
+[[ -d $runtime_root && -w $runtime_root ]] || {
+  echo "API-token parity runtime root is not writable: $runtime_root" >&2
+  exit 1
+}
+runtime=$(mktemp -d "$runtime_root/lmm-api-token-parity.XXXXXX")
 go_build=$(mktemp -d "$build_root/lmm-api-token-parity-go.XXXXXX")
 go_static_keys="$runtime/go.static.keys"
 rust_static_keys="$runtime/rust.static.keys"
@@ -141,7 +151,7 @@ cleanup() {
   rm -f -- "$go_env_file" "$rust_env_file" "$go_valkey_config" "$rust_valkey_config"
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
-    /tmp/lmm-api-token-parity.*) rm -rf "$runtime" ;;
+    "$runtime_root"/lmm-api-token-parity.*) rm -rf "$runtime" ;;
     *) echo "refusing unexpected runtime: $runtime" >&2 ;;
   esac
   case "$go_build" in
@@ -371,8 +381,16 @@ token_snapshot() {
   local database=$1 generated
   refresh_generated_keys "$database"
   generated=$(generated_keys_json "$database")
+  local snapshot_filter=''
+  if [[ $allow_current_oracle != 1 ]]; then
+    # The frozen 5418ce6 Go schema predates Rust's optional auto-groups
+    # extension. It is deliberately not part of the historical token-table
+    # comparison; the route wire contract above still verifies that frozen
+    # responses omit the field.
+    snapshot_filter='del(.auto_groups) | '
+  fi
   sql "$database" "SELECT COALESCE(json_agg(to_jsonb(token) ORDER BY id), '[]'::json) FROM tokens AS token" |
-    jq -S --argjson generated "$generated" '
+    jq -S --argjson generated "$generated" --arg snapshot_filter "$snapshot_filter" '
       def canonical_generated_key:
         . as $candidate
         | if ($candidate | type) == "string"
@@ -381,7 +399,8 @@ token_snapshot() {
           then "<KEY>"
           else .
           end;
-      map(.key |= canonical_generated_key
+      map((if $snapshot_filter == "" then . else (del(.auto_groups)) end)
+        | .key |= canonical_generated_key
         | .created_time = "<TIME>"
         | .accessed_time = "<TIME>"
         | .deleted_at = (if .deleted_at == null then null else "<DELETED>" end))'
@@ -429,6 +448,10 @@ assert_only_tokens_may_change() {
   go_after=$(business_snapshot_without_tokens "$go_database")
   rust_after=$(business_snapshot_without_tokens "$rust_database")
   if [[ $allow_console_activation == true ]]; then
+    # The disposable Go database installs the same first-token activation
+    # trigger for frozen and current-oracle runs. Permit only that one
+    # explicitly scoped create side effect while keeping every other
+    # non-token column strict.
     # The current forge contract intentionally changes only this derived user
     # bit on a successful first-credential create.  Keep the stronger
     # non-token immutability check for every other column and every rejected
@@ -1131,6 +1154,9 @@ wait_for_valkey() {
 write_valkey_config() {
   local config=$1 port=$2 password=$3
   (umask 077
+    # The exhaustive matrix runs longer than the deployed 60-second search
+    # window. Keep the counter alive for the whole isolated run so Go and
+    # Rust cannot cross the expiry boundary between their paired requests.
     printf '%s\n' \
       'bind 127.0.0.1' \
       "port $port" \
@@ -1178,7 +1204,7 @@ write_app_env() {
       'export CRITICAL_RATE_LIMIT_DURATION=1200' \
       'export SEARCH_RATE_LIMIT_ENABLE=true' \
       'export SEARCH_RATE_LIMIT=100000' \
-      'export SEARCH_RATE_LIMIT_DURATION=60'
+      'export SEARCH_RATE_LIMIT_DURATION=3600'
     } >"$file")
   chmod 600 "$file"
 }

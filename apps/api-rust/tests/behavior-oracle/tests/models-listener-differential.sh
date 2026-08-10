@@ -235,6 +235,9 @@ fi
 rust_binary_sha256=$(sha256sum -- "$rust_binary" | awk '{print $1}')
 [[ $rust_binary_sha256 =~ ^[[:xdigit:]]{64}$ ]] || { echo 'Rust binary hash calculation failed' >&2; exit 1; }
 cp -a "$legacy_root/." "$runtime/go-source"
+# The frozen archive is intentionally immutable; the disposable build copy
+# must still be writable so the embedded frontend placeholder can be created.
+chmod -R u+rwX -- "$runtime/go-source"
 mkdir -p "$runtime/go-source/web/dist"
 : >"$runtime/go-source/web/dist/index.html"
 (
@@ -316,7 +319,10 @@ start_go_listener() {
     go_redis_startup_diagnostics
     return 1
   fi
-  for _ in {1..300}; do
+  # The first Go boot performs the full SQLite migration before binding. On a
+  # constrained shared CI/desktop host that can exceed the old 15-second
+  # ownership window even though the listener is healthy and progressing.
+  for _ in {1..6000}; do
     owned_pid_is_live go_pid && listener_owned_by "$go_port" "$go_pid" && break
     sleep .05
   done
@@ -367,7 +373,7 @@ go_valkey FLUSHDB >/dev/null
 start_go_listener
 
 psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE SCHEMA lmm_test_models_rust;
+CREATE SCHEMA IF NOT EXISTS lmm_test_models_rust;
 ALTER DATABASE lmm_test_models_rust SET search_path TO lmm_test_models_rust;
 SET search_path TO lmm_test_models_rust;
 CREATE ROLE lmm_test_models_runtime LOGIN;
@@ -386,6 +392,7 @@ CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), use
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 CREATE TABLE channels (id BIGINT PRIMARY KEY, type INTEGER DEFAULT 0, status INTEGER DEFAULT 1);
 CREATE TABLE abilities ("group" VARCHAR(64), model VARCHAR(255), channel_id BIGINT, enabled BOOLEAN, priority INTEGER DEFAULT 0, weight INTEGER DEFAULT 0, PRIMARY KEY ("group", model, channel_id));
+ALTER SCHEMA lmm_test_models_rust OWNER TO lmm_test_models_runtime;
 GRANT USAGE ON SCHEMA lmm_test_models_rust TO lmm_test_models_runtime;
 GRANT SELECT ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, tokens, channels, abilities TO lmm_test_models_runtime;
 GRANT UPDATE ON users TO lmm_test_models_runtime;
