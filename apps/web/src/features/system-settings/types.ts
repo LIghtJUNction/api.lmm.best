@@ -179,6 +179,9 @@ export type ContentSettings = {
   DataExportDefaultTime: string
   DataExportInterval: number
   Chats: string
+  AssistantEnabled: boolean
+  AssistantModel: string
+  AssistantWeeklyCreditUSD: number
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean

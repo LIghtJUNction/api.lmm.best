@@ -22,6 +22,7 @@ import { lazy, Suspense, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { useStatus } from '@/hooks/use-status'
 
 import {
   consumeQueuedAssistantPreset,
@@ -38,6 +39,7 @@ const AssistantPanel = lazy(() =>
 
 export function AssistantLauncher() {
   const { t } = useTranslation()
+  const { status } = useStatus()
   const [open, setOpen] = useState(false)
   const [hasOpened, setHasOpened] = useState(false)
   const [request, setRequest] = useState<{
@@ -60,6 +62,8 @@ export function AssistantLauncher() {
   const preload = () => {
     void loadAssistantPanel()
   }
+
+  if (status?.assistant?.enabled === false) return null
 
   return (
     <>

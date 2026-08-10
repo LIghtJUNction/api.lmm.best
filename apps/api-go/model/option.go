@@ -122,6 +122,10 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
+	assistantSettings := setting.GetAssistantSettings()
+	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
+	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
+	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = strconv.FormatFloat(assistantSettings.WeeklyCreditUSD, 'f', -1, 64)
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
@@ -211,6 +215,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if err := setting.ValidateAssistantOption(key, value); err != nil {
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -398,6 +405,8 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.DefaultUseAutoGroup = boolValue
 		case "ExposeRatioEnabled":
 			ratio_setting.SetExposeRatioEnabled(boolValue)
+		case setting.AssistantEnabledOptionKey:
+			setting.SetAssistantEnabled(boolValue)
 		}
 	}
 	switch key {
@@ -424,6 +433,10 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.PayAddress = value
 	case "Chats":
 		err = setting.UpdateChatsByJsonString(value)
+	case setting.AssistantModelOptionKey:
+		err = setting.UpdateAssistantModel(value)
+	case setting.AssistantWeeklyCreditUSDOptionKey:
+		err = setting.UpdateAssistantWeeklyCreditUSD(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "MaxTokenAutoGroups":
