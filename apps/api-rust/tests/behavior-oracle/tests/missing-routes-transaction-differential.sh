@@ -112,10 +112,12 @@ snapshot() {
     'options', COALESCE((SELECT jsonb_object_agg(key,value ORDER BY key) FROM options WHERE key IN ('checkin_setting','checkin_setting.enabled','checkin_setting.min_quota','checkin_setting.max_quota','payment_setting.compliance_confirmed','payment_setting.compliance_terms_version','QuotaPerUnit','MinTopUp','Price','TopupGroupRatio','general_setting')),'{}'::jsonb))" | jq -S .
 }
 canonical_json() {
-  jq -S '
+  local context=${1:-}
+  jq -S --arg context "$context" '
     def dynamic_field:
       . == "access_token" or . == "refresh_token" or . == "session" or . == "sid"
-      or . == "request_id" or . == "created_at" or . == "updated_at";
+      or . == "request_id" or . == "created_at" or . == "updated_at"
+      or (($context | startswith("sessions-list.")) and (. == "last_active_at" or . == "expires_at"));
     def unpad_char_32:
       rtrimstr(" ") | rtrimstr(" ") | rtrimstr(" ") | rtrimstr(" ");
     def dynamic_response_token:
@@ -219,7 +221,7 @@ pair() {
   call go "$name" "$method" "$path" "$body" "$go_session"
   call rust "$name" "$method" "$path" "$body" "$rust_session"
   diff -u "$runtime/go.$name.status" "$runtime/rust.$name.status"
-  diff -u <(canonical_json <"$runtime/go.$name.body") <(canonical_json <"$runtime/rust.$name.body")
+  diff -u <(canonical_json "$name" <"$runtime/go.$name.body") <(canonical_json "$name" <"$runtime/rust.$name.body")
   # Headers are retained beside each response, but legacy's dashboard cache
   # directives are intentionally not an atomic-route contract.  Status/body
   # and the six durable snapshots are the differential verdict here.
@@ -278,6 +280,7 @@ route_for() {
     user-models) printf 'GET\t/api/user/models\t__NONE__\tuser101\n' ;;
     aff-code) printf 'GET\t/api/user/aff\t__NONE__\tuser101\n' ;;
     admin-topups) printf 'GET\t/api/user/topup?p=1&page_size=10\t__NONE__\troot\n' ;;
+    sessions-list) printf 'GET\t/api/user/sessions\t__NONE__\tuser101\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -310,6 +313,7 @@ run_phase() {
   IFS=$'\t' read -r method path body actor < <(route_for "$id")
   [[ $phase != failure || $id != access-token-generation ]] || actor=anonymous
   [[ $phase != failure || $id != admin-topups ]] || actor=anonymous
+  [[ $phase != failure || $id != sessions-list ]] || actor=anonymous
   prepare_actor "$actor"
   snapshot go >"$runtime/go.$id.$phase.before"; snapshot rust >"$runtime/rust.$id.$phase.before"
   pair "$id.$phase.first" "$method" "$path" "$body"
@@ -383,7 +387,7 @@ for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
 if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
-  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code && $route_filter != admin-topups ]]; then
+  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code && $route_filter != admin-topups && $route_filter != sessions-list ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -392,7 +396,7 @@ while IFS=$'\t' read -r id; do
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
 done < <(jq -r '.fixtures[].id' "$fixtures")
-if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code || $route_filter == admin-topups ]]; then
+if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code || $route_filter == admin-topups || $route_filter == sessions-list ]]; then
   for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
 fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi
