@@ -114,3 +114,4 @@ DELETE	/api/user/:id/oauth/bindings/:provider_id	apps/api-rust/src/main.rs:ident
 GET	/api/user/oauth/bindings	apps/api-rust/src/main.rs:identity_federation_bindings_router
 DELETE	/api/user/oauth/bindings/:provider_id	apps/api-rust/src/main.rs:identity_federation_bindings_router
 GET	/api/user/sessions	apps/api-rust/src/main.rs:identity_sessions
+GET	/api/user/passkey	apps/api-rust/src/main.rs:identity_passkey;apps/api-rust/src/migration_routes/identity_security.rs:passkey_read_router
