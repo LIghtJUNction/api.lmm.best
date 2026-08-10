@@ -146,15 +146,36 @@ func hardenProductionEnvironment(content []byte) []byte {
 		"TRUSTED_PROXIES":            {},
 	}
 	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	// EnvironmentFile parsing is last-assignment-wins.  Normalize legacy files
+	// to that deterministic representation before the transaction parser checks
+	// for duplicates; otherwise a harmless historical duplicate blocks every
+	// guarded production backup.
+	lastAssignment := make(map[string]int)
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		key, _, found := strings.Cut(trimmed, "=")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if _, remove := blocked[key]; remove {
+			continue
+		}
+		lastAssignment[key] = index
+	}
 	kept := make([]string, 0, len(lines)+3)
-	for _, line := range lines {
+	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
 		key, _, found := strings.Cut(trimmed, "=")
 		if found {
-			if _, remove := blocked[strings.TrimSpace(key)]; remove {
+			key = strings.TrimSpace(key)
+			if _, remove := blocked[key]; remove {
+				continue
+			}
+			if lastAssignment[key] != index {
 				continue
 			}
 		}

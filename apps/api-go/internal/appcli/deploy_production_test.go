@@ -15,7 +15,7 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	if err := os.MkdirAll(filepath.Dir(envFile), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	original := "SQL_DSN=postgres://private\nSESSION_COOKIE_SECURE=false\nTRUSTED_PROXIES=0.0.0.0/0\n"
+	original := "SQL_DSN=postgres://private\nPORT=3000\nPORT=3001\nSESSION_COOKIE_SECURE=false\nTRUSTED_PROXIES=0.0.0.0/0\n"
 	if err := os.WriteFile(envFile, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +42,9 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	}
 	if strings.Contains(string(environment), "SESSION_COOKIE_SECURE=false") || strings.Contains(string(environment), "0.0.0.0/0") {
 		t.Fatalf("unsafe values survived hardening: %q", environment)
+	}
+	if strings.Count(string(environment), "PORT=") != 1 || !strings.Contains(string(environment), "PORT=3001") {
+		t.Fatalf("duplicate environment assignments were not normalized: %q", environment)
 	}
 	envInfo, err := os.Stat(envFile)
 	if err != nil {
