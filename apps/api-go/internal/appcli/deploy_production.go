@@ -15,6 +15,7 @@ const (
 	defaultProductionEnvFile   = "/etc/lmm-api-go/lmm-api-go.env"
 	defaultProductionDropInDir = "/etc/systemd/system/lmm-api-go.service.d"
 	productionMemoryFileName   = "80-production-memory.conf"
+	legacyEmergencyMemoryFile  = "99-emergency-memory-safety.conf"
 )
 
 type productionHardenOptions struct {
@@ -124,6 +125,10 @@ func hardenProductionConfiguration(options productionHardenOptions) error {
 	if err := os.Chmod(options.DropInDir, 0o755); err != nil {
 		return fmt.Errorf("set drop-in permissions: %w", err)
 	}
+	legacyMemoryPath := filepath.Join(options.DropInDir, legacyEmergencyMemoryFile)
+	if err := retireLegacyEmergencyMemoryDropIn(legacyMemoryPath); err != nil {
+		return err
+	}
 	memoryPath := filepath.Join(options.DropInDir, productionMemoryFileName)
 	if memoryInfo, err := os.Lstat(memoryPath); err == nil && memoryInfo.Mode()&os.ModeSymlink != 0 {
 		return errors.New("production memory drop-in must not be a symlink")
@@ -132,11 +137,46 @@ func hardenProductionConfiguration(options productionHardenOptions) error {
 	}
 	if err := writeAtomicRegularFile(memoryPath, []byte(`[Service]
 MemoryAccounting=yes
-MemoryHigh=320M
-MemoryMax=384M
+MemoryHigh=512M
+MemoryMax=640M
 MemorySwapMax=256M
 `), 0o644); err != nil {
 		return fmt.Errorf("write production memory drop-in: %w", err)
+	}
+	return nil
+}
+
+func retireLegacyEmergencyMemoryDropIn(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect legacy emergency memory drop-in: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("legacy emergency memory drop-in must be a real regular file")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read legacy emergency memory drop-in: %w", err)
+	}
+	for _, expected := range []string{"MemoryHigh=256M", "MemoryMax=288M", "MemorySwapMax=64M"} {
+		if !strings.Contains(string(content), expected) {
+			return fmt.Errorf("refusing to retire unknown legacy memory drop-in: missing %s", expected)
+		}
+	}
+	retired := path + ".disabled"
+	if retiredInfo, statErr := os.Lstat(retired); statErr == nil {
+		if retiredInfo.Mode()&os.ModeSymlink != 0 || !retiredInfo.Mode().IsRegular() {
+			return errors.New("retired legacy memory drop-in must be a real regular file")
+		}
+		return fmt.Errorf("retired legacy memory drop-in already exists: %s", retired)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect retired legacy memory drop-in: %w", statErr)
+	}
+	if err := os.Rename(path, retired); err != nil {
+		return fmt.Errorf("retire legacy emergency memory drop-in: %w", err)
 	}
 	return nil
 }

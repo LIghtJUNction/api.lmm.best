@@ -97,7 +97,7 @@ func SetPersonalAccessIP(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, model.ErrPersonalAccessIPNotEligible):
-			personalAccessIPError(c, http.StatusForbidden, "TRUST_LEVEL_REQUIRED", "personal IP allowlist requires trust level L2 or higher")
+			personalAccessIPError(c, http.StatusForbidden, "TRUST_LEVEL_REQUIRED", "personal IP allowlist requires trust level L1 or higher")
 		case errors.Is(err, model.ErrInvalidPersonalAccessIP):
 			personalAccessIPError(c, http.StatusUnprocessableEntity, "INVALID_IP", "IP address must be public and globally routable")
 		default:

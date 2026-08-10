@@ -118,10 +118,10 @@ export function PersonalAccessIPCard({
       <div className='bg-muted/30 flex items-start gap-3 rounded-lg border p-3'>
         <ShieldCheck className='text-muted-foreground mt-0.5 size-4 shrink-0' />
         <div className='min-w-0'>
-          <p className='text-sm font-medium'>{t('Unlocks at L2')}</p>
+          <p className='text-sm font-medium'>{t('Unlocks at L1')}</p>
           <p className='text-muted-foreground mt-1 text-xs leading-5'>
             {t(
-              'Reach trust level L2 to register one public IP address for direct access.'
+              'Reach trust level L1 to register one public IP address for direct access.'
             )}
           </p>
         </div>

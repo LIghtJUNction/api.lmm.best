@@ -11,7 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 4
+// Bump this whenever an authorization-relevant field is added to the cache.
+// Older hashes did not carry console activation or trust overrides and would
+// incorrectly downgrade an activated account to L0.
+const userCacheSchemaVersion = 5
 
 type UserBase struct {
 	Id                 int    `json:"id"`

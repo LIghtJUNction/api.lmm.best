@@ -43,6 +43,13 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	if err := os.WriteFile(envFile, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	legacyMemoryPath := filepath.Join(dropInDir, legacyEmergencyMemoryFile)
+	if err := os.MkdirAll(dropInDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyMemoryPath, []byte("[Service]\nMemoryHigh=256M\nMemoryMax=288M\nMemorySwapMax=64M\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	code := RunDeploy([]string{
 		"production", "harden", "--env-file", envFile, "--drop-in-dir", dropInDir,
@@ -83,7 +90,7 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"MemoryHigh=320M", "MemoryMax=384M", "MemorySwapMax=256M"} {
+	for _, expected := range []string{"MemoryHigh=512M", "MemoryMax=640M", "MemorySwapMax=256M"} {
 		if !strings.Contains(string(memory), expected) {
 			t.Errorf("memory guard missing %q: %q", expected, memory)
 		}
@@ -94,6 +101,12 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	}
 	if memoryInfo.Mode().Perm() != 0o644 {
 		t.Fatalf("memory drop-in mode=%v", memoryInfo.Mode().Perm())
+	}
+	if _, err := os.Stat(legacyMemoryPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy memory override remains: %v", err)
+	}
+	if _, err := os.Stat(legacyMemoryPath + ".disabled"); err != nil {
+		t.Fatalf("retired legacy memory override missing: %v", err)
 	}
 	if stdout.String() != "configuration=hardened\nsystemd_reload_required=true\n" {
 		t.Fatalf("stdout=%q", stdout.String())
