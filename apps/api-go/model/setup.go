@@ -1,5 +1,7 @@
 package model
 
+const SetupSingletonID uint = 1
+
 type Setup struct {
 	ID            uint   `json:"id" gorm:"primaryKey"`
 	Version       string `json:"version" gorm:"type:varchar(50);not null"`
