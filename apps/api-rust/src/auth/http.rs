@@ -1137,6 +1137,12 @@ mod tests {
         (StatusCode::CREATED, content_length.to_owned()).into_response()
     }
 
+    const TEST_REGISTRATION_PATH: &str = "/api/user/register";
+
+    fn registration_probe_router() -> Router {
+        Router::new().route(TEST_REGISTRATION_PATH, post(registration_probe))
+    }
+
     impl MockAuth {
         fn success() -> Self {
             Self {
@@ -2184,7 +2190,7 @@ mod tests {
             AuthHttpState::new(auth.clone(), false)
                 .with_anonymous_body_limit_bytes(16)
                 .with_turnstile_verifier(verifier.clone()),
-            Router::new().route("/api/user/register", post(registration_probe)),
+            registration_probe_router(),
         );
 
         let response = router
@@ -2270,7 +2276,7 @@ mod tests {
         let verifier = Arc::new(MockTurnstile::allowing());
         let response = anonymous_registration_surface(
             AuthHttpState::new(auth.clone(), false).with_turnstile_verifier(verifier.clone()),
-            Router::new().route("/api/user/register", post(registration_probe)),
+            registration_probe_router(),
         )
         .oneshot(
             Request::builder()

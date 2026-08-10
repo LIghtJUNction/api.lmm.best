@@ -29,6 +29,7 @@ const USER_ROLE: i64 = 1;
 const DEFAULT_PAGE_SIZE: i64 = 10;
 const MAX_PAGE_SIZE: i64 = 100;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const STATUS_TEST_PATH: &str = "/api/status/test";
 
 /// The three legacy task collections selected by the HTTP boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -372,7 +373,7 @@ pub fn missing_control_tasks_router(state: MissingControlTasksState) -> Router {
 /// Builds only `GET /api/status/test` for the normal listener.
 pub fn status_test_router(state: ControlTaskStatusState) -> Router {
     Router::new()
-        .route("/api/status/test", get(status_test_only))
+        .route(STATUS_TEST_PATH, get(status_test_only))
         .with_state(state)
 }
 

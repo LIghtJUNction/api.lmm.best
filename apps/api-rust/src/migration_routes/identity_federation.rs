@@ -644,16 +644,7 @@ pub fn router(state: FederationState) -> Router {
         .route("/api/oauth/telegram/login", get(telegram_login))
         .route("/api/oauth/telegram/bind/start", post(telegram_bind_start))
         .route("/api/oauth/telegram/bind/{flow_token}", get(telegram_bind))
-        .route("/api/user/oauth/bindings", get(list_self_bindings))
-        .route(
-            "/api/user/oauth/bindings/{provider_id}",
-            delete(unbind_self),
-        )
-        .route("/api/user/{id}/oauth/bindings", get(list_admin_bindings))
-        .route(
-            "/api/user/{id}/oauth/bindings/{provider_id}",
-            delete(unbind_admin),
-        )
+        .merge(bindings_routes())
         .with_state(state)
 }
 
@@ -664,6 +655,10 @@ pub fn router(state: FederationState) -> Router {
 /// These four routes are PostgreSQL/session-authority operations and can be
 /// mounted independently without exposing a half-configured provider flow.
 pub fn bindings_router(state: FederationState) -> Router {
+    bindings_routes().with_state(state)
+}
+
+fn bindings_routes() -> Router<FederationState> {
     Router::new()
         .route("/api/user/oauth/bindings", get(list_self_bindings))
         .route(
@@ -675,7 +670,6 @@ pub fn bindings_router(state: FederationState) -> Router {
             "/api/user/{id}/oauth/bindings/{provider_id}",
             delete(unbind_admin),
         )
-        .with_state(state)
 }
 
 #[derive(Debug, thiserror::Error)]

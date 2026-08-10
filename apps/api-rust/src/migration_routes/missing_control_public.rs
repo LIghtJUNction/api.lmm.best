@@ -32,6 +32,8 @@ use crate::{ClientIpKey, RequestContext, legacy_empty_response};
 
 const ADMIN_ROLE: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const GROUP_PATH: &str = "/api/group/";
+const RATIO_CONFIG_PATH: &str = "/api/ratio_config";
 
 /// Identity derived from a verified dashboard session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -524,14 +526,14 @@ impl GroupState {
 /// Mounts only `GET /api/group/` for the normal listener.
 pub fn group_router(state: GroupState) -> Router {
     Router::new()
-        .route("/api/group/", get(groups_direct))
+        .route(GROUP_PATH, get(groups_direct))
         .with_state(state)
 }
 
 /// Mounts only `GET /api/ratio_config` for the normal listener.
 pub fn ratio_config_router(state: RatioConfigState) -> Router {
     Router::new()
-        .route("/api/ratio_config", get(ratio_config_direct))
+        .route(RATIO_CONFIG_PATH, get(ratio_config_direct))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             ratio_config_critical_rate_limit,
