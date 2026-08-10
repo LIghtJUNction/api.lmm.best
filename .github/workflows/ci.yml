@@ -252,7 +252,7 @@ jobs:
     steps:
       - name: Install checkout and package validation tools
         run: |
-          pacman --sync --refresh --noconfirm git libarchive shellcheck
+          pacman --sync --refresh --noconfirm git jq libarchive shellcheck
           useradd --create-home package-builder
           install -d -o package-builder -g package-builder /home/package-builder/lmm-ci-tmp
 
