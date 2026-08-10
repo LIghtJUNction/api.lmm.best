@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Real loopback Go/Rust differential for the read-only subscription surface.
-# The runner owns two disposable PostgreSQL databases, two Valkey instances,
-# and both listeners. It never accepts production endpoints or credentials.
+# Real loopback Go/Rust differential for the subscription/profile setting
+# surfaces. The runner owns two disposable PostgreSQL databases, two Valkey
+# instances, and both listeners. It never accepts production endpoints or
+# credentials.
 set -euo pipefail
 set +x
 
@@ -205,6 +206,47 @@ compare_write() {
   grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
 }
 
+compare_profile_write() {
+  local name=$1 body=$2 go_token=$3 rust_token=$4 go_code rust_code
+  go_code=$(request_method PUT "$go_port" "$go_token" /api/user/setting "$body" "$runtime/go-$name")
+  rust_code=$(request_method PUT "$rust_port" "$rust_token" /api/user/setting "$body" "$runtime/rust-$name")
+  [[ $go_code == "$rust_code" ]] || { echo "$name status mismatch: $go_code/$rust_code" >&2; return 1; }
+  jq -S . "$runtime/go-$name.body" >"$runtime/go-$name.json"
+  jq -S . "$runtime/rust-$name.body" >"$runtime/rust-$name.json"
+  diff -u "$runtime/go-$name.json" "$runtime/rust-$name.json"
+  grep -qi '^content-type: application/json' "$runtime/go-$name.headers"
+  grep -qi '^content-type: application/json' "$runtime/rust-$name.headers"
+}
+
+compare_profile_write profile-invalid-type '{"notify_type":"sms","quota_warning_threshold":1}' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "profile invalid-type DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
+  exit 1
+fi
+compare_profile_write profile-null 'null' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "profile null DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
+  exit 1
+fi
+compare_profile_write profile-email '{"notify_type":"email","quota_warning_threshold":2,"notification_email":"ada@example.test","accept_unset_model_ratio_model":true}' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "profile email DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
+  exit 1
+fi
+compare_profile_write profile-gotify-priority-fallback '{"notify_type":"gotify","quota_warning_threshold":3,"gotify_url":"https://gotify.example","gotify_token":"token","gotify_priority":99}' "$go_user" "$rust_user"
+if [[ "$(snapshot "$go_database")" != "$(snapshot "$rust_database")" ]]; then
+  echo "profile setting DB snapshot mismatch" >&2
+  printf '%s\n' "--- go" "$(snapshot "$go_database")" "--- rust" "$(snapshot "$rust_database")" >&2
+  exit 1
+fi
+if [[ "$(valkey_user_hash "$go_valkey_port" "$go_secret")" != "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" ]]; then
+  echo "profile setting Valkey user hash mismatch" >&2
+  printf '%s\n' "--- go" "$(valkey_user_hash "$go_valkey_port" "$go_secret")" "--- rust" "$(valkey_user_hash "$rust_valkey_port" "$rust_secret")" >&2
+  exit 1
+fi
 go_before=$(snapshot "$go_database"); rust_before=$(snapshot "$rust_database")
 go_valkey_before=$(valkey_keys "$go_valkey_port" "$go_secret")
 rust_valkey_before=$(valkey_keys "$rust_valkey_port" "$rust_secret")
@@ -245,4 +287,4 @@ go_root=$(login "$go_port" root); rust_root=$(login "$rust_port" root); go_user=
 compare compliance-off /api/subscription/plans "$go_user" "$rust_user"
 compare non-admin /api/subscription/admin/plans "$go_user" "$rust_user"
 
-jq -cn --arg revision "$legacy_revision" --argjson scenarios 12 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference"],result:"passed"}'
+jq -cn --arg revision "$legacy_revision" --argjson scenarios 16 '{test:"subscription-read-listener-differential",real_tcp:true,production_access:false,legacy_go_revision:$revision,scenarios:$scenarios,routes:["GET /api/subscription/plans","GET /api/subscription/admin/plans","GET /api/subscription/admin/users/:id/subscriptions","GET /api/subscription/self","PUT /api/subscription/self/preference","PUT /api/user/setting"],result:"passed"}'
