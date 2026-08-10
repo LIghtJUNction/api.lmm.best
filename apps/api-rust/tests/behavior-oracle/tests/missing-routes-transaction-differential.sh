@@ -235,7 +235,7 @@ prepare_actor() {
 seed() {
   local mode=$1 engine
   for engine in go rust; do
-    admin_schema_sql "${engine_schema[$engine]}" "TRUNCATE logs, checkins, redemptions, top_ups, users, options RESTART IDENTITY CASCADE;"
+    admin_schema_sql "${engine_schema[$engine]}" "TRUNCATE logs, checkins, redemptions, top_ups, passkey_credentials, users, options RESTART IDENTITY CASCADE;"
     admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO options(key,value) VALUES
       ('checkin_setting.enabled','true'),
       ('checkin_setting.min_quota','100'),
@@ -249,6 +249,7 @@ seed() {
     case "$mode" in
       checkin-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='false' WHERE key='checkin_setting.enabled'" ;;
       checkin-existing) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO checkins(id,user_id,checkin_date,quota_awarded,created_at) VALUES(1,101,to_char(CURRENT_DATE,'YYYY-MM-DD'),100,0)" ;;
+      passkey) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO passkey_credentials(id,user_id,credential_id,public_key,last_used_at) VALUES(1,101,'ORACLE-CREDENTIAL-101','ORACLE-PUBLIC-KEY-101',NULL)" ;;
       aff-code) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_code='ORACLE-AFF-101' WHERE id=101" ;;
       topup-admin) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO top_ups(id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,status) VALUES(1,101,2,2,'ORACLE-TOPUP-ADMIN-101','manual','stripe',1730000000,'pending')" ;;
       aff-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_quota=499999 WHERE id=101" ;;
@@ -281,6 +282,7 @@ route_for() {
     aff-code) printf 'GET\t/api/user/aff\t__NONE__\tuser101\n' ;;
     admin-topups) printf 'GET\t/api/user/topup?p=1&page_size=10\t__NONE__\troot\n' ;;
     sessions-list) printf 'GET\t/api/user/sessions\t__NONE__\tuser101\n' ;;
+    passkey-status) printf 'GET\t/api/user/passkey\t__NONE__\tuser101\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -295,6 +297,7 @@ phase_seed() {
     topup-self:positive|topup-self:rollback|topup-self:replay) printf topup ;;
     aff-code:positive|aff-code:failure|aff-code:rollback|aff-code:replay) printf aff-code ;;
     admin-topups:positive|admin-topups:rollback|admin-topups:replay) printf topup-admin ;;
+    passkey-status:positive|passkey-status:rollback|passkey-status:replay) printf passkey ;;
     checkin-commit-rollback:failure) printf checkin-existing ;;
     affiliate-transfer:failure) printf aff-failure ;;
     amount-quote:failure) printf amount-failure ;;
@@ -314,6 +317,7 @@ run_phase() {
   [[ $phase != failure || $id != access-token-generation ]] || actor=anonymous
   [[ $phase != failure || $id != admin-topups ]] || actor=anonymous
   [[ $phase != failure || $id != sessions-list ]] || actor=anonymous
+  [[ $phase != failure || $id != passkey-status ]] || actor=anonymous
   prepare_actor "$actor"
   snapshot go >"$runtime/go.$id.$phase.before"; snapshot rust >"$runtime/rust.$id.$phase.before"
   pair "$id.$phase.first" "$method" "$path" "$body"
@@ -387,7 +391,7 @@ for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
 if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
-  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code && $route_filter != admin-topups && $route_filter != sessions-list ]]; then
+  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code && $route_filter != admin-topups && $route_filter != sessions-list && $route_filter != passkey-status ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -396,7 +400,7 @@ while IFS=$'\t' read -r id; do
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
 done < <(jq -r '.fixtures[].id' "$fixtures")
-if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code || $route_filter == admin-topups || $route_filter == sessions-list ]]; then
+if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code || $route_filter == admin-topups || $route_filter == sessions-list || $route_filter == passkey-status ]]; then
   for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
 fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi

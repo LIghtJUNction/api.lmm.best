@@ -244,7 +244,7 @@ GET	/api/user/models	present	unverified	mounted	unverified	not-applicable	go	mou
 GET	/api/user/oauth/bindings	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/identity_federation.rs;mount=apps/api-rust/src/migration_routes/identity_federation.rs;listener=apps/api-rust/src/main.rs
 DELETE	/api/user/oauth/bindings/:provider_id	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/identity_federation.rs;mount=apps/api-rust/src/migration_routes/identity_federation.rs;listener=apps/api-rust/src/main.rs
 DELETE	/api/user/passkey	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-GET	/api/user/passkey	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
+GET	/api/user/passkey	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	mount=apps/api-rust/src/migration_routes/identity_security.rs;listener=apps/api-rust/src/main.rs::identity_passkey
 POST	/api/user/passkey/login/begin	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/passkey/login/finish	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/passkey/register/begin	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only

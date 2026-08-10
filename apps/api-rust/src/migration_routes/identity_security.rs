@@ -853,7 +853,9 @@ impl IdentitySecurityState {
     }
 }
 
-/// All twenty frozen account-security route candidates, intentionally unmounted.
+/// All frozen account-security route candidates.  Only the read-only passkey
+/// status and session inventory are separately mountable; mutations remain on
+/// the candidate router until their session/cache differentials are complete.
 pub fn router(state: IdentitySecurityState) -> Router {
     Router::new()
         .route(
@@ -913,6 +915,15 @@ pub fn registration_router(state: IdentitySecurityState) -> Router {
 pub fn sessions_read_router(state: IdentitySecurityState) -> Router {
     Router::new()
         .route("/api/user/sessions", get(list_sessions))
+        .with_state(state)
+}
+
+/// Builds only the authenticated passkey status read.  Passkey registration,
+/// verification, and deletion remain isolated because they rotate sessions
+/// and persist WebAuthn secrets.
+pub fn passkey_read_router(state: IdentitySecurityState) -> Router {
+    Router::new()
+        .route("/api/user/passkey", get(passkey_status))
         .with_state(state)
 }
 
