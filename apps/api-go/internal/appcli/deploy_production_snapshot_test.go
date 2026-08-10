@@ -42,6 +42,38 @@ func TestNativeProductionWorkspaceCreateClaimsExactTransaction(t *testing.T) {
 	}
 }
 
+func TestNativeProductionWorkspaceAcceptsManagedVarLibAlias(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "private", "lmm-api-go")
+	aliasRoot := filepath.Join(root, "var", "lib", "lmm-api-go")
+	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(aliasRoot), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(stateRoot, aliasRoot); err != nil {
+		t.Fatal(err)
+	}
+	paths := defaultProductionPaths()
+	paths.WorkRoot = filepath.Join(aliasRoot, "deploy-work")
+	paths.BackupRoot = filepath.Join(aliasRoot, "deploy-backups")
+	paths.GlobalLock = filepath.Join(root, "run", "deploy.lock")
+	paths.TransactionLock = filepath.Join(aliasRoot, "deploy-transaction.lock")
+	runtime := &productionRuntime{
+		paths: paths, runner: &fakeProductionRunner{t: t}, now: time.Now,
+		sleep: func(time.Duration) {}, effectiveUID: func() int { return 0 },
+		hostname: func() (string, error) { return productionExpectedHost, nil }, probeAttempts: 1,
+	}
+	result, err := runtime.createWorkspace(context.Background(), "go-managed-alias-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.openWorkspace(result.Workspace); err != nil {
+		t.Fatalf("managed /var/lib alias should be accepted: %v", err)
+	}
+}
+
 func TestNativeProductionBackupCapturesRollbackFrontendConfigAndPostgres(t *testing.T) {
 	fixture := newProductionFixture(t)
 	if err := os.RemoveAll(fixture.options.BackupDir); err != nil {

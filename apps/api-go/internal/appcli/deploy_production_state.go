@@ -425,9 +425,17 @@ func (runtime *productionRuntime) openWorkspace(root string) (productionWorkspac
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return productionWorkspace{}, errors.New("workspace must be a real directory")
 	}
+	// Arch systemd's DynamicUser layout exposes /var/lib/lmm-api-go as a
+	// managed symlink to /var/lib/private/lmm-api-go.  The workspace itself
+	// must still be a real directory, but rejecting that trusted parent alias
+	// makes the CLI unable to abort or inspect its own production transactions.
+	canonicalWorkRoot, err := filepath.EvalSymlinks(runtime.paths.WorkRoot)
+	if err != nil {
+		return productionWorkspace{}, fmt.Errorf("resolve production work root: %w", err)
+	}
 	canonical, err := filepath.EvalSymlinks(root)
-	if err != nil || filepath.Clean(canonical) != root {
-		return productionWorkspace{}, errors.New("workspace must be canonical and symlink-free")
+	if err != nil || filepath.Dir(filepath.Clean(canonical)) != filepath.Clean(canonicalWorkRoot) {
+		return productionWorkspace{}, errors.New("workspace must be a direct child of the canonical production work root")
 	}
 	marker := filepath.Join(root, productionWorkspaceMarker)
 	markerContent, err := readPrivateRegularFile(marker, 16<<10)
