@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -100,4 +101,33 @@ func TestAssistantFundingRefundsBothSources(t *testing.T) {
 	quota, err := model.GetUserQuota(userId, true)
 	require.NoError(t, err)
 	assert.Equal(t, 100, quota)
+}
+
+func TestAssistantCreditStatusResetsOneDollarEachUTCWeek(t *testing.T) {
+	_, userId, weekStart := setupAssistantFundingTestDB(t, 0)
+	original := setting.GetAssistantSettings()
+	require.NoError(t, setting.UpdateAssistantWeeklyCreditUSD("1"))
+	t.Cleanup(func() {
+		_ = setting.UpdateAssistantWeeklyCreditUSD(fmt.Sprintf("%g", original.WeeklyCreditUSD))
+	})
+
+	limit := int(common.QuotaPerUnit)
+	used := limit / 4
+	funding := NewAssistantFunding(userId, weekStart, assistantWeeklyQuotaLimit())
+	require.NoError(t, funding.PreConsume(used))
+
+	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	status, err := GetAssistantCreditStatus(userId, now)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, status.WeeklyCreditUSD)
+	assert.Equal(t, limit, status.LimitQuota)
+	assert.Equal(t, used, status.UsedQuota)
+	assert.Equal(t, limit-used, status.RemainingQuota)
+	assert.Equal(t, weekStart, status.WeekStart)
+	assert.Equal(t, weekStart+int64(7*24*time.Hour/time.Second), status.ResetsAt)
+
+	nextStatus, err := GetAssistantCreditStatus(userId, now.AddDate(0, 0, 7))
+	require.NoError(t, err)
+	assert.Zero(t, nextStatus.UsedQuota)
+	assert.Equal(t, limit, nextStatus.RemainingQuota)
 }

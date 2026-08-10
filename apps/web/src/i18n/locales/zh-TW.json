@@ -6155,6 +6155,11 @@
     "Retry before using account-specific assistant tools.": "請重試後再使用需要帳戶權限的助手工具。",
     "Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.": "L0 存取權限審核期間仍可查看儲值優惠。L1 審核通過後即可使用即時訂閱方案比較。",
     "Connection details": "連線資訊",
-    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "Base URL 告訴用戶端要連線到哪裡，模型 ID 用於選擇模型，API key 是每次請求攜帶的機密憑證。"
+    "Base URL tells your client where to connect, Model ID selects the model, and an API key is the secret credential sent with each request.": "Base URL 告訴用戶端要連線到哪裡，模型 ID 用於選擇模型，API key 是每次請求攜帶的機密憑證。",
+    "The official ChatGPT desktop app is not available for Linux": "ChatGPT 官方桌面應用程式目前不支援 Linux",
+    "OpenAI currently provides ChatGPT desktop installers for Windows and macOS. On Linux, use chatgpt.com in your browser or choose an API-compatible client such as CC Switch.": "OpenAI 目前僅提供 Windows 與 macOS 版 ChatGPT 桌面安裝程式。在 Linux 上，請透過瀏覽器使用 chatgpt.com，或選擇 CC Switch 等相容 API 的用戶端。",
+    "Use ChatGPT in your browser": "在瀏覽器中使用 ChatGPT",
+    "Open chatgpt.com in a supported browser and sign in with your OpenAI account. No Linux desktop installer is required.": "請在支援的瀏覽器中開啟 chatgpt.com，並登入你的 OpenAI 帳戶。不需要安裝 Linux 桌面程式。",
+    "Open ChatGPT in browser": "在瀏覽器中開啟 ChatGPT"
   }
 }
