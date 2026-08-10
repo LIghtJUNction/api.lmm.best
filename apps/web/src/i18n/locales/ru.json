@@ -6072,6 +6072,21 @@
     "Other questions": "Другие вопросы",
     "No pending human-support requests.": "Нет ожидающих запросов на поддержку.",
     "Optional resolution note for the user": "Необязательное примечание для пользователя",
-    "Mark resolved": "Отметить решённым"
+    "Mark resolved": "Отметить решённым",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "Выбирайте по нагрузке, а не по цене в списке. Я могу сопоставить текущую квоту, период сброса и скидки на пополнение с ожидаемым использованием.",
+    "Compare live plans": "Сравнить актуальные планы",
+    "Live plan recommendations require L1": "Для актуальных рекомендаций требуется уровень L1",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "Ограничен только уровень L0. Отправьте запрос на доступ, и после одобрения помощник сравнит текущие планы и скидки.",
+    "Live plan and discount advisor": "Помощник по планам и скидкам",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "Укажите ожидаемый ежемесячный расход API-кредита. Рекомендации основаны на текущих квотах планов, а не на рекламных описаниях.",
+    "Expected monthly API credit (USD)": "Ожидаемый API-кредит в месяц (USD)",
+    "No subscription plans are currently available.": "Сейчас нет доступных планов подписки.",
+    "Closest fit": "Наиболее подходящий",
+    "Included credit": "Включённый кредит",
+    "Best current top-up discounts": "Лучшие текущие скидки на пополнение",
+    "save {{percent}}%": "экономия {{percent}} %",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "Сравнение учитывает только включённый кредит. Правила сброса, доступ к моделям, способ оплаты и групповые множители могут изменить итоговую выгоду; окончательной является сумма при оформлении.",
+    "Review plans and exact checkout prices": "Посмотреть планы и точные цены при оформлении",
+    "Estimated monthly capacity": "Расчётная месячная ёмкость"
   }
 }

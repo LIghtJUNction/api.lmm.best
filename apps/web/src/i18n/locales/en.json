@@ -6072,6 +6072,21 @@
     "Other questions": "Other questions",
     "No pending human-support requests.": "No pending human-support requests.",
     "Optional resolution note for the user": "Optional resolution note for the user",
-    "Mark resolved": "Mark resolved"
+    "Mark resolved": "Mark resolved",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.",
+    "Compare live plans": "Compare live plans",
+    "Live plan recommendations require L1": "Live plan recommendations require L1",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.",
+    "Live plan and discount advisor": "Live plan and discount advisor",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.",
+    "Expected monthly API credit (USD)": "Expected monthly API credit (USD)",
+    "No subscription plans are currently available.": "No subscription plans are currently available.",
+    "Closest fit": "Closest fit",
+    "Included credit": "Included credit",
+    "Best current top-up discounts": "Best current top-up discounts",
+    "save {{percent}}%": "save {{percent}}%",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.",
+    "Review plans and exact checkout prices": "Review plans and exact checkout prices",
+    "Estimated monthly capacity": "Estimated monthly capacity"
   }
 }

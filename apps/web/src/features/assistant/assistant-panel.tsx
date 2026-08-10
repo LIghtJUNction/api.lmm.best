@@ -60,6 +60,7 @@ import { AssistantCostTool } from './assistant-cost-tool'
 import type { AssistantPresetId } from './assistant-events'
 import { AssistantHandoffTool } from './assistant-handoff-tool'
 import { AssistantKeyTool } from './assistant-key-tool'
+import { AssistantPlanTool } from './assistant-plan-tool'
 
 type AssistantActionPath =
   | '/getting-started'
@@ -74,7 +75,7 @@ type AssistantAction =
   | {
       kind: 'tool'
       label: string
-      tool: 'key' | 'cost' | 'handoff'
+      tool: 'key' | 'cost' | 'handoff' | 'plan'
     }
 
 type AssistantPreset = {
@@ -99,7 +100,7 @@ function getBaseUrl(): string {
 
 function PresetAction(props: {
   action: AssistantAction
-  onToolOpen: (tool: 'key' | 'cost' | 'handoff') => void
+  onToolOpen: (tool: 'key' | 'cost' | 'handoff' | 'plan') => void
 }) {
   const { action } = props
   if (action.kind === 'tool') {
@@ -163,9 +164,13 @@ export function AssistantPanel(props: {
         id: 'plan',
         question: t('Which option is the best value?'),
         answer: t(
-          'Choose by workload rather than list price. Compare input, output, and cached-token prices against your expected usage; available discounts are shown before purchase.'
+          'Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.'
         ),
-        action: { kind: 'route', label: t('Compare pricing'), to: '/pricing' },
+        action: {
+          kind: 'tool',
+          label: t('Compare live plans'),
+          tool: 'plan',
+        },
       },
       {
         id: 'api-key',
@@ -247,7 +252,7 @@ export function AssistantPanel(props: {
   })
   const [sending, setSending] = useState(false)
   const [activeTool, setActiveTool] = useState<
-    'key' | 'cost' | 'handoff' | null
+    'key' | 'cost' | 'handoff' | 'plan' | null
   >(null)
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
@@ -431,6 +436,13 @@ export function AssistantPanel(props: {
                   />
                 ) : null}
                 {activeTool === 'handoff' ? <AssistantHandoffTool /> : null}
+                {activeTool === 'plan' ? (
+                  <AssistantPlanTool
+                    developerAccessGranted={
+                      statusQuery.data?.developer_access_granted === true
+                    }
+                  />
+                ) : null}
                 <div className='border-t pt-3'>
                   <Button
                     type='button'

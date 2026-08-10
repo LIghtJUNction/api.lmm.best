@@ -6072,6 +6072,21 @@
     "Other questions": "Câu hỏi khác",
     "No pending human-support requests.": "Không có yêu cầu hỗ trợ trực tiếp nào đang chờ.",
     "Optional resolution note for the user": "Ghi chú giải quyết tùy chọn cho người dùng",
-    "Mark resolved": "Đánh dấu đã giải quyết"
+    "Mark resolved": "Đánh dấu đã giải quyết",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "Hãy chọn theo khối lượng công việc thay vì giá niêm yết. Tôi có thể so sánh hạn mức hiện tại, chu kỳ đặt lại và ưu đãi nạp tiền với nhu cầu dự kiến của bạn.",
+    "Compare live plans": "So sánh gói hiện tại",
+    "Live plan recommendations require L1": "Đề xuất gói theo thời gian thực yêu cầu L1",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "Chỉ L0 bị giới hạn. Hãy gửi yêu cầu truy cập; sau khi được duyệt, trợ lý sẽ so sánh các gói và ưu đãi hiện tại.",
+    "Live plan and discount advisor": "Cố vấn gói và ưu đãi",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "Nhập lượng tín dụng API bạn dự kiến dùng mỗi tháng. Đề xuất dựa trên hạn mức hiện tại của gói, không dựa trên nhãn quảng cáo.",
+    "Expected monthly API credit (USD)": "Tín dụng API dự kiến mỗi tháng (USD)",
+    "No subscription plans are currently available.": "Hiện không có gói đăng ký nào khả dụng.",
+    "Closest fit": "Phù hợp nhất",
+    "Included credit": "Tín dụng đi kèm",
+    "Best current top-up discounts": "Ưu đãi nạp tiền tốt nhất hiện tại",
+    "save {{percent}}%": "tiết kiệm {{percent}}%",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "Việc so sánh chỉ dựa trên tín dụng đi kèm. Quy tắc đặt lại, quyền truy cập mô hình, phương thức thanh toán và hệ số nhóm có thể làm thay đổi giá trị cuối cùng; số tiền tại bước thanh toán là căn cứ chính thức.",
+    "Review plans and exact checkout prices": "Xem gói và giá thanh toán chính xác",
+    "Estimated monthly capacity": "Dung lượng ước tính mỗi tháng"
   }
 }

@@ -6072,6 +6072,21 @@
     "Other questions": "Autres questions",
     "No pending human-support requests.": "Aucune demande d’assistance humaine en attente.",
     "Optional resolution note for the user": "Note de résolution facultative pour l’utilisateur",
-    "Mark resolved": "Marquer comme résolu"
+    "Mark resolved": "Marquer comme résolu",
+    "Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.": "Choisissez selon votre charge de travail plutôt que le prix affiché. Je peux comparer le quota inclus, la période de réinitialisation et les remises de recharge actuelles à votre usage prévu.",
+    "Compare live plans": "Comparer les offres actuelles",
+    "Live plan recommendations require L1": "Les recommandations en temps réel nécessitent le niveau L1",
+    "Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.": "Seul le niveau L0 est restreint. Envoyez une demande d’accès ; après approbation, l’assistant comparera les offres et remises actuelles.",
+    "Live plan and discount advisor": "Conseiller en offres et remises",
+    "Enter the API credit you expect to use each month. Recommendations use current plan quotas, not marketing labels.": "Saisissez le crédit API que vous prévoyez d’utiliser chaque mois. Les recommandations reposent sur les quotas actuels, pas sur les arguments marketing.",
+    "Expected monthly API credit (USD)": "Crédit API mensuel prévu (USD)",
+    "No subscription plans are currently available.": "Aucune offre d’abonnement n’est disponible actuellement.",
+    "Closest fit": "Choix le plus proche",
+    "Included credit": "Crédit inclus",
+    "Best current top-up discounts": "Meilleures remises de recharge actuelles",
+    "save {{percent}}%": "économisez {{percent}} %",
+    "Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.": "La comparaison tient uniquement compte du crédit inclus. Les règles de réinitialisation, l’accès aux modèles, le moyen de paiement et les multiplicateurs de groupe peuvent modifier la valeur finale ; le prix affiché au paiement fait foi.",
+    "Review plans and exact checkout prices": "Voir les offres et les prix exacts au paiement",
+    "Estimated monthly capacity": "Capacité mensuelle estimée"
   }
 }
