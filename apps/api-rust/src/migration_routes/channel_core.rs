@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -20,6 +20,7 @@ use sqlx::{PgPool, Row};
 use std::{collections::BTreeMap, sync::Arc};
 
 const CHANNEL_CACHE_GENERATION: &str = "lmm:channels:generation";
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Authorization is deliberately injected: the HTTP auth slice owns the
 /// bearer/session verifier and this route slice only owns channel policy.
@@ -106,7 +107,11 @@ async fn channel_auth_boundary(
     if let Err(error) = state.authorizer.authorize(request.headers(), action).await {
         return error.legacy();
     }
-    next.run(request).await
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 #[derive(Debug, Serialize)]
