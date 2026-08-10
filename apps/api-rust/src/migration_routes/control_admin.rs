@@ -643,6 +643,7 @@ pub fn control_admin_read_router(state: ControlAdminState) -> Router {
         .route("/api/system-task/current", get(current_system_task))
         .route("/api/system-task/{task_id}", get(get_system_task))
         .route("/api/custom-oauth-provider/", get(list_oauth))
+        .route("/api/system-info/instances", get(list_instances))
         .with_state(state)
 }
 
