@@ -1075,14 +1075,16 @@ async fn subscription_self(
                 .map(normalize_preference)
         })
         .unwrap_or("subscription_first");
-    let all = match subscriptions(&state.pg, user.id, false).await {
-        Ok(subscriptions) => subscriptions,
-        Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
-    };
-    let active = match subscriptions(&state.pg, user.id, true).await {
-        Ok(subscriptions) => subscriptions,
-        Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
-    };
+    // Go's GetSubscriptionSelf deliberately degrades each read failure to an
+    // empty list after UserAuth has succeeded. Preserve that wire contract so
+    // a transient subscription-table failure does not turn a dashboard read
+    // into a different HTTP/error envelope on Rust.
+    let all = subscriptions(&state.pg, user.id, false)
+        .await
+        .unwrap_or_default();
+    let active = subscriptions(&state.pg, user.id, true)
+        .await
+        .unwrap_or_default();
     with_auth_version(ok(
         json!({"billing_preference": preference, "subscriptions": active, "all_subscriptions": all}),
     ))
