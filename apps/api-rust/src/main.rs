@@ -211,8 +211,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // C1 exercises the current-Go API-token policy on the normal Rust
         // listener. This does not transfer production ownership from Go.
         let models_http = models_http.with_listener_mode(ModelsListenerMode::CurrentTrustPolicy);
-        let identity_profile = identity_profile_router(
-            ProfileState::new(pg.clone(), valkey.clone()).with_dashboard_auth(Arc::clone(&auth)),
+        let identity_profile = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_profile_router(
+                ProfileState::new(pg.clone(), valkey.clone())
+                    .with_dashboard_auth(Arc::clone(&auth)),
+            ),
         );
         let identity_catalog = http::api_global_rate_limited_surface(
             &app_state,
@@ -315,23 +319,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )),
             ),
         );
-        let billing_subscriptions = billing_subscriptions_router(BillingSubscriptionsState::new(
-            pg.clone(),
-            Some(valkey.clone()),
-            Arc::clone(&auth),
-        ));
+        // Go mounts the subscription groups below the API router's
+        // GlobalAPIRateLimit middleware. Keep the Rust candidate behind the
+        // same client-keyed boundary before it is ever considered for a
+        // production ownership transfer.
+        let billing_subscriptions = http::api_global_rate_limited_surface(
+            &app_state,
+            billing_subscriptions_router(BillingSubscriptionsState::new(
+                pg.clone(),
+                Some(valkey.clone()),
+                Arc::clone(&auth),
+            )),
+        );
         let _subscription_maintenance =
             spawn_subscription_maintenance(pg.clone(), Some(valkey.clone()));
-        let observability = observability_read_router(ObservabilityState::new(
-            Arc::new(PgObservabilityStore::postgres_read_only(
-                pg.clone(),
-                Arc::new(ValkeyObservabilityMetrics::new(valkey.clone())),
+        let observability = http::api_global_rate_limited_surface(
+            &app_state,
+            observability_read_router(ObservabilityState::new(
+                Arc::new(PgObservabilityStore::postgres_read_only(
+                    pg.clone(),
+                    Arc::new(ValkeyObservabilityMetrics::new(valkey.clone())),
+                )),
+                Arc::new(DashboardObservabilityAuthorizer::new(
+                    Arc::clone(&auth),
+                    Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
+                )),
             )),
-            Arc::new(DashboardObservabilityAuthorizer::new(
-                Arc::clone(&auth),
-                Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
-            )),
-        ));
+        );
         let open_source_bounties =
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
         // The single-model GET is a read-only static catalogue lookup. Keep
@@ -356,6 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(uptime_kuma),
             ))
         };
+        let control_public = http::api_global_rate_limited_surface(&app_state, control_public);
         let mut extra_surface = identity_profile
             .merge(identity_catalog)
             .merge(identity_catalog_protected)

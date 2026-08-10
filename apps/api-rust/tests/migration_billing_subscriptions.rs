@@ -187,6 +187,33 @@ async fn subscription_admin_auth_precedes_malformed_json_rejection() {
 }
 
 #[tokio::test]
+async fn authenticated_subscription_extractor_failures_preserve_auth_version() {
+    let response = smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/subscription/admin/plans")
+                .header("authorization", "Bearer admin")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(
+        response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
+    );
+    assert!(matches!(
+        response.status(),
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+    ));
+}
+
+#[tokio::test]
 async fn subscription_self_degrades_database_read_failures_to_empty_lists() {
     let response = smoke_router()
         .oneshot(
