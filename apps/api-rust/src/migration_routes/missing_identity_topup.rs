@@ -15,7 +15,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{Extension, RawQuery, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -38,6 +38,7 @@ const TOPUP_SUCCESS: &str = "success";
 const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
 const TOPUP_QUERY_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 const SEARCH_COUNT_HARD_LIMIT: i64 = 10_000;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Dependencies owned by this isolated migration slice.
 #[derive(Clone)]
@@ -395,15 +396,21 @@ async fn all_topups(
     headers: HeaderMap,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
-    if administrator(&state, &headers).await.is_err() {
-        return forbidden_or_unauthorized(&state, &headers).await;
+    let user = match actor(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    if user.role < ROLE_ADMIN {
+        return forbidden();
     }
-    list_topups(
-        &state.pool,
-        &PageQuery::from_raw(raw_query.as_deref()),
-        None,
+    with_auth_version(
+        list_topups(
+            &state.pool,
+            &PageQuery::from_raw(raw_query.as_deref()),
+            None,
+        )
+        .await,
     )
-    .await
 }
 
 async fn user_topups(
@@ -415,12 +422,14 @@ async fn user_topups(
         Ok(user) => user,
         Err(response) => return response,
     };
-    list_self_topups(
-        &state.pool,
-        &PageQuery::from_raw(raw_query.as_deref()),
-        Some(user.id),
+    with_auth_version(
+        list_self_topups(
+            &state.pool,
+            &PageQuery::from_raw(raw_query.as_deref()),
+            Some(user.id),
+        )
+        .await,
     )
-    .await
 }
 
 // Preserve the distinction between a missing/invalid credential and a valid ordinary user.
@@ -1017,7 +1026,7 @@ async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap)
     };
     let options = match read_options(&state.pool).await {
         Ok(options) => options,
-        Err(_) => return fail("系统错误"),
+        Err(_) => return with_auth_version(fail("系统错误")),
     };
     let mut data = topup_info_data_for_user(&options, true, &actor.group);
     // Keep the frozen Go response shape. The activation-aware helper is also
@@ -1027,7 +1036,14 @@ async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap)
         object.remove("developer_access_granted");
         object.remove("topup_group_ratio");
     }
-    ok(data)
+    with_auth_version(ok(data))
+}
+
+fn with_auth_version(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 #[cfg(test)]
@@ -1642,6 +1658,18 @@ mod tests {
                 "{uri}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn authenticated_topup_reads_preserve_auth_version_on_errors() {
+        let request = Request::builder()
+            .uri("/api/user/topup/info")
+            .header(header::AUTHORIZATION, "Bearer administrator")
+            .body(Body::empty())
+            .unwrap();
+        let response = app(ROLE_ADMIN).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["auth-version"], AUTH_VERSION);
     }
 
     #[tokio::test]
