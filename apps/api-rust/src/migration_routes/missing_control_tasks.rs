@@ -30,6 +30,7 @@ const DEFAULT_PAGE_SIZE: i64 = 10;
 const MAX_PAGE_SIZE: i64 = 100;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 const STATUS_TEST_PATH: &str = "/api/status/test";
+const TASK_SELF_PATH: &str = "/api/task/self";
 
 /// The three legacy task collections selected by the HTTP boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -381,7 +382,7 @@ pub fn status_test_router(state: ControlTaskStatusState) -> Router {
 /// listener. Administrator task listings and task writes remain isolated.
 pub fn self_task_read_router(state: ControlTaskSelfState) -> Router {
     Router::new()
-        .route("/api/task/self", get(self_tasks_read_only))
+        .route(TASK_SELF_PATH, get(self_tasks_read_only))
         .with_state(state)
 }
 

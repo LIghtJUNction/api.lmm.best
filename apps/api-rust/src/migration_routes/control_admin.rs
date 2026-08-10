@@ -615,7 +615,6 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
             "/api/system-task/log-cleanup",
             post(create_log_cleanup_task),
         )
-        .route("/api/system-info/instances", get(list_instances))
         .route(
             "/api/system-info/stale-instances",
             delete(delete_stale_instances),
@@ -634,6 +633,7 @@ fn control_admin_read_routes() -> Router<ControlAdminState> {
         .route("/api/system-task/list", get(list_system_tasks))
         .route("/api/system-task/current", get(current_system_task))
         .route("/api/system-task/{task_id}", get(get_system_task))
+        .route("/api/system-info/instances", get(list_instances))
 }
 
 /// Mounts only the read-only control-admin views for the normal listener.
@@ -645,7 +645,6 @@ fn control_admin_read_routes() -> Router<ControlAdminState> {
 pub fn control_admin_read_router(state: ControlAdminState) -> Router {
     control_admin_read_routes()
         .route(CUSTOM_OAUTH_COLLECTION_PATH, get(list_oauth))
-        .route("/api/system-info/instances", get(list_instances))
         .with_state(state)
 }
 
