@@ -693,6 +693,9 @@ export function ChannelMutateDrawer({
     cancel: cancelVerification,
     setCode: setVerificationCode,
     switchMethod: switchVerificationMethod,
+    sendEmailCode,
+    emailCodeSending,
+    emailCodeSent,
   } = useSecureVerification()
 
   useEffect(() => {
@@ -4844,6 +4847,9 @@ export function ChannelMutateDrawer({
         onCancel={cancelVerification}
         onCodeChange={setVerificationCode}
         onMethodChange={switchVerificationMethod}
+        onSendEmailCode={sendEmailCode}
+        emailCodeSending={emailCodeSending}
+        emailCodeSent={emailCodeSent}
       />
 
       {/* Missing Models Confirmation Dialog */}

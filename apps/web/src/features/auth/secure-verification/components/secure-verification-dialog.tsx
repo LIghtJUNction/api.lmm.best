@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
+import { ShieldCheck, KeyRound, Loader2, Mail } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -40,6 +40,9 @@ interface SecureVerificationDialogProps {
   onCancel: () => void
   onCodeChange: (code: string) => void
   onMethodChange: (method: VerificationMethod) => void
+  onSendEmailCode?: () => void | Promise<unknown>
+  emailCodeSending?: boolean
+  emailCodeSent?: boolean
 }
 
 export function SecureVerificationDialog({
@@ -51,10 +54,14 @@ export function SecureVerificationDialog({
   onCancel,
   onCodeChange,
   onMethodChange,
+  onSendEmailCode,
+  emailCodeSending = false,
+  emailCodeSent = false,
 }: SecureVerificationDialogProps) {
   const { t } = useTranslation()
   const availableTabs: VerificationMethod[] = useMemo(() => {
     const tabs: VerificationMethod[] = []
+    if (methods.hasEmail) tabs.push('email')
     if (methods.has2FA) tabs.push('2fa')
     if (methods.hasPasskey && methods.passkeySupported) tabs.push('passkey')
     return tabs
@@ -73,7 +80,7 @@ export function SecureVerificationDialog({
     state.description ??
     (availableTabs.length
       ? 'Confirm your identity before accessing this sensitive action.'
-      : 'Enable Two-factor Authentication or Passkey in your profile settings to continue.')
+      : 'Bind an email, or enable Two-factor Authentication or Passkey in your profile settings to continue.')
 
   const handleVerify = () => {
     if (!activeMethod) return
@@ -83,6 +90,8 @@ export function SecureVerificationDialog({
 
   const verifyDisabled =
     state.loading ||
+    (activeMethod === 'email' &&
+      (!emailCodeSent || !state.code.trim() || state.code.length < 6)) ||
     (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6))
 
   return (
@@ -132,7 +141,7 @@ export function SecureVerificationDialog({
           </div>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
+            'Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
             )}
           </p>
         </div>
@@ -143,6 +152,9 @@ export function SecureVerificationDialog({
           className='gap-4'
         >
           <TabsList>
+            {methods.hasEmail && (
+              <TabsTrigger value='email'>{t('Email verification')}</TabsTrigger>
+            )}
             {methods.has2FA && (
               <TabsTrigger value='2fa'>{t('Authenticator code')}</TabsTrigger>
             )}
@@ -150,6 +162,46 @@ export function SecureVerificationDialog({
               <TabsTrigger value='passkey'>{t('Passkey')}</TabsTrigger>
             )}
           </TabsList>
+
+          <TabsContent value='email' className='space-y-3'>
+            <p className='text-muted-foreground text-sm'>
+              {methods.emailHint
+                ? t('Send a one-time code to {{email}}.', {
+                    email: methods.emailHint,
+                  })
+                : t('Send a one-time code to your bound email address.')}
+            </p>
+            <div className='flex gap-2'>
+              <Input
+                inputMode='numeric'
+                maxLength={6}
+                value={state.code}
+                onChange={(event) => onCodeChange(event.target.value)}
+                placeholder={t('Enter verification code')}
+                disabled={state.loading}
+                autoFocus={activeMethod === 'email'}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !verifyDisabled) {
+                    event.preventDefault()
+                    handleVerify()
+                  }
+                }}
+              />
+              <Button
+                type='button'
+                variant='outline'
+                onClick={onSendEmailCode}
+                disabled={state.loading || emailCodeSending}
+              >
+                {emailCodeSending ? (
+                  <Loader2 className='h-4 w-4 animate-spin' />
+                ) : (
+                  <Mail className='h-4 w-4' />
+                )}
+                {emailCodeSent ? t('Resend code') : t('Send code')}
+              </Button>
+            </div>
+          </TabsContent>
 
           <TabsContent value='2fa' className='space-y-3'>
             <p className='text-muted-foreground text-sm'>

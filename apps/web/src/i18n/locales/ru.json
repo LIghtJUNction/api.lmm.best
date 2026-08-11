@@ -6181,5 +6181,13 @@
     "Eligible credited amount (USD)": "Зачисленная сумма, учитываемая для уровня (USD)",
     "{{amount}} credited USD needed for L{{level}}": "Для L{{level}} нужно ещё {{amount}} USD зачислений",
     "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "Это сумма, зачисленная на баланс API, а не фактически списанная сумма. Платежи LinuxDO Credit исключаются."
-  }
+  },
+  "Email verification": "Подтверждение по электронной почте",
+  "Send a one-time code to {{email}}.": "Отправить одноразовый код на {{email}}.",
+  "Send a one-time code to your bound email address.": "Отправить одноразовый код на привязанный адрес электронной почты.",
+  "Resend code": "Отправить код повторно",
+  "Verification code sent to {{email}}": "Код подтверждения отправлен на {{email}}",
+  "Verification code sent": "Код подтверждения отправлен",
+  "Bind an email, or enable Two-factor Authentication or Passkey to continue.": "Привяжите электронную почту или включите двухфакторную аутентификацию либо Passkey, чтобы продолжить.",
+  "Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.": "Привяжите электронную почту в профиле или включите двухфакторную аутентификацию либо Passkey, чтобы разблокировать чувствительные операции."
 }

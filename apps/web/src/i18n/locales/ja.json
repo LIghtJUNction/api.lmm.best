@@ -6181,5 +6181,13 @@
     "Eligible credited amount (USD)": "レベル計算対象の付与額（USD）",
     "{{amount}} credited USD needed for L{{level}}": "L{{level}} までに必要な付与額（USD）：{{amount}}",
     "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "これはAPI残高に付与された金額であり、実際の支払額ではありません。LinuxDO Creditのポイント決済はレベル計算から除外されます。"
-  }
+  },
+  "Email verification": "メール認証",
+  "Send a one-time code to {{email}}.": "{{email}} にワンタイムコードを送信します。",
+  "Send a one-time code to your bound email address.": "登録済みのメールアドレスにワンタイムコードを送信します。",
+  "Resend code": "コードを再送信",
+  "Verification code sent to {{email}}": "{{email}} に認証コードを送信しました",
+  "Verification code sent": "認証コードを送信しました",
+  "Bind an email, or enable Two-factor Authentication or Passkey to continue.": "メールアドレスを登録するか、二要素認証または Passkey を有効にして続行してください。",
+  "Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.": "プロフィールでメールアドレスを登録するか、二要素認証または Passkey を有効にすると機密操作を解除できます。"
 }

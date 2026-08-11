@@ -128,3 +128,60 @@ func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *
 		})
 	}
 }
+
+func TestUniversalVerifyAcceptsBoundEmailAndConsumesCode(t *testing.T) {
+	db := setupUserOnboardingTestDB(t)
+	previousLogDB := model.LOG_DB
+	model.LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	t.Cleanup(func() { model.LOG_DB = previousLogDB })
+	previousSecret := common.SessionSecret
+	common.SessionSecret = "email-proof-test-secret"
+	t.Cleanup(func() { common.SessionSecret = previousSecret })
+
+	user := &model.User{
+		Username: "email-proof-user", Password: "password-placeholder",
+		Email: "owner@example.com", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, AuthVersion: 1,
+	}
+	require.NoError(t, db.Create(user).Error)
+	common.RegisterVerificationCodeWithKey(
+		user.Email,
+		"123456",
+		common.SecurityEmailVerificationPurpose,
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/verify", strings.NewReader(`{
+		"method":"email","code":"123456","scope":"channel.key.read"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = request
+	context.Set("id", user.Id)
+	context.Set("session_id", "email-proof-session")
+	context.Set("auth_version", int64(1))
+	context.Set("session_version", int64(1))
+
+	UniversalVerify(context)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), `"method":"email"`)
+
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/verify", strings.NewReader(`{
+		"method":"email","code":"123456","scope":"channel.key.read"
+	}`))
+	secondRequest.Header.Set("Content-Type", "application/json")
+	secondResponse := httptest.NewRecorder()
+	secondContext, _ := gin.CreateTestContext(secondResponse)
+	secondContext.Request = secondRequest
+	secondContext.Set("id", user.Id)
+	secondContext.Set("session_id", "email-proof-session")
+	secondContext.Set("auth_version", int64(1))
+	secondContext.Set("session_version", int64(1))
+
+	UniversalVerify(secondContext)
+
+	assert.Equal(t, http.StatusOK, secondResponse.Code)
+	assert.Contains(t, secondResponse.Body.String(), "验证失败")
+}

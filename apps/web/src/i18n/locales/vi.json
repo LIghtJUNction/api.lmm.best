@@ -6181,5 +6181,13 @@
     "Eligible credited amount (USD)": "Số tiền được cộng hợp lệ (USD)",
     "{{amount}} credited USD needed for L{{level}}": "Cần thêm {{amount}} USD được cộng để đạt L{{level}}",
     "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "Đây là số tiền được cộng vào số dư API, không phải số tiền thực tế bị trừ. Các khoản thanh toán bằng điểm LinuxDO Credit không được tính."
-  }
+  },
+  "Email verification": "Xác minh email",
+  "Send a one-time code to {{email}}.": "Gửi mã dùng một lần đến {{email}}.",
+  "Send a one-time code to your bound email address.": "Gửi mã dùng một lần đến địa chỉ email đã liên kết.",
+  "Resend code": "Gửi lại mã",
+  "Verification code sent to {{email}}": "Mã xác minh đã được gửi đến {{email}}",
+  "Verification code sent": "Mã xác minh đã được gửi",
+  "Bind an email, or enable Two-factor Authentication or Passkey to continue.": "Hãy liên kết email hoặc bật xác thực hai yếu tố hay Passkey để tiếp tục.",
+  "Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.": "Hãy liên kết email trong hồ sơ hoặc bật xác thực hai yếu tố hay Passkey để mở khóa các thao tác nhạy cảm."
 }

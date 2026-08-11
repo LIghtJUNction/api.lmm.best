@@ -675,7 +675,7 @@ func requirePasskeyRegistrationVerification(c *gin.Context, userID int) bool {
 	if twoFA == nil || !twoFA.IsEnabled {
 		return true
 	}
-	return middleware.RequireSecurityProof(c, securityProofScopePasskeyRegister, []string{secureVerificationMethod2FA})
+	return middleware.RequireSecurityProof(c, securityProofScopePasskeyRegister, []string{secureVerificationMethodEmail, secureVerificationMethod2FA})
 }
 
 func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
@@ -685,7 +685,7 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 	if twoFA != nil && twoFA.IsEnabled {
-		return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethod2FA})
+		return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethodEmail, secureVerificationMethod2FA})
 	}
 
 	_, err = model.GetPasskeyByUserID(userID)
@@ -701,5 +701,5 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 
-	return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethodPasskey})
+	return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethodEmail, secureVerificationMethodPasskey})
 }
