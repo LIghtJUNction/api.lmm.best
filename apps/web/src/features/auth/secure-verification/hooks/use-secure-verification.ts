@@ -30,14 +30,14 @@ import {
   sendSecurityEmailVerification,
   verify,
 } from '../api'
-import type {
-  SecureVerificationState,
-  StartVerificationOptions,
-  UseSecureVerificationOptions,
-  VerificationMethod,
-  VerificationMethods,
+import {
+  getPreferredVerificationMethods,
+  type SecureVerificationState,
+  type StartVerificationOptions,
+  type UseSecureVerificationOptions,
+  type VerificationMethod,
+  type VerificationMethods,
 } from '../types'
-import { getPreferredVerificationMethods } from '../types'
 
 type ApiCall = ((proofToken?: string) => Promise<unknown>) | null
 
