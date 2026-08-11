@@ -104,6 +104,10 @@ assistant-cache, intent and profile checks, additionally set
 `PERSONA_RUN_ASSISTANT=1`. When a turn is cache-eligible, the suite requires
 the repeated answer to return `HIT` with identical response bytes; turns that
 invoke live tools are reported as non-cacheable rather than being cached.
+The full A–I set runs by default. For a lower-cost focused pass, set
+`PERSONA_RUN_IDS=A,D` (comma-separated IDs); every selected persona still
+requires the expected deterministic intent and, where applicable, the
+security-refusal policy.
 The suite does not create keys, make payments, publish bounties, or call a
 provider; L0 key creation is tested only as a required authorization denial.
 

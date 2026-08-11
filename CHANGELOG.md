@@ -6,6 +6,10 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+- Strengthened the shell-only A–I persona acceptance suite: every selected
+  persona now verifies its deterministic intent route, security-risk persona
+  still requires the refusal policy, and focused runs can select only the
+  needed profiles to reduce assistant quota spend.
 - Improved the anonymous homepage entry points and added a real L0 black-box
   check: L0 users are guided to the AI assistant while key creation remains
   denied until the access boundary changes.
