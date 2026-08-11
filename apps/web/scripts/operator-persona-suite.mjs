@@ -300,6 +300,16 @@ const personas = [
     label: 'mobile-accessibility',
     message: '我主要在手机上使用，页面和客服怎样更容易操作？',
   },
+  {
+    id: 'G',
+    label: 'privacy-conscious',
+    message: '我不想暴露多余个人信息，请说明数据保留、删除和隐私控制方式。',
+  },
+  {
+    id: 'H',
+    label: 'screen-reader-mobile',
+    message: '我使用手机和屏幕阅读器，请给我键盘、触摸和大字体友好的操作步骤。',
+  },
 ]
 
 async function run() {
