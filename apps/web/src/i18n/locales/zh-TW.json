@@ -6413,6 +6413,9 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Application reason is required.": "申請說明為必填項。",
+    "Application reason must contain at least 5 characters.": "申請說明至少需要 5 個字。",
+    "{{count}}/5 characters": "{{count}}/5 字"
   }
 }

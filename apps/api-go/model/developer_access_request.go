@@ -10,17 +10,19 @@ import (
 )
 
 const (
-	DeveloperAccessRequestPending  = "pending"
-	DeveloperAccessRequestApproved = "approved"
-	DeveloperAccessRequestRejected = "rejected"
-	maxDeveloperAccessRequestNote  = 2000
+	DeveloperAccessRequestPending   = "pending"
+	DeveloperAccessRequestApproved  = "approved"
+	DeveloperAccessRequestRejected  = "rejected"
+	minDeveloperAccessRequestReason = 5
+	maxDeveloperAccessRequestNote   = 2000
 )
 
 var (
-	ErrDeveloperAccessRequestNotFound    = errors.New("解锁申请不存在")
-	ErrDeveloperAccessRequestReviewed    = errors.New("解锁申请已经处理")
-	ErrDeveloperAccessRequestStatus      = errors.New("解锁申请状态无效")
-	ErrDeveloperAccessRequestNoteTooLong = errors.New("解锁申请说明不能超过 2000 个字符")
+	ErrDeveloperAccessRequestNotFound       = errors.New("解锁申请不存在")
+	ErrDeveloperAccessRequestReviewed       = errors.New("解锁申请已经处理")
+	ErrDeveloperAccessRequestStatus         = errors.New("解锁申请状态无效")
+	ErrDeveloperAccessRequestReasonTooShort = errors.New("解锁申请说明至少需要 5 个字符")
+	ErrDeveloperAccessRequestNoteTooLong    = errors.New("解锁申请说明不能超过 2000 个字符")
 )
 
 // DeveloperAccessRequest records the non-payment path to L1 access. The
@@ -53,6 +55,17 @@ func normalizeDeveloperAccessRequestText(value string) (string, error) {
 	return value, nil
 }
 
+func normalizeDeveloperAccessRequestReason(value string) (string, error) {
+	value, err := normalizeDeveloperAccessRequestText(value)
+	if err != nil {
+		return "", err
+	}
+	if len([]rune(value)) < minDeveloperAccessRequestReason {
+		return "", ErrDeveloperAccessRequestReasonTooShort
+	}
+	return value, nil
+}
+
 func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
@@ -72,7 +85,7 @@ func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRe
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
-	normalizedReason, err := normalizeDeveloperAccessRequestText(reason)
+	normalizedReason, err := normalizeDeveloperAccessRequestReason(reason)
 	if err != nil {
 		return nil, err
 	}

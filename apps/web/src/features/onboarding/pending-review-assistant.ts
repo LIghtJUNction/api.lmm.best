@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-const PROMPT_KEY_PREFIX = 'lmm:pending-review-assistant:v1'
+const PROMPT_KEY_PREFIX = 'lmm:onboarding-assistant:v2'
 const claimedPrompts = new Set<string>()
 
 type PromptStorage = Pick<Storage, 'getItem' | 'setItem'>
@@ -35,15 +35,16 @@ function getSessionStorage(): PromptStorage | undefined {
  * Session storage prevents repeated prompts after reloads, while the module
  * cache keeps the same behavior when browser storage is unavailable.
  */
-export function claimPendingReviewAssistantPrompt(
+export function claimOnboardingAssistantPrompt(
   userId: number,
-  requestId: number,
+  requestId = 0,
   storage: PromptStorage | undefined = getSessionStorage()
 ): boolean {
   if (!Number.isInteger(userId) || userId <= 0) return false
-  if (!Number.isInteger(requestId) || requestId <= 0) return false
+  if (!Number.isInteger(requestId) || requestId < 0) return false
 
-  const key = `${PROMPT_KEY_PREFIX}:${userId}:${requestId}`
+  const promptId = requestId > 0 ? `review:${requestId}` : 'start'
+  const key = `${PROMPT_KEY_PREFIX}:${userId}:${promptId}`
   if (claimedPrompts.has(key)) return false
 
   try {
@@ -62,4 +63,13 @@ export function claimPendingReviewAssistantPrompt(
     // Opening once per app lifetime is still preferable to blocking guidance.
   }
   return true
+}
+
+export function claimPendingReviewAssistantPrompt(
+  userId: number,
+  requestId: number,
+  storage: PromptStorage | undefined = getSessionStorage()
+): boolean {
+  if (!Number.isInteger(requestId) || requestId <= 0) return false
+  return claimOnboardingAssistantPrompt(userId, requestId, storage)
 }

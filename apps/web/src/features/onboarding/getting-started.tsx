@@ -32,7 +32,7 @@ import { getOnboardingState } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getDeveloperAccessRequest, type DeveloperAccessRequest } from './api'
-import { claimPendingReviewAssistantPrompt } from './pending-review-assistant'
+import { claimOnboardingAssistantPrompt } from './pending-review-assistant'
 import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
@@ -72,7 +72,7 @@ export function GettingStarted() {
   const userId = user?.id ?? 0
   useEffect(() => {
     if (!requestLoaded || onboarding.stage !== 'activate') return
-    if (!claimPendingReviewAssistantPrompt(userId, pendingRequestId)) return
+    if (!claimOnboardingAssistantPrompt(userId, pendingRequestId)) return
     requestAssistantOpen('onboarding')
   }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
 
