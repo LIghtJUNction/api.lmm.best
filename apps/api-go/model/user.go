@@ -369,7 +369,25 @@ func GetMaxUserId() int {
 	return user.Id
 }
 
-func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
+func applyL0UserFilter(tx *gorm.DB, query *gorm.DB) *gorm.DB {
+	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
+	paidTopUpSubquery := successfulExternalPaidTopUpQuery(tx.Model(&TopUp{}).
+		Select("1").
+		Where("top_ups.user_id = users.id")).
+		Where("("+creditedQuotaExpression+") > 0", creditedQuotaArgs...)
+
+	return query.
+		Where("users.role < ?", common.RoleAdminUser).
+		Where(
+			"(users.trust_level_override IS NOT NULL AND users.trust_level_override NOT BETWEEN ? AND ?) OR "+
+				"(users.trust_level_override IS NULL AND users.console_activated_at = 0 AND NOT EXISTS (?))",
+			TrustLevelMinUser+1,
+			TrustLevelMaxUser,
+			paidTopUpSubquery,
+		)
+}
+
+func GetAllUsers(pageInfo *common.PageInfo, onlyL0 bool, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -381,8 +399,13 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 		}
 	}()
 
+	query := tx.Unscoped().Model(&User{})
+	if onlyL0 {
+		query = applyL0UserFilter(tx, query)
+	}
+
 	// Get total count within transaction
-	err = tx.Unscoped().Model(&User{}).Count(&total).Error
+	err = query.Count(&total).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -390,7 +413,7 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 
 	// Get paginated users within same transaction
 	order := resolveUserSortOptions(sortOptions)
-	err = order.Apply(tx.Unscoped()).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
+	err = order.Apply(query).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -406,7 +429,7 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, onlyL0 bool, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -424,6 +447,9 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
+	if onlyL0 {
+		query = applyL0UserFilter(tx, query)
+	}
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"

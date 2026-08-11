@@ -352,7 +352,8 @@ func Register(c *gin.Context) {
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
+	onlyL0 := c.Query("trust_level") == strconv.Itoa(model.TrustLevelMinUser)
+	users, total, err := model.GetAllUsers(pageInfo, onlyL0, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -382,7 +383,8 @@ func SearchUsers(c *gin.Context) {
 	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	onlyL0 := c.Query("trust_level") == strconv.Itoa(model.TrustLevelMinUser)
+	users, total, err := model.SearchUsers(keyword, group, role, status, onlyL0, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
