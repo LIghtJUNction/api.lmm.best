@@ -1231,10 +1231,10 @@ async fn execute(
     // validation boundary instead of leaking a provider 503 for malformed
     // requests.
     if operation == SecurityOperation::VerifyTwoFactorLogin
-        && !input
+        && input
             .get("code")
             .and_then(Value::as_str)
-            .is_some_and(|code| !code.is_empty())
+            .is_none_or(|code| code.is_empty())
     {
         let response = SecurityError::Invalid("参数错误").response(locale);
         return if authenticated {
