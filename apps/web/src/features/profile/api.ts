@@ -28,6 +28,8 @@ import type {
   CheckinStatusResponse,
   CheckinResponse,
   PersonalAccessIPPolicy,
+  GiftItem,
+  GiftClaimResponse,
 } from './types'
 
 // ============================================================================
@@ -246,5 +248,28 @@ export async function performCheckin(
     ? `/api/user/checkin?turnstile=${encodeURIComponent(turnstileToken)}`
     : '/api/user/checkin'
   const res = await api.post(url)
+  return res.data
+}
+
+// ============================================================================
+// Compensation Gift APIs
+// ============================================================================
+
+/**
+ * List gifts currently visible to the user with claim/eligibility status
+ */
+export async function getAvailableGifts(): Promise<ApiResponse<GiftItem[]>> {
+  const res = await api.get('/api/user/gift')
+  return res.data
+}
+
+/**
+ * Claim a compensation gift. Idempotent: repeated claims return 200 with
+ * `already_claimed=true` and quota is credited exactly once.
+ */
+export async function claimGift(
+  giftId: number
+): Promise<ApiResponse<GiftClaimResponse>> {
+  const res = await api.post(`/api/user/gift/${giftId}/claim`)
   return res.data
 }
