@@ -42,13 +42,19 @@ func applyLinuxDOPaymentRestriction(provider oauth.Provider, oauthUser *oauth.OA
 		return nil
 	}
 	score, ok := oauthUser.Extra["gamification_score"].(float64)
-	if !ok || score <= model.LinuxDOGamificationScorePaymentThreshold {
+	if !ok || score < 0 {
 		return nil
 	}
-	if err := model.AddPaymentRestrictionFlags(user.Id, model.PaymentRestrictionLinuxDOHighScore); err != nil {
+	if err := model.UpdateLinuxDOGamificationScore(user.Id, score); err != nil {
 		return err
 	}
-	user.PaymentRestrictionFlags |= model.PaymentRestrictionLinuxDOHighScore
+	user.LinuxDOGamificationScore = score
+	user.LinuxDOScoreUpdatedAt = time.Now().Unix()
+	if score > model.LinuxDOGamificationScorePaymentThreshold {
+		user.PaymentRestrictionFlags |= model.PaymentRestrictionLinuxDOHighScore
+	} else {
+		user.PaymentRestrictionFlags &^= model.PaymentRestrictionLinuxDOHighScore
+	}
 	return nil
 }
 
@@ -333,6 +339,10 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 			common.ApiError(c, err)
 			return
 		}
+	}
+	if err := applyLinuxDOPaymentRestriction(provider, oauthUser, &user); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 
 	common.ApiSuccessI18n(c, i18n.MsgOAuthBindSuccess, gin.H{

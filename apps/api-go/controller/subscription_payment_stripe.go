@@ -30,6 +30,9 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodStripe) {
+		return
+	}
 
 	plan, err := model.GetSubscriptionPlanById(req.PlanId)
 	if err != nil {

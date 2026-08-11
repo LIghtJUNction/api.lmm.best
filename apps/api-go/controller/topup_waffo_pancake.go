@@ -28,6 +28,9 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffoPancake) {
+		return
+	}
 
 	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
@@ -345,6 +348,9 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	var req WaffoPancakePayRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+		return
+	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffoPancake) {
 		return
 	}
 	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {

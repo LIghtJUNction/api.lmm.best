@@ -40,6 +40,9 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodCreem) {
+		return
+	}
 
 	plan, err := model.GetSubscriptionPlanById(req.PlanId)
 	if err != nil {

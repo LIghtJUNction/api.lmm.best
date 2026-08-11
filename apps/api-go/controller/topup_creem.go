@@ -69,7 +69,6 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "不支持的支付渠道"})
 		return
 	}
-
 	if req.ProductId == "" {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "请选择产品"})
 		return
@@ -100,6 +99,9 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 	if strings.TrimSpace(selectedProduct.Currency) == "" {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 产品币种为空 user_id=%d product_id=%s", c.GetInt("id"), selectedProduct.ProductId))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "产品币种配置错误"})
+		return
+	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodCreem) {
 		return
 	}
 

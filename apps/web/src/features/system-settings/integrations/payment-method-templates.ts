@@ -57,6 +57,14 @@ export const PAYMENT_METHOD_TEMPLATES: readonly PaymentMethodTemplate[] = [
     },
   },
   {
+    labelKey: 'Creem',
+    method: { name: 'Creem', type: 'creem' },
+  },
+  {
+    labelKey: 'Waffo',
+    method: { name: 'Waffo', type: 'waffo' },
+  },
+  {
     labelKey: 'Waffo Pancake',
     // Waffo Pancake has a dedicated wallet SVG. Do not override it here.
     method: { name: 'Waffo Pancake', type: 'waffo_pancake' },

@@ -56,6 +56,9 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		SubscriptionRequestFastPay(c)
 		return
 	}
+	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+		return
+	}
 
 	userId := c.GetInt("id")
 	if plan.MaxPurchasePerUser > 0 {
