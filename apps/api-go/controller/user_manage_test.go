@@ -65,7 +65,7 @@ func performManageUserRequestAsRole(t *testing.T, body string, role int) *httpte
 	return recorder
 }
 
-func TestManageUserTrustLevelRemainsAutomatic(t *testing.T) {
+func TestManageUserTrustLevelPersistsOverrideAndCanRestoreAutomatic(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	user := model.User{
 		Username: "managed-trust-user", Password: "password", Role: common.RoleCommonUser,
@@ -73,14 +73,21 @@ func TestManageUserTrustLevelRemainsAutomatic(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&user).Error)
 
-	for _, value := range []int{0, 1, 2, 3, 4, -1} {
+	for _, value := range []int{0, 1, 2, 3, 4} {
 		recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":%d}`, user.Id, value))
 		assert.Contains(t, recorder.Body.String(), `"success":true`, "value %d", value)
 
 		var updated model.User
 		require.NoError(t, db.First(&updated, user.Id).Error)
-		assert.Nil(t, updated.TrustLevelOverride)
+		require.NotNil(t, updated.TrustLevelOverride)
+		assert.Equal(t, value, *updated.TrustLevelOverride)
 	}
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":-1}`, user.Id))
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.Id).Error)
+	assert.Nil(t, updated.TrustLevelOverride)
 
 	for _, value := range []int{-2, 5} {
 		recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":%d}`, user.Id, value))

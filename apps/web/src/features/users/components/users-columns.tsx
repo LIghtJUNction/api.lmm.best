@@ -1,21 +1,3 @@
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import type { ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 
@@ -41,6 +23,7 @@ import {
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { UserQuotaCell } from './user-quota-cell'
+import { UserTrustLevelCell } from './user-trust-level-cell'
 
 export function useUsersColumns(): ColumnDef<User>[] {
   const { t } = useTranslation()
@@ -222,42 +205,10 @@ export function useUsersColumns(): ColumnDef<User>[] {
       id: 'trust_level',
       header: t('Trust level'),
       cell: ({ row }) => {
-        const user = row.original
-        const info = user.trust_level_info
-        let level = info?.level ?? 0
-        if (!info?.level && user.role >= 100) level = 6
-        else if (!info?.level && user.role >= 10) level = 5
-        let badgeVariant: 'info' | 'success' | 'neutral' = 'neutral'
-        if (level >= 5) badgeVariant = 'info'
-        else if (level >= 3) badgeVariant = 'success'
-        const overridden = info?.overridden === true
-        return (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <StatusBadge
-                  label={`L${level}`}
-                  variant={badgeVariant}
-                  copyable={false}
-                  className='cursor-help'
-                />
-              }
-            />
-            <TooltipContent>
-              <p className='text-xs'>
-                {overridden
-                  ? t('Administrator override')
-                  : t('Automatic level')}
-                {info?.discount_percent
-                  ? ` · ${info.discount_percent}% ${t('discount')}`
-                  : ''}
-              </p>
-            </TooltipContent>
-          </Tooltip>
-        )
+        return <UserTrustLevelCell user={row.original} />
       },
       enableSorting: false,
-      size: 110,
+      size: 150,
       meta: { mobileBadge: true, mobileOrder: 25 },
     },
     {

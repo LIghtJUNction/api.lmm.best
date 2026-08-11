@@ -657,11 +657,14 @@ func SetUserTrustLevelOverride(userID int, level *int) error {
 	if level != nil && (*level < TrustLevelMinUser || *level > TrustLevelMaxUser) {
 		return gorm.ErrInvalidData
 	}
-	// Trust levels are automatic. Keep this legacy management entry point
-	// idempotent for older clients, but never persist a manual freeze.
-	if err := DB.Model(&User{}).Where("id = ? AND role < ?", userID, common.RoleAdminUser).
-		Update("trust_level_override", nil).Error; err != nil {
-		return err
+	result := DB.Model(&User{}).
+		Where("id = ? AND role < ?", userID, common.RoleAdminUser).
+		Update("trust_level_override", level)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
 	}
 	return invalidateUserCache(userID)
 }
