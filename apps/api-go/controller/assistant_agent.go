@@ -822,25 +822,26 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 	paymentRestricted := model.IsPaymentRestricted(user)
 	result := map[string]any{
-		"ok":                           true,
+		"ok":                           access.Granted,
 		"developer_access_granted":     access.Granted,
-		"read_only":                    !access.Granted,
+		"read_only":                    false,
 		"checkout_available":           access.Granted && complianceConfirmed && !paymentRestricted,
 		"payment_hidden":               !access.Granted || paymentRestricted,
 		"plans":                        []SubscriptionPlanDTO{},
 		"topup_discounts":              map[int]float64{},
-		"payment_compliance_confirmed": complianceConfirmed,
+		"payment_compliance_confirmed": access.Granted && complianceConfirmed,
 	}
 	if !access.Granted {
-		result["message"] = "Live plans and discounts are available for read-only AI recommendations. Checkout remains unavailable until an administrator grants L1; do not direct the user to payment."
-		result["next_step"] = "Recommend a suitable plan if asked, then help the user submit an administrator L1 access request."
+		result["error"] = "L1 access is required to view plans and top-up discounts"
+		result["next_step"] = "Ask the user to submit an administrator L1 access request from the onboarding assistant."
+		return result
 	}
 	if paymentRestricted {
 		if access.Granted {
 			result["message"] = "Payment options are hidden for this account; do not direct the user to checkout."
 		}
 	}
-	if access.Granted && !complianceConfirmed {
+	if !complianceConfirmed {
 		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."
 		return result
 	}
@@ -857,7 +858,7 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 		planValues = append(planValues, SubscriptionPlanDTO{Plan: plan})
 	}
 	discountValues := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
-	if !access.Granted || !paymentRestricted {
+	if !paymentRestricted {
 		for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
 			discountValues[amount] = multiplier
 		}

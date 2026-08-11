@@ -211,7 +211,7 @@ describe('AssistantPlanTool', () => {
     }
   })
 
-  test('gives L0 users live read-only plan and discount advice without checkout', async () => {
+  test('does not request or expose plans and discounts to L0 users', async () => {
     let calls = 0
     let accessRequests = 0
     api.get = (async (url: string) => {
@@ -234,16 +234,22 @@ describe('AssistantPlanTool', () => {
       accessRequests += 1
     })
 
-    assert.equal(calls, 1)
-    assert.match(rendered.container.textContent ?? '', /Pro/)
-    assert.match(rendered.container.textContent ?? '', /save 20%/)
-    assert.match(rendered.container.textContent ?? '', /Read-only plan advice/)
+    assert.equal(calls, 0)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /Pro/)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /save 20%/)
+    assert.match(rendered.container.textContent ?? '', /L1 access required/)
     assert.match(
       rendered.container.textContent ?? '',
-      /Estimated discounted base amount\$80 USD/
+      /plans and top-up discounts are hidden/i
     )
-    assert.ok(rendered.container.querySelector('#assistant-expected-credit'))
-    assert.ok(rendered.container.querySelector('#assistant-topup-credit'))
+    assert.equal(
+      rendered.container.querySelector('#assistant-expected-credit'),
+      null
+    )
+    assert.equal(
+      rendered.container.querySelector('#assistant-topup-credit'),
+      null
+    )
     assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
     await act(async () => {
       const button = [...rendered.container.querySelectorAll('button')].find(
