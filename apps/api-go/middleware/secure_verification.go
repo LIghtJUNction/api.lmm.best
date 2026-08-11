@@ -13,7 +13,7 @@ import (
 // operations validate their narrower proof scopes in their controller.
 func SecureVerificationRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !RequireSecurityProof(c, "channel.key.read", []string{"2fa", "passkey"}) {
+		if !RequireSecurityProof(c, "channel.key.read", []string{"email", "2fa", "passkey"}) {
 			return
 		}
 		c.Set("secure_verified", true)

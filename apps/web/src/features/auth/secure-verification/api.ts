@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import i18next from 'i18next'
 
 import type { ApiResponse } from '@/features/auth/types'
-import { api, get2FAStatus } from '@/lib/api'
+import { api, get2FAStatus, getSelf } from '@/lib/api'
 import {
   buildAssertionResult,
   prepareCredentialRequestOptions,
@@ -43,13 +43,15 @@ import type {
  */
 export async function checkVerificationMethods(): Promise<VerificationMethods> {
   try {
-    const [twoFAResponse, passkeyResponse, passkeySupported] =
+    const [selfResponse, twoFAResponse, passkeyResponse, passkeySupported] =
       await Promise.all([
+        getSelf(),
         get2FAStatus(),
         getPasskeyStatus(),
         detectPasskeySupport(),
       ])
 
+    const email = String(selfResponse?.data?.email ?? '').trim()
     const has2FA =
       Boolean(twoFAResponse?.success) && Boolean(twoFAResponse?.data?.enabled)
     const hasPasskey =
@@ -57,6 +59,8 @@ export async function checkVerificationMethods(): Promise<VerificationMethods> {
       Boolean(passkeyResponse?.data?.enabled)
 
     return {
+      hasEmail: email.length > 0,
+      emailHint: email ? maskEmail(email) : undefined,
       has2FA,
       hasPasskey,
       passkeySupported,
@@ -65,11 +69,34 @@ export async function checkVerificationMethods(): Promise<VerificationMethods> {
     // eslint-disable-next-line no-console
     console.error('[Secure Verification] Failed to check methods', error)
     return {
+      hasEmail: false,
       has2FA: false,
       hasPasskey: false,
       passkeySupported: false,
     }
   }
+}
+
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@', 2)
+  if (!local || !domain) return ''
+  if (local.length <= 2) return `${local.slice(0, 1)}***@${domain}`
+  return `${local.slice(0, 1)}***${local.slice(-1)}@${domain}`
+}
+
+/** Request a one-time code for the authenticated user's bound email. */
+export async function sendSecurityEmailVerification(): Promise<{
+  email_hint?: string
+}> {
+  const res = await api.post<{
+    success: boolean
+    message?: string
+    data?: { email_hint?: string }
+  }>('/api/verify/email')
+  if (!res.data?.success) {
+    throw new Error(res.data?.message || i18next.t('Failed to send verification email'))
+  }
+  return res.data.data ?? {}
 }
 
 /**
@@ -81,6 +108,8 @@ export async function verify(
   code?: string
 ): Promise<SecurityProof> {
   switch (method) {
+    case 'email':
+      return verifyEmail(scope, code)
     case '2fa':
       return verifyTwoFA(scope, code)
     case 'passkey':
@@ -90,6 +119,28 @@ export async function verify(
         i18next.t('Unsupported verification method: {{method}}', { method })
       )
   }
+}
+
+async function verifyEmail(
+  scope: SecurityProofScope,
+  code?: string | null
+): Promise<SecurityProof> {
+  const trimmed = code?.trim()
+  if (!trimmed) {
+    throw new Error(i18next.t('Please enter the verification code'))
+  }
+  const res = await api.post<ApiResponse<SecurityProof>>('/api/verify', {
+    method: 'email',
+    code: trimmed,
+    scope,
+  })
+  if (!res.data?.success) {
+    throw new Error(res.data?.message || i18next.t('Verification failed'))
+  }
+  if (!res.data.data?.proof_token) {
+    throw new Error(i18next.t('Verification proof was not returned'))
+  }
+  return res.data.data
 }
 
 /**

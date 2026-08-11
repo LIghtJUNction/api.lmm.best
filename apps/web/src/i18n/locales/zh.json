@@ -6181,5 +6181,13 @@
     "Eligible credited amount (USD)": "计入升级的到账金额（美元）",
     "{{amount}} credited USD needed for L{{level}}": "距离 L{{level}} 还需要 {{amount}} 美元到账金额",
     "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "这是计入 API 余额的到账金额，不是实际扣款金额。LinuxDO Credit 积分支付不计入升级进度。"
-  }
+  },
+  "Email verification": "邮箱验证",
+  "Send a one-time code to {{email}}.": "向 {{email}} 发送一次性验证码。",
+  "Send a one-time code to your bound email address.": "向已绑定的邮箱发送一次性验证码。",
+  "Resend code": "重新发送验证码",
+  "Verification code sent to {{email}}": "验证码已发送至 {{email}}",
+  "Verification code sent": "验证码已发送",
+  "Bind an email, or enable Two-factor Authentication or Passkey to continue.": "请绑定邮箱，或启用双因素认证或 Passkey 后继续。",
+  "Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.": "请在个人资料中绑定邮箱，或启用双因素认证或 Passkey，以解锁敏感操作。"
 }

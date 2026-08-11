@@ -25,7 +25,11 @@ import {
   isVerificationRequiredError,
 } from '@/lib/secure-verification'
 
-import { checkVerificationMethods, verify } from '../api'
+import {
+  checkVerificationMethods,
+  sendSecurityEmailVerification,
+  verify,
+} from '../api'
 import type {
   SecureVerificationState,
   StartVerificationOptions,
@@ -41,6 +45,7 @@ interface InternalState extends SecureVerificationState {
 }
 
 const defaultMethods: VerificationMethods = {
+  hasEmail: false,
   has2FA: false,
   hasPasskey: false,
   passkeySupported: false,
@@ -63,6 +68,8 @@ export function useSecureVerification(
   const [methods, setMethods] = useState<VerificationMethods>(defaultMethods)
   const [state, setState] = useState<InternalState>(initialState)
   const [open, setOpen] = useState(false)
+  const [emailCodeSending, setEmailCodeSending] = useState(false)
+  const [emailCodeSent, setEmailCodeSent] = useState(false)
 
   const fetchVerificationMethods = useCallback(async () => {
     const result = await checkVerificationMethods()
@@ -77,6 +84,7 @@ export function useSecureVerification(
   const reset = useCallback(() => {
     setState(initialState)
     setOpen(false)
+    setEmailCodeSent(false)
   }, [])
 
   const startVerification = useCallback(
@@ -87,7 +95,11 @@ export function useSecureVerification(
       const { preferredMethod, scope, title, description } = config
       const availableMethods = await fetchVerificationMethods()
 
-      if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
+      if (
+        !availableMethods.hasEmail &&
+        !availableMethods.has2FA &&
+        !availableMethods.hasPasskey
+      ) {
         toast.error(
           i18next.t(
             'Please enable Two-factor Authentication or Passkey before proceeding'
@@ -103,6 +115,7 @@ export function useSecureVerification(
 
       let defaultMethod: VerificationMethod | null = preferredMethod ?? null
       if (
+        (defaultMethod === 'email' && !availableMethods.hasEmail) ||
         (defaultMethod === 'passkey' &&
           (!availableMethods.hasPasskey ||
             !availableMethods.passkeySupported)) ||
@@ -111,7 +124,12 @@ export function useSecureVerification(
         defaultMethod = null
       }
       if (!defaultMethod) {
-        if (availableMethods.hasPasskey && availableMethods.passkeySupported) {
+        if (availableMethods.hasEmail) {
+          defaultMethod = 'email'
+        } else if (
+          availableMethods.hasPasskey &&
+          availableMethods.passkeySupported
+        ) {
           defaultMethod = 'passkey'
         } else if (availableMethods.has2FA) {
           defaultMethod = '2fa'
@@ -126,11 +144,37 @@ export function useSecureVerification(
         title,
         description,
       }))
+      setEmailCodeSent(false)
       setOpen(true)
       return true
     },
     [fetchVerificationMethods, onError]
   )
+
+  const sendEmailCode = useCallback(async () => {
+    setEmailCodeSending(true)
+    try {
+      const result = await sendSecurityEmailVerification()
+      setEmailCodeSent(true)
+      toast.success(
+        result.email_hint
+          ? i18next.t('Verification code sent to {{email}}', {
+              email: result.email_hint,
+            })
+          : i18next.t('Verification code sent')
+      )
+      return result
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : i18next.t('Failed to send verification email')
+      toast.error(message)
+      throw error
+    } finally {
+      setEmailCodeSending(false)
+    }
+  }, [])
 
   const executeVerification = useCallback(
     async (method?: VerificationMethod, code?: string) => {
@@ -218,6 +262,7 @@ export function useSecureVerification(
 
   const canUseMethod = useCallback(
     (method: VerificationMethod) => {
+      if (method === 'email') return methods.hasEmail
       if (method === '2fa') return methods.has2FA
       if (method === 'passkey') {
         return methods.hasPasskey && methods.passkeySupported
@@ -228,6 +273,7 @@ export function useSecureVerification(
   )
 
   const recommendedMethod = useMemo<VerificationMethod | null>(() => {
+    if (methods.hasEmail) return 'email'
     if (methods.hasPasskey && methods.passkeySupported) return 'passkey'
     if (methods.has2FA) return '2fa'
     return null
@@ -241,6 +287,9 @@ export function useSecureVerification(
     startVerification,
     executeVerification,
     cancel,
+    sendEmailCode,
+    emailCodeSending,
+    emailCodeSent,
     reset,
     setCode,
     switchMethod,
@@ -248,7 +297,7 @@ export function useSecureVerification(
     fetchVerificationMethods,
     canUseMethod,
     recommendedMethod,
-    hasAnyMethod: methods.has2FA || methods.hasPasskey,
+    hasAnyMethod: methods.hasEmail || methods.has2FA || methods.hasPasskey,
     isLoading: state.loading,
     currentMethod: state.method,
     code: state.code,

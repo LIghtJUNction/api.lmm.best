@@ -15,7 +15,11 @@ type verificationValue struct {
 
 const (
 	EmailVerificationPurpose = "v"
-	PasswordResetPurpose     = "r"
+	// SecurityEmailVerificationPurpose is kept separate from registration and
+	// email-binding codes so a code requested for a sensitive action cannot be
+	// replayed in an account-creation flow (or vice versa).
+	SecurityEmailVerificationPurpose = "s"
+	PasswordResetPurpose             = "r"
 )
 
 var verificationMutex sync.Mutex

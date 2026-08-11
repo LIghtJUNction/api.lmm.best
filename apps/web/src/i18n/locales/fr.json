@@ -6181,5 +6181,13 @@
     "Eligible credited amount (USD)": "Montant crédité éligible (USD)",
     "{{amount}} credited USD needed for L{{level}}": "{{amount}} USD crédités nécessaires pour atteindre L{{level}}",
     "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "Il s’agit du montant crédité sur votre solde API, et non du montant débité. Les paiements LinuxDO Credit sont exclus."
-  }
+  },
+  "Email verification": "Vérification par e-mail",
+  "Send a one-time code to {{email}}.": "Envoyer un code à usage unique à {{email}}.",
+  "Send a one-time code to your bound email address.": "Envoyer un code à usage unique à votre adresse e-mail liée.",
+  "Resend code": "Renvoyer le code",
+  "Verification code sent to {{email}}": "Code de vérification envoyé à {{email}}",
+  "Verification code sent": "Code de vérification envoyé",
+  "Bind an email, or enable Two-factor Authentication or Passkey to continue.": "Associez un e-mail ou activez l’authentification à deux facteurs ou Passkey pour continuer.",
+  "Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.": "Associez un e-mail ou activez l’authentification à deux facteurs ou Passkey dans votre profil pour déverrouiller les opérations sensibles."
 }
