@@ -160,3 +160,38 @@ async fn invalid_item_id_returns_legacy_business_envelope_without_provider_call(
     assert_eq!(body, json!({"success": false, "message": "id 参数错误"}));
     assert!(provider.calls().expect("calls").is_empty());
 }
+
+#[tokio::test]
+async fn missing_models_preserves_hand_written_go_envelope_and_nil_slice() {
+    let provider = Arc::new(MemoryCatalogProvider::new(json!([])));
+    let (status, body) = call(
+        &app(Arc::clone(&provider), Ok(administrator())),
+        Request::builder()
+            .uri("/api/models/missing")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"success": true, "data": null}));
+    assert_eq!(provider.calls().expect("calls").len(), 1);
+}
+
+#[tokio::test]
+async fn redemption_delete_preserves_go_envelope_without_data_key() {
+    let provider = Arc::new(MemoryCatalogProvider::default());
+    let (status, body) = call(
+        &app(Arc::clone(&provider), Ok(administrator())),
+        Request::builder()
+            .method("DELETE")
+            .uri("/api/redemption/41")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"success": true, "message": ""}));
+    assert_eq!(provider.calls().expect("calls").len(), 1);
+}

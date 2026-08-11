@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{RawQuery, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -28,9 +28,6 @@ const ROOT_ROLE: i64 = 100;
 const USER_ROLE: i64 = 1;
 const DEFAULT_PAGE_SIZE: i64 = 10;
 const MAX_PAGE_SIZE: i64 = 100;
-const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
-const STATUS_TEST_PATH: &str = "/api/status/test";
-const TASK_SELF_PATH: &str = "/api/task/self";
 
 /// The three legacy task collections selected by the HTTP boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,38 +81,6 @@ pub trait ControlTaskStore: Send + Sync {
 pub trait ControlTaskStatusProbe: Send + Sync {
     /// Checks dependencies and returns the direct legacy `http_stats` object.
     async fn test_status(&self) -> Result<Value, ControlTaskStatusError>;
-}
-
-/// Provides the process-owned statistics object used by the administrator
-/// status route.  The provider is kept outside the PostgreSQL adapter so the
-/// route cannot manufacture a counter for a listener that has no runtime
-/// boundary.
-pub type ControlTaskStatsProvider = Arc<dyn Fn() -> Value + Send + Sync>;
-
-/// PostgreSQL and listener-runtime implementation of the status probe.
-#[derive(Clone)]
-pub struct PgControlTaskStatusProbe {
-    pg: PgPool,
-    stats: ControlTaskStatsProvider,
-}
-
-impl PgControlTaskStatusProbe {
-    /// Builds a status probe from the application database and runtime stats.
-    #[must_use]
-    pub fn new(pg: PgPool, stats: ControlTaskStatsProvider) -> Self {
-        Self { pg, stats }
-    }
-}
-
-#[async_trait]
-impl ControlTaskStatusProbe for PgControlTaskStatusProbe {
-    async fn test_status(&self) -> Result<Value, ControlTaskStatusError> {
-        sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(&self.pg)
-            .await
-            .map_err(|_| ControlTaskStatusError::DatabaseUnavailable)?;
-        Ok((self.stats)())
-    }
 }
 
 /// PostgreSQL implementation of the task listing boundary.
@@ -176,12 +141,12 @@ impl PgControlTaskStore {
                 'fail_reason', COALESCE(fail_reason, ''), 'channel_id', COALESCE(channel_id, 0),\
                 'quota', COALESCE(quota, 0), 'buttons', COALESCE(buttons, ''),\
                 'properties', COALESCE(properties, '')\
-             ) FROM midjourneys\
-             WHERE ($1::bigint IS NULL OR user_id = $1)\
-               AND ($2::bigint IS NULL OR channel_id = $2)\
-               AND ($3 = '' OR mj_id = $3)\
-               AND ($4::bigint IS NULL OR submit_time >= $4)\
-               AND ($5::bigint IS NULL OR submit_time <= $5)\
+             ) FROM midjourneys \
+             WHERE ($1::bigint IS NULL OR user_id = $1) \
+               AND ($2::bigint IS NULL OR channel_id = $2) \
+               AND ($3 = '' OR mj_id = $3) \
+               AND ($4::bigint IS NULL OR submit_time >= $4) \
+               AND ($5::bigint IS NULL OR submit_time <= $5) \
              ORDER BY id DESC LIMIT $6 OFFSET $7",
         )
         .bind(self_user)
@@ -193,13 +158,16 @@ impl PgControlTaskStore {
         .bind(offset)
         .fetch_all(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "midjourney-list", "control task query failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM midjourneys\
-             WHERE ($1::bigint IS NULL OR user_id = $1)\
-               AND ($2::bigint IS NULL OR channel_id = $2)\
-               AND ($3 = '' OR mj_id = $3)\
-               AND ($4::bigint IS NULL OR submit_time >= $4)\
+            "SELECT COUNT(*) FROM midjourneys \
+             WHERE ($1::bigint IS NULL OR user_id = $1) \
+               AND ($2::bigint IS NULL OR channel_id = $2) \
+               AND ($3 = '' OR mj_id = $3) \
+               AND ($4::bigint IS NULL OR submit_time >= $4) \
                AND ($5::bigint IS NULL OR submit_time <= $5)",
         )
         .bind(self_user)
@@ -209,7 +177,10 @@ impl PgControlTaskStore {
         .bind(end)
         .fetch_one(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "midjourney-count", "control task count failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         Ok(page_payload(call.query, rows_to_values(rows)?, total))
     }
 
@@ -225,23 +196,23 @@ impl PgControlTaskStore {
         let action = filter(&call.query.filters, "action");
         let start = filter_i64(&call.query.filters, "start_timestamp");
         let end = filter_i64(&call.query.filters, "end_timestamp");
-        // The Go TaskDto includes channel_id even for the user-scoped route.
+        // Go deliberately omits `channel_id` from a user's task response.
         let rows = sqlx::query(
             "SELECT jsonb_build_object(\
                 'id', id, 'created_at', COALESCE(created_at, 0),\
                 'updated_at', COALESCE(updated_at, 0), 'task_id', COALESCE(task_id, ''),\
                 'platform', COALESCE(platform, ''), 'user_id', COALESCE(user_id, 0),\
-                'group', COALESCE(\"group\", ''), 'channel_id', COALESCE(channel_id, 0), 'quota', COALESCE(quota, 0),\
+                'group', COALESCE(\"group\", ''), 'quota', COALESCE(quota, 0),\
                 'action', COALESCE(action, ''), 'status', COALESCE(status, ''),\
                 'fail_reason', COALESCE(fail_reason, ''), 'submit_time', COALESCE(submit_time, 0),\
                 'start_time', COALESCE(start_time, 0), 'finish_time', COALESCE(finish_time, 0),\
                 'progress', COALESCE(progress, ''), 'properties', properties, 'data', data\
              ) FROM tasks \
-             WHERE user_id = $1 AND ($2 = '' OR platform = $2)\
-               AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4)\
-               AND ($5 = '' OR action = $5)\
-               AND ($6::bigint IS NULL OR submit_time >= $6)\
-               AND ($7::bigint IS NULL OR submit_time <= $7)\
+             WHERE user_id = $1 AND ($2 = '' OR platform = $2) \
+               AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4) \
+               AND ($5 = '' OR action = $5) \
+               AND ($6::bigint IS NULL OR submit_time >= $6) \
+               AND ($7::bigint IS NULL OR submit_time <= $7) \
              ORDER BY id DESC LIMIT $8 OFFSET $9",
         )
         .bind(user_id)
@@ -255,12 +226,15 @@ impl PgControlTaskStore {
         .bind(offset)
         .fetch_all(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "task-list", "control task query failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND ($2 = '' OR platform = $2)\
-             AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4)\
-             AND ($5 = '' OR action = $5)\
-             AND ($6::bigint IS NULL OR submit_time >= $6)\
+            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND ($2 = '' OR platform = $2) \
+             AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4) \
+             AND ($5 = '' OR action = $5) \
+             AND ($6::bigint IS NULL OR submit_time >= $6) \
              AND ($7::bigint IS NULL OR submit_time <= $7)",
         )
         .bind(user_id)
@@ -272,7 +246,10 @@ impl PgControlTaskStore {
         .bind(end)
         .fetch_one(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "task-count", "control task count failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         Ok(page_payload(call.query, rows_to_values(rows)?, total))
     }
 }
@@ -304,43 +281,6 @@ pub struct MissingControlTasksState {
     status: Arc<dyn ControlTaskStatusProbe>,
 }
 
-/// State for the independently mountable administrator status route.
-#[derive(Clone)]
-pub struct ControlTaskStatusState {
-    authorizer: Arc<dyn ObservabilityAuthorizer>,
-    status: Arc<dyn ControlTaskStatusProbe>,
-}
-
-/// Minimal state for the normal-listener user-scoped task read.
-#[derive(Clone)]
-pub struct ControlTaskSelfState {
-    store: Arc<dyn ControlTaskStore>,
-    authorizer: Arc<dyn ObservabilityAuthorizer>,
-}
-
-impl ControlTaskSelfState {
-    /// Builds the user-scoped read boundary without exposing the unrelated
-    /// administrator and status operations from [`MissingControlTasksState`].
-    #[must_use]
-    pub fn new(
-        store: Arc<dyn ControlTaskStore>,
-        authorizer: Arc<dyn ObservabilityAuthorizer>,
-    ) -> Self {
-        Self { store, authorizer }
-    }
-}
-
-impl ControlTaskStatusState {
-    /// Builds the status route state from application-owned dependencies.
-    #[must_use]
-    pub fn new(
-        authorizer: Arc<dyn ObservabilityAuthorizer>,
-        status: Arc<dyn ControlTaskStatusProbe>,
-    ) -> Self {
-        Self { authorizer, status }
-    }
-}
-
 impl MissingControlTasksState {
     /// Builds route state from application-owned persistence, authorization,
     /// and process-health adapters.
@@ -368,21 +308,6 @@ pub fn missing_control_tasks_router(state: MissingControlTasksState) -> Router {
         .route("/api/mj/self", get(self_midjourney))
         .route("/api/task/self", get(self_tasks))
         .route("/api/status/test", get(test_status))
-        .with_state(state)
-}
-
-/// Builds only `GET /api/status/test` for the normal listener.
-pub fn status_test_router(state: ControlTaskStatusState) -> Router {
-    Router::new()
-        .route(STATUS_TEST_PATH, get(status_test_only))
-        .with_state(state)
-}
-
-/// Builds only the authenticated user-scoped task read for the normal
-/// listener. Administrator task listings and task writes remain isolated.
-pub fn self_task_read_router(state: ControlTaskSelfState) -> Router {
-    Router::new()
-        .route(TASK_SELF_PATH, get(self_tasks_read_only))
         .with_state(state)
 }
 
@@ -431,22 +356,6 @@ async fn self_tasks(
     .await
 }
 
-async fn self_tasks_read_only(
-    State(state): State<ControlTaskSelfState>,
-    headers: HeaderMap,
-    raw: RawQuery,
-) -> Response {
-    list_with(
-        &state.authorizer,
-        &state.store,
-        &headers,
-        raw,
-        ObservabilityAccess::User,
-        ControlTaskOperation::TaskSelf,
-    )
-    .await
-}
-
 async fn list(
     state: &MissingControlTasksState,
     headers: &HeaderMap,
@@ -454,31 +363,12 @@ async fn list(
     access: ObservabilityAccess,
     operation: ControlTaskOperation,
 ) -> Response {
-    list_with(
-        &state.authorizer,
-        &state.store,
-        headers,
-        raw,
-        access,
-        operation,
-    )
-    .await
-}
-
-async fn list_with(
-    authorizer: &Arc<dyn ObservabilityAuthorizer>,
-    store: &Arc<dyn ControlTaskStore>,
-    headers: &HeaderMap,
-    raw: RawQuery,
-    access: ObservabilityAccess,
-    operation: ControlTaskOperation,
-) -> Response {
-    let principal = match authorize(authorizer, headers, access).await {
+    let principal = match authorize(&state.authorizer, headers, access).await {
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    let dashboard_user = matches!(principal, ObservabilityPrincipal::User { .. });
-    match store
+    match state
+        .store
         .list(ControlTaskCall {
             operation,
             principal,
@@ -486,13 +376,7 @@ async fn list_with(
         })
         .await
     {
-        Ok(data) => {
-            if dashboard_user {
-                with_task_read_headers(success(data))
-            } else {
-                success(data)
-            }
-        }
+        Ok(data) => success(data),
         Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -501,25 +385,11 @@ async fn test_status(
     State(state): State<MissingControlTasksState>,
     headers: HeaderMap,
 ) -> Response {
-    test_status_response(&state.authorizer, &state.status, &headers).await
-}
-
-async fn status_test_only(
-    State(state): State<ControlTaskStatusState>,
-    headers: HeaderMap,
-) -> Response {
-    test_status_response(&state.authorizer, &state.status, &headers).await
-}
-
-async fn test_status_response(
-    authorizer: &Arc<dyn ObservabilityAuthorizer>,
-    status: &Arc<dyn ControlTaskStatusProbe>,
-    headers: &HeaderMap,
-) -> Response {
-    if let Err(response) = authorize(authorizer, headers, ObservabilityAccess::Admin).await {
+    if let Err(response) = authorize(&state.authorizer, &headers, ObservabilityAccess::Admin).await
+    {
         return response;
     }
-    let response = match status.test_status().await {
+    match state.status.test_status().await {
         Ok(http_stats) => Json(json!({
             "success": true,
             "message": "Server is running",
@@ -545,23 +415,7 @@ async fn test_status_response(
             })),
         )
             .into_response(),
-    };
-    with_auth_version(response)
-}
-
-fn with_auth_version(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
-    response
-}
-
-fn with_task_read_headers(mut response: Response) -> Response {
-    response.headers_mut().insert(
-        "content-type",
-        HeaderValue::from_static("application/json; charset=utf-8"),
-    );
-    with_auth_version(response)
+    }
 }
 
 async fn authorize(

@@ -105,10 +105,9 @@ test-all: test test-rust
 # Run default Go and web quality gates.
 check: format-check lint typecheck test check-deploy
 
-# Verify atomic frontend publication and the protected Go deployment contract.
+# Verify the native Go build, frontend publication, backup, and deployment contract.
 check-deploy:
-    bash deploy/test-frontend-release.sh
-    bash deploy/production/test-go-deploy-contract.sh
+    cd apps/api-go && go test ./internal/appcli -count=1
 
 format: format-go format-web
 
@@ -181,11 +180,9 @@ docker-rust:
 package: package-go
 
 package-go: build
-    @test -n "${LMM_API_BUILD_WORKSPACE:-}" || { echo "error: set LMM_API_BUILD_WORKSPACE to a marker-owned absolute path" >&2; exit 1; }
-    bash packaging/local/lmm-api-go/build-local-package.sh \
-      --workspace "$LMM_API_BUILD_WORKSPACE" \
-      --binary "$(pwd)/apps/api-go/out/lmm-api-go" \
-      --frontend "$(pwd)/apps/web/dist"
+    apps/api-go/out/lmm-api-go deploy build \
+      --repo "$(pwd)" \
+      --workspace "$LMM_API_BUILD_WORKSPACE"
 
 # Validate the public AUR package that consumes prebuilt release assets.
 test-package-bin:
@@ -194,5 +191,9 @@ test-package-bin:
 
 # Deploy Go production only after explicit site confirmation.
 deploy-production:
-    @if [[ "${CONFIRM_PRODUCTION:-}" != "api.lmm.best" ]]; then echo "error: set CONFIRM_PRODUCTION=api.lmm.best" >&2; exit 1; fi
-    @script="deploy/production/deploy-go.sh"; if [[ ! -x "$script" ]]; then echo "error: $script is required before production deployment is available" >&2; exit 1; fi; "$script"
+    apps/api-go/out/lmm-api-go deploy production release \
+      --repo "$(pwd)" \
+      --workspace "$LMM_API_DEPLOY_WORKSPACE" \
+      --age-recipient-file "$LMM_BACKUP_AGE_RECIPIENT_FILE" \
+      --age-identity-file "$LMM_BACKUP_AGE_IDENTITY_FILE" \
+      --confirm "$CONFIRM_PRODUCTION"

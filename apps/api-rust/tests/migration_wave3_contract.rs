@@ -788,8 +788,8 @@ async fn channel_dashboard_adapter_should_use_only_server_role_and_permissions()
         forged_user
             .authorize(&forged_headers, ChannelAdvancedPermission::Read)
             .await,
-        Err(ChannelAdvancedError::InsufficientPrivilege),
-        "a forged role header bypassed the frozen AdminAuth tier"
+        Err(ChannelAdvancedError::ConsoleNotFound),
+        "an unactivated principal must be concealed before the frozen AdminAuth tier"
     );
 
     let unprivileged_admin =
@@ -990,7 +990,13 @@ async fn identity_security_default_provider_should_never_fabricate_mail_or_webau
         let mut builder = Request::builder().method(route.method).uri(uri);
         let body = if route.method == "POST" {
             builder = builder.header(header::CONTENT_TYPE, "application/json");
-            Body::from("{}")
+            match route.path {
+                "/api/user/login/2fa" => Body::from(r#"{"code":"123456"}"#),
+                "/api/user/reset" => {
+                    Body::from(r#"{"email":"ada@example.test","token":"reset-token"}"#)
+                }
+                _ => Body::from("{}"),
+            }
         } else {
             Body::empty()
         };
@@ -1011,8 +1017,8 @@ async fn identity_security_default_provider_should_never_fabricate_mail_or_webau
 
     assert_eq!(
         provider.calls().expect("provider calls").len(),
-        7,
-        "every anonymous mail/WebAuthn operation must cross the provider boundary"
+        6,
+        "every configured anonymous mail/WebAuthn operation must cross the provider boundary; registration is fail-closed until its anonymous security policy is wired"
     );
 }
 

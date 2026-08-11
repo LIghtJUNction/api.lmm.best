@@ -299,7 +299,7 @@ async fn gemini_should_require_a_token_before_channel_selection() {
         .await
         .expect("router responds");
 
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -316,7 +316,7 @@ async fn gemini_authentication_precedes_invalid_json_parsing() {
         .await
         .expect("router responds");
 
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

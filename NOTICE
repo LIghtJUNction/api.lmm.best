@@ -1,5 +1,8 @@
 new-api Notices
 
+LMM API is a maintained fork of new-api by LIghtJUNction.
+Copyright (C) 2026 LIghtJUNction for fork-specific modifications.
+
 new-api
 Copyright (c) QuantumNous and contributors.
 
@@ -23,6 +26,10 @@ https://github.com/QuantumNous/new-api
 
 Modified versions must not misrepresent the origin of the software and must
 mark their changes in accordance with AGPLv3 Section 7(c).
+
+Fork-specific source files may carry the upstream QuantumNous notice together
+with a separate Copyright (C) 2026 LIghtJUNction modification notice. Both
+notices must be preserved when redistributing the modified source.
 
 ==== Third-Party Notices ====
 

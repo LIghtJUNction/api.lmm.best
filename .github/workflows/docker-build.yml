@@ -87,9 +87,14 @@ jobs:
               exit 1
               ;;
           esac
+          if [[ ! -f "$dockerfile" ]]; then
+            echo "error: selected dockerfile '$dockerfile' does not exist in this branch." >&2
+            echo "restore or replace the Dockerfile path before running this workflow." >&2
+            exit 1
+          fi
 
           revision=$(git rev-parse HEAD)
-          printf '%s\n' "$source_tag" > VERSION
+              printf '%s\n' "$source_tag" > VERSION
           echo "backend=$REQUESTED_BACKEND" >> "$GITHUB_OUTPUT"
           echo "dockerfile=$dockerfile" >> "$GITHUB_OUTPUT"
           echo "image=$image" >> "$GITHUB_OUTPUT"

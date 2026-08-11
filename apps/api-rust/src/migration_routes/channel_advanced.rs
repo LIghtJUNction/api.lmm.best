@@ -15,7 +15,7 @@ use axum::{
     Json, Router,
     body::{Body, Bytes, to_bytes},
     extract::{Path, RawQuery, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -91,6 +91,10 @@ pub struct ChannelAdvancedCall {
 /// Errors translated by this route slice without leaking provider details.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChannelAdvancedError {
+    /// The Go `ConsoleAccessGate` conceals this dashboard discovery surface
+    /// before `AdminAuth` sees anonymous, invalid, disabled, or unactivated
+    /// credentials.
+    ConsoleNotFound,
     Unauthorized,
     /// AdminAuth or RootAuth rejected the signed dashboard role.
     InsufficientPrivilege,
@@ -117,6 +121,15 @@ pub enum ChannelAdvancedError {
 impl ChannelAdvancedError {
     fn response(self) -> Response {
         match self {
+            Self::ConsoleNotFound => {
+                let mut response =
+                    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+                response
+            }
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
@@ -215,14 +228,19 @@ impl ChannelAdvancedAuthorizer for DashboardChannelAdvancedAuthorizer {
         headers: &HeaderMap,
         permission: ChannelAdvancedPermission,
     ) -> Result<(), ChannelAdvancedError> {
-        let token = dashboard_credential(headers).ok_or(ChannelAdvancedError::Unauthorized)?;
+        // The normal Go listener applies ConsoleAccessGate to `/api/channel`
+        // before the nested AdminAuth/RequirePermission chain.  Resolving the
+        // optional dashboard view first preserves that generic 404 boundary;
+        // only an activated principal reaches the legacy role/permission
+        // decisions below.
+        let token = dashboard_credential(headers).ok_or(ChannelAdvancedError::ConsoleNotFound)?;
         let user = self
             .auth
-            .self_user(SecretString::from(token.to_owned()))
+            .self_user_view_for_optional(SecretString::from(token.to_owned()))
             .await
-            .map_err(|_| ChannelAdvancedError::Unauthorized)?;
-        if user.status != STATUS_ENABLED {
-            return Err(ChannelAdvancedError::Unauthorized);
+            .map_err(|_| ChannelAdvancedError::ConsoleNotFound)?;
+        if user.id <= 0 || user.status != STATUS_ENABLED || !user.developer_access_granted {
+            return Err(ChannelAdvancedError::ConsoleNotFound);
         }
         // The frozen Go router applies AdminAuth to the entire route group.
         // The signed `DashboardAuth` record, not request headers, supplies

@@ -144,6 +144,9 @@ pub trait RelayBackend: Send + Sync {
 pub enum RelayFailure {
     /// A token is absent, malformed, or invalid.
     Unauthorized,
+    /// Current Go `TokenAuth` conceals an absent or invalid relay credential
+    /// as the generic public 404 document instead of exposing an auth error.
+    ConcealedNotFound,
     /// No channel can serve the requested model.
     NoChannel,
     /// The upstream did not complete the request.
@@ -298,7 +301,7 @@ async fn delete_openai_model(
             .backend
             .record_outcome(None, None, RelayOutcome::Unauthorized)
             .await;
-        return openai_failure(&RelayFailure::Unauthorized, &request_id);
+        return openai_failure(&RelayFailure::ConcealedNotFound, &request_id);
     };
     if let Err(error) = state.backend.authenticate(&token).await {
         state
@@ -360,7 +363,7 @@ async fn relay(
             .backend
             .record_outcome(None, None, RelayOutcome::Unauthorized)
             .await;
-        return failure(protocol, &RelayFailure::Unauthorized, &request_id);
+        return failure(protocol, &RelayFailure::ConcealedNotFound, &request_id);
     };
     let identity = match state.backend.authenticate(&token).await {
         Ok(identity) => identity,
@@ -516,20 +519,25 @@ fn request_id(request: &Request) -> String {
 
 fn outcome_for(error: &RelayFailure) -> RelayOutcome {
     match error {
-        RelayFailure::Unauthorized => RelayOutcome::Unauthorized,
+        RelayFailure::Unauthorized | RelayFailure::ConcealedNotFound => RelayOutcome::Unauthorized,
         RelayFailure::NoChannel => RelayOutcome::NoChannel,
         RelayFailure::Upstream | RelayFailure::Provider { .. } => RelayOutcome::UpstreamFailure,
     }
 }
 
 fn openai_failure(error: &RelayFailure, request_id: &str) -> Response {
+    if matches!(error, RelayFailure::ConcealedNotFound) {
+        return concealed_not_found();
+    }
     let status = match error {
         RelayFailure::Unauthorized => StatusCode::UNAUTHORIZED,
+        RelayFailure::ConcealedNotFound => StatusCode::NOT_FOUND,
         RelayFailure::NoChannel => StatusCode::SERVICE_UNAVAILABLE,
         RelayFailure::Upstream | RelayFailure::Provider { .. } => StatusCode::BAD_GATEWAY,
     };
     let message = match error {
         RelayFailure::Unauthorized => "Invalid token",
+        RelayFailure::ConcealedNotFound => "Not Found",
         RelayFailure::NoChannel => "relay request could not be completed",
         RelayFailure::Upstream | RelayFailure::Provider { .. } => {
             "relay request could not be completed"
@@ -606,6 +614,9 @@ fn invalid_request(protocol: RelayProtocol, message: &str, request_id: &str) -> 
 }
 
 fn failure(protocol: RelayProtocol, error: &RelayFailure, request_id: &str) -> Response {
+    if matches!(error, RelayFailure::ConcealedNotFound) {
+        return concealed_not_found();
+    }
     if matches!(protocol, RelayProtocol::Anthropic | RelayProtocol::Gemini)
         && matches!(error, RelayFailure::Unauthorized)
     {
@@ -614,6 +625,11 @@ fn failure(protocol: RelayProtocol, error: &RelayFailure, request_id: &str) -> R
     let (status, type_name, gemini_status) = match error {
         RelayFailure::Unauthorized => (
             StatusCode::UNAUTHORIZED,
+            "authentication_error",
+            "UNAUTHENTICATED",
+        ),
+        RelayFailure::ConcealedNotFound => (
+            StatusCode::NOT_FOUND,
             "authentication_error",
             "UNAUTHENTICATED",
         ),
@@ -636,6 +652,10 @@ fn failure(protocol: RelayProtocol, error: &RelayFailure, request_id: &str) -> R
         },
     };
     error_response(status, body, request_id)
+}
+
+fn concealed_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message":"Not Found"}))).into_response()
 }
 
 fn error_response(status: StatusCode, body: Value, request_id: &str) -> Response {
@@ -691,7 +711,7 @@ mod tests {
         async fn authenticate(&self, token: &str) -> Result<RelayIdentity, RelayFailure> {
             self.tokens.lock().unwrap().push(token.to_owned());
             if token == "invalid" {
-                Err(RelayFailure::Unauthorized)
+                Err(RelayFailure::ConcealedNotFound)
             } else {
                 Ok(RelayIdentity {
                     token_id: "token-id".to_owned(),
@@ -844,18 +864,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anthropic_missing_and_invalid_credentials_should_use_exact_openai_envelope() {
+    async fn anthropic_missing_and_invalid_credentials_should_use_go_concealed_not_found() {
         let backend = Arc::new(RecordingBackend::default());
-        for (credential, expected_body) in [
-            (
-                None,
-                r#"{"error":{"code":"","message":"Invalid token (request id: fixed-request-id)","type":"new_api_error"}}"#,
-            ),
-            (
-                Some("invalid"),
-                r#"{"error":{"code":"","message":"Invalid token (request id: fixed-request-id)","type":"new_api_error"}}"#,
-            ),
-        ] {
+        for credential in [None, Some("invalid")] {
             let mut request = request_with_context("/v1/messages", r#"{"model":"claude-test"}"#);
             if let Some(token) = credential {
                 request
@@ -866,17 +877,13 @@ mod tests {
                 .oneshot(request)
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            assert_eq!(
-                response.headers()[header::CONTENT_TYPE],
-                "application/json; charset=utf-8"
-            );
-            assert_eq!(response_body(response).await, expected_body);
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(response_body(response).await, r#"{"message":"Not Found"}"#);
         }
     }
 
     #[tokio::test]
-    async fn gemini_missing_and_invalid_credentials_should_use_exact_openai_envelope() {
+    async fn gemini_missing_and_invalid_credentials_should_use_go_concealed_not_found() {
         let backend = Arc::new(RecordingBackend::default());
         for credential in [None, Some("invalid")] {
             let mut request = request_with_context(
@@ -892,15 +899,8 @@ mod tests {
                 .oneshot(request)
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            assert_eq!(
-                response.headers()[header::CONTENT_TYPE],
-                "application/json; charset=utf-8"
-            );
-            assert_eq!(
-                response_body(response).await,
-                r#"{"error":{"code":"","message":"Invalid token (request id: fixed-request-id)","type":"new_api_error"}}"#
-            );
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(response_body(response).await, r#"{"message":"Not Found"}"#);
         }
     }
 

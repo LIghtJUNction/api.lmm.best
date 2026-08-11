@@ -15,7 +15,7 @@ use axum::{
     Json, Router,
     body::to_bytes,
     extract::{Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -33,8 +33,9 @@ use crate::auth::{
 const DEFAULT_QUOTA_PER_UNIT: i64 = 500_000;
 const DEFAULT_CHECKIN_MIN_QUOTA: i64 = 1_000;
 const DEFAULT_CHECKIN_MAX_QUOTA: i64 = 10_000;
+const DEFAULT_CHECKIN_LEVEL_MULTIPLIERS: [f64; 5] = [0.5, 0.65, 0.8, 0.9, 1.0];
+const TRUST_LEVEL_DECAY_PERIOD_SECONDS: i64 = 90 * 24 * 60 * 60;
 const LOG_TYPE_SYSTEM: i64 = 4;
-const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 #[async_trait]
 pub trait Clock: Send + Sync {
@@ -252,16 +253,14 @@ async fn user(
     headers: &HeaderMap,
 ) -> Result<DashboardUser, Response> {
     let token = dashboard_token(headers).ok_or_else(|| auth_error(StatusCode::UNAUTHORIZED))?;
-    match state
+    let user = match state
         .auth
         .self_user(SecretString::from(token.to_owned()))
         .await
     {
-        Ok(user) => enforce_user_auth(&user)
-            .map(|()| user)
-            .map_err(|error| user_auth_error(headers, error)),
+        Ok(user) => user,
         Err(e) if e.kind == AuthErrorKind::UserDisabled => {
-            Err(user_auth_error(headers, UserAuthPolicyError::UserDisabled))
+            return Err(user_auth_error(headers, UserAuthPolicyError::UserDisabled));
         }
         Err(e)
             if matches!(
@@ -271,10 +270,13 @@ async fn user(
                     | AuthErrorKind::SessionRevoked
             ) =>
         {
-            Err(auth_error(StatusCode::UNAUTHORIZED))
+            return Err(auth_error(StatusCode::UNAUTHORIZED));
         }
-        Err(_) => Err(auth_error(StatusCode::INTERNAL_SERVER_ERROR)),
-    }
+        Err(_) => return Err(auth_error(StatusCode::INTERNAL_SERVER_ERROR)),
+    };
+    enforce_user_auth(&user)
+        .map(|()| user)
+        .map_err(|error| user_auth_error(headers, error))
 }
 
 /// Mirrors the frozen Go `authorizationToken` parser: accept a bare token or
@@ -353,21 +355,110 @@ fn parse_go_i64(value: &str) -> Option<i64> {
     })
 }
 
-fn checkin_config_from_options(options: &BTreeMap<String, String>) -> (bool, i64, i64) {
-    (
-        options
+#[derive(Clone, Debug, PartialEq)]
+struct CheckinConfig {
+    enabled: bool,
+    min_quota: i64,
+    max_quota: i64,
+    level_multipliers: [f64; 5],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CheckinRewardRange {
+    trust_level: i64,
+    multiplier: f64,
+    base_min_quota: i64,
+    base_max_quota: i64,
+    min_quota: i64,
+    max_quota: i64,
+}
+
+fn valid_checkin_multiplier(value: f64) -> bool {
+    value.is_finite() && value >= 0.0
+}
+
+fn normalized_checkin_level_multipliers(value: Option<&str>) -> [f64; 5] {
+    let parsed = value
+        .and_then(|raw| serde_json::from_str::<Vec<f64>>(raw).ok())
+        .unwrap_or_default();
+    std::array::from_fn(|index| {
+        parsed
+            .get(index)
+            .copied()
+            .filter(|multiplier| valid_checkin_multiplier(*multiplier))
+            .unwrap_or(DEFAULT_CHECKIN_LEVEL_MULTIPLIERS[index])
+    })
+}
+
+fn checkin_config_from_options(options: &BTreeMap<String, String>) -> CheckinConfig {
+    CheckinConfig {
+        enabled: options
             .get("checkin_setting.enabled")
             .and_then(|value| parse_go_bool(value))
             .unwrap_or(false),
-        options
+        min_quota: options
             .get("checkin_setting.min_quota")
             .and_then(|value| parse_go_i64(value))
             .unwrap_or(DEFAULT_CHECKIN_MIN_QUOTA),
-        options
+        max_quota: options
             .get("checkin_setting.max_quota")
             .and_then(|value| parse_go_i64(value))
             .unwrap_or(DEFAULT_CHECKIN_MAX_QUOTA),
-    )
+        level_multipliers: normalized_checkin_level_multipliers(
+            options
+                .get("checkin_setting.level_multipliers")
+                .map(String::as_str),
+        ),
+    }
+}
+
+fn scaled_checkin_quota_range(base_min: i64, base_max: i64, multiplier: f64) -> (i64, i64) {
+    let min = base_min.max(0);
+    let max = base_max.max(min);
+    let multiplier = if valid_checkin_multiplier(multiplier) {
+        multiplier
+    } else {
+        DEFAULT_CHECKIN_LEVEL_MULTIPLIERS[0]
+    };
+    let scaled_min = ((min as f64) * multiplier)
+        .round()
+        .clamp(0.0, i64::MAX as f64) as i64;
+    let scaled_max = ((max as f64) * multiplier)
+        .round()
+        .clamp(0.0, i64::MAX as f64) as i64;
+    (scaled_min, scaled_max.max(scaled_min))
+}
+
+fn checkin_reward_range(config: &CheckinConfig, trust_level: i64) -> CheckinRewardRange {
+    let level = trust_level.clamp(0, 4);
+    let multiplier = config.level_multipliers[level as usize];
+    let (min_quota, max_quota) =
+        scaled_checkin_quota_range(config.min_quota, config.max_quota, multiplier);
+    CheckinRewardRange {
+        trust_level: level,
+        multiplier,
+        base_min_quota: config.min_quota,
+        base_max_quota: config.max_quota,
+        min_quota,
+        max_quota,
+    }
+}
+
+/// Go's `encoding/json` writes an integral `float64` as an integer token
+/// (`1`), while serde_json preserves the Rust source representation (`1.0`).
+/// Keep the wire representation identical for the check-in multiplier fields.
+fn go_json_number(value: f64) -> Value {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() <= i64::MAX as f64 {
+        Value::Number(serde_json::Number::from(value as i64))
+    } else {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
+    }
+}
+
+fn go_json_multiplier_array(values: &[f64; 5]) -> Vec<Value> {
+    values.iter().copied().map(go_json_number).collect()
 }
 
 fn checkin_usd_log_quota(award: i64, quota_per_unit: f64) -> String {
@@ -379,7 +470,7 @@ fn checkin_usd_log_quota(award: i64, quota_per_unit: f64) -> String {
     format!("＄{:.6} 额度", (award as f64) / quota_per_unit)
 }
 
-async fn checkin_config(pg: &PgPool) -> Result<(bool, i64, i64), ()> {
+async fn checkin_config(pg: &PgPool) -> Result<CheckinConfig, ()> {
     // `ConfigManager.LoadFromDB` in frozen Go only collects option keys with
     // the case-sensitive `checkin_setting.` prefix.  Its historical JSON
     // aggregate key (`checkin_setting`) is deliberately ignored.
@@ -389,6 +480,7 @@ async fn checkin_config(pg: &PgPool) -> Result<(bool, i64, i64), ()> {
                 "checkin_setting.enabled",
                 "checkin_setting.min_quota",
                 "checkin_setting.max_quota",
+                "checkin_setting.level_multipliers",
             ])
             .fetch_all(pg)
             .await
@@ -396,6 +488,135 @@ async fn checkin_config(pg: &PgPool) -> Result<(bool, i64, i64), ()> {
     let options = rows.into_iter().collect();
     Ok(checkin_config_from_options(&options))
 }
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CheckinPaymentSnapshot {
+    paid_amount: f64,
+    last_paid_complete_at: i64,
+    paid_activation_complete: bool,
+}
+
+const CHECKIN_PAYMENT_SNAPSHOT: &str = r#"
+WITH parsed AS (
+    SELECT
+        COALESCE(row_data->>'status', '') AS status,
+        COALESCE(row_data->>'payment_method', '') AS payment_method,
+        COALESCE(row_data->>'payment_provider', '') AS payment_provider,
+        CASE WHEN COALESCE(row_data->>'money', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+            THEN (row_data->>'money')::DOUBLE PRECISION ELSE 0 END AS money,
+        CASE WHEN COALESCE(row_data->>'amount', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'amount')::BIGINT ELSE 0 END AS amount,
+        CASE WHEN COALESCE(row_data->>'credited_quota', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'credited_quota')::BIGINT ELSE 0 END AS credited_quota,
+        CASE WHEN COALESCE(row_data->>'settled_amount_micros', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'settled_amount_micros')::BIGINT ELSE 0 END AS settled_amount_micros,
+        CASE WHEN COALESCE(row_data->>'create_time', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'create_time')::BIGINT ELSE 0 END AS create_time,
+        CASE WHEN COALESCE(row_data->>'complete_time', '') ~ '^-?[0-9]+$'
+            THEN (row_data->>'complete_time')::BIGINT ELSE 0 END AS complete_time
+    FROM (
+        SELECT to_jsonb(top_ups) AS row_data
+        FROM top_ups
+        WHERE user_id = $1
+    ) rows
+), qualified AS (
+    SELECT *,
+        status = 'success'
+        AND payment_method <> 'balance'
+        AND payment_provider <> 'balance'
+        AND (settled_amount_micros > 0 OR (settled_amount_micros = 0 AND money > 0))
+        AND (credited_quota > 0 OR amount > 0)
+        AND (
+            payment_provider IN ('epay', 'stripe', 'creem', 'fastpay', 'waffo', 'waffo_pancake')
+            OR (
+                payment_provider = ''
+                AND payment_method IN ('stripe', 'creem', 'waffo', 'waffo_pancake', 'alipay', 'wxpay')
+            )
+        ) AS qualifies
+    FROM parsed
+)
+SELECT
+    (
+        COALESCE(SUM(CASE WHEN qualifies AND settled_amount_micros > 0
+            THEN settled_amount_micros ELSE 0 END), 0)::DOUBLE PRECISION
+        + ROUND(COALESCE(SUM(CASE WHEN qualifies AND settled_amount_micros = 0
+            THEN money ELSE 0 END), 0) * 1000000.0)
+    ) / 1000000.0 AS paid_amount,
+    COALESCE(MAX(CASE WHEN qualifies THEN
+        CASE WHEN complete_time > 0 THEN complete_time ELSE create_time END
+        ELSE 0 END), 0)::BIGINT AS last_paid_complete_at,
+    COALESCE(BOOL_OR(qualifies), FALSE) AS paid_activation_complete
+FROM qualified
+"#;
+
+async fn checkin_payment_snapshot(pg: &PgPool, user_id: i64) -> Result<CheckinPaymentSnapshot, ()> {
+    let row = sqlx::query(CHECKIN_PAYMENT_SNAPSHOT)
+        .bind(user_id)
+        .fetch_one(pg)
+        .await
+        .map_err(|_| ())?;
+    Ok(CheckinPaymentSnapshot {
+        paid_amount: row.try_get("paid_amount").map_err(|_| ())?,
+        last_paid_complete_at: row.try_get("last_paid_complete_at").map_err(|_| ())?,
+        paid_activation_complete: row.try_get("paid_activation_complete").map_err(|_| ())?,
+    })
+}
+
+async fn checkin_trust_level(pg: &PgPool, actor: &DashboardUser, now: i64) -> Result<i64, ()> {
+    if actor.role >= 100 {
+        return Ok(6);
+    }
+    if actor.role >= 10 {
+        return Ok(5);
+    }
+    let row = sqlx::query(
+        r#"SELECT
+            CASE WHEN COALESCE(to_jsonb(users)->>'created_at', '') ~ '^-?[0-9]+$'
+                THEN (to_jsonb(users)->>'created_at')::BIGINT ELSE 0 END AS created_at,
+            CASE WHEN COALESCE(to_jsonb(users)->>'last_api_activity_at', '') ~ '^-?[0-9]+$'
+                THEN (to_jsonb(users)->>'last_api_activity_at')::BIGINT ELSE 0 END AS last_api_activity_at,
+            CASE WHEN COALESCE(to_jsonb(users)->>'trust_level_override', '') ~ '^-?[0-9]+$'
+                THEN (to_jsonb(users)->>'trust_level_override')::BIGINT ELSE NULL END AS trust_level_override
+        FROM users
+        WHERE id = $1 AND deleted_at IS NULL
+        LIMIT 1"#,
+    )
+    .bind(actor.id)
+    .fetch_one(pg)
+    .await
+    .map_err(|_| ())?;
+    let override_level: Option<i64> = row.try_get("trust_level_override").map_err(|_| ())?;
+    if let Some(level) = override_level {
+        return Ok(if (0..=4).contains(&level) { level } else { 0 });
+    }
+    let created_at: i64 = row.try_get("created_at").map_err(|_| ())?;
+    let last_api_activity_at: i64 = row.try_get("last_api_activity_at").map_err(|_| ())?;
+    let payment = checkin_payment_snapshot(pg, actor.id).await?;
+    let automatic_level = if !payment.paid_activation_complete {
+        0
+    } else if payment.paid_amount >= 2_000.0 {
+        4
+    } else if payment.paid_amount >= 500.0 {
+        3
+    } else if payment.paid_amount >= 100.0 {
+        2
+    } else {
+        1
+    };
+    if automatic_level == 0 {
+        return Ok(0);
+    }
+    let activity_anchor = created_at
+        .max(last_api_activity_at)
+        .max(payment.last_paid_complete_at);
+    if now <= activity_anchor || activity_anchor <= 0 {
+        return Ok(automatic_level);
+    }
+    let decay_steps = ((now - activity_anchor) / TRUST_LEVEL_DECAY_PERIOD_SECONDS)
+        .min(automatic_level.saturating_sub(1));
+    Ok(automatic_level - decay_steps)
+}
+
 fn date(now: i64, timezone: FixedOffset) -> String {
     chrono::DateTime::from_timestamp(now, 0)
         .unwrap_or(chrono::DateTime::UNIX_EPOCH)
@@ -416,26 +637,30 @@ async fn checkin_status(
     headers: HeaderMap,
     Query(query): Query<Month>,
 ) -> Response {
-    // The frozen Go route is mounted in the ordinary UserAuth group. It does
-    // not require console activation/developer access; that gate belongs to
-    // payment/catalog surfaces, not the user's check-in history.
+    // The frozen Go route only requires UserAuth; ordinary active users can
+    // read their check-in history even when they do not have developer access.
     let actor = match user(&state, &headers).await {
         Ok(v) => v,
         Err(v) => return v,
     };
-    let (enabled, min, max) = match checkin_config(&state.pg).await {
+    let config = match checkin_config(&state.pg).await {
         Ok(v) => v,
-        Err(_) => return with_auth_version(fail("系统错误")),
+        Err(_) => return fail("系统错误"),
     };
-    if !enabled {
-        return with_auth_version(fail("签到功能未启用"));
+    if !config.enabled {
+        return fail("签到功能未启用");
     }
+    let trust_level = match checkin_trust_level(&state.pg, &actor, state.clock.now()).await {
+        Ok(v) => v,
+        Err(_) => return fail("系统错误"),
+    };
+    let reward_range = checkin_reward_range(&config, trust_level);
     // Go's `DefaultQuery` only supplies the current month when the parameter
     // is absent; malformed or empty values are passed through verbatim.
     let requested = query
         .month
         .unwrap_or_else(|| state.calendar.month(state.clock.now()));
-    let rows = match sqlx::query("SELECT checkin_date, quota_awarded FROM checkins WHERE user_id=$1 AND checkin_date >= $2 AND checkin_date <= $3 ORDER BY checkin_date DESC").bind(actor.id).bind(format!("{requested}-01")).bind(format!("{requested}-31")).fetch_all(&state.pg).await { Ok(v)=>v, Err(_)=>return with_auth_version(fail("系统错误")) };
+    let rows = match sqlx::query("SELECT checkin_date, quota_awarded FROM checkins WHERE user_id=$1 AND checkin_date >= $2 AND checkin_date <= $3 ORDER BY checkin_date DESC").bind(actor.id).bind(format!("{requested}-01")).bind(format!("{requested}-31")).fetch_all(&state.pg).await { Ok(v)=>v, Err(_)=>return fail("系统错误") };
     let records: Vec<Value> = rows.iter().map(|r| json!({"checkin_date":r.get::<String,_>("checkin_date"),"quota_awarded":r.get::<i64,_>("quota_awarded")})).collect();
     let total: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(quota_awarded),0) FROM checkins WHERE user_id=$1")
@@ -457,16 +682,17 @@ async fn checkin_status(
     .fetch_one(&state.pg)
     .await
     .unwrap_or(false);
-    with_auth_version(checkin_status_ok(
-        json!({"enabled":enabled,"min_quota":min,"max_quota":max,"stats":{"total_quota":total,"total_checkins":count,"checkin_count":records.len(),"checked_in_today":checked,"records":records}}),
-    ))
-}
-
-fn with_auth_version(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
-    response
+    checkin_status_ok(json!({
+        "enabled": config.enabled,
+        "min_quota": reward_range.min_quota,
+        "max_quota": reward_range.max_quota,
+        "base_min_quota": reward_range.base_min_quota,
+        "base_max_quota": reward_range.base_max_quota,
+        "trust_level": reward_range.trust_level,
+        "reward_multiplier": go_json_number(reward_range.multiplier),
+        "level_multipliers": go_json_multiplier_array(&config.level_multipliers),
+        "stats":{"total_quota":total,"total_checkins":count,"checkin_count":records.len(),"checked_in_today":checked,"records":records}
+    }))
 }
 
 async fn checkin(State(state): State<IdentityCheckinAffState>, headers: HeaderMap) -> Response {
@@ -474,18 +700,25 @@ async fn checkin(State(state): State<IdentityCheckinAffState>, headers: HeaderMa
         Ok(v) => v,
         Err(v) => return v,
     };
-    let (enabled, min, max) = match checkin_config(&state.pg).await {
+    let config = match checkin_config(&state.pg).await {
         Ok(v) => v,
         Err(_) => return fail("系统错误"),
     };
-    if !enabled {
+    if !config.enabled {
         return fail("签到功能未启用");
     }
-    if min < 0 || max < min {
+    let trust_level = match checkin_trust_level(&state.pg, &actor, state.clock.now()).await {
+        Ok(v) => v,
+        Err(_) => return fail("签到失败，请稍后重试"),
+    };
+    let reward_range = checkin_reward_range(&config, trust_level);
+    if reward_range.min_quota < 0 || reward_range.max_quota < reward_range.min_quota {
         return fail("签到失败，请稍后重试");
     }
     let today = state.calendar.date(state.clock.now());
-    let award = state.awarder.award(min, max);
+    let award = state
+        .awarder
+        .award(reward_range.min_quota, reward_range.max_quota);
     let mut tx = match state.pg.begin().await {
         Ok(v) => v,
         Err(_) => return fail("签到失败，请稍后重试"),
@@ -983,7 +1216,12 @@ mod tests {
         let setting = BTreeMap::new();
         assert_eq!(
             checkin_config_from_options(&setting),
-            (false, 1_000, 10_000)
+            CheckinConfig {
+                enabled: false,
+                min_quota: 1_000,
+                max_quota: 10_000,
+                level_multipliers: DEFAULT_CHECKIN_LEVEL_MULTIPLIERS,
+            }
         );
     }
 
@@ -996,8 +1234,20 @@ mod tests {
                 "100.000000".to_owned(),
             ),
             ("checkin_setting.max_quota".to_owned(), "250".to_owned()),
+            (
+                "checkin_setting.level_multipliers".to_owned(),
+                "[0.25,0.5,0.75,0.9,1]".to_owned(),
+            ),
         ]);
-        assert_eq!(checkin_config_from_options(&setting), (true, 100, 250));
+        assert_eq!(
+            checkin_config_from_options(&setting),
+            CheckinConfig {
+                enabled: true,
+                min_quota: 100,
+                max_quota: 250,
+                level_multipliers: [0.25, 0.5, 0.75, 0.9, 1.0],
+            }
+        );
     }
 
     #[test]
@@ -1029,8 +1279,27 @@ mod tests {
         ]);
         assert_eq!(
             checkin_config_from_options(&setting),
-            (false, DEFAULT_CHECKIN_MIN_QUOTA, DEFAULT_CHECKIN_MAX_QUOTA)
+            CheckinConfig {
+                enabled: false,
+                min_quota: DEFAULT_CHECKIN_MIN_QUOTA,
+                max_quota: DEFAULT_CHECKIN_MAX_QUOTA,
+                level_multipliers: DEFAULT_CHECKIN_LEVEL_MULTIPLIERS,
+            }
         );
+    }
+
+    #[test]
+    fn checkin_reward_range_scales_low_trust_users_and_clamps_admins() {
+        let config = CheckinConfig {
+            enabled: true,
+            min_quota: 1_000,
+            max_quota: 10_000,
+            level_multipliers: [0.5, 0.65, 0.8, 0.9, 1.0],
+        };
+        let low = checkin_reward_range(&config, 0);
+        assert_eq!((low.min_quota, low.max_quota), (500, 5_000));
+        let admin = checkin_reward_range(&config, 6);
+        assert_eq!((admin.min_quota, admin.max_quota), (1_000, 10_000));
     }
 
     #[tokio::test]

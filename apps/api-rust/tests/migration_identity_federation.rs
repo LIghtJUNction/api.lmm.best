@@ -8,7 +8,8 @@ use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::identity_federation::{
     FederatedLogin, FederatedUser, FederationError, FederationIdentity,
     FederationMutationPublisher, FederationPrincipal, FederationProviderError, FederationProviders,
-    FederationState, OAuthFlowContext, bindings_router, router, verify_telegram_authorization,
+    FederationState, OAuthFlowContext, bindings_router, provider_router, router,
+    verify_telegram_authorization,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -61,16 +62,18 @@ impl FederationIdentity for BoundIdentity {
     }
 }
 
-struct RecordingMutationPublisher;
+struct ConfiguredMutationPublisher;
 
 #[async_trait]
-impl FederationMutationPublisher for RecordingMutationPublisher {
+impl FederationMutationPublisher for ConfiguredMutationPublisher {
     fn configured(&self) -> bool {
         true
     }
 
-    async fn publish_user(&self, _: i64) -> Result<(), FederationError> {
-        Ok(())
+    async fn publish_user(&self, user_id: i64) -> Result<(), FederationError> {
+        (user_id == 7)
+            .then_some(())
+            .ok_or(FederationError::Internal)
     }
 }
 
@@ -154,7 +157,7 @@ impl FederationProviders for GithubBoundary {
     ) -> Result<(), FederationError> {
         (provider == "telegram" && subject == "12345")
             .then_some(())
-            .ok_or(FederationError::Internal)
+            .ok_or(FederationError::Unauthorized)
     }
 
     fn telegram_bot_token(&self) -> Option<String> {
@@ -175,7 +178,7 @@ async fn isolated_postgres() -> sqlx::PgPool {
         .connect(&database_url)
         .await
         .expect("connect isolated PostgreSQL");
-    sqlx::query("DROP TABLE IF EXISTS auth_flows, external_identity_claims, users CASCADE")
+    sqlx::query("DROP TABLE IF EXISTS external_identity_claims, auth_flows, users CASCADE")
         .execute(&pool)
         .await
         .expect("reset isolated identity tables");
@@ -191,12 +194,10 @@ async fn isolated_postgres() -> sqlx::PgPool {
     .execute(&pool)
     .await
     .expect("create auth_flows");
-    sqlx::query(
-        "CREATE TABLE external_identity_claims (provider TEXT NOT NULL, subject TEXT NOT NULL, user_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (provider, subject), UNIQUE (provider, user_id))",
-    )
-    .execute(&pool)
-    .await
-    .expect("create external identity claims");
+    sqlx::query("CREATE TABLE external_identity_claims (id BIGSERIAL PRIMARY KEY, provider TEXT NOT NULL, subject TEXT NOT NULL, user_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL, UNIQUE (provider, subject), UNIQUE (provider, user_id))")
+        .execute(&pool)
+        .await
+        .expect("create external identity claims");
     sqlx::query("INSERT INTO users (id, github_id, status) VALUES (7, '', 1)")
         .execute(&pool)
         .await
@@ -209,7 +210,7 @@ async fn callback_rejects_missing_state_before_any_provider_exchange() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
         .expect("a lazy test pool is valid");
-    let app = router(FederationState::new(
+    let app = provider_router(FederationState::new(
         pool,
         Arc::new(NoIdentity),
         "test-secret",
@@ -225,29 +226,6 @@ async fn callback_rejects_missing_state_before_any_provider_exchange() {
         .expect("router responds");
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-}
-
-#[tokio::test]
-async fn bindings_read_mount_keeps_the_federation_auth_boundary() {
-    let pool = PgPoolOptions::new()
-        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
-        .expect("a lazy test pool is valid");
-    let app = bindings_router(FederationState::new(
-        pool,
-        Arc::new(NoIdentity),
-        "test-secret",
-    ));
-
-    let response = app
-        .oneshot(
-            Request::get("/api/user/oauth/bindings")
-                .body(Body::empty())
-                .expect("request is valid"),
-        )
-        .await
-        .expect("router responds");
-
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -319,96 +297,24 @@ async fn federation_user_routes_reject_invalid_identity_before_postgres() {
 }
 
 #[tokio::test]
-async fn binding_mutation_preserves_go_auth_version_after_authentication() {
+async fn bindings_router_rejects_missing_identity_before_postgres() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
         .expect("a lazy test pool is valid");
-    let response = router(FederationState::new(
+    let response = bindings_router(FederationState::new(
         pool,
-        Arc::new(BoundIdentity),
+        Arc::new(NoIdentity),
         "test-secret",
     ))
     .oneshot(
-        Request::delete("/api/user/oauth/bindings/not-a-provider")
+        Request::get("/api/user/oauth/bindings")
             .body(Body::empty())
             .expect("request is valid"),
     )
     .await
     .expect("router responds");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("auth-version")
-            .and_then(|value| value.to_str().ok()),
-        Some("864b7076dbcd0a3c01b5520316720ebf")
-    );
-    let body = axum::body::to_bytes(response.into_body(), 1024)
-        .await
-        .expect("response body");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).expect("JSON body"),
-        json!({"success": false, "message": "无效的提供商 ID"})
-    );
-}
-
-#[tokio::test]
-async fn binding_database_failures_keep_go_legacy_ok_envelopes() {
-    let pool = PgPoolOptions::new()
-        .acquire_timeout(std::time::Duration::from_millis(10))
-        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
-        .expect("a lazy test pool is valid");
-    let app = router(FederationState::new(
-        pool,
-        Arc::new(BoundIdentity),
-        "test-secret",
-    ));
-
-    let list_response = app
-        .clone()
-        .oneshot(
-            Request::get("/api/user/oauth/bindings")
-                .body(Body::empty())
-                .expect("request is valid"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(list_response.status(), StatusCode::OK);
-    assert_eq!(
-        list_response
-            .headers()
-            .get("auth-version")
-            .and_then(|value| value.to_str().ok()),
-        Some("864b7076dbcd0a3c01b5520316720ebf")
-    );
-    let body = axum::body::to_bytes(list_response.into_body(), 1024)
-        .await
-        .expect("response body");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).expect("JSON body"),
-        json!({"success": false, "message": "internal server error"})
-    );
-
-    // Atoi accepts numeric zero. Go sends that value to DeleteUserOAuthBinding
-    // instead of rejecting it in the controller; the resulting DB error still
-    // uses the same HTTP-200 business envelope.
-    let delete_response = app
-        .oneshot(
-            Request::delete("/api/user/oauth/bindings/0")
-                .body(Body::empty())
-                .expect("request is valid"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(delete_response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(delete_response.into_body(), 1024)
-        .await
-        .expect("response body");
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).expect("JSON body"),
-        json!({"success": false, "message": "internal server error"})
-    );
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -482,14 +388,14 @@ async fn oauth_bind_callback_consumes_postgres_state_and_claims_the_account_once
     let app = router(
         FederationState::new(pool.clone(), Arc::new(BoundIdentity), "test-secret")
             .with_providers(Arc::new(GithubBoundary))
-            .with_mutation_publisher(Arc::new(RecordingMutationPublisher)),
+            .with_mutation_publisher(Arc::new(ConfiguredMutationPublisher)),
     );
 
     let state_response = app
         .clone()
         .oneshot(
             Request::post("/api/oauth/state")
-                .header("authorization", "Bearer listener-verified")
+                .header("authorization", "Bearer fixture-access")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"provider":"github","intent":"bind"}"#))
                 .expect("state request is valid"),

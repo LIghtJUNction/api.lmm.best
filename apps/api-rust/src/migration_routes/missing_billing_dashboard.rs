@@ -412,8 +412,19 @@ fn auth_failure(error: BillingDashboardAuthError, request: &Request) -> Response
         || uuid::Uuid::new_v4().to_string(),
         |context| context.request_id.clone(),
     );
+    if matches!(error, BillingDashboardAuthError::Unauthorized) {
+        let mut response =
+            (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            "application/json; charset=utf-8"
+                .parse()
+                .expect("static content type is valid"),
+        );
+        return response;
+    }
     let (status, message, code) = match error {
-        BillingDashboardAuthError::Unauthorized => (StatusCode::UNAUTHORIZED, "Invalid token", ""),
+        BillingDashboardAuthError::Unauthorized => unreachable!("handled above"),
         BillingDashboardAuthError::Forbidden => (
             StatusCode::FORBIDDEN,
             "您的 IP 不在令牌允许访问的列表中",
@@ -696,15 +707,10 @@ mod tests {
             });
             let response = app.clone().oneshot(request).await.expect("response");
 
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
             assert_eq!(
                 response.headers()[header::CONTENT_TYPE],
                 "application/json; charset=utf-8",
-                "{path}"
-            );
-            assert_eq!(
-                response.headers()["x-oneapi-request-id"],
-                "billing-fixture-request-id",
                 "{path}"
             );
             let body = to_bytes(response.into_body(), usize::MAX)
@@ -712,11 +718,7 @@ mod tests {
                 .expect("body");
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).expect("json"),
-                json!({"error": {
-                    "message": "Invalid token (request id: billing-fixture-request-id)",
-                    "type": "new_api_error",
-                    "code": "",
-                }}),
+                json!({"message": "Not Found"}),
                 "{path}"
             );
         }
