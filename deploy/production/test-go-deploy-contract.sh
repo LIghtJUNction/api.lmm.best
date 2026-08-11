@@ -109,7 +109,8 @@ if grep -R -nE '(^|[^[:alnum:]_])(curl|wget)([^[:alnum:]_]|$)|SIGKILL|mktemp[^\n
   "$here/capture-precutover-payload.sh" "$here/prepare-production-backup.sh"; then
   fail 'Go production path retains a browser-style client, SIGKILL fallback, or /tmp artifact path'
 fi
-if grep -R -nE 'lmm-api-launcher|backend\.conf.*selector|/usr/lib/lmm-api/backends/go/lmm-api.*ExecStart' \
+if grep -R --exclude='test-cli-contract.sh' -nE \
+  'lmm-api-launcher|backend\.conf.*selector|/usr/lib/lmm-api/backends/go/lmm-api.*ExecStart' \
   "$repo/packaging/common/lmm-api" "$repo/packaging/local/lmm-api-go" \
   "$repo"/packaging/aur/*/PKGBUILD "$repo"/packaging/aur/*/.SRCINFO; then
   fail 'new package path retains launcher/provider architecture'
