@@ -122,10 +122,13 @@ func newFrontendHandler(configuredRoot string) (http.Handler, error) {
 func (handler *frontendHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	requestPath := path.Clean("/" + request.URL.Path)
 	if requestPath != "/" {
-		candidate := filepath.Join(handler.root, filepath.FromSlash(strings.TrimPrefix(requestPath, "/")))
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			handler.fileServer.ServeHTTP(writer, request)
-			return
+		relativeRequestPath := filepath.FromSlash(strings.TrimPrefix(requestPath, "/"))
+		if filepath.IsLocal(relativeRequestPath) {
+			candidate := filepath.Join(handler.root, relativeRequestPath)
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+				handler.fileServer.ServeHTTP(writer, request)
+				return
+			}
 		}
 	}
 	if isFrontendAssetPath(requestPath) {
