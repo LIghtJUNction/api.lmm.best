@@ -364,7 +364,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	}
 
 	messages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
-	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings)}
+	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings, assistantUserContextFromGin(c))}
 	messages = append(messages, conversation...)
 	maxSteps := settings.MaxSteps
 	if maxSteps < 1 {

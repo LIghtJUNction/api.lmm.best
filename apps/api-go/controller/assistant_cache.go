@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,9 +46,58 @@ func getAssistantResponseCache() *cachex.HybridCache[assistantCachedResponse] {
 	return assistantResponseCache
 }
 
-func assistantCacheKey(settings setting.AssistantSettings, conversation []assistantOpenAIMessage) string {
+type assistantCacheContext struct {
+	UserID                   int                      `json:"user_id"`
+	Username                 string                   `json:"username,omitempty"`
+	Email                    string                   `json:"email,omitempty"`
+	EmailDomain              string                   `json:"email_domain,omitempty"`
+	EmailCategory            string                   `json:"email_category,omitempty"`
+	AuthProviders            []string                 `json:"auth_providers,omitempty"`
+	AccessLevel              string                   `json:"access_level"`
+	DeveloperAccessGranted   bool                     `json:"developer_access_granted"`
+	AccessReviewStatus       string                   `json:"access_review_status,omitempty"`
+	PaymentMethodsHidden     bool                     `json:"payment_methods_hidden"`
+	PaymentRestrictionCauses []string                 `json:"payment_restriction_causes,omitempty"`
+	CustomerProfile          assistantCustomerProfile `json:"customer_profile"`
+	Intent                   string                   `json:"current_intent,omitempty"`
+	ProfileSignals           []string                 `json:"profile_signals,omitempty"`
+}
+
+func toAssistantCacheContext(context assistantUserContext) assistantCacheContext {
+	return assistantCacheContext{
+		UserID:                   context.UserID,
+		Username:                 context.Username,
+		Email:                    context.Email,
+		EmailDomain:              context.EmailDomain,
+		EmailCategory:            context.EmailCategory,
+		AuthProviders:            append([]string(nil), context.AuthProviders...),
+		AccessLevel:              context.AccessLevel,
+		DeveloperAccessGranted:   context.DeveloperAccessGranted,
+		AccessReviewStatus:       context.AccessReviewStatus,
+		PaymentMethodsHidden:     context.PaymentMethodsHidden,
+		PaymentRestrictionCauses: append([]string(nil), context.PaymentRestrictionCauses...),
+		CustomerProfile:          context.CustomerProfile,
+		Intent:                   context.Intent,
+		ProfileSignals:           append([]string(nil), context.ProfileSignals...),
+	}
+}
+
+func assistantCacheConversation(conversation []assistantOpenAIMessage) []assistantOpenAIMessage {
+	result := make([]assistantOpenAIMessage, len(conversation))
+	copy(result, conversation)
+	for index := range result {
+		result[index].Content = strings.ToLower(strings.Join(strings.Fields(result[index].Content), " "))
+	}
+	return result
+}
+
+func assistantCacheKey(settings setting.AssistantSettings, conversation []assistantOpenAIMessage, contexts ...assistantUserContext) string {
 	if !settings.CacheEnabled || settings.CacheTTLMinutes <= 0 || len(conversation) != 1 || conversation[0].Role != "user" {
 		return ""
+	}
+	var userContext assistantUserContext
+	if len(contexts) > 0 {
+		userContext = contexts[0]
 	}
 
 	fingerprint := struct {
@@ -58,16 +108,18 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 		MaxSteps         int                      `json:"max_steps"`
 		TimeoutSeconds   int                      `json:"timeout_seconds"`
 		TTLMinutes       int                      `json:"ttl_minutes"`
+		UserContext      assistantCacheContext    `json:"user_context"`
 		Conversation     []assistantOpenAIMessage `json:"conversation"`
 	}{
 		Version:          "assistant-cache-v1",
 		Model:            settings.Model,
-		SystemPrompt:     buildAssistantSystemPrompt(settings),
+		SystemPrompt:     buildAssistantSystemPrompt(settings, userContext),
 		AgentLoopEnabled: settings.AgentLoopEnabled,
 		MaxSteps:         settings.MaxSteps,
 		TimeoutSeconds:   settings.TimeoutSeconds,
 		TTLMinutes:       settings.CacheTTLMinutes,
-		Conversation:     conversation,
+		UserContext:      toAssistantCacheContext(userContext),
+		Conversation:     assistantCacheConversation(conversation),
 	}
 	raw, err := json.Marshal(fingerprint)
 	if err != nil {
