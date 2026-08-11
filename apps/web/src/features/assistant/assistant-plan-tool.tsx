@@ -112,7 +112,6 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   const plansQuery = useQuery({
     queryKey: ['subscription-plans'],
     queryFn: getPublicPlans,
-    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -203,15 +202,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
       })}
     </div>
   )
-  if (!props.developerAccessGranted) {
-    planContent = (
-      <div className='bg-muted/40 rounded-lg border p-3 text-xs leading-5'>
-        {t(
-          'Top-up discounts remain available while L0 access is under review. Live subscription comparison unlocks after L1 approval.'
-        )}
-      </div>
-    )
-  } else if (plansQuery.isLoading) {
+  if (plansQuery.isLoading) {
     planContent = (
       <div className='grid gap-2' aria-label={t('Loading...')}>
         <Skeleton className='h-24 w-full' />
@@ -343,22 +334,20 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-4'>
-        {props.developerAccessGranted ? (
-          <div className='grid gap-1.5'>
-            <Label htmlFor='assistant-expected-credit'>
-              {t('Expected monthly API credit (USD)')}
-            </Label>
-            <Input
-              id='assistant-expected-credit'
-              type='number'
-              inputMode='decimal'
-              min={0}
-              step={5}
-              value={expectedCredit}
-              onChange={(event) => setExpectedCredit(event.target.value)}
-            />
-          </div>
-        ) : null}
+        <div className='grid gap-1.5'>
+          <Label htmlFor='assistant-expected-credit'>
+            {t('Expected monthly API credit (USD)')}
+          </Label>
+          <Input
+            id='assistant-expected-credit'
+            type='number'
+            inputMode='decimal'
+            min={0}
+            step={5}
+            value={expectedCredit}
+            onChange={(event) => setExpectedCredit(event.target.value)}
+          />
+        </div>
 
         {planContent}
 

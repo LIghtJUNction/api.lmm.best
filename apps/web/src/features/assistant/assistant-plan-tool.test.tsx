@@ -213,7 +213,7 @@ describe('AssistantPlanTool', () => {
     }
   })
 
-  test('shows live top-up discounts to L0 without requesting restricted plans', async () => {
+  test('shows live plans and top-up discounts to L0 without enabling write actions', async () => {
     let topupCalls = 0
     let planCalls = 0
     api.get = (async (url: string) => {
@@ -239,6 +239,7 @@ describe('AssistantPlanTool', () => {
       }
       if (url === '/api/subscription/plans') {
         planCalls += 1
+        return { data: plansFixture }
       }
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
@@ -246,17 +247,20 @@ describe('AssistantPlanTool', () => {
     const rendered = await renderTool(false)
 
     assert.equal(topupCalls, 1)
-    assert.equal(planCalls, 0)
-    assert.match(
-      rendered.container.textContent ?? '',
-      /Top-up discounts remain available while L0 access is under review\./
-    )
+    assert.equal(planCalls, 1)
+    assert.match(rendered.container.textContent ?? '', /Pro/)
+    assert.match(rendered.container.textContent ?? '', /Closest fit/)
     assert.match(
       rendered.container.textContent ?? '',
       /Best current top-up discounts/
     )
     assert.match(rendered.container.textContent ?? '', /save 20%/)
     assert.match(rendered.container.textContent ?? '', /Add funds/)
+    assert.ok(
+      rendered.container.querySelector<HTMLInputElement>(
+        '#assistant-expected-credit'
+      )
+    )
 
     await unmount(rendered)
   })
