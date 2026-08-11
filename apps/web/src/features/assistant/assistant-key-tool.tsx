@@ -104,6 +104,7 @@ export function AssistantKeyTool(props: {
   baseUrl: string
   defaultModel: string
   developerAccessGranted: boolean
+  onContinueSetup: () => void
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(t('AI assistant key'))
@@ -152,6 +153,19 @@ export function AssistantKeyTool(props: {
             model={model}
             apiKey={created.key}
           />
+          <Button
+            type='button'
+            variant='outline'
+            onClick={props.onContinueSetup}
+          >
+            {t('I copied it — continue setup')}
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              data-icon='inline-end'
+              aria-hidden='true'
+            />
+          </Button>
         </CardContent>
       </Card>
     )
