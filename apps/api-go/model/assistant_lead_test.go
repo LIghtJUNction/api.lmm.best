@@ -12,7 +12,7 @@ import (
 func setupAssistantLeadTestDB(t *testing.T) *User {
 	t.Helper()
 	db := setupConsoleActivationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&AssistantLead{}, &AssistantProfileEvent{}))
+	require.NoError(t, db.AutoMigrate(&AssistantLead{}, &AssistantProfileBucket{}))
 	user := &User{
 		Username: "assistant-lead-user",
 		Password: "password",
@@ -115,9 +115,15 @@ func TestAssistantProfileSummaryIsAggregateOnly(t *testing.T) {
 	assert.Equal(t, "normal_user", summary[1].Profile)
 	assert.EqualValues(t, 1, summary[1].Count)
 
-	var events []AssistantProfileEvent
-	require.NoError(t, DB.Find(&events).Error)
-	require.Len(t, events, 3)
-	assert.NotContains(t, events[0].Profile, "@")
+	var buckets []AssistantProfileBucket
+	require.NoError(t, DB.Find(&buckets).Error)
+	require.Len(t, buckets, 2)
+	counts := map[string]int64{}
+	for _, bucket := range buckets {
+		counts[bucket.Profile] = bucket.Count
+		assert.NotContains(t, bucket.Profile, "@")
+	}
+	assert.EqualValues(t, 2, counts["guided_buyer"])
+	assert.EqualValues(t, 1, counts["normal_user"])
 	assert.Error(t, RecordAssistantProfile("user@example.com"))
 }
