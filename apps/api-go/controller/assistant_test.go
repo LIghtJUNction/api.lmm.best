@@ -408,21 +408,32 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	claudeCode := executeAssistantSetupTool(map[string]any{
 		"platform": "windows",
 		"topic":    "claude-code",
+		"model_id": "claude-sonnet-4-5",
 	})
 	assert.Equal(t, true, claudeCode["ok"])
 	assert.Equal(t, "https://api.example.com", claudeCode["service_root"])
 	assert.Equal(t, "https://api.example.com/v1", claudeCode["openai_base_url"])
 	assert.Equal(t, "winget install Anthropic.ClaudeCode", claudeCode["install_command"])
 	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_BASE_URL=\"https://api.example.com\"")
+	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_MODEL=\"claude-sonnet-4-5\"")
 	assert.NotContains(t, claudeCode["configuration"], "api.example.com/v1")
 
 	codex := executeAssistantSetupTool(map[string]any{
 		"platform": "linux",
 		"topic":    "codex",
+		"model_id": "gpt-5.6-codex",
 	})
 	assert.Contains(t, codex["config_toml"], "base_url = \"https://api.example.com/v1\"")
 	assert.Contains(t, codex["config_toml"], "wire_api = \"responses\"")
 	assert.NotContains(t, codex["config_toml"], "<YOUR_API_KEY>")
+	assert.NotContains(t, codex["config_toml"], "deepseek-v4-flash")
+
+	withoutModel := executeAssistantSetupTool(map[string]any{
+		"platform": "linux",
+		"topic":    "claude-code",
+	})
+	assert.Equal(t, "<MODEL_ID_FROM_GET_AVAILABLE_MODELS>", withoutModel["client_model_id"])
+	assert.NotContains(t, withoutModel["configuration"], "deepseek-v4-flash")
 
 	chatGPT := executeAssistantSetupTool(map[string]any{
 		"platform": "macos",

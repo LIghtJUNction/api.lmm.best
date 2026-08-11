@@ -532,9 +532,9 @@ describe('AssistantPanel', () => {
         )
       )
       assert.match(document.body.textContent ?? '', /deepseek-v4-flash/)
-      assert.match(
+      assert.doesNotMatch(
         document.body.textContent ?? '',
-        /Default assistant modeldeepseek-v4-flash/
+        /Default assistant model/
       )
       assert.ok(document.querySelector('button[aria-label="Copy model names"]'))
     } finally {

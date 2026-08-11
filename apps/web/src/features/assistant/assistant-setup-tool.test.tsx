@@ -94,7 +94,7 @@ describe('AssistantSetupTool', () => {
           <AssistantSetupTool
             rootUrl='https://api.example.test'
             openAIBaseUrl='https://api.example.test/v1'
-            defaultModel='deepseek-v4-flash'
+            availableModels={['claude-sonnet-4-5', 'gpt-5.6-codex']}
             developerAccessGranted
             onCreateKey={() => {
               createKeyCalls += 1
@@ -167,7 +167,7 @@ describe('AssistantSetupTool', () => {
       container.textContent ?? '',
       /https:\/\/api\.example\.test\/v1/
     )
-    assert.match(container.textContent ?? '', /deepseek-v4-flash/)
+    assert.match(container.textContent ?? '', /claude-sonnet-4-5/)
     assert.equal(
       container.querySelector<HTMLAnchorElement>(
         'a[href="https://chatgpt.com/"]'
@@ -196,6 +196,20 @@ describe('AssistantSetupTool', () => {
     )
     assert.equal(createKeyCalls, 0)
 
+    await act(async () => {
+      const modelSelect = container.querySelector<HTMLSelectElement>(
+        'select[aria-label="Model ID"]'
+      )
+      assert.ok(modelSelect)
+      modelSelect.value = 'gpt-5.6-codex'
+      modelSelect.dispatchEvent(new Event('change', { bubbles: true }))
+      findButton('Codex').click()
+      await flushEffects()
+    })
+    assert.match(container.textContent ?? '', /model_provider = "lmm"/)
+    assert.match(container.textContent ?? '', /wire_api = "responses"/)
+    assert.match(container.textContent ?? '', /gpt-5\.6-codex/)
+
     await act(async () => root.unmount())
   })
 
@@ -210,7 +224,7 @@ describe('AssistantSetupTool', () => {
           <AssistantSetupTool
             rootUrl='https://api.example.test'
             openAIBaseUrl='https://api.example.test/v1'
-            defaultModel='deepseek-v4-flash'
+            availableModels={['deepseek-v4-flash']}
             developerAccessGranted={false}
             onCreateKey={() => {}}
           />

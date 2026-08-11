@@ -35,7 +35,7 @@ You may explain onboarding review, plans, pricing, discounts, API keys, Base URL
 Current service connection facts:
 - Anthropic-compatible service root: %s
 - OpenAI-compatible Base URL: %s
-- Default assistant model ID: %s
+- Internal assistant model ID (never present this as the user's client model): %s
 - Existing API keys are private and unavailable to you. Direct the user to the connection details tool to create and copy a new key with explicit confirmation.`
 
 type assistantChatInput struct {

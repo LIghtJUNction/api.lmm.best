@@ -25,7 +25,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -50,6 +50,7 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Separator } from '@/components/ui/separator'
 import { getUserGroups } from '@/lib/api'
 
@@ -111,17 +112,24 @@ function ConnectionDetails(props: {
 
 export function AssistantKeyTool(props: {
   baseUrl: string
-  defaultModel: string
+  availableModels: string[]
+  modelsLoading?: boolean
   developerAccessGranted: boolean
   onContinueSetup: () => void
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(t('AI assistant key'))
   const [group, setGroup] = useState('auto')
+  const [selectedModel, setSelectedModel] = useState('')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<AssistantCreatedKey | null>(null)
-  const model = props.defaultModel || '<MODEL_ID>'
+  let model = '<MODEL_ID>'
+  if (props.developerAccessGranted && props.availableModels.length > 0) {
+    model = props.availableModels.includes(selectedModel)
+      ? selectedModel
+      : props.availableModels[0]
+  }
   const groupsQuery = useQuery({
     queryKey: ['assistant-user-groups'],
     queryFn: getUserGroups,
@@ -135,6 +143,25 @@ export function AssistantKeyTool(props: {
     if (groupsQuery.isLoading || group !== 'auto') return
     if (!groups.includes('auto') && groups.length > 0) setGroup(groups[0])
   }, [group, groups, groupsQuery.isLoading])
+
+  let modelOptions: ReactNode = (
+    <NativeSelectOption value='<MODEL_ID>'>
+      {t('No available models')}
+    </NativeSelectOption>
+  )
+  if (props.modelsLoading) {
+    modelOptions = (
+      <NativeSelectOption value='<MODEL_ID>'>
+        {t('Loading current models...')}
+      </NativeSelectOption>
+    )
+  } else if (props.availableModels.length > 0) {
+    modelOptions = props.availableModels.map((item) => (
+      <NativeSelectOption key={item} value={item}>
+        {item}
+      </NativeSelectOption>
+    ))
+  }
 
   const createKey = async () => {
     if (creating) return
@@ -211,6 +238,21 @@ export function AssistantKeyTool(props: {
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>
+          {props.developerAccessGranted ? (
+            <div className='grid gap-1.5'>
+              <Label htmlFor='assistant-key-model'>{t('Model ID')}</Label>
+              <NativeSelect
+                id='assistant-key-model'
+                value={model}
+                disabled={
+                  props.modelsLoading || props.availableModels.length === 0
+                }
+                onChange={(event) => setSelectedModel(event.target.value)}
+              >
+                {modelOptions}
+              </NativeSelect>
+            </div>
+          ) : null}
           <ConnectionDetails baseUrl={props.baseUrl} model={model} />
           {props.developerAccessGranted ? (
             <>

@@ -110,10 +110,7 @@ async function renderTool(developerAccessGranted: boolean) {
     root.render(
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantCostTool
-            defaultModel='deepseek-v4-flash'
-            developerAccessGranted={developerAccessGranted}
-          />
+          <AssistantCostTool developerAccessGranted={developerAccessGranted} />
         </I18nextProvider>
       </QueryClientProvider>
     )

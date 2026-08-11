@@ -24,7 +24,7 @@ import {
   LaptopIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CopyButton } from '@/components/copy-button'
@@ -38,6 +38,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import {
@@ -46,6 +47,10 @@ import {
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
   getClaudeSessionCommand,
+  getCodexAPIKeyCommand,
+  getCodexConfig,
+  getCodexConfigPath,
+  getCodexInstallCommand,
   getOpenAICompatibleClientJSON,
   type AssistantSetupPlatform,
 } from './setup-guide'
@@ -62,6 +67,7 @@ const CC_SWITCH_DESKTOP_DOCS =
 const CHATGPT_DOWNLOAD = 'https://chatgpt.com/download/'
 const CHATGPT_WEB = 'https://chatgpt.com/'
 const CODEX_DOCS = 'https://developers.openai.com/codex/'
+const CODEX_CONFIG_DOCS = 'https://developers.openai.com/codex/config-reference'
 const CURSOR_DOWNLOADS = 'https://www.cursor.com/en/downloads'
 const OPEN_WEBUI_GUIDE =
   'https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/'
@@ -75,6 +81,7 @@ type ClientTab =
   | 'cc-switch'
   | 'claude-desktop'
   | 'chatgpt'
+  | 'codex'
   | 'openai-compatible'
 
 type NavigatorWithUserAgentData = Navigator & {
@@ -160,7 +167,8 @@ function SetupStep(props: {
 export function AssistantSetupTool(props: {
   rootUrl: string
   openAIBaseUrl: string
-  defaultModel: string
+  availableModels: string[]
+  modelsLoading?: boolean
   developerAccessGranted: boolean
   onCreateKey: () => void
 }) {
@@ -169,7 +177,10 @@ export function AssistantSetupTool(props: {
     detectBrowserSetupPlatform
   )
   const [clientTab, setClientTab] = useState<ClientTab>('claude-code')
-  const model = props.defaultModel || '<MODEL_ID>'
+  const [selectedModel, setSelectedModel] = useState('')
+  const model = props.availableModels.includes(selectedModel)
+    ? selectedModel
+    : (props.availableModels[0] ?? '<MODEL_ID>')
   const installCommand = getClaudeInstallCommand(platform)
   const sessionCommand = getClaudeSessionCommand(platform, props.rootUrl, model)
   const ccSwitchInstall = getCCSwitchInstallGuide(platform)
@@ -178,7 +189,29 @@ export function AssistantSetupTool(props: {
     props.openAIBaseUrl,
     model
   )
+  const codexInstallCommand = getCodexInstallCommand(platform)
+  const codexAPIKeyCommand = getCodexAPIKeyCommand(platform)
+  const codexConfigPath = getCodexConfigPath(platform)
+  const codexConfig = getCodexConfig(props.openAIBaseUrl, model)
   const chatGPTDesktopAvailable = platform !== 'linux'
+  let modelOptions: ReactNode = (
+    <NativeSelectOption value='<MODEL_ID>'>
+      {t('No available models')}
+    </NativeSelectOption>
+  )
+  if (props.modelsLoading) {
+    modelOptions = (
+      <NativeSelectOption value='<MODEL_ID>'>
+        {t('Loading current models...')}
+      </NativeSelectOption>
+    )
+  } else if (props.availableModels.length > 0) {
+    modelOptions = props.availableModels.map((item) => (
+      <NativeSelectOption key={item} value={item}>
+        {item}
+      </NativeSelectOption>
+    ))
+  }
 
   if (!props.developerAccessGranted) {
     return (
@@ -231,6 +264,18 @@ export function AssistantSetupTool(props: {
           </div>
         </div>
 
+        <div className='mb-3 grid gap-1.5'>
+          <span className='text-muted-foreground text-xs'>{t('Model ID')}</span>
+          <NativeSelect
+            value={model}
+            disabled={props.modelsLoading || props.availableModels.length === 0}
+            onChange={(event) => setSelectedModel(event.target.value)}
+            aria-label={t('Model ID')}
+          >
+            {modelOptions}
+          </NativeSelect>
+        </div>
+
         <Tabs
           value={clientTab}
           onValueChange={(value) => setClientTab(value as ClientTab)}
@@ -240,6 +285,7 @@ export function AssistantSetupTool(props: {
             <TabsTrigger value='cc-switch'>CC Switch</TabsTrigger>
             <TabsTrigger value='claude-desktop'>Claude Desktop</TabsTrigger>
             <TabsTrigger value='chatgpt'>ChatGPT</TabsTrigger>
+            <TabsTrigger value='codex'>Codex</TabsTrigger>
             <TabsTrigger value='openai-compatible'>
               {t('OpenAI-compatible clients')}
             </TabsTrigger>
@@ -572,6 +618,69 @@ export function AssistantSetupTool(props: {
                   data-icon='inline-end'
                   aria-hidden='true'
                 />
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value='codex' className='mt-3 grid gap-3'>
+            <CodeSnippet
+              label={t('Install command')}
+              value={codexInstallCommand}
+            />
+            <CodeSnippet label={t('API key')} value={codexAPIKeyCommand} />
+            <CodeSnippet
+              label={t('Codex configuration: {{path}}', {
+                path: codexConfigPath,
+              })}
+              value={codexConfig}
+            />
+            <ol className='grid gap-3' aria-label={t('Codex setup steps')}>
+              <SetupStep
+                number={1}
+                title={t('Install Codex')}
+                description={t(
+                  'Install the official CLI, then verify it with codex --version.'
+                )}
+              />
+              <SetupStep
+                number={2}
+                title={t('Add the LMM provider')}
+                description={t(
+                  'Save the provider block in the user-level config file. Codex uses the Responses API, so keep the /v1 Base URL.'
+                )}
+              />
+              <SetupStep
+                number={3}
+                title={t('Set the API key in your shell')}
+                description={t(
+                  'Run the API-key command in the current terminal. The secret is not stored in config.toml.'
+                )}
+              />
+              <SetupStep
+                number={4}
+                title={t('Verify the active provider')}
+                description={t(
+                  'Run codex in a project and use /status to verify the LMM provider and selected model.'
+                )}
+              />
+            </ol>
+            <div className='flex flex-wrap gap-2'>
+              <OfficialLink
+                href={CODEX_DOCS}
+                label={t('Official Codex guide')}
+              />
+              <OfficialLink
+                href={CODEX_CONFIG_DOCS}
+                label={t('Configuration reference')}
+              />
+              <Button size='sm' variant='outline' onClick={props.onCreateKey}>
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
+                {t('Create API key')}
               </Button>
             </div>
           </TabsContent>

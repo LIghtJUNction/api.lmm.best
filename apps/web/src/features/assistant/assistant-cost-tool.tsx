@@ -62,10 +62,7 @@ function parseTokenCount(value: string): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : Number.NaN
 }
 
-export function AssistantCostTool(props: {
-  defaultModel: string
-  developerAccessGranted: boolean
-}) {
+export function AssistantCostTool(props: { developerAccessGranted: boolean }) {
   const { t, i18n } = useTranslation()
   const [modelName, setModelName] = useState('')
   const [group, setGroup] = useState('')
@@ -90,9 +87,7 @@ export function AssistantCostTool(props: {
     [pricingQuery.data?.data]
   )
   const selectedModel =
-    models.find((model) => model.model_name === modelName) ??
-    models.find((model) => model.model_name === props.defaultModel) ??
-    models[0]
+    models.find((model) => model.model_name === modelName) ?? models[0]
   const groups = useMemo(() => {
     if (!selectedModel || !pricingQuery.data) return []
     const usableGroups = pricingQuery.data.usable_group

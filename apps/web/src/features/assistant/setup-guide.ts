@@ -142,3 +142,37 @@ export function getOpenAICompatibleClientJSON(
     2
   )
 }
+
+export function getCodexInstallCommand(
+  platform: AssistantSetupPlatform
+): string {
+  if (platform === 'windows') return 'npm install -g @openai/codex'
+  return 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+}
+
+export function getCodexAPIKeyCommand(
+  platform: AssistantSetupPlatform
+): string {
+  if (platform === 'windows') return "$env:LMM_API_KEY='<YOUR_API_KEY>'"
+  return "export LMM_API_KEY='<YOUR_API_KEY>'"
+}
+
+export function getCodexConfigPath(platform: AssistantSetupPlatform): string {
+  if (platform === 'windows') return '%USERPROFILE%\\.codex\\config.toml'
+  return '~/.codex/config.toml'
+}
+
+export function getCodexConfig(baseUrl: string, model: string): string {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
+  const normalizedModel = model.trim() || '<MODEL_ID>'
+  return [
+    `model = ${JSON.stringify(normalizedModel)}`,
+    'model_provider = "lmm"',
+    '',
+    '[model_providers.lmm]',
+    'name = "LMM"',
+    `base_url = ${JSON.stringify(normalizedBaseUrl)}`,
+    'env_key = "LMM_API_KEY"',
+    'wire_api = "responses"',
+  ].join('\n')
+}
