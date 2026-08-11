@@ -29,6 +29,27 @@ export type PaymentSettlementUnit = {
 }
 
 /**
+ * Normalize the server-owned maximum credited USD for one payment. Invalid
+ * metadata is ignored in the UI; the backend still fails closed at checkout.
+ */
+export function getPaymentMaxTopup(
+  paymentMethod?: PaymentMethod
+): number | null {
+  const rawLimit = paymentMethod?.max_topup
+  if (typeof rawLimit === 'string') {
+    if (!POSITIVE_DECIMAL_PATTERN.test(rawLimit)) return null
+    const parsedLimit = Number(rawLimit)
+    return Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : null
+  }
+
+  return typeof rawLimit === 'number' &&
+    Number.isFinite(rawLimit) &&
+    rawLimit > 0
+    ? rawLimit
+    : null
+}
+
+/**
  * Normalize a server-owned per-method payment multiplier. Missing or invalid
  * metadata keeps legacy payment methods at the neutral multiplier of 1.
  */

@@ -237,6 +237,9 @@ func RequestFastPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
 		return
 	}
+	if !requirePaymentMethodTopUpWithinLimit(c, req.PaymentMethod, int64Amount) {
+		return
+	}
 
 	cfg := getFastPayConfig()
 	if cfg == nil {

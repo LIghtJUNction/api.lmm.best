@@ -104,6 +104,9 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 	if !requirePaymentMethodAvailable(c, model.PaymentMethodCreem) {
 		return
 	}
+	if !requirePaymentMethodCreditedQuotaWithinLimit(c, model.PaymentMethodCreem, selectedProduct.Quota) {
+		return
+	}
 
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)

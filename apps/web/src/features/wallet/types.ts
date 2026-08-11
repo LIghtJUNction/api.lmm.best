@@ -98,6 +98,8 @@ export interface PaymentMethod {
   color?: string
   /** Minimum topup amount for this payment method */
   min_topup?: number
+  /** Maximum credited USD allowed in one payment for this method. */
+  max_topup?: string | number
   /** Optional react-icons component name or safe icon URL */
   icon?: string
   /** Settlement unit shown for this gateway, for example LDC. */
