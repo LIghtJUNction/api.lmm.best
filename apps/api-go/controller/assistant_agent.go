@@ -165,7 +165,7 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "request_create_key",
-				Description: "Prepare the instructions for creating an API key. This is a write action and must remain confirmation-gated; never claim a key was created from this tool.",
+				Description: "Prepare creation of an API key. First call without a group to load the signed-in user's live group choices, then ask the user to choose one exact group. Only after that choice may you request explicit confirmation; never claim a key was created from this tool.",
 				Parameters: objectSchema(map[string]any{
 					"name":  map[string]any{"type": "string", "maxLength": 50},
 					"group": map[string]any{"type": "string", "maxLength": 64},
@@ -510,15 +510,10 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "get_setup_guide":
 		return executeAssistantSetupTool(input)
 	case "request_create_key":
-		return map[string]any{
-			"ok":              true,
-			"status":          "confirmation_required",
-			"action":          "create_key",
-			"ui_path":         "/keys",
-			"message":         "Ask the user to confirm key creation in the UI; do not claim that a key exists yet.",
-			"requested_name":  inputString(input, "name"),
-			"requested_group": inputString(input, "group"),
+		if c == nil {
+			return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 		}
+		return executeAssistantCreateKeyRequestTool(c.GetInt("id"), input)
 	case "request_human_support":
 		return map[string]any{
 			"ok":            true,

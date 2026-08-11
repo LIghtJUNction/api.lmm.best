@@ -226,11 +226,38 @@ func TestPrepareAssistantRequestRejectsOversizedMessage(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "ASSISTANT_MESSAGE_TOO_LONG")
 }
 
-func TestCreateAssistantDefaultKeyRequiresConfirmation(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func createAssistantKeyTestContext(t *testing.T, username string) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+	user := &model.User{
+		Username:           username,
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		ConsoleActivatedAt: 1,
+	}
+	require.NoError(t, db.Create(user).Error)
 	response := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(response)
+	c.Set("id", user.Id)
+	return c, response
+}
+
+func TestCreateAssistantDefaultKeyRequiresGroupBeforeConfirmation(t *testing.T) {
+	c, response := createAssistantKeyTestContext(t, "assistant-group-user")
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"name":"my key"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	CreateAssistantDefaultKey(c)
+	assert.Equal(t, http.StatusUnprocessableEntity, response.Code)
+	assert.Contains(t, response.Body.String(), "ASSISTANT_KEY_GROUP_REQUIRED")
+	assert.Contains(t, response.Body.String(), `"id":"default"`)
+}
+
+func TestCreateAssistantDefaultKeyRequiresConfirmation(t *testing.T) {
+	c, response := createAssistantKeyTestContext(t, "assistant-confirm-user")
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"name":"my key","group":"default"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	CreateAssistantDefaultKey(c)
 	assert.Equal(t, http.StatusUnprocessableEntity, response.Code)
@@ -252,7 +279,7 @@ func TestCreateAssistantDefaultKeyForL1Session(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(response)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"confirmed":true,"name":"assistant-created"}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(`{"confirmed":true,"name":"assistant-created","group":"default"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("id", user.Id)
 	CreateAssistantDefaultKey(c)
@@ -272,6 +299,7 @@ func TestCreateAssistantDefaultKeyForL1Session(t *testing.T) {
 	var token model.Token
 	require.NoError(t, db.First(&token, payload.Data.ID).Error)
 	assert.Equal(t, user.Id, token.UserId)
+	assert.Equal(t, "default", token.Group)
 	assert.True(t, token.UnlimitedQuota)
 	assert.EqualValues(t, -1, token.ExpiredTime)
 }
@@ -299,6 +327,7 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 }
 
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
+	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
 	require.Len(t, definitions, 12)
 	names := make(map[string]bool, len(definitions))
@@ -318,14 +347,26 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["request_create_key"])
 	assert.True(t, names["request_human_support"])
 
-	createKey := executeAssistantTool(nil, assistantOpenAIToolCall{
+	createKey := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
 			Name:      "request_create_key",
 			Arguments: `{"name":"from assistant"}`,
 		},
 	})
+	assert.Equal(t, "group_required", createKey["status"])
+	options, ok := createKey["available_groups"].([]assistantKeyGroupOption)
+	require.True(t, ok)
+	assert.Contains(t, options, assistantKeyGroupOption{ID: "default", Description: "默认分组"})
+
+	createKey = executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "request_create_key",
+			Arguments: `{"name":"from assistant","group":"default"}`,
+		},
+	})
 	assert.Equal(t, "confirmation_required", createKey["status"])
 	assert.Equal(t, "create_key", createKey["action"])
+	assert.Equal(t, "default", createKey["requested_group"])
 
 	handoff := executeAssistantTool(nil, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
