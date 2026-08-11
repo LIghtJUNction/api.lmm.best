@@ -893,8 +893,12 @@ func executeAssistantInvitationTool(userID int) map[string]any {
 		"total_reward_usd":             float64(user.AffHistoryQuota) / common.QuotaPerUnit,
 		"reward_per_inviter_usd":       float64(common.QuotaForInviter) / common.QuotaPerUnit,
 		"reward_per_invitee_usd":       float64(common.QuotaForInvitee) / common.QuotaPerUnit,
+		"promotional_rewards_eligible": !model.IsDisposableEmail(user.Email),
 		"payment_compliance_confirmed": operation_setting.IsPaymentComplianceConfirmed(),
 		"next_step":                    "Open the invitation page to generate or copy the current invitation code.",
+	}
+	if model.IsDisposableEmail(user.Email) {
+		result["message"] = "Known disposable email domains are not eligible for new-account or invitation promotional credits. Use a durable email for legitimate referrals; ordinary account access and administrator review remain available."
 	}
 	if user.AffCode != "" {
 		baseURL := strings.TrimRight(system_setting.ServerAddress, "/")

@@ -532,6 +532,28 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	return user.Id, err
 }
 
+func registrationQuotaForEmail(email string) int {
+	if IsDisposableEmail(email) {
+		return 0
+	}
+	return common.QuotaForNewUser
+}
+
+func promotionRewardsAllowedForUser(user *User) bool {
+	return user != nil && !IsDisposableEmail(user.Email)
+}
+
+func promotionRewardsAllowedForUserID(userID int) bool {
+	if userID <= 0 || DB == nil {
+		return false
+	}
+	var user User
+	if err := DB.Select("email").First(&user, "id = ?", userID).Error; err != nil {
+		return false
+	}
+	return promotionRewardsAllowedForUser(&user)
+}
+
 func DeleteUserById(id int) (err error) {
 	if id == 0 {
 		return errors.New("id 为空！")
@@ -657,7 +679,7 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
+			user.Quota = registrationQuotaForEmail(user.Email)
 			user.AffCode = common.GetRandomString(4)
 
 			// 初始化用户设置，包括默认的边栏配置
@@ -693,10 +715,12 @@ func (user *User) finishInsert(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
+	newUserEligible := promotionRewardsAllowedForUser(user)
+	if newUserEligible && common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() &&
+		newUserEligible && promotionRewardsAllowedForUserID(inviterId) {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
@@ -721,7 +745,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
+		user.Quota = registrationQuotaForEmail(user.Email)
 		user.AffCode = common.GetRandomString(4)
 
 		// 初始化用户设置
@@ -750,10 +774,12 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
+	newUserEligible := promotionRewardsAllowedForUser(user)
+	if newUserEligible && common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() &&
+		newUserEligible && promotionRewardsAllowedForUserID(inviterId) {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
