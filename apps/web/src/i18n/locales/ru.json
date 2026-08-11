@@ -5462,6 +5462,7 @@
     "Super Large": "Очень крупная",
     "Support": "Поддержка",
     "Support for high concurrency with automatic load balancing": "Поддержка высокой конкурентности с автоматической балансировкой нагрузки",
+    "Support message must contain at least 5 characters.": "Сообщение в поддержку должно содержать не менее 5 символов.",
     "Support request resolved": "Запрос поддержки решён",
     "Support requests are sent to {{email}}.": "Запросы в поддержку отправляются на адрес {{email}}.",
     "Support ticket": "Обращение в поддержку",

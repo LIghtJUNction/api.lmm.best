@@ -63,6 +63,8 @@ import {
   type AssistantHandoff,
 } from './api'
 
+const minAssistantHandoffCharacters = 5
+
 export function AssistantHandoffTool() {
   const { t } = useTranslation()
   const [message, setMessage] = useState('')
@@ -76,12 +78,17 @@ export function AssistantHandoffTool() {
     retry: false,
   })
   const current = submitted ?? handoffQuery.data
+  const trimmedMessage = message.trim()
+  const messageLength = Array.from(trimmedMessage).length
+  const messageTooShort =
+    trimmedMessage.length > 0 &&
+    messageLength < minAssistantHandoffCharacters
 
   const submit = async () => {
-    if (submitting || !message.trim()) return
+    if (submitting || messageLength < minAssistantHandoffCharacters) return
     setSubmitting(true)
     try {
-      const result = await submitAssistantHandoff(message.trim())
+      const result = await submitAssistantHandoff(trimmedMessage)
       setSubmitted(result)
       setConfirmOpen(false)
       toast.success(t('Your message was sent to an administrator'))
@@ -191,15 +198,34 @@ export function AssistantHandoffTool() {
               id='assistant-handoff-message'
               rows={4}
               maxLength={2000}
+              minLength={minAssistantHandoffCharacters}
+              required
+              aria-required='true'
+              aria-invalid={messageTooShort}
+              aria-describedby={
+                messageTooShort ? 'assistant-handoff-message-hint' : undefined
+              }
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               placeholder={t('What happened, where, and when?')}
             />
+            {messageTooShort ? (
+              <p
+                id='assistant-handoff-message-hint'
+                className='text-sm text-destructive'
+                role='alert'
+              >
+                {t('Support message must contain at least 5 characters.')}
+              </p>
+            ) : null}
           </div>
           <Button
             type='button'
             onClick={() => setConfirmOpen(true)}
-            disabled={!message.trim() || handoffQuery.isLoading}
+            disabled={
+              messageLength < minAssistantHandoffCharacters ||
+              handoffQuery.isLoading
+            }
           >
             <HugeiconsIcon
               icon={MailSend01Icon}

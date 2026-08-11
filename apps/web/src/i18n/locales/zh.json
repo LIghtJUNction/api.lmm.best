@@ -5462,6 +5462,7 @@
     "Super Large": "超大",
     "Support": "支持",
     "Support for high concurrency with automatic load balancing": "支持高并发和自动负载均衡",
+    "Support message must contain at least 5 characters.": "提交给管理员的说明至少需要 5 个字。",
     "Support request resolved": "支持请求已解决",
     "Support requests are sent to {{email}}.": "客服请求将发送至 {{email}}。",
     "Support ticket": "支持工单",

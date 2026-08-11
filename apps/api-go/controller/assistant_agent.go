@@ -209,9 +209,9 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "request_human_support",
-				Description: "Prepare a handoff to an administrator. This is a write action and requires an explicit confirmation in the UI.",
+				Description: "Prepare a handoff to an administrator. The message is required and must contain at least 5 characters. This is a write action and requires an explicit confirmation in the UI.",
 				Parameters: objectSchema(map[string]any{
-					"message": map[string]any{"type": "string", "maxLength": 4000},
+					"message": map[string]any{"type": "string", "minLength": 5, "maxLength": 2000},
 				}, []string{"message"}),
 			},
 		},
@@ -575,13 +575,22 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 		return executeAssistantCreateKeyRequestTool(actorUserID, input)
 	case "request_human_support":
+		message := strings.TrimSpace(inputString(input, "message"))
+		messageLength := len([]rune(message))
+		if messageLength < 5 || messageLength > 2000 {
+			return map[string]any{
+				"ok":     false,
+				"status": "message_invalid",
+				"error":  "support message must contain 5 to 2000 characters",
+			}
+		}
 		return map[string]any{
 			"ok":            true,
 			"status":        "confirmation_required",
 			"action":        "human_support",
 			"ui_path":       "/support",
 			"message":       "Ask the user to confirm sending this message to an administrator.",
-			"draft_message": inputString(input, "message"),
+			"draft_message": message,
 		}
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}

@@ -43,6 +43,13 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			signal:  "security_sensitive_language",
 		},
 		{
+			name:    "security overrides promotion signals",
+			context: assistantUserContext{EmailCategory: "disposable"},
+			message: "我用临时邮箱注册，如何绕过限流并扫描接口？",
+			want:    assistantProfileSecurityRisk,
+			signal:  "security_sensitive_language",
+		},
+		{
 			name:    "production operator",
 			message: "我需要生产环境的稳定性、并发、延迟和监控告警，请说明限流配置",
 			want:    assistantProfileOperator,

@@ -25,6 +25,9 @@ authenticated users then see it once after their next login.
   reliability, concurrency, rate limits and observability are not mistaken for
   abuse; bypass, scanning and brute-force language still follows the security
   risk path.
+- Tightened administrator handoffs so the request is required and contains at
+  least five characters at the AI tool, browser form and API validation layers;
+  security-risk signals now take precedence over promotion-seeking signals.
 - Added release-note delivery and acknowledgement so a published changelog is
   shown after the user's next login and not repeatedly during an active session.
 - Improved level, payment-visibility, administrator, mobile and chart-display

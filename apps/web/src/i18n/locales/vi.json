@@ -5462,6 +5462,7 @@
     "Super Large": "Rất lớn",
     "Support": "Hỗ trợ",
     "Support for high concurrency with automatic load balancing": "Hỗ trợ đồng thời cao với cân bằng tải tự động",
+    "Support message must contain at least 5 characters.": "Tin nhắn hỗ trợ phải có ít nhất 5 ký tự.",
     "Support request resolved": "Yêu cầu hỗ trợ đã được giải quyết",
     "Support requests are sent to {{email}}.": "Yêu cầu hỗ trợ sẽ được gửi đến {{email}}.",
     "Support ticket": "Yêu cầu hỗ trợ",

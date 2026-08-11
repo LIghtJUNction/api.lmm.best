@@ -149,6 +149,33 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantHandoffTool', () => {
+  test('requires at least five characters before review', async () => {
+    api.get = (async () => {
+      return { data: { success: true, data: null } }
+    }) as typeof api.get
+
+    const rendered = await renderTool()
+    const textarea = rendered.container.querySelector<HTMLTextAreaElement>(
+      '#assistant-handoff-message'
+    )
+    assert.ok(textarea)
+    assert.equal(textarea.required, true)
+    assert.equal(textarea.minLength, 5)
+
+    await setTextareaValue(textarea, '四个字')
+    const reviewButton = findButton('Review message')
+    assert.equal(reviewButton.disabled, true)
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Support message must contain at least 5 characters/
+    )
+
+    await setTextareaValue(textarea, '五个字符消息')
+    assert.equal(reviewButton.disabled, false)
+
+    await unmount(rendered)
+  })
+
   test('hides the message form when a human-support request is already pending', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/handoffs/self')
