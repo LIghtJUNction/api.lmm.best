@@ -137,6 +137,10 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/checkin", controller.GetCheckinStatus)
 				selfRoute.POST("/checkin", middleware.TurnstileCheck(), controller.DoCheckin)
 
+				// Compensation gift routes (user)
+				selfRoute.GET("/gift", controller.GetAvailableGifts)
+				selfRoute.POST("/gift/:id/claim", middleware.CriticalRateLimit(), controller.ClaimGift)
+
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
@@ -163,7 +167,19 @@ func SetApiRouter(router *gin.Engine) {
 				// Admin 2FA routes
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
+
+
 			}
+		}
+
+		// Admin compensation gift management
+		giftRoute := apiRouter.Group("/gift")
+		giftRoute.Use(middleware.AdminAuth())
+		{
+			giftRoute.GET("/", controller.AdminGetGifts)
+			giftRoute.POST("/", middleware.CriticalRateLimit(), controller.AdminCreateGift)
+			giftRoute.PUT("/:id", middleware.CriticalRateLimit(), controller.AdminUpdateGift)
+			giftRoute.GET("/claims", controller.AdminGetGiftClaims)
 		}
 
 		developerAccessRequestRoute := apiRouter.Group("/developer-access/requests")

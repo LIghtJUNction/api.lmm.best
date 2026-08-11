@@ -25,6 +25,7 @@ import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { CheckinCalendarCard } from './components/checkin-calendar-card'
+import { GiftCard } from './components/gift-card'
 import { LanguagePreferencesCard } from './components/language-preferences-card'
 import { LoginSessionsCard } from './components/login-sessions-card'
 import { PasskeyCard } from './components/passkey-card'
@@ -89,6 +90,7 @@ export function Profile() {
               </div>
 
               <div className='space-y-4 sm:space-y-6 xl:sticky xl:top-6'>
+                <GiftCard />
                 {checkinEnabled && (
                   <CheckinCalendarCard
                     checkinEnabled={checkinEnabled}
