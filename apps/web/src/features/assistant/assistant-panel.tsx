@@ -364,6 +364,11 @@ export function AssistantPanel(props: {
           answer: t(
             'You can install clients while L0 access is under review. API requests become available after L1 approval.'
           ),
+          action: {
+            kind: 'tool',
+            label: t('Open client setup guide'),
+            tool: 'setup',
+          },
         },
       },
       {
@@ -832,7 +837,7 @@ export function AssistantPanel(props: {
                     onRequestAccess={() => setActiveTool('activation')}
                   />
                 ) : null}
-                {activeTool === 'setup' && developerAccessGranted ? (
+                {activeTool === 'setup' && accountAccessConfirmed ? (
                   <AssistantSetupTool
                     rootUrl={baseUrl.replace(/\/v1$/, '')}
                     openAIBaseUrl={baseUrl}
@@ -840,6 +845,7 @@ export function AssistantPanel(props: {
                     modelsLoading={connectionModelsQuery.isLoading}
                     developerAccessGranted={developerAccessGranted}
                     onCreateKey={() => setActiveTool('key')}
+                    onRequestAccess={() => setActiveTool('activation')}
                   />
                 ) : null}
                 {activeTool === 'usage' && developerAccessGranted ? (

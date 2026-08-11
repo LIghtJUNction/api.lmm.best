@@ -1316,6 +1316,7 @@
     "Connection info detected in clipboard": "Đã phát hiện thông tin kết nối trong bảng tạm",
     "Connection info filled in": "Đã điền thông tin kết nối",
     "Connection successful": "Kết nối thành công",
+    "Connection values and API key creation unlock only after an administrator approves L1.": "Thông tin kết nối và tính năng tạo khóa API chỉ được mở sau khi quản trị viên phê duyệt L1.",
     "Consistent, verified activity can improve value over time.": "Hoạt động ổn định và đã xác minh có thể cải thiện quyền lợi theo thời gian.",
     "Console": "Bảng điều khiển",
     "Console area": "Khu vực bảng điều khiển",

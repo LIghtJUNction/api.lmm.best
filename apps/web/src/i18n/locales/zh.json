@@ -1316,6 +1316,7 @@
     "Connection info detected in clipboard": "检测到剪贴板中的连接信息",
     "Connection info filled in": "连接信息已填入",
     "Connection successful": "连接成功",
+    "Connection values and API key creation unlock only after an administrator approves L1.": "连接信息和 API 密钥创建功能将在管理员批准 L1 后解锁。",
     "Consistent, verified activity can improve value over time.": "持续且经验证的使用记录可逐步提升权益。",
     "Console": "控制台",
     "Console area": "控制台区域",

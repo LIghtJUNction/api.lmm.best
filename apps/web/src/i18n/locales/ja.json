@@ -1316,6 +1316,7 @@
     "Connection info detected in clipboard": "クリップボードに接続情報が見つかりました",
     "Connection info filled in": "接続情報を入力しました",
     "Connection successful": "接続に成功しました",
+    "Connection values and API key creation unlock only after an administrator approves L1.": "接続情報と API キーの作成は、管理者が L1 を承認した後にのみ利用できます。",
     "Consistent, verified activity can improve value over time.": "継続的で確認済みの利用実績により、時間とともに特典が向上する場合があります。",
     "Console": "コンソール",
     "Console area": "コンソールエリア",

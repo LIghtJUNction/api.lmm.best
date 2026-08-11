@@ -1316,6 +1316,7 @@
     "Connection info detected in clipboard": "В буфере обмена найдены данные подключения",
     "Connection info filled in": "Данные подключения заполнены",
     "Connection successful": "Подключение успешно",
+    "Connection values and API key creation unlock only after an administrator approves L1.": "Данные подключения и создание API-ключей станут доступны только после одобрения L1 администратором.",
     "Consistent, verified activity can improve value over time.": "Регулярная подтверждённая активность со временем может улучшить доступные преимущества.",
     "Console": "Консоль",
     "Console area": "Область консоли",

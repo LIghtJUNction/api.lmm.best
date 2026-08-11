@@ -517,6 +517,27 @@ describe('AssistantPanel', () => {
       assert.throws(() => findButton('Compare live plans'))
       assert.ok(findButton('Unlock L1 access'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
+
+      await act(async () => {
+        findButton('Clear conversation').click()
+        await flushEffects()
+        findButton('How do I set up Claude Code or CC Switch?').click()
+        await flushEffects()
+        findButton('Open client setup guide').click()
+        await flushEffects()
+        findButton('Windows').click()
+        await flushEffects()
+      })
+      assert.match(
+        document.body.textContent ?? '',
+        /winget install Anthropic\.ClaudeCode/
+      )
+      assert.equal(
+        document.querySelector('select[aria-label="Model ID"]'),
+        null
+      )
+      assert.throws(() => findButton('Create API key'))
+      assert.equal(document.querySelector('a[href="/wallet"]'), null)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

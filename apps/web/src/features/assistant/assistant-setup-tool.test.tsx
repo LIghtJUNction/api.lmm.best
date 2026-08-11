@@ -99,6 +99,7 @@ describe('AssistantSetupTool', () => {
             onCreateKey={() => {
               createKeyCalls += 1
             }}
+            onRequestAccess={() => {}}
           />
         </I18nextProvider>
       )
@@ -213,7 +214,8 @@ describe('AssistantSetupTool', () => {
     await act(async () => root.unmount())
   })
 
-  test('does not expose client configuration to L0', async () => {
+  test('gives L0 an install-only guide without exposing connection values', async () => {
+    let accessRequests = 0
     const container = document.createElement('div')
     document.body.append(container)
     const root = createRoot(container)
@@ -227,6 +229,9 @@ describe('AssistantSetupTool', () => {
             availableModels={['deepseek-v4-flash']}
             developerAccessGranted={false}
             onCreateKey={() => {}}
+            onRequestAccess={() => {
+              accessRequests += 1
+            }}
           />
         </I18nextProvider>
       )
@@ -234,9 +239,35 @@ describe('AssistantSetupTool', () => {
     })
 
     assert.match(container.textContent ?? '', /Ask for L1 access/)
+    await act(async () => {
+      findButton('Windows').click()
+      await flushEffects()
+    })
+    assert.match(
+      container.textContent ?? '',
+      /winget install Anthropic\.ClaudeCode/
+    )
+    assert.equal(findButton('Windows').getAttribute('aria-pressed'), 'true')
     assert.doesNotMatch(container.textContent ?? '', /deepseek-v4-flash/)
     assert.doesNotMatch(container.textContent ?? '', /api\.example\.test/)
-    assert.equal(container.querySelector('button'), null)
+    assert.equal(container.querySelector('select[aria-label="Model ID"]'), null)
+    assert.throws(() => findButton('Create API key'))
+
+    await act(async () => {
+      findButton('CC Switch').click()
+      await flushEffects()
+    })
+    assert.match(
+      container.textContent ?? '',
+      /CC-Switch-v\{version\}-Windows\.msi/
+    )
+    assert.doesNotMatch(container.textContent ?? '', /ANTHROPIC_AUTH_TOKEN/)
+
+    await act(async () => {
+      findButton('Unlock L1 access').click()
+      await flushEffects()
+    })
+    assert.equal(accessRequests, 1)
 
     await act(async () => root.unmount())
   })
