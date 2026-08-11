@@ -96,6 +96,27 @@ export function PaymentMethodsVisualEditor({
     )
   }, [paymentMethods, searchText])
 
+  const getAccessDetails = (method: PaymentMethodData) => {
+    const unlockDays = Number(method.unlock_after_days || 0)
+    const unlockLabel =
+      Number.isFinite(unlockDays) && unlockDays > 0
+        ? t('After {{days}} days', { days: unlockDays })
+        : t('Immediate access')
+    const audienceLabel = (() => {
+      switch (method.audience_mode) {
+        case 'all':
+          return t('Visible to everyone')
+        case 'include':
+          return t('Matching users only')
+        case 'exclude':
+          return t('Hidden from matching users')
+        default:
+          return t('Legacy account restrictions')
+      }
+    })()
+    return { audienceLabel, unlockLabel }
+  }
+
   const handleSave = (data: PaymentMethodData) => {
     const parsed = safeJsonParseWithValidation<unknown[]>(value, {
       fallback: [],
@@ -350,6 +371,21 @@ export function PaymentMethodsVisualEditor({
                 ),
               },
               {
+                id: 'access',
+                header: t('Access'),
+                cell: (method) => {
+                  const details = getAccessDetails(method)
+                  return (
+                    <span className='flex flex-col text-xs'>
+                      <span>{details.unlockLabel}</span>
+                      <span className='text-muted-foreground'>
+                        {details.audienceLabel}
+                      </span>
+                    </span>
+                  )
+                },
+              },
+              {
                 id: 'actions',
                 header: t('Actions'),
                 className: 'text-right',
@@ -376,6 +412,13 @@ export function PaymentMethodsVisualEditor({
                 method.name,
                 method.icon,
                 method.min_topup,
+                method.unlock_after_days,
+                method.audience_mode,
+                method.audience_match,
+                method.audience_email_contains,
+                method.audience_oauth_provider,
+                method.audience_linuxdo_score_min,
+                method.audience_linuxdo_score_max,
                 method.topup_ratio,
                 method.settlement_unit,
                 method.unit_price,
@@ -466,6 +509,17 @@ export function PaymentMethodsVisualEditor({
                       </span>
                       <span className='font-mono'>
                         ×{method.topup_ratio || '1'}
+                      </span>
+                    </div>
+                    <div className='flex items-start gap-2'>
+                      <span className='text-muted-foreground min-w-20'>
+                        {t('Access')}:
+                      </span>
+                      <span className='flex flex-col text-xs'>
+                        <span>{getAccessDetails(method).unlockLabel}</span>
+                        <span className='text-muted-foreground'>
+                          {getAccessDetails(method).audienceLabel}
+                        </span>
                       </span>
                     </div>
                   </div>

@@ -20,6 +20,25 @@ import type { PaymentMethodData } from './payment-method-dialog'
 
 const SETTLEMENT_UNIT_PATTERN = /^[A-Za-z0-9._-]{1,16}$/
 const POSITIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
+const NON_NEGATIVE_INTEGER_PATTERN = /^(?:0|[1-9][0-9]*)$/
+const NON_NEGATIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
+const AUDIENCE_MODES = new Set(['legacy', 'all', 'include', 'exclude'])
+const AUDIENCE_MATCH_MODES = new Set(['any', 'all'])
+const OAUTH_PROVIDERS = new Set([
+  'linuxdo',
+  'linux.do',
+  'github',
+  'discord',
+  'oidc',
+  'wechat',
+  'telegram',
+])
+const AUDIENCE_CONDITION_FIELDS = [
+  'audience_email_contains',
+  'audience_oauth_provider',
+  'audience_linuxdo_score_min',
+  'audience_linuxdo_score_max',
+] as const
 
 export function isValidPaymentMethodData(
   item: unknown
@@ -33,6 +52,10 @@ export function isValidPaymentMethodData(
     typeof item.type !== 'string' ||
     ('icon' in item && typeof item.icon !== 'string') ||
     ('min_topup' in item && typeof item.min_topup !== 'string') ||
+    ('unlock_after_days' in item &&
+      (typeof item.unlock_after_days !== 'string' ||
+        !NON_NEGATIVE_INTEGER_PATTERN.test(item.unlock_after_days) ||
+        !Number.isSafeInteger(Number(item.unlock_after_days)))) ||
     ('topup_ratio' in item &&
       (typeof item.topup_ratio !== 'string' ||
         !POSITIVE_DECIMAL_PATTERN.test(item.topup_ratio) ||
@@ -43,6 +66,77 @@ export function isValidPaymentMethodData(
   }
 
   const record = item as Record<string, unknown>
+
+  if (
+    !('audience_mode' in record) &&
+    (AUDIENCE_CONDITION_FIELDS.some((field) => field in record) ||
+      'audience_match' in record)
+  ) {
+    return false
+  }
+
+  if ('audience_mode' in record) {
+    if (
+      typeof record.audience_mode !== 'string' ||
+      !AUDIENCE_MODES.has(record.audience_mode)
+    ) {
+      return false
+    }
+    if (
+      'audience_match' in record &&
+      (typeof record.audience_match !== 'string' ||
+        !AUDIENCE_MATCH_MODES.has(record.audience_match))
+    ) {
+      return false
+    }
+    for (const field of [
+      'audience_email_contains',
+      'audience_oauth_provider',
+    ]) {
+      if (field in record && typeof record[field] !== 'string') return false
+    }
+    if (
+      'audience_oauth_provider' in record &&
+      (!record.audience_oauth_provider ||
+        !OAUTH_PROVIDERS.has(String(record.audience_oauth_provider)))
+    ) {
+      return false
+    }
+    for (const field of [
+      'audience_linuxdo_score_min',
+      'audience_linuxdo_score_max',
+    ]) {
+      if (
+        field in record &&
+        (typeof record[field] !== 'string' ||
+          !NON_NEGATIVE_DECIMAL_PATTERN.test(record[field]) ||
+          !Number.isFinite(Number(record[field])))
+      ) {
+        return false
+      }
+    }
+
+    const scoreMin = Number(record.audience_linuxdo_score_min)
+    const scoreMax = Number(record.audience_linuxdo_score_max)
+    if (
+      'audience_linuxdo_score_min' in record &&
+      'audience_linuxdo_score_max' in record &&
+      scoreMin > scoreMax
+    ) {
+      return false
+    }
+    const hasCondition = AUDIENCE_CONDITION_FIELDS.some(
+      (field) =>
+        field in record &&
+        typeof record[field] === 'string' &&
+        record[field].trim() !== ''
+    )
+    const filtersUsers =
+      record.audience_mode === 'include' || record.audience_mode === 'exclude'
+    if (filtersUsers !== hasCondition) return false
+    if (!filtersUsers && 'audience_match' in record) return false
+  }
+
   const hasSettlementUnit = 'settlement_unit' in record
   const hasUnitPrice = 'unit_price' in record
   if (hasSettlementUnit !== hasUnitPrice) return false
