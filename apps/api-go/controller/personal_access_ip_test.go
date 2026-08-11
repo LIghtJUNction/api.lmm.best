@@ -65,11 +65,21 @@ func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
 	validHeaders := map[string]string{
 		"X-LMM-Internal-Error":   accessPolicyErrorHeader,
 		accessPolicyResultHeader: accessPolicyDenied,
+		"X-Original-Client-IP":   "203.0.113.42",
+		"X-LMM-CN-Source":        "1",
+		"X-LMM-Edge-Country":     "CN",
+		"User-Agent":             "Mozilla/5.0 TestBrowser",
 	}
 	status, response := request("127.0.0.1:42000", validHeaders)
 	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
 	assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
-	assert.Contains(t, response.Body.String(), "当前网络暂不支持直接访问")
+	body := response.Body.String()
+	assert.Contains(t, body, "您所在地区暂不支持直接访问")
+	assert.Contains(t, body, "疑难解答")
+	assert.Contains(t, body, "203.0.113.42")
+	assert.Contains(t, body, "IPv4")
+	assert.Contains(t, body, "region_denied")
+	assert.NotContains(t, body, "符合条件的账号")
 
 	status, _ = request("127.0.0.1:42000", map[string]string{
 		"X-LMM-Internal-Error": accessPolicyErrorHeader,

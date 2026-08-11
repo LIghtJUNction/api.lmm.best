@@ -1,10 +1,14 @@
 package controller
 
 import (
+	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,8 +20,8 @@ const (
 
 // GetAccessPolicyErrorPage renders the edge-policy response through the Go
 // service so the user-facing error page is versioned with the application.
-// Nginx is the only caller: the handler rejects public requests and never
-// reflects request headers or addresses into the response.
+// Nginx is the only caller: the handler rejects public requests and only
+// reflects validated, length-limited diagnostic values into the response.
 func GetAccessPolicyErrorPage(c *gin.Context) {
 	if !loopbackPeer(c.Request.RemoteAddr) ||
 		strings.TrimSpace(c.GetHeader("X-LMM-Internal-Error")) != accessPolicyErrorHeader ||
@@ -30,14 +34,29 @@ func GetAccessPolicyErrorPage(c *gin.Context) {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.GetHeader("Accept-Language"))), "en") {
 		language = "en"
 	}
-	page := accessPolicyErrorPage(language)
+	requestID := accessPolicyRequestID(c)
+	c.Header(common.RequestIdKey, requestID)
+	page := accessPolicyErrorPage(language, accessPolicyErrorDiagnostics(c, requestID))
 	c.Header("Cache-Control", "private, no-store, max-age=0")
 	c.Header("Pragma", "no-cache")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusUnavailableForLegalReasons, "text/html; charset=utf-8", []byte(page))
 }
 
-func accessPolicyErrorPage(language string) string {
+type accessPolicyErrorDetails struct {
+	ClientIP       string
+	IPVersion      string
+	EdgeCountry    string
+	PolicyDecision string
+	RequestID      string
+	CheckedAt      string
+	Browser        string
+	Host           string
+	Reachability   string
+	DiagnosticText string
+}
+
+func accessPolicyErrorPage(language string, diagnostics accessPolicyErrorDetails) string {
 	const pageTemplate = `<!doctype html>
 <html lang="{{.Language}}">
 <head>
@@ -45,32 +64,117 @@ func accessPolicyErrorPage(language string) string {
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{.Title}}</title>
   <style>
-    :root{color-scheme:dark;--bg:#111311;--panel:#1d211e;--line:#3b433d;--text:#f0f2eb;--muted:#b7beb6;--accent:#a8d5b5}
+    :root{color-scheme:dark;--bg:#111311;--panel:#1d211e;--line:#3b433d;--text:#f0f2eb;--muted:#b7beb6;--accent:#a8d5b5;--soft:#a8d5b51c}
     *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px}
-    main{width:min(620px,100%);padding:38px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,var(--panel),#161916);box-shadow:0 20px 70px #0008}
-    .mark{width:12px;height:12px;border-radius:50%;background:var(--accent);margin-bottom:22px;box-shadow:0 0 0 8px #a8d5b51c}
-    h1{font-size:clamp(24px,5vw,36px);line-height:1.2;margin:0 0 16px}p{margin:0 0 12px;color:var(--muted)}small{display:block;margin-top:24px;color:#8f9990}
+    main{width:min(760px,100%);padding:38px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(145deg,var(--panel),#161916);box-shadow:0 20px 70px #0008}
+    .mark{width:12px;height:12px;border-radius:50%;background:var(--accent);margin-bottom:22px;box-shadow:0 0 0 8px var(--soft)}
+    h1{font-size:clamp(24px,5vw,36px);line-height:1.2;margin:0 0 16px}h2{font-size:20px;line-height:1.3;margin:0 0 8px}p{margin:0 0 12px;color:var(--muted)}small{display:block;margin-top:24px;color:#8f9990}
+    section{margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
+    .diagnostic-intro{margin-bottom:16px}
+    dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
+    .item{min-width:0;padding:12px 14px;border:1px solid #3b433d99;border-radius:10px;background:#11131180}
+    dt{font-size:12px;color:#8f9990;margin-bottom:3px}dd{margin:0;overflow-wrap:anywhere;color:var(--text)}code{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--accent)}
+    textarea{display:block;width:100%;min-height:150px;margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#111311;color:var(--text);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+    .copy-hint{font-size:13px;margin-top:10px}.privacy{font-size:12px;margin-top:10px}.status{color:var(--accent)}
+    @media (max-width:560px){main{padding:26px 20px}dl{grid-template-columns:1fr}}
   </style>
 </head>
-<body><main><div class="mark" aria-hidden="true"></div><h1>{{.Title}}</h1><p>{{.Message}}</p><p>{{.Hint}}</p><small>{{.Footer}}</small></main></body>
+<body><main>
+  <div class="mark" aria-hidden="true"></div>
+  <h1>{{.Title}}</h1>
+  <p>{{.Message}}</p>
+  <p>{{.Hint}}</p>
+  <section aria-labelledby="why-title">
+    <h2 id="why-title">{{.WhyTitle}}</h2>
+    <p>{{.WhyDescription}}</p>
+  </section>
+  <section aria-labelledby="troubleshooting-title">
+    <h2 id="troubleshooting-title">{{.TroubleshootingTitle}}</h2>
+    <p class="diagnostic-intro">{{.TroubleshootingDescription}}</p>
+    <dl>
+      <div class="item"><dt>{{.ClientIPLabel}}</dt><dd><code>{{.Diagnostics.ClientIP}}</code></dd></div>
+      <div class="item"><dt>{{.IPVersionLabel}}</dt><dd>{{.Diagnostics.IPVersion}}</dd></div>
+      <div class="item"><dt>{{.EdgeCountryLabel}}</dt><dd>{{.Diagnostics.EdgeCountry}}</dd></div>
+      <div class="item"><dt>{{.PolicyDecisionLabel}}</dt><dd>{{.Diagnostics.PolicyDecision}}</dd></div>
+      <div class="item"><dt>{{.ReachabilityLabel}}</dt><dd class="status">{{.Diagnostics.Reachability}}</dd></div>
+      <div class="item"><dt>{{.HostLabel}}</dt><dd><code>{{.Diagnostics.Host}}</code></dd></div>
+      <div class="item"><dt>{{.RequestIDLabel}}</dt><dd><code>{{.Diagnostics.RequestID}}</code></dd></div>
+      <div class="item"><dt>{{.CheckedAtLabel}}</dt><dd>{{.Diagnostics.CheckedAt}}</dd></div>
+      <div class="item"><dt>{{.BrowserLabel}}</dt><dd>{{.Diagnostics.Browser}}</dd></div>
+    </dl>
+    <p class="copy-hint">{{.CopyHint}}</p>
+    <textarea aria-label="{{.DiagnosticTextLabel}}" readonly spellcheck="false">{{.Diagnostics.DiagnosticText}}</textarea>
+    <p class="privacy">{{.PrivacyNote}}</p>
+  </section>
+  <small>{{.Footer}}</small>
+</main></body>
 </html>`
 	templateData := struct {
-		Language string
-		Title    string
-		Message  string
-		Hint     string
-		Footer   string
-	}{Language: language}
+		Language                   string
+		Title                      string
+		Message                    string
+		Hint                       string
+		WhyTitle                   string
+		WhyDescription             string
+		TroubleshootingTitle       string
+		TroubleshootingDescription string
+		ClientIPLabel              string
+		IPVersionLabel             string
+		EdgeCountryLabel           string
+		PolicyDecisionLabel        string
+		ReachabilityLabel          string
+		HostLabel                  string
+		RequestIDLabel             string
+		CheckedAtLabel             string
+		BrowserLabel               string
+		DiagnosticTextLabel        string
+		CopyHint                   string
+		PrivacyNote                string
+		Footer                     string
+		Diagnostics                accessPolicyErrorDetails
+	}{Language: language, Diagnostics: diagnostics}
 	if language == "en" {
-		templateData.Title = "Direct access is not available"
-		templateData.Message = "This network cannot access the service directly right now."
-		templateData.Hint = "If you believe this is an error, sign in with an eligible account or contact support."
-		templateData.Footer = "Request access policy · lmm.best"
+		templateData.Title = "Your region is not currently supported"
+		templateData.Message = "The edge detected that your current region is not supported for direct access, so this request was stopped by the regional access policy."
+		templateData.Hint = "This is not an account-level or login-status restriction. Switch to a supported network environment, or send the diagnostic details below to support if the region was detected incorrectly."
+		templateData.WhyTitle = "Why did I see this page?"
+		templateData.WhyDescription = "DNS and HTTPS have reached the lmm.best edge node successfully. The request was stopped at the regional policy layer, before the application was reached."
+		templateData.TroubleshootingTitle = "Troubleshooting"
+		templateData.TroubleshootingDescription = "These details come from this request and help identify whether the exit IP or edge-region detection caused the block."
+		templateData.ClientIPLabel = "Detected client IP"
+		templateData.IPVersionLabel = "IP version"
+		templateData.EdgeCountryLabel = "Edge region"
+		templateData.PolicyDecisionLabel = "Policy decision"
+		templateData.ReachabilityLabel = "Connectivity"
+		templateData.HostLabel = "Host"
+		templateData.RequestIDLabel = "Request ID"
+		templateData.CheckedAtLabel = "Checked at"
+		templateData.BrowserLabel = "Browser / OS"
+		templateData.DiagnosticTextLabel = "Diagnostic details"
+		templateData.CopyHint = "Send the following diagnostic details to support. Do not include cookies or access tokens."
+		templateData.PrivacyNote = "Cookies, Authorization headers, and the full proxy chain are not shown. The client IP is displayed only so you can verify the network you are using."
+		templateData.Footer = "Regional access policy · lmm.best"
 	} else {
-		templateData.Title = "当前网络暂不支持直接访问"
-		templateData.Message = "此网络暂时无法直接访问服务。"
-		templateData.Hint = "如果你认为这是误判，请使用符合条件的账号登录后重试，或联系客户支持。"
-		templateData.Footer = "访问策略提示 · lmm.best"
+		templateData.Title = "您所在地区暂不支持直接访问"
+		templateData.Message = "检测到您当前所在地区暂不支持直接访问，边缘访问策略已拦截本次请求。"
+		templateData.Hint = "这与账号等级或登录状态无关。请更换到受支持的网络环境；如果你认为地区判断有误，请将下方诊断信息提供给客服。"
+		templateData.WhyTitle = "为什么会看到这个页面？"
+		templateData.WhyDescription = "域名解析和 HTTPS 已经到达 lmm.best 边缘节点，说明基础连接正常；请求是在地区访问策略层被拦截，并非页面应用加载失败。"
+		templateData.TroubleshootingTitle = "疑难解答"
+		templateData.TroubleshootingDescription = "以下信息来自当前请求，可帮助判断是出口 IP 还是边缘地区识别导致拦截。"
+		templateData.ClientIPLabel = "检测到的出口 IP"
+		templateData.IPVersionLabel = "IP 类型"
+		templateData.EdgeCountryLabel = "边缘地区判定"
+		templateData.PolicyDecisionLabel = "策略判定"
+		templateData.ReachabilityLabel = "连接状态"
+		templateData.HostLabel = "访问域名"
+		templateData.RequestIDLabel = "请求编号"
+		templateData.CheckedAtLabel = "检测时间"
+		templateData.BrowserLabel = "浏览器 / 系统"
+		templateData.DiagnosticTextLabel = "诊断信息"
+		templateData.CopyHint = "请将以下诊断信息提供给客服；不要附带 Cookie 或访问令牌。"
+		templateData.PrivacyNote = "页面不会显示 Cookie、Authorization 或完整代理链；出口 IP 仅用于你核对当前使用的网络。"
+		templateData.Footer = "地区访问策略提示 · lmm.best"
 	}
 	template := template.Must(template.New("access-policy-error").Parse(pageTemplate))
 	var rendered strings.Builder
@@ -80,4 +184,107 @@ func accessPolicyErrorPage(language string) string {
 		return "<!doctype html><meta charset=\"utf-8\"><title>Access unavailable</title>"
 	}
 	return rendered.String()
+}
+
+func accessPolicyErrorDiagnostics(c *gin.Context, requestID string) accessPolicyErrorDetails {
+	clientIP := accessPolicyClientIP(c)
+	ipVersion := "unknown"
+	if parsed := net.ParseIP(clientIP); parsed != nil {
+		if parsed.To4() != nil {
+			ipVersion = "IPv4"
+		} else {
+			ipVersion = "IPv6"
+		}
+	}
+
+	edgeCountry := strings.ToUpper(strings.TrimSpace(c.GetHeader("X-LMM-Edge-Country")))
+	if edgeCountry == "" && strings.TrimSpace(c.GetHeader("X-LMM-CN-Source")) == "1" {
+		edgeCountry = "CN"
+	}
+	if edgeCountry == "" {
+		edgeCountry = "unknown"
+	}
+
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		host = "unknown"
+	}
+	browser := truncateAccessPolicyValue(strings.TrimSpace(c.GetHeader("User-Agent")), 180)
+	if browser == "" {
+		browser = "unknown"
+	}
+	checkedAt := time.Now().UTC().Format(time.RFC3339)
+	policyDecision := "region_denied"
+	reachability := "edge_reached"
+	diagnostics := accessPolicyErrorDetails{
+		ClientIP:       clientIP,
+		IPVersion:      ipVersion,
+		EdgeCountry:    edgeCountry,
+		PolicyDecision: policyDecision,
+		RequestID:      requestID,
+		CheckedAt:      checkedAt,
+		Browser:        browser,
+		Host:           truncateAccessPolicyValue(host, 120),
+		Reachability:   reachability,
+	}
+	diagnostics.DiagnosticText = fmt.Sprintf(
+		"site=%s\nclient_ip=%s\nip_version=%s\nedge_country=%s\npolicy_decision=%s\nconnectivity=%s\nrequest_id=%s\nchecked_at=%s\nbrowser=%s",
+		diagnostics.Host,
+		diagnostics.ClientIP,
+		diagnostics.IPVersion,
+		diagnostics.EdgeCountry,
+		diagnostics.PolicyDecision,
+		diagnostics.Reachability,
+		diagnostics.RequestID,
+		diagnostics.CheckedAt,
+		diagnostics.Browser,
+	)
+	return diagnostics
+}
+
+func accessPolicyClientIP(c *gin.Context) string {
+	for _, candidate := range []string{
+		c.GetHeader("X-Original-Client-IP"),
+		c.GetHeader("X-Real-IP"),
+		c.ClientIP(),
+	} {
+		if ip := parseAccessPolicyIP(candidate); ip != "" {
+			return ip
+		}
+	}
+	return "unknown"
+}
+
+func parseAccessPolicyIP(value string) string {
+	value = strings.TrimSpace(value)
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	parsed := net.ParseIP(value)
+	if parsed == nil {
+		return ""
+	}
+	return parsed.String()
+}
+
+func accessPolicyRequestID(c *gin.Context) string {
+	for _, candidate := range []string{
+		c.GetString(common.RequestIdKey),
+		c.GetHeader(common.RequestIdKey),
+		c.GetHeader("X-Request-ID"),
+	} {
+		if value := truncateAccessPolicyValue(strings.TrimSpace(candidate), 128); value != "" {
+			return value
+		}
+	}
+	return common.NewRequestId()
+}
+
+func truncateAccessPolicyValue(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= max {
+		return value
+	}
+	return value[:max] + "…"
 }
