@@ -58,6 +58,19 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
       type: z.string().min(1, t('Payment type key is required')),
       icon: z.string().optional(),
       min_topup: z.string().optional(),
+      max_topup: z
+        .string()
+        .optional()
+        .refine(
+          (value) => {
+            if (!value?.trim()) return true
+            const trimmed = value.trim()
+            return POSITIVE_DECIMAL_PATTERN.test(trimmed) && Number(trimmed) > 0
+          },
+          {
+            message: t('Maximum top-up must be a positive decimal number'),
+          }
+        ),
       unlock_after_days: z
         .string()
         .optional()
@@ -173,6 +186,21 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
           path: ['audience_linuxdo_score_max'],
         })
       }
+
+      const minTopUp = values.min_topup?.trim()
+      const maxTopUp = values.max_topup?.trim()
+      if (
+        minTopUp &&
+        maxTopUp &&
+        NON_NEGATIVE_DECIMAL_PATTERN.test(minTopUp) &&
+        Number(minTopUp) > Number(maxTopUp)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Minimum top-up cannot exceed maximum top-up'),
+          path: ['max_topup'],
+        })
+      }
     })
 
 type PaymentMethodDialogFormValues = z.infer<
@@ -186,6 +214,7 @@ export type PaymentMethodData = {
   type: string
   icon?: string
   min_topup?: string
+  max_topup?: string
   unlock_after_days?: string
   audience_mode?: 'legacy' | 'all' | 'include' | 'exclude'
   audience_match?: 'any' | 'all'
@@ -280,6 +309,7 @@ export function PaymentMethodDialog({
       type: '',
       icon: '',
       min_topup: '',
+      max_topup: '',
       unlock_after_days: '',
       audience_mode: 'legacy',
       audience_match: 'any',
@@ -308,6 +338,7 @@ export function PaymentMethodDialog({
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
         min_topup: editData.min_topup ?? '',
+        max_topup: editData.max_topup ?? '',
         unlock_after_days: editData.unlock_after_days ?? '',
         audience_mode: editData.audience_mode ?? 'legacy',
         audience_match: editData.audience_match ?? 'any',
@@ -325,6 +356,7 @@ export function PaymentMethodDialog({
         type: '',
         icon: '',
         min_topup: '',
+        max_topup: '',
         unlock_after_days: '',
         audience_mode: 'legacy',
         audience_match: 'any',
@@ -349,6 +381,9 @@ export function PaymentMethodDialog({
     }
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
+    }
+    if (values.max_topup?.trim()) {
+      data.max_topup = values.max_topup.trim()
     }
     if (
       values.unlock_after_days?.trim() &&
@@ -568,6 +603,33 @@ export function PaymentMethodDialog({
                 </FormControl>
                 <FormDescription>
                   {t('Optional minimum recharge amount for this method.')}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='max_topup'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('Maximum credited amount per payment (USD, optional)')}
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min='0.01'
+                    step='0.01'
+                    placeholder={t('e.g., 20')}
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Limit how many US dollars can be credited in one payment. Leave empty for no per-method limit.'
+                  )}
                 </FormDescription>
                 <FormMessage />
               </FormItem>

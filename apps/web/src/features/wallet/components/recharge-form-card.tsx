@@ -59,6 +59,7 @@ import { cn } from '@/lib/utils'
 
 import {
   getPaymentIcon,
+  getPaymentMaxTopup,
   getPaymentTopupRatio,
   getDefaultPaymentType,
   getTopupAvailability,
@@ -554,15 +555,31 @@ export function RechargeFormCard({
                           method.min_topup || 0,
                           getMinTopupAmount(topupInfo)
                         )
-                        const disabled = minTopup > topupAmount
-                        const disabledReason = disabled
-                          ? t('Minimum topup amount: {{amount}}', {
+                        const maxTopup = getPaymentMaxTopup(method)
+                        const belowMinimum = minTopup > topupAmount
+                        const aboveMaximum =
+                          maxTopup !== null && topupAmount > maxTopup
+                        const disabled = belowMinimum || aboveMaximum
+                        let disabledReason: string | undefined
+                        let disabledLabel: string | undefined
+                        if (belowMinimum) {
+                          disabledReason = t(
+                            'Minimum topup amount: {{amount}}',
+                            {
                               amount: minTopup,
-                            })
-                          : undefined
-                        const disabledLabel = disabled
-                          ? `${t('Minimum:')} ${minTopup}`
-                          : undefined
+                            }
+                          )
+                          disabledLabel = `${t('Minimum:')} ${minTopup}`
+                        } else if (aboveMaximum) {
+                          disabledReason = t(
+                            'Maximum top-up amount: {{amount}} USD credited',
+                            { amount: maxTopup }
+                          )
+                          disabledLabel = t(
+                            'Maximum: {{amount}} USD credited',
+                            { amount: maxTopup }
+                          )
+                        }
                         const settlementRule = shouldShowSettlementRule(method)
                           ? getSettlementRule(method)
                           : null

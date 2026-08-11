@@ -26,6 +26,7 @@ describe('payment method JSON validation', () => {
     assert.equal(
       isValidPaymentMethodData({
         name: 'LINUX DO Credit',
+        max_topup: '20',
         settlement_unit: 'LDC',
         topup_ratio: '0.5',
         type: 'epay',
@@ -42,6 +43,18 @@ describe('payment method JSON validation', () => {
         settlement_unit: 'POINTS',
         type: 'provider_method_v2',
         unit_price: '2.75',
+      }),
+      true
+    )
+  })
+
+  test('accepts an optional per-payment credited balance limit', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'LINUX DO Credit',
+        type: 'epay',
+        min_topup: '1',
+        max_topup: '20.5',
       }),
       true
     )
@@ -78,6 +91,11 @@ describe('payment method JSON validation', () => {
       { ...base, topup_ratio: '-1' },
       { ...base, topup_ratio: '1e2' },
       { ...base, topup_ratio: 2 },
+      { ...base, max_topup: '0' },
+      { ...base, max_topup: '-1' },
+      { ...base, max_topup: '1e2' },
+      { ...base, max_topup: 20 },
+      { ...base, min_topup: '50', max_topup: '20' },
       { ...base, unlock_after_days: '-1' },
       { ...base, unlock_after_days: '1.5' },
       { ...base, unlock_after_days: 7 },

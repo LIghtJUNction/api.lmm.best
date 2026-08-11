@@ -22,11 +22,37 @@ import { describe, test } from 'node:test'
 import {
   formatPaymentSettlementRate,
   formatSettlementAmount,
+  getPaymentMaxTopup,
   getPaymentTopupRatio,
   getPaymentSettlementUnit,
 } from './payment-unit'
 
 describe('payment settlement units', () => {
+  test('normalizes the per-payment maximum credited USD', () => {
+    assert.equal(
+      getPaymentMaxTopup({
+        name: 'LINUX DO Credit',
+        type: 'epay',
+        max_topup: '20.5',
+      }),
+      20.5
+    )
+    assert.equal(
+      getPaymentMaxTopup({ name: 'Card', type: 'stripe', max_topup: 100 }),
+      100
+    )
+    for (const maxTopup of ['0', '-1', '1e2', ' 20 ', 'NaN']) {
+      assert.equal(
+        getPaymentMaxTopup({
+          name: 'Invalid method',
+          type: 'epay',
+          max_topup: maxTopup,
+        }),
+        null
+      )
+    }
+  })
+
   test('normalizes a Linux.do LDC price per credited USD', () => {
     assert.deepEqual(
       getPaymentSettlementUnit({

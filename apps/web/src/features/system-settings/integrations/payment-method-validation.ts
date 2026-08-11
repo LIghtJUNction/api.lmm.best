@@ -52,6 +52,11 @@ export function isValidPaymentMethodData(
     typeof item.type !== 'string' ||
     ('icon' in item && typeof item.icon !== 'string') ||
     ('min_topup' in item && typeof item.min_topup !== 'string') ||
+    ('max_topup' in item &&
+      (typeof item.max_topup !== 'string' ||
+        !POSITIVE_DECIMAL_PATTERN.test(item.max_topup) ||
+        Number(item.max_topup) <= 0 ||
+        !Number.isFinite(Number(item.max_topup)))) ||
     ('unlock_after_days' in item &&
       (typeof item.unlock_after_days !== 'string' ||
         !NON_NEGATIVE_INTEGER_PATTERN.test(item.unlock_after_days) ||
@@ -66,6 +71,15 @@ export function isValidPaymentMethodData(
   }
 
   const record = item as Record<string, unknown>
+
+  if (
+    typeof record.min_topup === 'string' &&
+    typeof record.max_topup === 'string' &&
+    NON_NEGATIVE_DECIMAL_PATTERN.test(record.min_topup) &&
+    Number(record.min_topup) > Number(record.max_topup)
+  ) {
+    return false
+  }
 
   if (
     !('audience_mode' in record) &&

@@ -36,6 +36,9 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
 		return
 	}
+	if !requirePaymentMethodTopUpWithinLimit(c, model.PaymentMethodWaffoPancake, req.Amount) {
+		return
+	}
 
 	id := c.GetInt("id")
 	group, err := model.GetUserGroup(id, true)
@@ -355,6 +358,9 @@ func RequestWaffoPancakePay(c *gin.Context) {
 	}
 	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
+		return
+	}
+	if !requirePaymentMethodTopUpWithinLimit(c, model.PaymentMethodWaffoPancake, req.Amount) {
 		return
 	}
 

@@ -281,7 +281,7 @@ func availablePaymentMethods(complianceConfirmed bool) []map[string]string {
 func sanitizedPaymentMethods(methods []map[string]string) []map[string]string {
 	allowed := map[string]struct{}{
 		"name": {}, "type": {}, "icon": {}, "color": {}, "min_topup": {},
-		"settlement_unit": {}, "unit_price": {}, "topup_ratio": {},
+		"max_topup": {}, "settlement_unit": {}, "unit_price": {}, "topup_ratio": {},
 	}
 	result := make([]map[string]string, 0, len(methods))
 	for _, method := range methods {
@@ -560,6 +560,9 @@ func RequestEpay(c *gin.Context) {
 	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
 		return
 	}
+	if !requirePaymentMethodTopUpWithinLimit(c, req.PaymentMethod, int64Amount) {
+		return
+	}
 
 	id := c.GetInt("id")
 	group, err := getTopupUserGroup(id)
@@ -813,6 +816,9 @@ func RequestAmount(c *gin.Context) {
 	}
 	id := c.GetInt("id")
 	if req.PaymentMethod != "" && !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+		return
+	}
+	if req.PaymentMethod != "" && !requirePaymentMethodTopUpWithinLimit(c, req.PaymentMethod, req.Amount) {
 		return
 	}
 	group, err := getTopupUserGroup(id)

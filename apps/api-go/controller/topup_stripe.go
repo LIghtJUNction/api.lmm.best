@@ -51,6 +51,9 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup())})
 		return
 	}
+	if !requirePaymentMethodTopUpWithinLimit(c, model.PaymentMethodStripe, req.Amount) {
+		return
+	}
 	id := c.GetInt("id")
 	group, err := model.GetUserGroup(id, true)
 	if err != nil {
@@ -75,6 +78,9 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	}
 	if req.Amount < getStripeMinTopup() {
 		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup()), "data": 10})
+		return
+	}
+	if !requirePaymentMethodTopUpWithinLimit(c, model.PaymentMethodStripe, req.Amount) {
 		return
 	}
 	if req.Amount > 10000 {
