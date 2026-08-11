@@ -115,6 +115,7 @@ export function AssistantPlanTool(props: {
   const offersQuery = useQuery({
     queryKey: ['assistant-plan-offers'],
     queryFn: getAssistantPlanOffers,
+    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -144,6 +145,35 @@ export function AssistantPlanTool(props: {
   const recommendedTopupOffer = exactTopupOffer ?? offers[0]
   const readOnly =
     !props.developerAccessGranted || offersQuery.data?.read_only === true
+
+  if (!props.developerAccessGranted) {
+    return (
+      <Alert>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('L1 access required')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Subscription plans and top-up discounts are hidden until an administrator approves L1 access.'
+          )}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={props.onRequestAccess}
+          >
+            {t('Unlock L1 access')}
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              data-icon='inline-end'
+              aria-hidden='true'
+            />
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  }
 
   let planContent: ReactNode = (
     <div className='grid gap-2'>

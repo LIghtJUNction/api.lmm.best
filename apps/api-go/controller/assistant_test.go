@@ -348,7 +348,7 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_REQUIRED")
 }
 
-func TestAssistantPlanOffersAllowL0ReadOnlyLiveRecommendations(t *testing.T) {
+func TestAssistantPlanOffersHidePlansAndDiscountsFromL0(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionPlan{}))
 	user := model.User{
@@ -377,20 +377,19 @@ func TestAssistantPlanOffersAllowL0ReadOnlyLiveRecommendations(t *testing.T) {
 	})
 
 	result := executeAssistantPlanOffersTool(user.Id)
-	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, false, result["ok"])
 	assert.Equal(t, false, result["developer_access_granted"])
-	assert.Equal(t, true, result["read_only"])
+	assert.Equal(t, false, result["read_only"])
 	assert.Equal(t, false, result["checkout_available"])
 	assert.Equal(t, true, result["payment_hidden"])
 	assert.Equal(t, false, result["payment_compliance_confirmed"])
 	plans, ok := result["plans"].([]SubscriptionPlanDTO)
 	require.True(t, ok)
-	require.Len(t, plans, 1)
-	assert.Equal(t, "L0 visible", plans[0].Plan.Title)
+	assert.Empty(t, plans)
 	discounts, ok := result["topup_discounts"].(map[int]float64)
 	require.True(t, ok)
-	assert.Equal(t, map[int]float64{50: 0.9}, discounts)
-	assert.Contains(t, result["message"], "read-only")
+	assert.Empty(t, discounts)
+	assert.Contains(t, result["error"], "L1 access")
 	assert.Contains(t, result["next_step"], "L1 access request")
 }
 

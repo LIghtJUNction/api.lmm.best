@@ -100,38 +100,6 @@ const assistantStatus = {
   },
 }
 
-const assistantReadOnlyOffers = {
-  success: true,
-  data: {
-    ok: true,
-    developer_access_granted: false,
-    read_only: true,
-    checkout_available: true,
-    payment_hidden: true,
-    payment_compliance_confirmed: true,
-    topup_discounts: { 100: 0.8 },
-    plans: [
-      {
-        plan: {
-          id: 2,
-          title: 'Pro',
-          price_amount: 15,
-          currency: 'USD',
-          duration_unit: 'month',
-          duration_value: 1,
-          quota_reset_period: 'monthly',
-          enabled: true,
-          sort_order: 2,
-          allow_balance_pay: true,
-          allow_wallet_overflow: true,
-          max_purchase_per_user: 0,
-          total_amount: 15_000_000,
-        },
-      },
-    ],
-  },
-}
-
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
@@ -502,9 +470,6 @@ describe('AssistantPanel', () => {
       if (url === '/api/user/developer-access/request') {
         return { data: { success: true, data: null } }
       }
-      if (url === '/api/assistant/offers') {
-        return { data: assistantReadOnlyOffers }
-      }
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
@@ -535,40 +500,17 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
       assert.ok(findButton('Ask an administrator to raise my access level'))
-      assert.ok(findButton('Which option is the best value?'))
+      assert.throws(() => findButton('Which option is the best value?'))
       assert.ok(findButton('How is request cost calculated?'))
       assert.ok(findButton('What can I do while access is under review?'))
       assert.ok(findButton('How do I set up Claude Code or CC Switch?'))
 
-      await act(async () => {
-        findButton('Which option is the best value?').click()
-        await flushEffects()
-      })
-      assert.match(
-        document.body.textContent ?? '',
-        /recommend a fit in read-only mode/
-      )
-      assert.equal(document.querySelector('a[href="/wallet"]'), null)
-      await act(async () => {
-        findButton('Compare live plans').click()
-        await flushEffects()
-      })
-      await act(async () =>
-        waitForCondition(
-          () => document.body.textContent?.includes('Pro') === true,
-          'L0 read-only plan advice did not render'
-        )
-      )
-      assert.match(document.body.textContent ?? '', /save 20%/)
-      assert.match(document.body.textContent ?? '', /Read-only plan advice/)
-      assert.ok(document.querySelector('#assistant-expected-credit'))
-      assert.ok(document.querySelector('#assistant-topup-credit'))
-      assert.ok(findButton('Unlock L1 access'))
+      assert.doesNotMatch(document.body.textContent ?? '', /save 20%/)
+      assert.equal(document.querySelector('#assistant-expected-credit'), null)
+      assert.equal(document.querySelector('#assistant-topup-credit'), null)
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
 
       await act(async () => {
-        findButton('Clear conversation').click()
-        await flushEffects()
         findButton('How do I set up Claude Code or CC Switch?').click()
         await flushEffects()
         findButton('Open client setup guide').click()
