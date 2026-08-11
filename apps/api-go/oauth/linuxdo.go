@@ -26,12 +26,13 @@ func init() {
 type LinuxDOProvider struct{}
 
 type linuxdoUser struct {
-	Id         int    `json:"id"`
-	Username   string `json:"username"`
-	Name       string `json:"name"`
-	Active     bool   `json:"active"`
-	TrustLevel int    `json:"trust_level"`
-	Silenced   bool   `json:"silenced"`
+	Id                int      `json:"id"`
+	Username          string   `json:"username"`
+	Name              string   `json:"name"`
+	Active            bool     `json:"active"`
+	TrustLevel        int      `json:"trust_level"`
+	Silenced          bool     `json:"silenced"`
+	GamificationScore *float64 `json:"gamification_score"`
 }
 
 func (p *LinuxDOProvider) GetName() string {
@@ -155,16 +156,66 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 
 	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo success: id=%d, username=%s", linuxdoUser.Id, linuxdoUser.Username)
 
+	extra := map[string]any{
+		"trust_level": linuxdoUser.TrustLevel,
+		"active":      linuxdoUser.Active,
+		"silenced":    linuxdoUser.Silenced,
+	}
+	score := linuxdoUser.GamificationScore
+	if score == nil {
+		profileScore, err := fetchLinuxDOGamificationScore(ctx, linuxdoUser.Username)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] unable to read gamification score: %s", err.Error()))
+		} else {
+			score = profileScore
+		}
+	}
+	if score != nil {
+		extra["gamification_score"] = *score
+	}
+
 	return &OAuthUser{
 		ProviderUserID: strconv.Itoa(linuxdoUser.Id),
 		Username:       linuxdoUser.Username,
 		DisplayName:    linuxdoUser.Name,
-		Extra: map[string]any{
-			"trust_level": linuxdoUser.TrustLevel,
-			"active":      linuxdoUser.Active,
-			"silenced":    linuxdoUser.Silenced,
-		},
+		Extra:          extra,
 	}, nil
+}
+
+func fetchLinuxDOGamificationScore(ctx context.Context, username string) (*float64, error) {
+	profileEndpoint := strings.TrimRight(
+		common.GetEnvOrDefaultString("LINUX_DO_PROFILE_ENDPOINT", "https://linux.do/u"),
+		"/",
+	)
+	profileURL := profileEndpoint + "/" + url.PathEscape(username) + ".json"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := http.Client{Timeout: 5 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("profile endpoint returned HTTP %d", res.StatusCode)
+	}
+
+	var profile struct {
+		User struct {
+			GamificationScore *float64 `json:"gamification_score"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&profile); err != nil {
+		return nil, err
+	}
+	if profile.User.GamificationScore == nil {
+		return nil, fmt.Errorf("profile response did not include gamification_score")
+	}
+	return profile.User.GamificationScore, nil
 }
 
 func (p *LinuxDOProvider) IsUserIDTaken(providerUserID string) bool {

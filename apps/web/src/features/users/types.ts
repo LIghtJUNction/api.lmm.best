@@ -65,6 +65,7 @@ export const userSchema = z.object({
     .optional(),
   trust_level_override: z.number().nullable().optional(),
   trust_level_info: z.any().optional(),
+  payment_restriction_flags: z.number().optional(),
 })
 export type User = z.infer<typeof userSchema>
 

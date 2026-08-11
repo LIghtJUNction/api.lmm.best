@@ -122,6 +122,20 @@ func GetTopUpInfo(c *gin.Context) {
 		return
 	}
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
+	if model.IsPaymentRestricted(user) {
+		common.ApiSuccess(c, neutralTopUpInfo{
+			DeveloperAccessGranted:        access.Granted,
+			ActivationRequired:            !access.Granted,
+			PaymentAvailable:              false,
+			PayMethods:                    []map[string]string{},
+			AmountOptions:                 []int{},
+			Discount:                      map[int]float64{},
+			EnableRedemption:              complianceConfirmed,
+			PaymentComplianceConfirmed:    complianceConfirmed,
+			PaymentComplianceTermsVersion: operation_setting.CurrentComplianceTermsVersion,
+		})
+		return
+	}
 	if !access.Granted {
 		paymentAvailable, minPayment := neutralTopUpAvailability()
 		enableOnlineTopUp := isEpayTopUpEnabled() || isFastPayTopUpEnabled()
@@ -210,6 +224,7 @@ type neutralTopUpInfo struct {
 	EnableCreemTopUp              bool                `json:"enable_creem_topup"`
 	EnableWaffoTopUp              bool                `json:"enable_waffo_topup"`
 	EnableWaffoPancakeTopUp       bool                `json:"enable_waffo_pancake_topup"`
+	EnableRedemption              bool                `json:"enable_redemption"`
 	PayMethods                    []map[string]string `json:"pay_methods"`
 	CreemProducts                 string              `json:"creem_products"`
 	WaffoPayMethods               interface{}         `json:"waffo_pay_methods"`
