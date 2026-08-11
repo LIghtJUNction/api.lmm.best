@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -964,7 +965,7 @@ func executeAssistantSearchTool(c *gin.Context, input map[string]any) map[string
 		return map[string]any{"ok": false, "configured": false, "error": "web search is not configured by the administrator"}
 	}
 	parsed, err := url.Parse(searchURL)
-	if err != nil {
+	if err != nil || setting.ValidateAssistantSearchURL(searchURL) != nil {
 		return map[string]any{"ok": false, "error": "configured search URL is invalid"}
 	}
 	params := parsed.Query()
@@ -982,7 +983,21 @@ func executeAssistantSearchTool(c *gin.Context, input map[string]any) map[string
 		request.Header.Set("Authorization", "Bearer "+key)
 		request.Header.Set("X-API-Key", key)
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialAssistantSearchAddress(ctx, network, address)
+			},
+		},
+		CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			if len(via) >= 3 || setting.ValidateAssistantSearchURL(request.URL.String()) != nil {
+				return errors.New("search provider redirect is not allowed")
+			}
+			return nil
+		},
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return map[string]any{"ok": false, "configured": true, "error": "search provider request failed"}
@@ -1000,6 +1015,39 @@ func executeAssistantSearchTool(c *gin.Context, input map[string]any) map[string
 		data = strings.TrimSpace(string(body))
 	}
 	return map[string]any{"ok": true, "configured": true, "query": query, "results": data}
+}
+
+func dialAssistantSearchAddress(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, errors.New("search provider address is invalid")
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	if ip := net.ParseIP(host); ip != nil {
+		if !setting.IsAssistantSearchPublicIP(ip) {
+			return nil, errors.New("search provider resolved to a non-public address")
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, errors.New("search provider hostname could not be resolved")
+	}
+	var lastErr error
+	for _, ip := range ips {
+		if !setting.IsAssistantSearchPublicIP(ip) {
+			continue
+		}
+		connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return connection, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr != nil {
+		return nil, errors.New("search provider has no reachable public address")
+	}
+	return nil, errors.New("search provider resolved only to non-public addresses")
 }
 
 func executeAssistantAccountTool(userID int) map[string]any {
