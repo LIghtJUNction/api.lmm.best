@@ -49,8 +49,9 @@ func TestHandleGroupRatioAppliesTrustLevelDiscount(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&user).Error)
 	require.NoError(t, db.Create(&model.TopUp{
-		UserId: user.Id, TradeNo: "trust-price-paid", Amount: 100 * int64(common.QuotaPerUnit),
-		Money: 100.0, Status: common.TopUpStatusSuccess, PaymentProvider: model.PaymentProviderStripe,
+		UserId: user.Id, TradeNo: "trust-price-paid", Amount: 100,
+		CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100.0,
+		Status: common.TopUpStatusSuccess, PaymentProvider: model.PaymentProviderStripe,
 		CompleteTime: time.Now().Unix(),
 	}).Error)
 

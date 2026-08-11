@@ -30,10 +30,10 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
 import type { TrustLevelTier } from '@/stores/auth-store'
 
+import { formatCreditBalance, formatCreditValue } from '../lib'
 import type { UserWalletData } from '../types'
 
 interface TrustLevelPanelProps {
@@ -105,12 +105,13 @@ export function TrustLevelPanel({
   const previousAmount = currentTier?.min_paid_amount ?? 0
   const nextAmount = nextTier?.min_paid_amount ?? previousAmount
   const amountRange = Math.max(nextAmount - previousAmount, 1)
+  const creditedAmountUSD = info?.paid_amount ?? 0
   const progress = info?.next_level
     ? Math.min(
         100,
         Math.max(
           0,
-          (((info.paid_amount ?? 0) - previousAmount) / amountRange) * 100
+          ((creditedAmountUSD - previousAmount) / amountRange) * 100
         )
       )
     : 100
@@ -177,15 +178,15 @@ export function TrustLevelPanel({
               </span>
             </div>
             <Progress value={progress} className='h-2' />
-            <div className='text-muted-foreground flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs'>
+            <div className='text-muted-foreground flex flex-wrap justify-between gap-x-4 gap-y-1 text-[11px] leading-4'>
               <span>
-                {t('Verified top-ups')}:{' '}
-                {formatCurrencyFromUSD(info?.paid_amount ?? 0)}
+                {t('Eligible credited amount (USD)')}:{' '}
+                {formatCreditBalance(creditedAmountUSD)}
               </span>
               {info?.amount_to_next_level != null && info.next_level && (
                 <span>
-                  {t('{{amount}} more to L{{level}}', {
-                    amount: formatCurrencyFromUSD(info.amount_to_next_level),
+                  {t('{{amount}} credited USD needed for L{{level}}', {
+                    amount: formatCreditValue(info.amount_to_next_level),
                     level: info.next_level,
                   })}
                 </span>
@@ -282,7 +283,7 @@ export function TrustLevelPanel({
                   <p className='text-muted-foreground mt-1 truncate text-[10px]'>
                     {tier.min_paid_amount === 0
                       ? t('No minimum')
-                      : formatCurrencyFromUSD(tier.min_paid_amount)}
+                      : formatCreditBalance(tier.min_paid_amount)}
                   </p>
                   <p
                     className='text-muted-foreground mt-2 line-clamp-2 text-[10px] leading-4'
@@ -298,6 +299,11 @@ export function TrustLevelPanel({
             {t(
               'Only successful external top-ups count. Long periods without API activity can reduce automatic levels.'
             )}
+            <span className='mt-1 block'>
+              {t(
+                'This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.'
+              )}
+            </span>
           </p>
         </div>
       </div>

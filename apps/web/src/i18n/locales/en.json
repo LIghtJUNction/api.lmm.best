@@ -6177,6 +6177,9 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Eligible credited amount (USD)": "Eligible credited amount (USD)",
+    "{{amount}} credited USD needed for L{{level}}": "{{amount}} credited USD needed for L{{level}}",
+    "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded."
   }
 }

@@ -6177,6 +6177,9 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Eligible credited amount (USD)": "Số tiền được cộng hợp lệ (USD)",
+    "{{amount}} credited USD needed for L{{level}}": "Cần thêm {{amount}} USD được cộng để đạt L{{level}}",
+    "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "Đây là số tiền được cộng vào số dư API, không phải số tiền thực tế bị trừ. Các khoản thanh toán bằng điểm LinuxDO Credit không được tính."
   }
 }

@@ -35,9 +35,11 @@ func LocalAcceptanceDeveloperAccessEnabled() bool {
 }
 
 type TrustLevelInfo struct {
-	Level                int      `json:"level"`
-	AutomaticLevel       int      `json:"automatic_level"`
-	OverrideLevel        *int     `json:"override_level"`
+	Level          int  `json:"level"`
+	AutomaticLevel int  `json:"automatic_level"`
+	OverrideLevel  *int `json:"override_level"`
+	// PaidAmount is the eligible API credit amount in USD. It intentionally
+	// does not represent the gateway's settlement amount.
 	PaidAmount           float64  `json:"paid_amount"`
 	DiscountRatio        float64  `json:"discount_ratio"`
 	DiscountPercent      float64  `json:"discount_percent"`
@@ -116,6 +118,8 @@ func GetTrustLevelTierViews(viewerLevel int) []TrustLevelTier {
 }
 
 type paidTopUpAggregate struct {
+	// PaidAmountMicros stores eligible credited API balance in USD micros, not
+	// the amount charged by the external payment provider.
 	PaidAmountMicros   int64
 	PaidAmount         float64
 	LastPaidCompleteAt int64
@@ -332,8 +336,7 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 
 	type paidTopUpSummary struct {
 		UserId                 int
-		SettledAmountMicros    int64
-		LegacyPaidAmount       float64
+		CreditedQuota          float64
 		LastPaidCompleteAt     int64
 		ActivationCompleteRows int64
 	}
@@ -341,12 +344,11 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 	activityExpression := "CASE WHEN complete_time > 0 THEN complete_time ELSE create_time END"
 	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
 	selectClause := "user_id, " +
-		"COALESCE(SUM(CASE WHEN settled_amount_micros > 0 THEN settled_amount_micros ELSE 0 END), 0) AS settled_amount_micros, " +
-		"COALESCE(SUM(CASE WHEN settled_amount_micros = 0 THEN money ELSE 0 END), 0) AS legacy_paid_amount, " +
+		"COALESCE(SUM(" + creditedQuotaExpression + "), 0) AS credited_quota, " +
 		"COALESCE(MAX(" + activityExpression + "), 0) AS last_paid_complete_at, " +
 		"COUNT(*) AS activation_complete_rows"
 	query := DB.Model(&TopUp{}).
-		Select(selectClause).
+		Select(selectClause, creditedQuotaArgs...).
 		Where("user_id IN ?", uniqueUserIDs).
 		Where("("+creditedQuotaExpression+") > 0", creditedQuotaArgs...).
 		Group("user_id")
@@ -354,9 +356,7 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 		return nil, err
 	}
 	for _, summary := range summaries {
-		legacyAmountMicros := decimal.NewFromFloat(summary.LegacyPaidAmount).
-			Mul(decimal.NewFromInt(1_000_000)).Round(0).IntPart()
-		paidAmountMicros := summary.SettledAmountMicros + legacyAmountMicros
+		paidAmountMicros := creditedQuotaToUSDMicros(summary.CreditedQuota)
 		result[summary.UserId] = paidTopUpAggregate{
 			PaidAmountMicros:   paidAmountMicros,
 			PaidAmount:         float64(paidAmountMicros) / 1_000_000,
@@ -365,6 +365,17 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 		}
 	}
 	return result, nil
+}
+
+func creditedQuotaToUSDMicros(creditedQuota float64) int64 {
+	if creditedQuota <= 0 || common.QuotaPerUnit <= 0 {
+		return 0
+	}
+	return decimal.NewFromFloat(creditedQuota).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Mul(decimal.NewFromInt(1_000_000)).
+		Round(0).
+		IntPart()
 }
 
 func invalidatePaidTopUpAggregate(userID int) {

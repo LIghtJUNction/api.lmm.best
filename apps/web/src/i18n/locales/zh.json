@@ -6177,6 +6177,9 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Eligible credited amount (USD)": "计入升级的到账金额（美元）",
+    "{{amount}} credited USD needed for L{{level}}": "距离 L{{level}} 还需要 {{amount}} 美元到账金额",
+    "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "这是计入 API 余额的到账金额，不是实际扣款金额。LinuxDO Credit 积分支付不计入升级进度。"
   }
 }

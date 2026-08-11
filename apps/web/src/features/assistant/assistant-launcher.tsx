@@ -66,15 +66,17 @@ export function AssistantLauncher() {
     <>
       <Button
         type='button'
-        size='icon-lg'
-        className='fixed right-4 bottom-4 z-40 size-12 rounded-full shadow-lg sm:right-6 sm:bottom-6'
+        size='default'
+        className='fixed right-4 bottom-20 z-50 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-20'
         aria-label={t('Open AI assistant')}
         title={t('Open AI assistant')}
+        data-testid='assistant-launcher'
         onClick={() => showAssistant()}
         onMouseEnter={preload}
         onFocus={preload}
       >
         <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} />
+        <span className='text-sm font-medium'>{t('AI assistant')}</span>
       </Button>
 
       {hasOpened ? (
