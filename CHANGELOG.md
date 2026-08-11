@@ -21,6 +21,10 @@ authenticated users then see it once after their next login.
 - Added the Anthropic-aligned advanced security policy with an Aho-Corasick
   matcher, audit/block actions, digest-only event records, public risk
   statistics and administrator configuration.
+- Added a production-operator customer profile so benign questions about
+  reliability, concurrency, rate limits and observability are not mistaken for
+  abuse; bypass, scanning and brute-force language still follows the security
+  risk path.
 - Added release-note delivery and acknowledgement so a published changelog is
   shown after the user's next login and not repeatedly during an active session.
 - Improved level, payment-visibility, administrator, mobile and chart-display

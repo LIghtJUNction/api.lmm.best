@@ -83,7 +83,7 @@ node apps/web/scripts/production-acceptance.test.mjs
 ## Local operator persona suite
 
 `operator-persona-suite.mjs` is a shell-only, read-mostly regression suite for
-the A–H user profiles used during iteration. It is intentionally local-only:
+the A–I user profiles used during iteration. It is intentionally local-only:
 the runner rejects every non-loopback URL, requires a marker-owned deployment
 workspace, bounds requests and response bodies, and writes a `0600` report
 without response text, cookies, tokens, balances, or API keys.
