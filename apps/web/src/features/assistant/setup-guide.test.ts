@@ -25,6 +25,10 @@ import {
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
   getClaudeSessionCommand,
+  getCodexAPIKeyCommand,
+  getCodexConfig,
+  getCodexConfigPath,
+  getCodexInstallCommand,
   getOpenAICompatibleClientJSON,
 } from './setup-guide'
 
@@ -141,6 +145,38 @@ describe('assistant setup guide', () => {
         null,
         2
       )
+    )
+  })
+
+  test('builds current Codex install and Responses provider configuration', () => {
+    assert.equal(
+      getCodexInstallCommand('linux'),
+      'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+    )
+    assert.equal(
+      getCodexInstallCommand('windows'),
+      'npm install -g @openai/codex'
+    )
+    assert.equal(
+      getCodexAPIKeyCommand('windows'),
+      "$env:LMM_API_KEY='<YOUR_API_KEY>'"
+    )
+    assert.equal(
+      getCodexConfigPath('windows'),
+      '%USERPROFILE%\\.codex\\config.toml'
+    )
+    assert.equal(
+      getCodexConfig('https://api.lmm.best/v1/', 'gpt-5.6-codex'),
+      [
+        'model = "gpt-5.6-codex"',
+        'model_provider = "lmm"',
+        '',
+        '[model_providers.lmm]',
+        'name = "LMM"',
+        'base_url = "https://api.lmm.best/v1"',
+        'env_key = "LMM_API_KEY"',
+        'wire_api = "responses"',
+      ].join('\n')
     )
   })
 })

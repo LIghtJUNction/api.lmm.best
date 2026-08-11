@@ -158,6 +158,7 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 				Parameters: objectSchema(map[string]any{
 					"platform": map[string]any{"type": "string", "enum": []string{"windows", "linux", "macos"}},
 					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "claude-desktop", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
+					"model_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
 				}, []string{"platform", "topic"}),
 			},
 		},
@@ -477,19 +478,22 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 
 	switch name {
 	case "get_service_facts":
-		baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
-		if baseURL == "" {
+		rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
+		baseURL := rootURL
+		if rootURL == "" {
+			rootURL = "the service root shown in the current console"
 			baseURL = "the /v1 endpoint shown in the current console"
 		} else {
 			baseURL += "/v1"
 		}
 		return map[string]any{
-			"ok":                   true,
-			"base_url":             baseURL,
-			"default_model":        setting.GetAssistantSettings().Model,
-			"api_keys_are_private": true,
-			"key_management_path":  "/keys",
-			"write_actions":        "require explicit confirmation in the UI",
+			"ok":                       true,
+			"service_root":             rootURL,
+			"openai_base_url":          baseURL,
+			"client_model_instruction": "Call get_available_models and use an exact model_ids value; the assistant's own model is not a client default.",
+			"api_keys_are_private":     true,
+			"key_management_path":      "/keys",
+			"write_actions":            "require explicit confirmation in the UI",
 		}
 	case "calculate_cost":
 		return executeAssistantCostTool(input)
@@ -572,11 +576,12 @@ func executeAssistantModelsTool(userID int) map[string]any {
 	models := service.GetGroupsEnabledModels(groupNames)
 	sort.Strings(models)
 	return map[string]any{
-		"ok":              true,
-		"groups":          groupNames,
-		"model_ids":       models,
-		"default_model":   setting.GetAssistantSettings().Model,
-		"model_list_path": "/models",
+		"ok":                        true,
+		"groups":                    groupNames,
+		"model_ids":                 models,
+		"model_list_path":           "/models",
+		"selection_required":        true,
+		"assistant_model_is_client": false,
 	}
 }
 
@@ -812,29 +817,29 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 	if rootURL == "<SERVICE_ROOT_URL>" {
 		openAIBaseURL = "<OPENAI_BASE_URL>"
 	}
-	defaultModel := strings.TrimSpace(setting.GetAssistantSettings().Model)
-	if defaultModel == "" {
-		defaultModel = "<MODEL_ID>"
+	clientModel := strings.TrimSpace(inputString(input, "model_id"))
+	if clientModel == "" {
+		clientModel = "<MODEL_ID_FROM_GET_AVAILABLE_MODELS>"
 	}
 
 	result := map[string]any{
-		"ok":               true,
-		"platform":         platform,
-		"topic":            topic,
-		"service_root":     rootURL,
-		"openai_base_url":  openAIBaseURL,
-		"default_model_id": defaultModel,
-		"api_key":          "<YOUR_API_KEY>",
-		"security_note":    "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session.",
+		"ok":              true,
+		"platform":        platform,
+		"topic":           topic,
+		"service_root":    rootURL,
+		"openai_base_url": openAIBaseURL,
+		"client_model_id": clientModel,
+		"api_key":         "<YOUR_API_KEY>",
+		"security_note":   "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session.",
 	}
 
 	switch topic {
 	case "claude-code":
 		installCommand := "curl -fsSL https://claude.ai/install.sh | bash"
-		configuration := fmt.Sprintf("export ANTHROPIC_BASE_URL=%q\nexport ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\nexport ANTHROPIC_MODEL=%q\nclaude", rootURL, defaultModel)
+		configuration := fmt.Sprintf("export ANTHROPIC_BASE_URL=%q\nexport ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\nexport ANTHROPIC_MODEL=%q\nclaude", rootURL, clientModel)
 		if platform == "windows" {
 			installCommand = "winget install Anthropic.ClaudeCode"
-			configuration = fmt.Sprintf("$env:ANTHROPIC_BASE_URL=%q\n$env:ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\n$env:ANTHROPIC_MODEL=%q\nclaude", rootURL, defaultModel)
+			configuration = fmt.Sprintf("$env:ANTHROPIC_BASE_URL=%q\n$env:ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\n$env:ANTHROPIC_MODEL=%q\nclaude", rootURL, clientModel)
 		} else if platform == "macos" {
 			installCommand = "brew install --cask claude-code"
 		}
@@ -860,7 +865,7 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 			"env": map[string]string{
 				"ANTHROPIC_BASE_URL":   rootURL,
 				"ANTHROPIC_AUTH_TOKEN": "<YOUR_API_KEY>",
-				"ANTHROPIC_MODEL":      defaultModel,
+				"ANTHROPIC_MODEL":      clientModel,
 			},
 		}
 		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
@@ -900,7 +905,7 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 		result["install_command"] = "npm install -g @openai/codex"
 		result["api_key_command"] = apiKeyCommand
 		result["config_path"] = "~/.codex/config.toml"
-		result["config_toml"] = fmt.Sprintf("model = %q\nmodel_provider = \"lmm\"\n\n[model_providers.lmm]\nname = \"LMM\"\nbase_url = %q\nenv_key = \"LMM_API_KEY\"\nwire_api = \"responses\"", defaultModel, openAIBaseURL)
+		result["config_toml"] = fmt.Sprintf("model = %q\nmodel_provider = \"lmm\"\n\n[model_providers.lmm]\nname = \"LMM\"\nbase_url = %q\nenv_key = \"LMM_API_KEY\"\nwire_api = \"responses\"", clientModel, openAIBaseURL)
 		result["endpoint_format"] = "OpenAI Responses API; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Install Codex, then create the user-level ~/.codex/config.toml with the returned provider configuration.",

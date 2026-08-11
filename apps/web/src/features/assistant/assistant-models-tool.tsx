@@ -28,7 +28,6 @@ import {
   AlertDescription,
   AlertTitle,
 } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -41,7 +40,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 import { getAssistantAvailableModels } from './api'
 
-export function AssistantModelsTool(props: { defaultModel: string }) {
+export function AssistantModelsTool() {
   const { t } = useTranslation()
   const modelsQuery = useQuery({
     queryKey: ['assistant-available-models'],
@@ -50,7 +49,6 @@ export function AssistantModelsTool(props: { defaultModel: string }) {
     retry: false,
   })
   const models = modelsQuery.data ?? []
-  const defaultModel = props.defaultModel.trim()
 
   let content = (
     <div className='grid max-h-60 gap-1 overflow-y-auto rounded-lg border p-2'>
@@ -123,16 +121,6 @@ export function AssistantModelsTool(props: { defaultModel: string }) {
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-3'>
-        {defaultModel ? (
-          <div className='flex flex-wrap items-center gap-2'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Default assistant model')}
-            </span>
-            <Badge variant='secondary'>
-              <code className='text-xs'>{defaultModel}</code>
-            </Badge>
-          </div>
-        ) : null}
         {content}
         {models.length > 0 ? (
           <CopyButton

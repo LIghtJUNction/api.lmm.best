@@ -103,7 +103,7 @@ async function renderTool(
         <I18nextProvider i18n={i18n}>
           <AssistantKeyTool
             baseUrl='https://api.example.test/v1'
-            defaultModel='deepseek-v4-flash'
+            availableModels={['claude-sonnet-4-5']}
             developerAccessGranted={developerAccessGranted}
             onContinueSetup={onContinueSetup}
           />
@@ -165,7 +165,7 @@ describe('AssistantKeyTool', () => {
       rendered.container.textContent ?? '',
       /https:\/\/api\.example\.test\/v1/
     )
-    assert.match(rendered.container.textContent ?? '', /deepseek-v4-flash/)
+    assert.match(rendered.container.textContent ?? '', /<MODEL_ID>/)
     assert.match(
       rendered.container.textContent ?? '',
       /API key creation requires L1/
@@ -222,7 +222,7 @@ describe('AssistantKeyTool', () => {
     })
     assert.match(rendered.container.textContent ?? '', /API key created/)
     assert.match(rendered.container.textContent ?? '', /sk-created-by-test/)
-    assert.match(rendered.container.textContent ?? '', /deepseek-v4-flash/)
+    assert.match(rendered.container.textContent ?? '', /claude-sonnet-4-5/)
     assert.equal(continued, 0)
 
     await act(async () => {

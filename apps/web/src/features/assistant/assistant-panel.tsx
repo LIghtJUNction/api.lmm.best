@@ -70,6 +70,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toIntlLocale } from '@/i18n/languages'
 
 import {
+  getAssistantAvailableModels,
   getAssistantStatus,
   sendAssistantMessage,
   type AssistantChatMessage,
@@ -512,6 +513,16 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
+  const connectionModelsQuery = useQuery({
+    queryKey: ['assistant-available-models'],
+    queryFn: getAssistantAvailableModels,
+    enabled:
+      props.open &&
+      developerAccessGranted &&
+      (activeTool === 'key' || activeTool === 'setup'),
+    staleTime: 60_000,
+    retry: false,
+  })
   const accountToolActive = activeTool !== null
   let visiblePresets: AssistantPreset[] = []
   if (accountAccessState === 'restricted') {
@@ -683,9 +694,6 @@ export function AssistantPanel(props: {
           <div className='flex flex-wrap items-center gap-2'>
             <SheetTitle>{t('AI assistant')}</SheetTitle>
             <Badge variant='secondary'>{t('Service guide')}</Badge>
-            {statusQuery.data?.model ? (
-              <Badge variant='outline'>{statusQuery.data.model}</Badge>
-            ) : null}
           </div>
           <SheetDescription>{assistantDescription}</SheetDescription>
         </SheetHeader>
@@ -794,7 +802,8 @@ export function AssistantPanel(props: {
                 {activeTool === 'key' && developerAccessGranted ? (
                   <AssistantKeyTool
                     baseUrl={baseUrl}
-                    defaultModel={statusQuery.data?.model ?? ''}
+                    availableModels={connectionModelsQuery.data ?? []}
+                    modelsLoading={connectionModelsQuery.isLoading}
                     developerAccessGranted={developerAccessGranted}
                     onContinueSetup={() => setActiveTool('setup')}
                   />
@@ -806,7 +815,6 @@ export function AssistantPanel(props: {
                 ) : null}
                 {activeTool === 'cost' && developerAccessGranted ? (
                   <AssistantCostTool
-                    defaultModel={statusQuery.data?.model ?? ''}
                     developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
@@ -814,9 +822,7 @@ export function AssistantPanel(props: {
                   <AssistantHandoffTool />
                 ) : null}
                 {activeTool === 'models' && developerAccessGranted ? (
-                  <AssistantModelsTool
-                    defaultModel={statusQuery.data?.model ?? ''}
-                  />
+                  <AssistantModelsTool />
                 ) : null}
                 {activeTool === 'plan' && developerAccessGranted ? (
                   <AssistantPlanTool
@@ -827,7 +833,8 @@ export function AssistantPanel(props: {
                   <AssistantSetupTool
                     rootUrl={baseUrl.replace(/\/v1$/, '')}
                     openAIBaseUrl={baseUrl}
-                    defaultModel={statusQuery.data?.model ?? ''}
+                    availableModels={connectionModelsQuery.data ?? []}
+                    modelsLoading={connectionModelsQuery.isLoading}
                     developerAccessGranted={developerAccessGranted}
                     onCreateKey={() => setActiveTool('key')}
                   />
