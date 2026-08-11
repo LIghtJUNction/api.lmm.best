@@ -26,7 +26,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { nanoid } from 'nanoid'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -43,6 +43,7 @@ import {
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
+  usePromptInputController,
 } from '@/components/ai-elements/prompt-input'
 import {
   sideDrawerContentClassName,
@@ -255,10 +256,42 @@ function AssistantAccountStatusNotice(props: {
   )
 }
 
+function AssistantPromptInputSync(props: {
+  initialMessage?: string
+  initialMessageRevision?: number
+}) {
+  const {
+    textInput: { setInput },
+  } = usePromptInputController()
+  const initialMessage = props.initialMessage?.trim() ?? ''
+  const lastRequest = useRef<{
+    message: string
+    revision?: number
+  } | null>(null)
+
+  useEffect(() => {
+    if (
+      lastRequest.current?.message === initialMessage &&
+      lastRequest.current?.revision === props.initialMessageRevision
+    ) {
+      return
+    }
+
+    lastRequest.current = {
+      message: initialMessage,
+      revision: props.initialMessageRevision,
+    }
+    if (initialMessage) setInput(initialMessage)
+  }, [initialMessage, props.initialMessageRevision, setInput])
+
+  return null
+}
+
 export function AssistantPanel(props: {
   open: boolean
   initialPreset?: AssistantPresetId
   initialMessage?: string
+  initialMessageRevision?: number
   onOpenChange: (open: boolean) => void
 }) {
   const { t, i18n } = useTranslation()
@@ -721,6 +754,10 @@ export function AssistantPanel(props: {
           <Separator className='bg-border/70' />
           <div className='px-3 py-3 sm:px-4'>
             <PromptInputProvider initialInput={props.initialMessage}>
+              <AssistantPromptInputSync
+                initialMessage={props.initialMessage}
+                initialMessageRevision={props.initialMessageRevision}
+              />
               <PromptInput
                 onSubmit={submitMessage}
                 groupClassName='rounded-xl'

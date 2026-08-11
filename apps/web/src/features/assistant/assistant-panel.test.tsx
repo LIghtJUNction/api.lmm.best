@@ -301,6 +301,59 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('syncs queued questions into an already-open assistant input', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/status') {
+        return {
+          data: {
+            success: true,
+            data: { assistant: { enabled: true } },
+          },
+        }
+      }
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderLauncher()
+    try {
+      const launcherButton = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open AI assistant"]'
+      )
+      assert.ok(launcherButton)
+      await act(async () => {
+        launcherButton.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => document.querySelector('textarea') !== null,
+          'Assistant input did not render'
+        )
+      )
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      const question = 'How do I set up Claude Code or CC Switch?'
+
+      await act(async () => {
+        requestAssistantOpen(undefined, question)
+        await flushEffects()
+      })
+      assert.equal(textarea.value, question)
+
+      await setTextareaValue(textarea, 'draft that should be replaced')
+      await act(async () => {
+        requestAssistantOpen(undefined, question)
+        await flushEffects()
+      })
+      assert.equal(textarea.value, question)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('appends guided presets without replacing the current conversation', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
