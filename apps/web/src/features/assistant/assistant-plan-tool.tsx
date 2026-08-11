@@ -111,10 +111,10 @@ export function AssistantPlanTool(props: {
 }) {
   const { t, i18n } = useTranslation()
   const [expectedCredit, setExpectedCredit] = useState('20')
+  const [topupCredit, setTopupCredit] = useState('100')
   const offersQuery = useQuery({
     queryKey: ['assistant-plan-offers'],
     queryFn: getAssistantPlanOffers,
-    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -135,35 +135,15 @@ export function AssistantPlanTool(props: {
     () => getAssistantTopupOffers(offersQuery.data?.topup_discounts),
     [offersQuery.data?.topup_discounts]
   )
-
-  if (!props.developerAccessGranted) {
-    return (
-      <Alert>
-        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
-        <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
-        <AlertDescription>
-          {t(
-            'L0 access is restricted. Explain your real use case to the assistant so it can prepare an L1 recommendation for administrator review.'
-          )}
-        </AlertDescription>
-        <AlertAction>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={props.onRequestAccess}
-          >
-            {t('Unlock L1 access')}
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              strokeWidth={2}
-              data-icon='inline-end'
-              aria-hidden='true'
-            />
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
-  }
+  const topupAmount = Number(topupCredit)
+  const normalizedTopupAmount =
+    Number.isFinite(topupAmount) && topupAmount > 0 ? topupAmount : 0
+  const exactTopupOffer = offers.find(
+    (offer) => offer.amount === normalizedTopupAmount
+  )
+  const recommendedTopupOffer = exactTopupOffer ?? offers[0]
+  const readOnly =
+    !props.developerAccessGranted || offersQuery.data?.read_only === true
 
   let planContent: ReactNode = (
     <div className='grid gap-2'>
@@ -303,18 +283,93 @@ export function AssistantPlanTool(props: {
       </Alert>
     )
   } else if (offers.length > 0) {
+    const discountPercent = recommendedTopupOffer
+      ? new Intl.NumberFormat(toIntlLocale(i18n.language), {
+          maximumFractionDigits: 1,
+        }).format(recommendedTopupOffer.savingsPercent)
+      : ''
     topupContent = (
-      <div className='flex flex-wrap gap-2'>
-        {offers.slice(0, 3).map((offer) => (
-          <Badge key={offer.amount} variant='outline'>
-            {formatCreditBalance(offer.amount)} ·{' '}
-            {t('save {{percent}}%', {
-              percent: new Intl.NumberFormat(toIntlLocale(i18n.language), {
-                maximumFractionDigits: 1,
-              }).format(offer.savingsPercent),
-            })}
-          </Badge>
-        ))}
+      <div className='grid gap-3'>
+        <div className='flex flex-wrap gap-2'>
+          {offers.slice(0, 3).map((offer) => (
+            <Badge key={offer.amount} variant='outline'>
+              {formatCreditBalance(offer.amount)} ·{' '}
+              {t('save {{percent}}%', {
+                percent: new Intl.NumberFormat(toIntlLocale(i18n.language), {
+                  maximumFractionDigits: 1,
+                }).format(offer.savingsPercent),
+              })}
+            </Badge>
+          ))}
+        </div>
+        <div className='grid gap-1.5'>
+          <Label htmlFor='assistant-topup-credit'>
+            {t('Top-up credit to compare (USD)')}
+          </Label>
+          <Input
+            id='assistant-topup-credit'
+            type='number'
+            inputMode='decimal'
+            min={0}
+            step={5}
+            value={topupCredit}
+            onChange={(event) => setTopupCredit(event.target.value)}
+          />
+        </div>
+        {recommendedTopupOffer ? (
+          <div className='grid gap-3 rounded-lg border p-3'>
+            <div className='flex flex-wrap items-center gap-2'>
+              <Badge variant='secondary'>
+                {exactTopupOffer ? t('Configured offer') : t('Suggested offer')}
+              </Badge>
+              {!exactTopupOffer && normalizedTopupAmount > 0 ? (
+                <span className='text-muted-foreground text-xs leading-5'>
+                  {t(
+                    'No exact discount matches {{amount}}. Showing the best current configured offer instead.',
+                    { amount: formatCreditBalance(normalizedTopupAmount) }
+                  )}
+                </span>
+              ) : null}
+            </div>
+            <dl className='grid grid-cols-2 gap-x-4 gap-y-2 text-xs'>
+              <dt className='text-muted-foreground'>
+                {t('Credited API balance')}
+              </dt>
+              <dd className='text-right font-medium'>
+                {formatCreditBalance(recommendedTopupOffer.amount)}
+              </dd>
+              <dt className='text-muted-foreground'>
+                {t('Configured discount')}
+              </dt>
+              <dd className='text-right font-medium'>{discountPercent}%</dd>
+              <dt className='text-muted-foreground'>
+                {t('Estimated discounted base amount')}
+              </dt>
+              <dd className='text-right font-medium'>
+                {formatCreditBalance(
+                  recommendedTopupOffer.amount *
+                    recommendedTopupOffer.multiplier
+                )}
+              </dd>
+              <dt className='text-muted-foreground'>
+                {t('Estimated savings')}
+              </dt>
+              <dd className='text-right font-medium'>
+                {formatCreditBalance(
+                  recommendedTopupOffer.amount *
+                    (1 - recommendedTopupOffer.multiplier)
+                )}
+              </dd>
+            </dl>
+          </div>
+        ) : null}
+        {readOnly ? (
+          <p className='text-muted-foreground text-xs leading-5'>
+            {t(
+              'This read-only estimate applies the configured amount discount only. It does not start a payment; currency, payment method, and group multipliers are shown only after L1 approval.'
+            )}
+          </p>
+        ) : null}
       </div>
     )
   } else {
@@ -326,7 +381,34 @@ export function AssistantPlanTool(props: {
   }
 
   let checkoutContent: ReactNode
-  if (offersQuery.data?.checkout_available) {
+  if (readOnly) {
+    checkoutContent = (
+      <Alert>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Read-only plan advice')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'You can compare live plans and discounts now. Checkout and payment remain locked until an administrator approves L1.'
+          )}
+        </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={props.onRequestAccess}
+          >
+            {t('Unlock L1 access')}
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              data-icon='inline-end'
+              aria-hidden='true'
+            />
+          </Button>
+        </AlertAction>
+      </Alert>
+    )
+  } else if (offersQuery.data?.checkout_available) {
     checkoutContent = (
       <Button variant='outline' render={<Link to='/wallet' />}>
         {t('Review plans and exact checkout prices')}
@@ -361,6 +443,7 @@ export function AssistantPlanTool(props: {
             aria-hidden='true'
           />
           {t('Live plan and discount advisor')}
+          {readOnly ? <Badge variant='outline'>{t('Read-only')}</Badge> : null}
         </CardTitle>
         <CardDescription>
           {t(

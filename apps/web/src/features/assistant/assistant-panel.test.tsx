@@ -100,6 +100,38 @@ const assistantStatus = {
   },
 }
 
+const assistantReadOnlyOffers = {
+  success: true,
+  data: {
+    ok: true,
+    developer_access_granted: false,
+    read_only: true,
+    checkout_available: true,
+    payment_hidden: true,
+    payment_compliance_confirmed: true,
+    topup_discounts: { 100: 0.8 },
+    plans: [
+      {
+        plan: {
+          id: 2,
+          title: 'Pro',
+          price_amount: 15,
+          currency: 'USD',
+          duration_unit: 'month',
+          duration_value: 1,
+          quota_reset_period: 'monthly',
+          enabled: true,
+          sort_order: 2,
+          allow_balance_pay: true,
+          allow_wallet_overflow: true,
+          max_purchase_per_user: 0,
+          total_amount: 15_000_000,
+        },
+      },
+    ],
+  },
+}
+
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
@@ -470,6 +502,9 @@ describe('AssistantPanel', () => {
       if (url === '/api/user/developer-access/request') {
         return { data: { success: true, data: null } }
       }
+      if (url === '/api/assistant/offers') {
+        return { data: assistantReadOnlyOffers }
+      }
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
@@ -511,10 +546,23 @@ describe('AssistantPanel', () => {
       })
       assert.match(
         document.body.textContent ?? '',
-        /prepare an L1 recommendation for your confirmation/
+        /recommend a fit in read-only mode/
       )
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
-      assert.throws(() => findButton('Compare live plans'))
+      await act(async () => {
+        findButton('Compare live plans').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => document.body.textContent?.includes('Pro') === true,
+          'L0 read-only plan advice did not render'
+        )
+      )
+      assert.match(document.body.textContent ?? '', /save 20%/)
+      assert.match(document.body.textContent ?? '', /Read-only plan advice/)
+      assert.ok(document.querySelector('#assistant-expected-credit'))
+      assert.ok(document.querySelector('#assistant-topup-credit'))
       assert.ok(findButton('Unlock L1 access'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
 

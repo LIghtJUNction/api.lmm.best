@@ -327,12 +327,12 @@ export function AssistantPanel(props: {
         },
         restricted: {
           answer: t(
-            'L0 access is restricted. Explain your real use case to me; after I have enough information, I can prepare an L1 recommendation for your confirmation.'
+            'I can compare live plans, calculate current top-up discounts, and recommend a fit in read-only mode. Checkout and payment remain locked until an administrator approves L1.'
           ),
           action: {
             kind: 'tool',
-            label: t('Unlock L1 access'),
-            tool: 'activation',
+            label: t('Compare live plans'),
+            tool: 'plan',
           },
         },
       },
