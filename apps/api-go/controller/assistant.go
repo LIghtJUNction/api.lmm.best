@@ -268,6 +268,10 @@ func PrepareAssistantRequest(c *gin.Context) {
 			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
 		}
 	}
+	if err := model.RecordAssistantProfile(string(userContext.CustomerProfile)); err != nil {
+		// Profile feedback is aggregate-only and must never make the assistant unavailable.
+		common.SysError(fmt.Sprintf("failed to record assistant profile %q: %v", userContext.CustomerProfile, err))
+	}
 	if userContext.CustomerProfile == assistantProfileSecurityRisk && assistantHasHighConfidenceSecurityAbuse(latestMessage) {
 		writeAssistantSecurityRefusal(c, settings, c.GetString("assistant_cache_key"))
 		return

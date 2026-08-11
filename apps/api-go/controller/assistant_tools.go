@@ -305,18 +305,38 @@ func AdminListAssistantHandoffs(c *gin.Context) {
 	common.ApiSuccess(c, leads)
 }
 
-func AdminGetAssistantIntentSummary(c *gin.Context) {
+func assistantSummarySince(c *gin.Context, errorCode string) (int64, bool) {
 	days := 30
 	if raw := strings.TrimSpace(c.Query("days")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 365 {
-			writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_INTENT_DAYS_INVALID", errors.New("days must be between 1 and 365"))
-			return
+			writeAssistantError(c, http.StatusBadRequest, errorCode, errors.New("days must be between 1 and 365"))
+			return 0, false
 		}
 		days = parsed
 	}
-	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	return time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix(), true
+}
+
+func AdminGetAssistantIntentSummary(c *gin.Context) {
+	since, ok := assistantSummarySince(c, "ASSISTANT_INTENT_DAYS_INVALID")
+	if !ok {
+		return
+	}
 	summary, err := model.ListAssistantIntentSummary(since)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, summary)
+}
+
+func AdminGetAssistantProfileSummary(c *gin.Context) {
+	since, ok := assistantSummarySince(c, "ASSISTANT_PROFILE_DAYS_INVALID")
+	if !ok {
+		return
+	}
+	summary, err := model.ListAssistantProfileSummary(since)
 	if err != nil {
 		common.ApiError(c, err)
 		return

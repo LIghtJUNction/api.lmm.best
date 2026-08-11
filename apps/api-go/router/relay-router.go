@@ -72,13 +72,22 @@ func SetRelayRouter(router *gin.Engine) {
 	assistantRouter.Use(middleware.UserAuth())
 	{
 		assistantRouter.GET("/status", controller.GetAssistantStatus)
-		assistantRouter.GET("/pricing", controller.GetAssistantPricing)
 		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
 		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
 		assistantRouter.GET("/handoffs/self", middleware.DisableCache(), controller.GetAssistantHandoff)
 		assistantRouter.POST("/handoffs", middleware.UserCriticalRateLimit("assistant-handoff"), middleware.DisableCache(), controller.SubmitAssistantHandoff)
 		assistantRouter.POST("/tools/create-key", middleware.ConsoleAccessGate(), middleware.UserCriticalRateLimit("assistant-create-key"), middleware.DisableCache(), controller.CreateAssistantDefaultKey)
 	}
+	// Model prices include group ratios and therefore can disclose the same
+	// discounted console inventory as /api/pricing.  Keep this read behind the
+	// developer-access boundary before UserAuth so anonymous and L0 callers
+	// receive the generic 404 instead of a pricing response.
+	assistantPricingRouter := router.Group("/api/assistant")
+	assistantPricingRouter.Use(middleware.RouteTag("relay"))
+	assistantPricingRouter.Use(middleware.SystemPerformanceCheck())
+	assistantPricingRouter.Use(middleware.ConsoleAccessGate())
+	assistantPricingRouter.Use(middleware.UserAuth())
+	assistantPricingRouter.GET("/pricing", controller.GetAssistantPricing)
 	assistantAdminRouter := router.Group("/api/assistant/admin")
 	assistantAdminRouter.Use(middleware.RouteTag("api"))
 	assistantAdminRouter.Use(middleware.AdminAuth())
@@ -86,6 +95,7 @@ func SetRelayRouter(router *gin.Engine) {
 		assistantAdminRouter.GET("/handoffs", controller.AdminListAssistantHandoffs)
 		assistantAdminRouter.POST("/handoffs/:id/resolve", middleware.CriticalRateLimit(), controller.AdminResolveAssistantHandoff)
 		assistantAdminRouter.GET("/intents", controller.AdminGetAssistantIntentSummary)
+		assistantAdminRouter.GET("/profiles", controller.AdminGetAssistantProfileSummary)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

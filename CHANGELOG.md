@@ -18,6 +18,10 @@ authenticated users then see it once after their next login.
   assistant personas/tools and super-administrator funding for assistant
   relay usage. Cache hits now avoid duplicate assistant-intent database writes
   while preserving exact response bytes.
+- Added an administrator-only, aggregate customer-profile summary for the
+  assistant. It records only the profile category and timestamp—never a user
+  ID, email, raw question or conversation—and older backends can omit this
+  optional panel without breaking the support queue.
 - Added the Anthropic-aligned advanced security policy with an Aho-Corasick
   matcher, audit/block actions, digest-only event records, public risk
   statistics and administrator configuration. The same guardrail now covers

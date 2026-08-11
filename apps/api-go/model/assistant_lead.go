@@ -78,6 +78,34 @@ type AssistantIntentSummary struct {
 	Count  int64  `json:"count"`
 }
 
+// AssistantProfileEvent is intentionally aggregate-only. It has no user ID,
+// email, raw message, or account metadata; it exists solely to help an
+// administrator compare onboarding strategies over time.
+type AssistantProfileEvent struct {
+	Id        int    `json:"id" gorm:"primaryKey"`
+	Profile   string `json:"profile" gorm:"type:varchar(64);not null;index"`
+	CreatedAt int64  `json:"created_at" gorm:"not null;index"`
+}
+
+func (AssistantProfileEvent) TableName() string { return "assistant_profile_events" }
+
+type AssistantProfileSummary struct {
+	Profile string `json:"profile"`
+	Count   int64  `json:"count"`
+}
+
+var assistantProfileNames = map[string]struct{}{
+	"unknown":                  {},
+	"technical_cost_sensitive": {},
+	"guided_buyer":             {},
+	"promotion_seeker":         {},
+	"security_risk":            {},
+	"production_operator":      {},
+	"privacy_conscious":        {},
+	"mobile_accessibility":     {},
+	"normal_user":              {},
+}
+
 func assistantMessageContains(message string, terms ...string) bool {
 	for _, term := range terms {
 		if strings.Contains(message, term) {
@@ -253,6 +281,31 @@ func ListAssistantIntentSummary(since int64) ([]AssistantIntentSummary, error) {
 		query = query.Where("created_at >= ?", since)
 	}
 	var summary []AssistantIntentSummary
+	if err := query.Scan(&summary).Error; err != nil {
+		return nil, err
+	}
+	return summary, nil
+}
+
+func RecordAssistantProfile(profile string) error {
+	profile = strings.TrimSpace(profile)
+	if _, ok := assistantProfileNames[profile]; !ok {
+		return errors.New("assistant profile is invalid")
+	}
+	return DB.Create(&AssistantProfileEvent{
+		Profile:   profile,
+		CreatedAt: common.GetTimestamp(),
+	}).Error
+}
+
+func ListAssistantProfileSummary(since int64) ([]AssistantProfileSummary, error) {
+	query := DB.Model(&AssistantProfileEvent{}).
+		Select("profile, COUNT(*) AS count").
+		Group("profile").Order("count DESC, profile ASC")
+	if since > 0 {
+		query = query.Where("created_at >= ?", since)
+	}
+	var summary []AssistantProfileSummary
 	if err := query.Scan(&summary).Error; err != nil {
 		return nil, err
 	}

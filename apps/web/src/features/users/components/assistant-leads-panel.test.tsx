@@ -165,6 +165,17 @@ describe('AssistantLeadsPanel', () => {
           },
         }
       }
+      if (url === '/api/assistant/admin/profiles') {
+        return {
+          data: {
+            success: true,
+            data: [
+              { profile: 'guided_buyer', count: 3 },
+              { profile: 'normal_user', count: 1 },
+            ],
+          },
+        }
+      }
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
@@ -208,6 +219,8 @@ describe('AssistantLeadsPanel', () => {
     assert.ok(requestedStatuses.includes('pending'))
     assert.ok(requestedStatuses.includes('resolved'))
     assert.match(container.textContent ?? '', /6 questions in 30 days/)
+    assert.match(container.textContent ?? '', /4 profile signals in 30 days/)
+    assert.match(container.textContent ?? '', /Guided buyer: 3/)
 
     await act(async () => {
       findButton('Resolved').click()

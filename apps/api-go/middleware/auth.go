@@ -246,6 +246,7 @@ func consoleDiscoveryRoute(method string, path string) bool {
 		return false
 	}
 	for _, prefix := range []string{
+		"/api/assistant/pricing",
 		"/api/channel",
 		"/api/custom-oauth-provider",
 		"/api/data",

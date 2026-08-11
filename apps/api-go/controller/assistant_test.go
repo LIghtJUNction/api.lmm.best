@@ -44,7 +44,7 @@ func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}))
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileEvent{}))
 	withAssistantSettings(t, true, "server-owned-model")
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://api.example.com/"
@@ -188,7 +188,7 @@ func TestPrepareAssistantRequestPreservesBoundedConversation(t *testing.T) {
 func TestPrepareAssistantRequestCacheHitSkipsDuplicateIntentWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}))
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileEvent{}))
 	original := setting.GetAssistantSettings()
 	setting.SetAssistantEnabled(true)
 	setting.SetAssistantCacheEnabled(true)

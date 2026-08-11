@@ -56,10 +56,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import {
   getAssistantIntentSummary,
+  getAssistantProfileSummary,
   listAssistantHandoffs,
   resolveAssistantHandoff,
   type AssistantHandoff,
   type AssistantIntentSummary,
+  type AssistantProfileSummary,
 } from '@/features/assistant/api'
 
 const PENDING_HANDOFFS_QUERY_KEY = [
@@ -71,7 +73,9 @@ const RESOLVED_HANDOFFS_QUERY_KEY = [
   'resolved',
 ] as const
 const INTENT_SUMMARY_QUERY_KEY = ['assistant-admin-intents', 30] as const
+const PROFILE_SUMMARY_QUERY_KEY = ['assistant-admin-profiles', 30] as const
 const EMPTY_INTENTS: AssistantIntentSummary[] = []
+const EMPTY_PROFILES: AssistantProfileSummary[] = []
 
 const INTENT_LABELS: Record<string, string> = {
   onboarding: 'Onboarding and L1',
@@ -82,6 +86,18 @@ const INTENT_LABELS: Record<string, string> = {
   bounty: 'Open-source bounties',
   human_support: 'Human support',
   other: 'Other questions',
+}
+
+const PROFILE_LABELS: Record<string, string> = {
+  technical_cost_sensitive: 'Technical cost-sensitive',
+  guided_buyer: 'Guided buyer',
+  promotion_seeker: 'Promotion seeker',
+  security_risk: 'Security-sensitive',
+  production_operator: 'Production operator',
+  privacy_conscious: 'Privacy-conscious',
+  mobile_accessibility: 'Mobile accessibility',
+  normal_user: 'Normal user',
+  unknown: 'Unknown profile',
 }
 
 function isNotFound(error: unknown): boolean {
@@ -133,13 +149,24 @@ export function AssistantLeadsPanel() {
     staleTime: 30_000,
     retry: false,
   })
+  const profilesQuery = useQuery({
+    queryKey: PROFILE_SUMMARY_QUERY_KEY,
+    queryFn: () => getAssistantProfileSummary(30),
+    staleTime: 30_000,
+    retry: false,
+  })
 
   const pending = pendingQuery.data ?? []
   const resolved = resolvedQuery.data ?? []
   const intents = intentsQuery.data ?? EMPTY_INTENTS
+  const profiles = profilesQuery.data ?? EMPTY_PROFILES
   const totalIntents = useMemo(
     () => intents.reduce((total, item) => total + item.count, 0),
     [intents]
+  )
+  const totalProfiles = useMemo(
+    () => profiles.reduce((total, item) => total + item.count, 0),
+    [profiles]
   )
   const dateTimeFormatter = useMemo(
     () =>
@@ -197,10 +224,13 @@ export function AssistantLeadsPanel() {
     },
   })
 
-  const queries = [pendingQuery, resolvedQuery, intentsQuery]
-  if (queries.some((query) => isNotFound(query.error))) return null
+  const requiredQueries = [pendingQuery, resolvedQuery, intentsQuery]
+  if (requiredQueries.some((query) => isNotFound(query.error))) return null
+  const queries = [...requiredQueries, profilesQuery]
 
-  const firstError = queries.find((query) => query.isError)?.error
+  const firstError = queries.find(
+    (query) => query.isError && !isNotFound(query.error)
+  )?.error
   const isRefreshing = queries.some((query) => query.isFetching)
   const refresh = () =>
     Promise.all(queries.map((query) => query.refetch())).then(() => undefined)
@@ -406,6 +436,26 @@ export function AssistantLeadsPanel() {
               {intents.map((item) => (
                 <Badge key={item.intent} variant='secondary'>
                   {t(INTENT_LABELS[item.intent] ?? 'Other questions')}:{' '}
+                  {item.count}
+                </Badge>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div className='flex flex-wrap gap-2' aria-label={t('Customer profiles')}>
+          {profilesQuery.isLoading ? (
+            <Skeleton className='h-5 w-40' />
+          ) : profilesQuery.isError && !isNotFound(profilesQuery.error) ? null : (
+            <>
+              <Badge variant='outline'>
+                {t('{{count}} profile signals in 30 days', {
+                  count: totalProfiles,
+                })}
+              </Badge>
+              {profiles.map((item) => (
+                <Badge key={item.profile} variant='secondary'>
+                  {t(PROFILE_LABELS[item.profile] ?? 'Unknown profile')}:{' '}
                   {item.count}
                 </Badge>
               ))}
