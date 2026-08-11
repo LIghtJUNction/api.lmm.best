@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -357,12 +359,19 @@ func SendPasswordResetEmail(c *gin.Context) {
 	if _, err := model.GetUniqueUserByEmail(email); err == nil {
 		code := common.GenerateVerificationCode(0)
 		common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
-		link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", system_setting.ServerAddress, email, code)
 		subject := fmt.Sprintf("%s密码重置", common.SystemName)
-		content := fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
-			"<p>点击 <a href='%s'>此处</a> 进行密码重置。</p>"+
-			"<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> %s </p>"+
-			"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, link, link, common.VerificationValidMinutes)
+		content, buildErr := buildPasswordResetEmailContent(
+			system_setting.ServerAddress,
+			common.SystemName,
+			email,
+			code,
+			common.VerificationValidMinutes,
+		)
+		if buildErr != nil {
+			logger.LogError(c.Request.Context(), "failed to build password reset email: "+buildErr.Error())
+			c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+			return
+		}
 		err := common.SendEmail(subject, email, content)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send password reset email to %s: %s", email, err.Error()))
@@ -374,6 +383,28 @@ func SendPasswordResetEmail(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
+}
+
+func buildPasswordResetEmailContent(serverAddress, systemName, email, token string, validMinutes int) (string, error) {
+	resetURL, err := url.Parse(strings.TrimSpace(serverAddress))
+	if err != nil {
+		return "", fmt.Errorf("invalid server address: %w", err)
+	}
+	if resetURL.Host == "" || (resetURL.Scheme != "http" && resetURL.Scheme != "https") {
+		return "", fmt.Errorf("server address must be an absolute http/https URL")
+	}
+	resetURL.Path = strings.TrimRight(resetURL.Path, "/") + "/user/reset"
+	query := resetURL.Query()
+	query.Set("email", email)
+	query.Set("token", token)
+	resetURL.RawQuery = query.Encode()
+
+	safeSystemName := html.EscapeString(systemName)
+	safeLink := html.EscapeString(resetURL.String())
+	return fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
+		"<p>点击 <a href=\"%s\">此处</a> 进行密码重置。</p>"+
+		"<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> %s </p>"+
+		"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", safeSystemName, safeLink, safeLink, validMinutes), nil
 }
 
 type PasswordResetRequest struct {

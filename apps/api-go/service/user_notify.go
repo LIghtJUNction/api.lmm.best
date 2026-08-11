@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,9 +14,9 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
-func NotifyRootUser(t string, subject string, content string) {
+func NotifyRootUser(t string, subject string, content string, values ...interface{}) {
 	user := model.GetRootUser().ToBaseUser()
-	err := NotifyUser(user.Id, user.Email, user.GetSetting(), dto.NewNotify(t, subject, content, nil))
+	err := NotifyUser(user.Id, user.Email, user.GetSetting(), dto.NewNotify(t, subject, content, values))
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to notify root user: %s", err.Error()))
 	}
@@ -105,13 +106,17 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 }
 
 func sendEmailNotify(userEmail string, data dto.Notify) error {
-	// make email content
-	content := data.Content
-	// 处理占位符
-	for _, value := range data.Values {
-		content = strings.Replace(content, dto.ContentValueParam, fmt.Sprintf("%v", value), 1)
-	}
+	content := renderEmailNotification(data.Content, data.Values)
 	return common.SendEmail(data.Title, userEmail, content)
+}
+
+func renderEmailNotification(contentTemplate string, values []interface{}) string {
+	content := contentTemplate
+	for _, value := range values {
+		escapedValue := html.EscapeString(fmt.Sprintf("%v", value))
+		content = strings.Replace(content, dto.ContentValueParam, escapedValue, 1)
+	}
+	return content
 }
 
 func sendBarkNotify(barkURL string, data dto.Notify) error {

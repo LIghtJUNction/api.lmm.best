@@ -53,9 +53,10 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         raw_body = self.rfile.read(length)
         record = {
-            "authorization": self.headers.get("authorization", ""),
+            "authorization_valid": self.headers.get("authorization", "")
+            == "Bearer provider-owned-secret",
             "body": json.loads(raw_body),
-            "caller_secret": self.headers.get("x-caller-secret", ""),
+            "caller_secret_present": bool(self.headers.get("x-caller-secret", "")),
             "content_encoding": self.headers.get("content-encoding", ""),
             "content_type": self.headers.get("content-type", ""),
             "path": self.path,
@@ -65,7 +66,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 output.write(json.dumps(record, sort_keys=True, separators=(",", ":")))
                 output.write("\n")
 
-        if record["authorization"] != "Bearer provider-owned-secret":
+        if not record["authorization_valid"]:
             self.send_response(400)
             self.send_header("content-type", "application/json")
             self.end_headers()

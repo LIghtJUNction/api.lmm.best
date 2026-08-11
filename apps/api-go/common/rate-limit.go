@@ -65,7 +65,10 @@ func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration in
 			}
 		}
 	} else {
-		s := make([]int64, 0, maxRequestNum)
+		// Grow with actual traffic instead of reserving an administrator-provided
+		// maximum up front. A large limit must not turn one request into a large
+		// allocation.
+		s := make([]int64, 0, 1)
 		l.store[key] = &s
 		*(l.store[key]) = append(*(l.store[key]), now)
 	}
