@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  detectAssistantSetupPlatform,
   getCCSwitchClaudeProviderJSON,
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
@@ -27,6 +28,28 @@ import {
 } from './setup-guide'
 
 describe('assistant setup guide', () => {
+  test('detects supported desktop platforms and avoids treating mobile as Linux', () => {
+    assert.equal(detectAssistantSetupPlatform('Windows', ''), 'windows')
+    assert.equal(detectAssistantSetupPlatform('macOS', ''), 'macos')
+    assert.equal(detectAssistantSetupPlatform('Linux', ''), 'linux')
+    assert.equal(
+      detectAssistantSetupPlatform(
+        '',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'
+      ),
+      'macos'
+    )
+    assert.equal(
+      detectAssistantSetupPlatform('', 'Mozilla/5.0 (X11; Linux x86_64)'),
+      'linux'
+    )
+    assert.equal(
+      detectAssistantSetupPlatform('', 'Mozilla/5.0 (Linux; Android 15)'),
+      'windows'
+    )
+    assert.equal(detectAssistantSetupPlatform('', ''), 'windows')
+  })
+
   test('uses current official install commands for each platform', () => {
     assert.equal(
       getClaudeInstallCommand('windows'),

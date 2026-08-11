@@ -41,6 +41,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import {
+  detectAssistantSetupPlatform,
   getCCSwitchClaudeProviderJSON,
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
@@ -65,6 +66,19 @@ const PLATFORM_LABELS: Record<AssistantSetupPlatform, string> = {
   linux: 'Linux',
 }
 type ClientTab = 'claude-code' | 'cc-switch' | 'claude-desktop' | 'chatgpt'
+
+type NavigatorWithUserAgentData = Navigator & {
+  userAgentData?: { platform?: string }
+}
+
+function detectBrowserSetupPlatform(): AssistantSetupPlatform {
+  if (typeof navigator === 'undefined') return 'windows'
+  const browserNavigator = navigator as NavigatorWithUserAgentData
+  return detectAssistantSetupPlatform(
+    browserNavigator.userAgentData?.platform,
+    browserNavigator.userAgent
+  )
+}
 
 function CodeSnippet(props: { label: string; value: string }) {
   return (
@@ -141,7 +155,9 @@ export function AssistantSetupTool(props: {
   onCreateKey: () => void
 }) {
   const { t } = useTranslation()
-  const [platform, setPlatform] = useState<AssistantSetupPlatform>('windows')
+  const [platform, setPlatform] = useState<AssistantSetupPlatform>(
+    detectBrowserSetupPlatform
+  )
   const [clientTab, setClientTab] = useState<ClientTab>('claude-code')
   const model = props.defaultModel || '<MODEL_ID>'
   const installCommand = getClaudeInstallCommand(platform)
@@ -186,6 +202,7 @@ export function AssistantSetupTool(props: {
                 type='button'
                 size='sm'
                 variant={platform === item ? 'default' : 'outline'}
+                aria-pressed={platform === item}
                 onClick={() => setPlatform(item)}
               >
                 {PLATFORM_LABELS[item]}
