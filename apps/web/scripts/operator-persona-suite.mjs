@@ -310,6 +310,11 @@ const personas = [
     label: 'screen-reader-mobile',
     message: '我使用手机和屏幕阅读器，请给我键盘、触摸和大字体友好的操作步骤。',
   },
+  {
+    id: 'I',
+    label: 'production-operator',
+    message: '我需要生产环境的稳定性、并发、延迟和监控告警，请说明限流配置。',
+  },
 ]
 
 async function run() {

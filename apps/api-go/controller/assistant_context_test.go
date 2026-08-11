@@ -43,6 +43,12 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			signal:  "security_sensitive_language",
 		},
 		{
+			name:    "production operator",
+			message: "我需要生产环境的稳定性、并发、延迟和监控告警，请说明限流配置",
+			want:    assistantProfileOperator,
+			signal:  "operations_language",
+		},
+		{
 			name:    "technical",
 			message: "我不想付费，想自建并配置 Claude Code",
 			want:    assistantProfileTechnical,
