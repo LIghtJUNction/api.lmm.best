@@ -16,7 +16,8 @@ authenticated users then see it once after their next login.
   subjects, balances and conversation contents are excluded from the context.
 - Added normalized question caching, user-context isolation, configurable
   assistant personas/tools and super-administrator funding for assistant
-  relay usage.
+  relay usage. Cache hits now avoid duplicate assistant-intent database writes
+  while preserving exact response bytes.
 - Added the Anthropic-aligned advanced security policy with an Aho-Corasick
   matcher, audit/block actions, digest-only event records, public risk
   statistics and administrator configuration.
