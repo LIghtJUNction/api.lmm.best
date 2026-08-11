@@ -409,6 +409,24 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 			return nil, nil, types.NewError(fmt.Errorf("user sensitive words detected: %s", strings.Join(words, ", ")), types.ErrorCodeSensitiveWordsDetected, types.ErrOptionWithSkipRetry())
 		}
 	}
+	if setting.ShouldCheckAdvancedSecurityPrompt() && meta != nil {
+		matches := service.CheckAdvancedSecurityText(meta.CombineText)
+		if len(matches) > 0 {
+			matchIDs := make([]string, 0, len(matches))
+			for _, match := range matches {
+				matchIDs = append(matchIDs, match.RuleID)
+			}
+			logger.LogWarn(s.c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
+			if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
+				return nil, nil, types.NewErrorWithStatusCode(
+					errors.New("prompt blocked by advanced security guardrail"),
+					types.ErrorCodeAdvancedSecurity,
+					http.StatusBadRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+		}
+	}
 	tokens, err := service.EstimateRequestToken(s.c, meta, relayInfo)
 	if err != nil {
 		return nil, nil, types.NewError(err, types.ErrorCodeCountTokenFailed)
