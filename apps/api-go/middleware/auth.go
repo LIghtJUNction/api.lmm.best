@@ -332,7 +332,7 @@ func preActivationRouteAllowed(method string, path string) bool {
 			method == http.MethodPost
 	}
 	switch path {
-	case "/api/setup", "/api/status", "/api/notice", "/api/user-agreement", "/api/privacy-policy", "/api/about", "/api/home_page_content":
+	case "/api/setup", "/api/status", "/api/notice", "/api/user-agreement", "/api/privacy-policy", "/api/about", "/api/home_page_content", "/api/security/policy", "/api/security/stats":
 		return method == http.MethodGet
 	case "/api/verification", "/api/reset_password":
 		return method == http.MethodGet

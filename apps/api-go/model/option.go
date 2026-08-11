@@ -190,6 +190,11 @@ func InitOptionMap() {
 	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
 	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
+	advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
+	common.OptionMap[setting.AdvancedSecurityEnabledOptionKey] = strconv.FormatBool(advancedSecuritySettings.Enabled)
+	common.OptionMap[setting.AdvancedSecurityOnPromptOptionKey] = strconv.FormatBool(advancedSecuritySettings.OnPrompt)
+	common.OptionMap[setting.AdvancedSecurityActionOptionKey] = advancedSecuritySettings.Action
+	common.OptionMap[setting.AdvancedSecurityRulesOptionKey] = setting.AdvancedSecurityRulesToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -226,6 +231,9 @@ func SyncOptions(frequency int) {
 
 func validateOptionValue(key string, value string) error {
 	if err := setting.ValidateAssistantOption(key, value); err != nil {
+		return err
+	}
+	if err := setting.ValidateAdvancedSecurityOption(key, value); err != nil {
 		return err
 	}
 	if key == operation_setting.ToolPriceOptionKey {
@@ -401,6 +409,10 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.ModelRequestRateLimitEnabled = boolValue
 		case "StopOnSensitiveEnabled":
 			setting.StopOnSensitiveEnabled = boolValue
+		case setting.AdvancedSecurityEnabledOptionKey:
+			setting.SetAdvancedSecurityEnabled(boolValue)
+		case setting.AdvancedSecurityOnPromptOptionKey:
+			setting.SetAdvancedSecurityOnPrompt(boolValue)
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -645,6 +657,10 @@ func updateOptionMap(key string, value string) (err error) {
 		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
+	case setting.AdvancedSecurityActionOptionKey:
+		err = setting.UpdateAdvancedSecurityAction(value)
+	case setting.AdvancedSecurityRulesOptionKey:
+		err = setting.UpdateAdvancedSecurityRules(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":
