@@ -106,6 +106,7 @@ func TestTrustLevelDeveloperAccessBoundary(t *testing.T) {
 func TestConsoleAccessGateHidesDiscoveryRoutesWithoutActivatedSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, path := range []string{
+		"/api/assistant/pricing",
 		"/api/channel",
 		"/api/custom-oauth-provider",
 		"/api/data",
@@ -245,6 +246,7 @@ func TestConsoleAccessGateAllowsL1OverrideToRestrictedRoutes(t *testing.T) {
 	user := &model.UserBase{Id: 18, Role: common.RoleCommonUser, TrustLevelOverride: &levelOne}
 
 	for _, path := range []string{
+		"/api/assistant/pricing",
 		"/api/channel",
 		"/api/custom-oauth-provider",
 		"/api/data/self",

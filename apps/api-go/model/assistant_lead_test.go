@@ -12,7 +12,7 @@ import (
 func setupAssistantLeadTestDB(t *testing.T) *User {
 	t.Helper()
 	db := setupConsoleActivationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&AssistantLead{}))
+	require.NoError(t, db.AutoMigrate(&AssistantLead{}, &AssistantProfileEvent{}))
 	user := &User{
 		Username: "assistant-lead-user",
 		Password: "password",
@@ -99,4 +99,25 @@ func TestAssistantHandoffValidationAndIntentSummary(t *testing.T) {
 	require.Len(t, summary, 2)
 	assert.Equal(t, AssistantIntentPlanPurchase, summary[0].Intent)
 	assert.EqualValues(t, 2, summary[0].Count)
+}
+
+func TestAssistantProfileSummaryIsAggregateOnly(t *testing.T) {
+	_ = setupAssistantLeadTestDB(t)
+	require.NoError(t, RecordAssistantProfile("guided_buyer"))
+	require.NoError(t, RecordAssistantProfile("guided_buyer"))
+	require.NoError(t, RecordAssistantProfile("normal_user"))
+
+	summary, err := ListAssistantProfileSummary(0)
+	require.NoError(t, err)
+	require.Len(t, summary, 2)
+	assert.Equal(t, "guided_buyer", summary[0].Profile)
+	assert.EqualValues(t, 2, summary[0].Count)
+	assert.Equal(t, "normal_user", summary[1].Profile)
+	assert.EqualValues(t, 1, summary[1].Count)
+
+	var events []AssistantProfileEvent
+	require.NoError(t, DB.Find(&events).Error)
+	require.Len(t, events, 3)
+	assert.NotContains(t, events[0].Profile, "@")
+	assert.Error(t, RecordAssistantProfile("user@example.com"))
 }

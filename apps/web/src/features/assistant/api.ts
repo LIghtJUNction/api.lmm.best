@@ -102,6 +102,11 @@ export type AssistantIntentSummary = {
   count: number
 }
 
+export type AssistantProfileSummary = {
+  profile: string
+  count: number
+}
+
 export type AssistantReply = {
   content: string
   intent?: AssistantIntent
@@ -383,6 +388,19 @@ export async function getAssistantIntentSummary(
     skipErrorHandler: true,
   })
   return requireAssistantData(response.data, 'Unable to load intent summary')
+}
+
+export async function getAssistantProfileSummary(
+  days = 30
+): Promise<AssistantProfileSummary[]> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantProfileSummary[]>
+  >('/api/assistant/admin/profiles', {
+    params: { days },
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to load profile summary')
 }
 
 export async function resolveAssistantHandoff(
