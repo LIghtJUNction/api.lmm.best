@@ -107,6 +107,7 @@ export const STATIC_I18N_KEYS = [
   'General',
   'Authentication',
   'Request Limits',
+  'Advanced Security',
   'Content',
   'Integrations',
   'Models',
