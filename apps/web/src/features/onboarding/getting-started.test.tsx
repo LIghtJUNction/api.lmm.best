@@ -52,7 +52,7 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
-const { subscribeToAssistantOpen } =
+const { consumeQueuedAssistantMessage, subscribeToAssistantOpen } =
   await import('@/features/assistant/assistant-events')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { GettingStarted } = await import('./getting-started')
@@ -205,6 +205,35 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('getting started payment availability', () => {
+  test('offers guided questions that keep the onboarding action in the assistant input', async () => {
+    const opened: Array<string | undefined> = []
+    const messages: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((preset) => {
+      opened.push(preset ?? undefined)
+      messages.push(consumeQueuedAssistantMessage())
+    })
+    const page = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } })
+    )
+
+    const question = [...page.container.querySelectorAll('button')].find(
+      (button) =>
+        button.textContent?.includes(
+          'What are my Base URL, model ID, and API key?'
+        )
+    )
+    assert.ok(question)
+    await act(async () => {
+      question.click()
+      await flushEffects()
+    })
+
+    assert.deepEqual(opened, [undefined])
+    assert.deepEqual(messages, ['What are my Base URL, model ID, and API key?'])
+    await unmountPage(page)
+    unsubscribe()
+  })
+
   test('opens onboarding guidance once while administrator review is pending', async () => {
     const opened: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((preset) =>
