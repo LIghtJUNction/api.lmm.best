@@ -79,3 +79,29 @@ func TestPaymentAccessGateAllowsOrdinaryUsers(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/pay", nil))
 	assert.Equal(t, http.StatusNoContent, response.Code)
 }
+
+func TestPaymentMethodAccessGateLetsControllerApplyPerMethodRule(t *testing.T) {
+	db := setupPaymentAccessTestDB(t)
+	user := model.User{
+		Username:                "audience-payment",
+		Password:                "password123",
+		PaymentRestrictionFlags: model.PaymentRestrictionLinuxDOHighScore,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set("id", user.Id)
+		c.Next()
+	})
+	router.POST("/pay", PaymentMethodAccessGate(), func(c *gin.Context) {
+		_, loaded := c.Get("payment_user")
+		assert.True(t, loaded)
+		c.Status(http.StatusNoContent)
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/pay", nil))
+	assert.Equal(t, http.StatusNoContent, response.Code)
+}

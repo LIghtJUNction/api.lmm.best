@@ -92,13 +92,20 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const remark = row.original.remark
         const paymentRestrictionFlags =
           row.original.payment_restriction_flags || 0
+        let linuxDOScoreReason: string | null = null
+        if (row.original.linux_do_gamification_score !== undefined) {
+          linuxDOScoreReason = t('LinuxDO community score: {{score}}', {
+            score: row.original.linux_do_gamification_score,
+          })
+        } else if (paymentRestrictionFlags & 2) {
+          linuxDOScoreReason = t('LinuxDO community score exceeded 10,000')
+        }
         const paymentRestrictionReasons = [
           paymentRestrictionFlags & 1
             ? t('Registered with a linux.do email address')
             : null,
-          paymentRestrictionFlags & 2
-            ? t('LinuxDO community score exceeded 10,000')
-            : null,
+          linuxDOScoreReason,
+          row.original.linux_do_id ? t('Uses LinuxDO OAuth') : null,
         ].filter(Boolean) as string[]
 
         return (
@@ -114,7 +121,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
                       <span
                         className='cursor-help text-amber-500'
                         role='img'
-                        aria-label={t('Payment-restricted special account')}
+                        aria-label={t('Payment audience profile')}
                       >
                         ★
                       </span>
@@ -122,7 +129,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
                   />
                   <TooltipContent>
                     <p className='mb-1 text-xs font-medium'>
-                      {t('Payment-restricted special account')}
+                      {t('Payment audience profile')}
                     </p>
                     {paymentRestrictionReasons.map((reason) => (
                       <p key={reason} className='text-xs'>
