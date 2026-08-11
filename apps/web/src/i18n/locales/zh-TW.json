@@ -5462,6 +5462,7 @@
     "Super Large": "超大",
     "Support": "支援",
     "Support for high concurrency with automatic load balancing": "支援高並發和自動負載平衡",
+    "Support message must contain at least 5 characters.": "提交給管理員的說明至少需要 5 個字。",
     "Support request resolved": "支援要求已解決",
     "Support requests are sent to {{email}}.": "客服請求將寄送至 {{email}}。",
     "Support ticket": "支援工單",

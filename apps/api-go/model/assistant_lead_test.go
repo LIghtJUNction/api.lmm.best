@@ -86,6 +86,8 @@ func TestAssistantHandoffValidationAndIntentSummary(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
 	_, err := SubmitAssistantHandoff(user.Id, "")
 	assert.ErrorIs(t, err, ErrAssistantHandoffMessageRequired)
+	_, err = SubmitAssistantHandoff(user.Id, "四个字")
+	assert.ErrorIs(t, err, ErrAssistantHandoffMessageTooShort)
 	_, err = SubmitAssistantHandoff(user.Id, strings.Repeat("问", maxAssistantHandoffRunes+1))
 	assert.ErrorIs(t, err, ErrAssistantHandoffMessageTooLong)
 

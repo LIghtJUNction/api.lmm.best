@@ -5462,6 +5462,7 @@
     "Super Large": "極大",
     "Support": "サポート",
     "Support for high concurrency with automatic load balancing": "自動ロードバランシングによる高並行性のサポート",
+    "Support message must contain at least 5 characters.": "サポートメッセージは5文字以上で入力してください。",
     "Support request resolved": "サポート依頼を解決済みにしました",
     "Support requests are sent to {{email}}.": "サポートへのリクエストは {{email}} に送信されます。",
     "Support ticket": "サポートチケット",

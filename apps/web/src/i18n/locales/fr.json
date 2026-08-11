@@ -5462,6 +5462,7 @@
     "Super Large": "Très grand",
     "Support": "Assistance",
     "Support for high concurrency with automatic load balancing": "Prise en charge de la haute concurrence avec équilibrage de charge automatique",
+    "Support message must contain at least 5 characters.": "Le message d’assistance doit comporter au moins 5 caractères.",
     "Support request resolved": "Demande d’assistance résolue",
     "Support requests are sent to {{email}}.": "Les demandes d’assistance sont envoyées à {{email}}.",
     "Support ticket": "Demande d'assistance",

@@ -564,6 +564,14 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	})
 	assert.Equal(t, "confirmation_required", handoff["status"])
 	assert.Equal(t, "human_support", handoff["action"])
+	shortHandoff := executeAssistantTool(nil, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "request_human_support",
+			Arguments: `{"message":"四个字"}`,
+		},
+	})
+	assert.Equal(t, "message_invalid", shortHandoff["status"])
+	assert.False(t, shortHandoff["ok"].(bool))
 }
 
 func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *testing.T) {

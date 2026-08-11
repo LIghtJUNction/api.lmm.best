@@ -248,10 +248,10 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	}
 
 	switch {
-	case assistantTextContainsAnyValue(signals, "disposable_email", "promotion_language"):
-		return assistantProfilePromotion, signals
 	case assistantTextContainsAnyValue(signals, "security_sensitive_language"):
 		return assistantProfileSecurityRisk, signals
+	case assistantTextContainsAnyValue(signals, "disposable_email", "promotion_language"):
+		return assistantProfilePromotion, signals
 	case assistantTextContainsAnyValue(signals, "operations_language"):
 		return assistantProfileOperator, signals
 	case assistantTextContainsAnyValue(signals, "mobile_accessibility_language"):

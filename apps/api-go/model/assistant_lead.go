@@ -30,12 +30,14 @@ const (
 	AssistantIntentHumanSupport = "human_support"
 	AssistantIntentOther        = "other"
 
+	minAssistantHandoffRunes   = 5
 	maxAssistantHandoffRunes   = 2000
 	maxAssistantAdminNoteRunes = 2000
 )
 
 var (
 	ErrAssistantHandoffMessageRequired = errors.New("support message is required")
+	ErrAssistantHandoffMessageTooShort = errors.New("support message must contain at least 5 characters")
 	ErrAssistantHandoffMessageTooLong  = errors.New("support message must be at most 2000 characters")
 	ErrAssistantLeadNotFound           = errors.New("assistant support request not found")
 	ErrAssistantLeadAlreadyResolved    = errors.New("assistant support request is already resolved")
@@ -136,6 +138,9 @@ func normalizeAssistantHandoffMessage(message string) (string, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return "", ErrAssistantHandoffMessageRequired
+	}
+	if utf8.RuneCountInString(message) < minAssistantHandoffRunes {
+		return "", ErrAssistantHandoffMessageTooShort
 	}
 	if utf8.RuneCountInString(message) > maxAssistantHandoffRunes {
 		return "", ErrAssistantHandoffMessageTooLong

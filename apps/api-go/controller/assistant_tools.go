@@ -270,7 +270,9 @@ func SubmitAssistantHandoff(c *gin.Context) {
 	lead, err := model.SubmitAssistantHandoff(c.GetInt("id"), input.Message)
 	if err != nil {
 		switch {
-		case errors.Is(err, model.ErrAssistantHandoffMessageRequired), errors.Is(err, model.ErrAssistantHandoffMessageTooLong):
+		case errors.Is(err, model.ErrAssistantHandoffMessageRequired),
+			errors.Is(err, model.ErrAssistantHandoffMessageTooShort),
+			errors.Is(err, model.ErrAssistantHandoffMessageTooLong):
 			writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_HANDOFF_INVALID_MESSAGE", err)
 		default:
 			common.ApiError(c, err)

@@ -5462,6 +5462,7 @@
     "Super Large": "Super Large",
     "Support": "Support",
     "Support for high concurrency with automatic load balancing": "Support for high concurrency with automatic load balancing",
+    "Support message must contain at least 5 characters.": "Support message must contain at least 5 characters.",
     "Support request resolved": "Support request resolved",
     "Support requests are sent to {{email}}.": "Support requests are sent to {{email}}.",
     "Support ticket": "Support ticket",
