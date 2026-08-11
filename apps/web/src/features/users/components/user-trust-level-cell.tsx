@@ -16,13 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import { ArrowDown01Icon, ArrowUp01Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import {
   Tooltip,
   TooltipContent,
@@ -109,9 +111,13 @@ export function UserTrustLevelCell({ user }: { user: User }) {
           }
         >
           {pendingLevel === level - 1 ? (
-            <Loader2 className='animate-spin' />
+            <Spinner />
           ) : (
-            <ChevronDown />
+            <HugeiconsIcon
+              icon={ArrowDown01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
           )}
         </TooltipTrigger>
         <TooltipContent>{t('Decrease trust level')}</TooltipContent>
@@ -151,9 +157,13 @@ export function UserTrustLevelCell({ user }: { user: User }) {
           }
         >
           {pendingLevel === level + 1 ? (
-            <Loader2 className='animate-spin' />
+            <Spinner />
           ) : (
-            <ChevronUp />
+            <HugeiconsIcon
+              icon={ArrowUp01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
           )}
         </TooltipTrigger>
         <TooltipContent>{t('Increase trust level')}</TooltipContent>
