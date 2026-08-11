@@ -164,6 +164,30 @@ export function GettingStarted() {
                 <ArrowRight data-icon='inline-end' aria-hidden='true' />
               </Button>
             </form>
+            <div
+              className='mt-3 flex flex-wrap gap-2'
+              aria-label={t(
+                'Choose a common question or ask anything about using LMM.'
+              )}
+            >
+              {[
+                t('What can I do while access is under review?'),
+                t('Which option is the best value?'),
+                t('What are my Base URL, model ID, and API key?'),
+                t('How do I set up Claude Code or CC Switch?'),
+              ].map((question) => (
+                <Button
+                  key={question}
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  className='h-auto min-h-9 whitespace-normal'
+                  onClick={() => requestAssistantOpen(undefined, question)}
+                >
+                  {question}
+                </Button>
+              ))}
+            </div>
             <p className='text-muted-foreground mt-3 text-xs leading-5'>
               {t(
                 'Never paste a password, API key, session cookie, or other secret into the conversation.'
