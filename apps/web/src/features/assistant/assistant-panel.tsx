@@ -87,6 +87,7 @@ import {
 import { AssistantHandoffTool } from './assistant-handoff-tool'
 import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
+import { AssistantModelsTool } from './assistant-models-tool'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { AssistantSetupTool } from './assistant-setup-tool'
 
@@ -105,7 +106,14 @@ type AssistantAction =
   | {
       kind: 'tool'
       label: string
-      tool: 'activation' | 'key' | 'cost' | 'handoff' | 'plan' | 'setup'
+      tool:
+        | 'activation'
+        | 'key'
+        | 'cost'
+        | 'handoff'
+        | 'models'
+        | 'plan'
+        | 'setup'
     }
 
 type AssistantPreset = {
@@ -135,7 +143,14 @@ function getBaseUrl(): string {
 function PresetAction(props: {
   action: AssistantAction
   onToolOpen: (
-    tool: 'activation' | 'key' | 'cost' | 'handoff' | 'plan' | 'setup'
+    tool:
+      | 'activation'
+      | 'key'
+      | 'cost'
+      | 'handoff'
+      | 'models'
+      | 'plan'
+      | 'setup'
   ) => void
 }) {
   const { action } = props
@@ -343,9 +358,9 @@ export function AssistantPanel(props: {
           'Ask me for the current model IDs and routing groups. I will read the account-specific list instead of guessing from a public model name.'
         ),
         action: {
-          kind: 'route',
-          label: t('Open model pricing'),
-          to: '/pricing',
+          kind: 'tool',
+          label: t('View all currently available models'),
+          tool: 'models',
         },
       },
       {
@@ -391,7 +406,14 @@ export function AssistantPanel(props: {
   })
   const [sending, setSending] = useState(false)
   const [activeTool, setActiveTool] = useState<
-    'activation' | 'key' | 'cost' | 'handoff' | 'plan' | 'setup' | null
+    | 'activation'
+    | 'key'
+    | 'cost'
+    | 'handoff'
+    | 'models'
+    | 'plan'
+    | 'setup'
+    | null
   >(null)
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
@@ -649,6 +671,11 @@ export function AssistantPanel(props: {
                   />
                 ) : null}
                 {activeTool === 'handoff' ? <AssistantHandoffTool /> : null}
+                {activeTool === 'models' && accountAccessConfirmed ? (
+                  <AssistantModelsTool
+                    defaultModel={statusQuery.data?.model ?? ''}
+                  />
+                ) : null}
                 {activeTool === 'plan' && accountAccessConfirmed ? (
                   <AssistantPlanTool
                     developerAccessGranted={developerAccessGranted}

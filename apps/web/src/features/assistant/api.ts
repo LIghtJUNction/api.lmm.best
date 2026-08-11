@@ -217,6 +217,17 @@ export async function getAssistantStatus(): Promise<AssistantStatus> {
   return requireAssistantData(response.data, 'Unable to load assistant status')
 }
 
+export async function getAssistantAvailableModels(): Promise<string[]> {
+  const response = await api.get<AssistantAPIResponse<string[]>>(
+    '/api/user/models',
+    {
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Unable to load available models')
+}
+
 export async function createAssistantDefaultKey(
   name: string,
   group: string
