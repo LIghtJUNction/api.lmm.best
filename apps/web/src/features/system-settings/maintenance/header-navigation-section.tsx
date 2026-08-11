@@ -55,6 +55,8 @@ const headerNavSchema = z.object({
   pricingRequireAuth: z.boolean(),
   rankingsEnabled: z.boolean(),
   rankingsRequireAuth: z.boolean(),
+  securityEnabled: z.boolean(),
+  securityRequireAuth: z.boolean(),
   docs: z.boolean(),
   about: z.boolean(),
 })
@@ -89,6 +91,14 @@ const toFormValues = (config: HeaderNavModulesConfig): HeaderNavFormValues => ({
     config.rankings?.requireAuth === undefined
       ? HEADER_NAV_DEFAULT.rankings.requireAuth
       : Boolean(config.rankings.requireAuth),
+  securityEnabled:
+    config.security?.enabled === undefined
+      ? HEADER_NAV_DEFAULT.security.enabled
+      : Boolean(config.security.enabled),
+  securityRequireAuth:
+    config.security?.requireAuth === undefined
+      ? HEADER_NAV_DEFAULT.security.requireAuth
+      : Boolean(config.security.requireAuth),
   docs:
     config.docs === undefined ? HEADER_NAV_DEFAULT.docs : Boolean(config.docs),
   about:
@@ -130,6 +140,11 @@ export function HeaderNavigationSection({
         ...(config.rankings ?? HEADER_NAV_DEFAULT.rankings),
         enabled: values.rankingsEnabled,
         requireAuth: values.rankingsRequireAuth,
+      },
+      security: {
+        ...(config.security ?? HEADER_NAV_DEFAULT.security),
+        enabled: values.securityEnabled,
+        requireAuth: values.securityRequireAuth,
       },
     }
 
@@ -178,7 +193,10 @@ export function HeaderNavigationSection({
   const accessModules: Array<{
     enabledKey: keyof HeaderNavFormValues
     requireAuthKey: keyof HeaderNavFormValues
-    requireAuthDependsOn: 'pricingEnabled' | 'rankingsEnabled'
+    requireAuthDependsOn:
+      | 'pricingEnabled'
+      | 'rankingsEnabled'
+      | 'securityEnabled'
     title: string
     description: string
     requireAuthTitle: string
@@ -204,6 +222,17 @@ export function HeaderNavigationSection({
       requireAuthTitle: t('Require login to view rankings'),
       requireAuthDescription: t(
         'Visitors must authenticate before accessing the rankings page.'
+      ),
+    },
+    {
+      enabledKey: 'securityEnabled',
+      requireAuthKey: 'securityRequireAuth',
+      requireAuthDependsOn: 'securityEnabled',
+      title: t('Security'),
+      description: t('Public page describing this site’s security rules.'),
+      requireAuthTitle: t('Require login to view security page'),
+      requireAuthDescription: t(
+        'Visitors must authenticate before accessing the public security page.'
       ),
     },
   ]

@@ -40,6 +40,7 @@ export type TopNavLink = {
  *   console: true,
  *   pricing: { enabled: true, requireAuth: false },
  *   rankings: { enabled: true, requireAuth: false },
+ *   security: { enabled: true, requireAuth: false },
  *   docs: true,
  *   about: true
  * }
@@ -86,6 +87,15 @@ export function useTopNavLinks(): TopNavLink[] {
   if (rankings && typeof rankings === 'object' && rankings.enabled) {
     const requiresAuth = rankings.requireAuth && !isAuthed
     links.push({ title: t('Rankings'), href: '/rankings', requiresAuth })
+  }
+
+  // Security is an access-controlled public module, just like pricing and
+  // rankings. The default keeps the page public; administrators can hide it
+  // or require authentication through HeaderNavModules.
+  const security = modules?.security
+  if (security && typeof security === 'object' && security.enabled) {
+    const requiresAuth = security.requireAuth && !isAuthed
+    links.push({ title: t('Security'), href: '/security', requiresAuth })
   }
 
   // Paid documentation is never synthesized as a public local route. The
