@@ -30,6 +30,7 @@ import type {
   VerificationMethod,
   VerificationMethods,
 } from '../types'
+import { getPreferredVerificationMethods } from '../types'
 
 interface SecureVerificationDialogProps {
   open: boolean
@@ -59,16 +60,23 @@ export function SecureVerificationDialog({
   emailCodeSent = false,
 }: SecureVerificationDialogProps) {
   const { t } = useTranslation()
+  const preferredMethods = useMemo(
+    () => getPreferredVerificationMethods(methods),
+    [methods]
+  )
   const availableTabs: VerificationMethod[] = useMemo(() => {
     const tabs: VerificationMethod[] = []
-    if (methods.hasEmail) tabs.push('email')
-    if (methods.has2FA) tabs.push('2fa')
-    if (methods.hasPasskey && methods.passkeySupported) tabs.push('passkey')
+    if (preferredMethods.hasEmail) tabs.push('email')
+    if (preferredMethods.hasPasskey) tabs.push('passkey')
     return tabs
-  }, [methods])
+  }, [preferredMethods])
 
   const activeMethod =
-    state.method ?? (availableTabs.length > 0 ? availableTabs[0] : null)
+    state.method && availableTabs.includes(state.method)
+      ? state.method
+      : availableTabs.length > 0
+        ? availableTabs[0]
+        : null
 
   const title =
     state.title ??
@@ -80,7 +88,7 @@ export function SecureVerificationDialog({
     state.description ??
     (availableTabs.length
       ? 'Confirm your identity before accessing this sensitive action.'
-      : 'Bind an email, or enable Two-factor Authentication or Passkey in your profile settings to continue.')
+      : 'Bind an email or set up a Passkey before continuing.')
 
   const handleVerify = () => {
     if (!activeMethod) return
@@ -141,7 +149,7 @@ export function SecureVerificationDialog({
           </div>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
+              'Bind an email or set up a Passkey in your profile to unlock sensitive operations.'
             )}
           </p>
         </div>
@@ -152,13 +160,10 @@ export function SecureVerificationDialog({
           className='gap-4'
         >
           <TabsList>
-            {methods.hasEmail && (
+            {preferredMethods.hasEmail && (
               <TabsTrigger value='email'>{t('Email verification')}</TabsTrigger>
             )}
-            {methods.has2FA && (
-              <TabsTrigger value='2fa'>{t('Authenticator code')}</TabsTrigger>
-            )}
-            {methods.hasPasskey && methods.passkeySupported && (
+            {preferredMethods.hasPasskey && (
               <TabsTrigger value='passkey'>{t('Passkey')}</TabsTrigger>
             )}
           </TabsList>
@@ -203,29 +208,6 @@ export function SecureVerificationDialog({
             </div>
           </TabsContent>
 
-          <TabsContent value='2fa' className='space-y-3'>
-            <p className='text-muted-foreground text-sm'>
-              {t(
-                'Enter the 6-digit Time-based One-Time Password or 8-character backup code from your authenticator app.'
-              )}
-            </p>
-            <Input
-              inputMode='numeric'
-              maxLength={8}
-              value={state.code}
-              onChange={(event) => onCodeChange(event.target.value)}
-              placeholder={t('Enter verification code')}
-              disabled={state.loading}
-              autoFocus={activeMethod === '2fa'}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !verifyDisabled) {
-                  event.preventDefault()
-                  handleVerify()
-                }
-              }}
-            />
-          </TabsContent>
-
           <TabsContent value='passkey' className='space-y-4'>
             <div className='bg-muted/50 flex items-center justify-center rounded-lg p-4'>
               <div className='text-muted-foreground flex items-center gap-3'>
@@ -242,11 +224,6 @@ export function SecureVerificationDialog({
                 </div>
               </div>
             </div>
-            {!methods.passkeySupported && (
-              <p className='text-destructive text-sm'>
-                {t('This device does not support Passkey verification.')}
-              </p>
-            )}
           </TabsContent>
         </Tabs>
       )}

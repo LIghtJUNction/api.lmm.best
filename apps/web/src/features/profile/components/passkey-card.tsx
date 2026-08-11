@@ -112,24 +112,22 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     }
 
     const methods = await fetchVerificationMethods()
-    if (!methods.hasEmail && !methods.has2FA) {
-      // Without 2FA enabled, register directly. The browser-level Passkey prompt
-      // is itself a strong proof of presence, so no extra verification is needed.
+    if (!methods.hasEmail && !methods.hasPasskey) {
+      // The first Passkey is the fallback credential itself, so there is no
+      // existing Passkey available for a step-up proof yet.
       await register()
       return
     }
 
     const requiredMethod: VerificationMethod = methods.hasEmail
       ? 'email'
-      : '2fa'
+      : 'passkey'
     setRestrictedMethod(requiredMethod)
     await startVerification(register, {
       scope: 'passkey.register',
       preferredMethod: requiredMethod,
       title: t('Security verification'),
-      description: t(
-        'Confirm your identity with Two-factor Authentication before registering a Passkey.'
-      ),
+      description: t('Confirm your identity before registering a Passkey.'),
     })
   }, [fetchVerificationMethods, register, startVerification, supported, t])
 
@@ -138,17 +136,13 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     let required: VerificationMethod | null = null
     if (methods.hasEmail) {
       required = 'email'
-    } else if (methods.has2FA) {
-      required = '2fa'
     } else if (methods.hasPasskey) {
       required = 'passkey'
     }
 
     if (!required) {
       toast.error(
-        t(
-          'Please enable Two-factor Authentication or Passkey before proceeding'
-        )
+        t('Please bind an email or set up a Passkey before proceeding')
       )
       return
     }

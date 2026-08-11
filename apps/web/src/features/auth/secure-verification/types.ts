@@ -38,6 +38,38 @@ export interface VerificationMethods {
   passkeySupported: boolean
 }
 
+/**
+ * Sensitive dashboard actions use email when it is bound and otherwise fall
+ * back to the existing Passkey flow. Other account capabilities, such as
+ * signing in with 2FA, are intentionally not exposed as step-up methods.
+ */
+export function getPreferredVerificationMethods(
+  methods: VerificationMethods
+): VerificationMethods {
+  if (methods.hasEmail) {
+    return {
+      ...methods,
+      has2FA: false,
+      hasPasskey: false,
+    }
+  }
+
+  if (methods.hasPasskey && methods.passkeySupported) {
+    return {
+      ...methods,
+      hasEmail: false,
+      has2FA: false,
+    }
+  }
+
+  return {
+    ...methods,
+    hasEmail: false,
+    has2FA: false,
+    hasPasskey: false,
+  }
+}
+
 export interface SecureVerificationState {
   method: VerificationMethod | null
   scope?: SecurityProofScope
