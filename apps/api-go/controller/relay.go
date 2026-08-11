@@ -156,7 +156,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		contains, words := service.CheckSensitiveText(meta.CombineText)
 		if contains {
 			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
-			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
+			// `err` is nil here because request validation succeeded. Passing it
+			// through made the local rejection look like an internal error with no
+			// useful message, and some clients treated it as a retryable failure.
+			newAPIError = types.NewError(
+				errors.New("user sensitive words detected"),
+				types.ErrorCodeSensitiveWordsDetected,
+				types.ErrOptionWithStatusCode(http.StatusBadRequest),
+				types.ErrOptionWithSkipRetry(),
+			)
 			return
 		}
 	}

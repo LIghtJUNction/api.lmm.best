@@ -544,6 +544,20 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		consumeQuota = false
 	}
 
+	if setting.ShouldCheckAdvancedSecurityPrompt() && strings.TrimSpace(midjRequest.Prompt) != "" {
+		matches := service.CheckAdvancedSecurityText(midjRequest.Prompt)
+		if len(matches) > 0 {
+			decision := model.AdvancedSecurityDecisionAudited
+			if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
+				decision = model.AdvancedSecurityDecisionBlocked
+			}
+			service.RecordAdvancedSecurityDetection(c, relayInfo, midjRequest.Prompt, matches, decision)
+			if decision == model.AdvancedSecurityDecisionBlocked {
+				return service.MidjourneyErrorWrapper(constant.MjRequestError, "advanced_security_guardrail")
+			}
+		}
+	}
+
 	//baseURL := common.ChannelBaseURLs[channelType]
 	requestURL := getMjRequestPath(c.Request.URL.String())
 

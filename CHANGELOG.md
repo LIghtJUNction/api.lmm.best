@@ -20,7 +20,10 @@ authenticated users then see it once after their next login.
   while preserving exact response bytes.
 - Added the Anthropic-aligned advanced security policy with an Aho-Corasick
   matcher, audit/block actions, digest-only event records, public risk
-  statistics and administrator configuration.
+  statistics and administrator configuration. The same guardrail now covers
+  text prompts in task/video, Suno and Midjourney submissions before pricing,
+  billing or upstream dispatch; sensitive-word rejections also return a
+  stable non-retryable 400 response.
 - Added a production-operator customer profile so benign questions about
   reliability, concurrency, rate limits and observability are not mistaken for
   abuse; bypass, scanning and brute-force language still follows the security
