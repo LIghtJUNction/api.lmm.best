@@ -141,10 +141,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+	needAdvancedSecurityCheck := setting.ShouldCheckAdvancedSecurityPrompt()
+	advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needCountToken {
+	if needSensitiveCheck || needAdvancedSecurityCheck || needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
@@ -156,6 +158,31 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
 			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
 			return
+		}
+	}
+
+	if needAdvancedSecurityCheck && meta != nil {
+		matches := service.CheckAdvancedSecurityText(meta.CombineText)
+		if len(matches) > 0 {
+			matchIDs := make([]string, 0, len(matches))
+			for _, match := range matches {
+				matchIDs = append(matchIDs, match.RuleID)
+			}
+			logger.LogWarn(c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
+			decision := model.AdvancedSecurityDecisionAudited
+			if advancedSecuritySettings.Action == setting.AdvancedSecurityActionBlock {
+				decision = model.AdvancedSecurityDecisionBlocked
+			}
+			service.RecordAdvancedSecurityDetection(c, relayInfo, meta.CombineText, matches, decision)
+			if decision == model.AdvancedSecurityDecisionBlocked {
+				newAPIError = types.NewErrorWithStatusCode(
+					errors.New("prompt blocked by advanced security guardrail"),
+					types.ErrorCodeAdvancedSecurity,
+					http.StatusBadRequest,
+					types.ErrOptionWithSkipRetry(),
+				)
+				return
+			}
 		}
 	}
 
