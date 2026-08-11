@@ -198,6 +198,46 @@ export interface TwoFASetupData {
 }
 
 // ============================================================================
+// Compensation Gift Type Definitions
+// ============================================================================
+
+/**
+ * A time-boxed compensation gift as shown to the current user.
+ */
+export interface GiftItem {
+  id: number
+  title: string
+  description: string
+  quota: number
+  start_at: number
+  end_at: number
+  min_used_quota: number
+  min_account_age_days: number
+  enabled: boolean
+  created_at: number
+  /** Whether the current user already claimed this gift */
+  claimed: boolean
+  /** Claim unix timestamp when `claimed` is true */
+  claimed_at?: number
+  /** Whether the current user meets all eligibility gates right now */
+  eligible: boolean
+  /** Human-readable reason when `eligible` is false */
+  reason?: string
+}
+
+/** Payload returned by POST /api/user/gift/:id/claim */
+export interface GiftClaimResponse {
+  claim: {
+    id: number
+    gift_id: number
+    user_id: number
+    quota: number
+    created_at: number
+  }
+  already_claimed: boolean
+}
+
+// ============================================================================
 // Checkin Type Definitions
 // ============================================================================
 

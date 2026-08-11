@@ -5970,6 +5970,15 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Unlocks at L1": "Unlocks at L1",
-    "Reach trust level L1 to register one public IP address for direct access.": "Reach trust level L1 to register one public IP address for direct access."
+    "Reach trust level L1 to register one public IP address for direct access.": "Reach trust level L1 to register one public IP address for direct access.",
+    "Compensation Gifts": "Compensation Gifts",
+    "Claim time-limited compensation quota": "Claim time-limited compensation quota",
+    "Claimed": "Claimed",
+    "Ends at {{time}}": "Ends at {{time}}",
+    "Claim": "Claim",
+    "Claiming...": "Claiming...",
+    "You have already claimed this gift": "You have already claimed this gift",
+    "Gift claimed successfully": "Gift claimed successfully",
+    "Failed to claim gift": "Failed to claim gift"
   }
 }

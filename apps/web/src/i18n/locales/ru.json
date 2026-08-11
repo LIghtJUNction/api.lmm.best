@@ -5970,6 +5970,15 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Масштаб",
     "Unlocks at L1": "Открывается на L1",
-    "Reach trust level L1 to register one public IP address for direct access.": "Достигните уровня доверия L1, чтобы зарегистрировать один публичный IP для прямого доступа."
+    "Reach trust level L1 to register one public IP address for direct access.": "Достигните уровня доверия L1, чтобы зарегистрировать один публичный IP для прямого доступа.",
+    "Compensation Gifts": "Компенсационные подарки",
+    "Claim time-limited compensation quota": "Получите ограниченную по времени компенсационную квоту",
+    "Claimed": "Получено",
+    "Ends at {{time}}": "Заканчивается {{time}}",
+    "Claim": "Получить",
+    "Claiming...": "Получение…",
+    "You have already claimed this gift": "Вы уже получили этот подарок",
+    "Gift claimed successfully": "Подарок успешно получен",
+    "Failed to claim gift": "Не удалось получить подарок"
   }
 }
