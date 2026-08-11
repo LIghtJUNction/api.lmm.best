@@ -181,7 +181,6 @@ export type ContentSettings = {
   Chats: string
   AssistantEnabled: boolean
   AssistantModel: string
-  AssistantWeeklyCreditUSD: number
   AssistantAgentLoopEnabled: boolean
   AssistantMaxSteps: number
   AssistantTimeoutSeconds: number
