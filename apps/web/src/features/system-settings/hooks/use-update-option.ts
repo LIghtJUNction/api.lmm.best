@@ -45,6 +45,11 @@ const STATUS_RELATED_KEYS = new Set([
   'AssistantTimeoutSeconds',
   'AssistantCacheEnabled',
   'AssistantCacheTTLMinutes',
+  'AssistantPersona',
+  'AssistantSystemPrompt',
+  'AssistantSearchURL',
+  'AssistantSearchAPIKey',
+  'AssistantSkills',
 ])
 
 export function useUpdateOption() {

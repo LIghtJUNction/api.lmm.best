@@ -24,6 +24,9 @@ const (
 	AssistantIntentClientSetup  = "client_setup"
 	AssistantIntentCost         = "cost"
 	AssistantIntentBounty       = "bounty"
+	AssistantIntentUsage        = "usage"
+	AssistantIntentModels       = "models"
+	AssistantIntentInvitation   = "invitation"
 	AssistantIntentHumanSupport = "human_support"
 	AssistantIntentOther        = "other"
 
@@ -94,6 +97,15 @@ func ClassifyAssistantIntent(message string) string {
 	case assistantMessageContains(normalized,
 		"成本", "费用", "计费", "消耗", "cost", "estimate", "billing", "token price"):
 		return AssistantIntentCost
+	case assistantMessageContains(normalized,
+		"历史调用", "调用数据", "调用统计", "用量统计", "使用统计", "调用记录", "usage", "usage logs", "request history", "statistics"):
+		return AssistantIntentUsage
+	case assistantMessageContains(normalized,
+		"有哪些模型", "模型列表", "可用模型", "模型清单", "available models", "model list", "model ids"):
+		return AssistantIntentModels
+	case assistantMessageContains(normalized,
+		"邀请奖励", "邀请码", "邀请链接", "邀请用户", "affiliate", "referral", "invite reward"):
+		return AssistantIntentInvitation
 	case assistantMessageContains(normalized,
 		"claude code", "cc switch", "cc-switch", "chatgpt", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
 		return AssistantIntentClientSetup

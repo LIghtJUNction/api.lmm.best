@@ -140,6 +140,7 @@ export type ManageUserAction =
   | 'delete'
   | 'add_quota'
   | 'set_trust_level'
+  | 'reset_onboarding'
 
 export type QuotaAdjustMode = 'add' | 'subtract' | 'override'
 

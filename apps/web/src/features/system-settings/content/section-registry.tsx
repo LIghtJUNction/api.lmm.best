@@ -108,6 +108,11 @@ const CONTENT_SECTIONS = [
           AssistantTimeoutSeconds: settings.AssistantTimeoutSeconds,
           AssistantCacheEnabled: settings.AssistantCacheEnabled,
           AssistantCacheTTLMinutes: settings.AssistantCacheTTLMinutes,
+          AssistantPersona: settings.AssistantPersona,
+          AssistantSystemPrompt: settings.AssistantSystemPrompt,
+          AssistantSearchURL: settings.AssistantSearchURL,
+          AssistantSearchAPIKey: settings.AssistantSearchAPIKey,
+          AssistantSkills: settings.AssistantSkills,
         }}
       />
     ),

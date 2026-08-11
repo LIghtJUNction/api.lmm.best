@@ -30,6 +30,7 @@ const ACTION_MESSAGES: Record<ManageUserAction, string> = {
   delete: 'User deleted successfully',
   add_quota: 'Quota adjusted successfully',
   set_trust_level: 'Trust level updated successfully',
+  reset_onboarding: 'User reset to L0 successfully',
 }
 
 /**

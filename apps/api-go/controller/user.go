@@ -1287,6 +1287,29 @@ func ManageUser(c *gin.Context) {
 		})
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return
+	case "reset_onboarding":
+		if user.Role >= common.RoleAdminUser {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		if err := model.ResetUserToL0(user.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.PublishUserAuthCache(user.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if _, err := model.RevokeAllUserSessions(user.Id, "admin_reset_onboarding"); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordManageAuditFor(c, user.Id, "user.reset_onboarding", map[string]interface{}{
+			"username": user.Username,
+			"level":    0,
+		})
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
 	case "add_quota":
 		switch req.Mode {
 		case "add":
