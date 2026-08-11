@@ -35,6 +35,7 @@ import useDialogState from '@/hooks/use-dialog'
 import { useIsSidebarModuleVisible } from '@/hooks/use-sidebar-config'
 import { useUserDisplay } from '@/hooks/use-user-display'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -46,6 +47,7 @@ export function ProfileDropdown() {
   const [open, setOpen] = useDialogState()
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
+  const consoleActivated = isConsoleActivated(user)
   const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
   const isWalletVisible = useIsSidebarModuleVisible('/wallet')
   const avatarName = user?.username || displayName
@@ -102,17 +104,21 @@ export function ProfileDropdown() {
 
           <DropdownMenuSeparator />
 
-          <DropdownMenuItem onClick={() => navigate({ to: '/profile' })}>
-            <User className='size-4' />
-            {t('Profile')}
-          </DropdownMenuItem>
+          {consoleActivated ? (
+            <>
+              <DropdownMenuItem onClick={() => navigate({ to: '/profile' })}>
+                <User className='size-4' />
+                {t('Profile')}
+              </DropdownMenuItem>
 
-          {isWalletVisible && (
-            <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>
-              <Wallet className='size-4' />
-              {t('Wallet')}
-            </DropdownMenuItem>
-          )}
+              {isWalletVisible ? (
+                <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>
+                  <Wallet className='size-4' />
+                  {t('Wallet')}
+                </DropdownMenuItem>
+              ) : null}
+            </>
+          ) : null}
 
           {isSuperAdmin && (
             <DropdownMenuItem

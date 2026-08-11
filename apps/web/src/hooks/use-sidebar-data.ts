@@ -68,11 +68,6 @@ export function useSidebarData(): SidebarData {
               icon: Compass,
             },
             {
-              title: t('Add funds'),
-              url: '/wallet',
-              icon: Wallet,
-            },
-            {
               title: t('Open-source bounties'),
               url: '/open-source-bounties',
               icon: Compass,
