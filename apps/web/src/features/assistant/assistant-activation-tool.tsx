@@ -26,7 +26,6 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -146,14 +145,11 @@ export function AssistantActivationTool(props: {
         <CardTitle>{t('Unlock L1 access')}</CardTitle>
         <CardDescription>
           {t(
-            'Add funds for automatic activation, or send a free explanation to an administrator for manual review.'
+            'Tell the administrator what you want to use the service for. The request is free and must contain at least 5 characters.'
           )}
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-3'>
-        <Button variant='outline' render={<Link to='/wallet' />}>
-          {t('Open recharge and plans')}
-        </Button>
         {request?.status === 'pending' ? (
           <div className='grid gap-3'>
             <p className='text-muted-foreground text-xs leading-5'>

@@ -91,6 +91,7 @@ import { AssistantKeyTool } from './assistant-key-tool'
 import { AssistantModelsTool } from './assistant-models-tool'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { AssistantSetupTool } from './assistant-setup-tool'
+import { AssistantUsageTool } from './assistant-usage-tool'
 
 type AssistantActionPath =
   | '/getting-started'
@@ -115,6 +116,7 @@ type AssistantAction =
         | 'models'
         | 'plan'
         | 'setup'
+        | 'usage'
     }
 
 type AssistantPreset = {
@@ -152,6 +154,7 @@ function PresetAction(props: {
       | 'models'
       | 'plan'
       | 'setup'
+      | 'usage'
   ) => void
 }) {
   const { action } = props
@@ -301,13 +304,13 @@ export function AssistantPanel(props: {
     () => [
       {
         id: 'onboarding',
-        question: t('What can I do while access is under review?'),
+        question: t('Ask an administrator to raise my access level'),
         answer: t(
-          'You can review pricing, add funds, and explore open-source bounties while an administrator reviews your request. Approval unlocks L1 access; no payment is required for manual approval.'
+          'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
         ),
         action: {
           kind: 'tool',
-          label: t('Choose an activation path'),
+          label: t('Unlock L1 access'),
           tool: 'activation',
         },
       },
@@ -379,9 +382,9 @@ export function AssistantPanel(props: {
           'I can summarize your recent requests, tokens, cost, models, and groups. Ask for a time range such as the last 7 or 30 days, or open the detailed usage logs.'
         ),
         action: {
-          kind: 'route',
+          kind: 'tool',
           label: t('Open usage statistics'),
-          to: '/usage-logs',
+          tool: 'usage',
         },
       },
       {
@@ -446,8 +449,9 @@ export function AssistantPanel(props: {
     | 'models'
     | 'plan'
     | 'setup'
+    | 'usage'
     | null
-  >(null)
+  >(props.initialPreset === 'onboarding' ? 'activation' : null)
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
     queryFn: getAssistantStatus,
@@ -463,6 +467,13 @@ export function AssistantPanel(props: {
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
   const accountToolActive = activeTool !== null && activeTool !== 'handoff'
+  const visiblePresets = useMemo(
+    () =>
+      developerAccessGranted
+        ? presets
+        : presets.filter((preset) => preset.id === 'onboarding'),
+    [developerAccessGranted, presets]
+  )
 
   const creditLabel = useMemo(
     () =>
@@ -477,9 +488,17 @@ export function AssistantPanel(props: {
     () => assistantCreditResetLabel(statusQuery.data, i18n.language),
     [i18n.language, statusQuery.data]
   )
+  let assistantFooterStatus = t('Ask for L1 access')
+  if (developerAccessGranted) {
+    assistantFooterStatus = statusQuery.data
+      ? t('Weekly included credit remaining: {{amount}}', {
+          amount: creditLabel,
+        })
+      : t('Weekly included AI credit applies first.')
+  }
 
   const appendPreset = useCallback((preset: AssistantPreset) => {
-    setActiveTool(null)
+    setActiveTool(preset.id === 'onboarding' ? 'activation' : null)
     setEntries((current) => [
       ...current,
       {
@@ -500,10 +519,10 @@ export function AssistantPanel(props: {
     () =>
       subscribeToAssistantOpen((presetId) => {
         if (!presetId) return
-        const preset = presets.find((item) => item.id === presetId)
+        const preset = visiblePresets.find((item) => item.id === presetId)
         if (preset) appendPreset(preset)
       }),
-    [appendPreset, presets]
+    [appendPreset, visiblePresets]
   )
 
   const handleOpenChange = (open: boolean) => {
@@ -519,9 +538,13 @@ export function AssistantPanel(props: {
     try {
       const reply = await sendAssistantMessage(message, history)
       const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
-      const suggestedAction = suggestedPresetId
-        ? presets.find((preset) => preset.id === suggestedPresetId)?.action
+      const suggestedPreset = suggestedPresetId
+        ? presets.find((preset) => preset.id === suggestedPresetId)
         : undefined
+      const suggestedAction =
+        developerAccessGranted || suggestedPreset?.id === 'onboarding'
+          ? suggestedPreset?.action
+          : undefined
       setEntries((current) => [
         ...current,
         {
@@ -543,11 +566,13 @@ export function AssistantPanel(props: {
           ),
           error: true,
           retry: { message, history },
-          action: {
-            kind: 'route',
-            label: t('Contact support'),
-            to: '/support',
-          },
+          action: developerAccessGranted
+            ? {
+                kind: 'route',
+                label: t('Contact support'),
+                to: '/support',
+              }
+            : undefined,
         },
       ])
     } finally {
@@ -589,7 +614,11 @@ export function AssistantPanel(props: {
             ) : null}
           </div>
           <SheetDescription>
-            {t('Guidance for plans, setup, API keys, costs, and support.')}
+            {developerAccessGranted
+              ? t('Guidance for plans, setup, API keys, costs, and support.')
+              : t(
+                  'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+                )}
           </SheetDescription>
         </SheetHeader>
 
@@ -608,7 +637,7 @@ export function AssistantPanel(props: {
                   </p>
                 </div>
                 <div className='grid gap-2'>
-                  {presets.map((preset) => (
+                  {visiblePresets.map((preset) => (
                     <Button
                       key={preset.id}
                       type='button'
@@ -687,7 +716,7 @@ export function AssistantPanel(props: {
                     onRetry={() => void statusQuery.refetch()}
                   />
                 ) : null}
-                {activeTool === 'key' && accountAccessConfirmed ? (
+                {activeTool === 'key' && developerAccessGranted ? (
                   <AssistantKeyTool
                     baseUrl={baseUrl}
                     defaultModel={statusQuery.data?.model ?? ''}
@@ -700,30 +729,37 @@ export function AssistantPanel(props: {
                     onContinueSetup={() => setActiveTool('setup')}
                   />
                 ) : null}
-                {activeTool === 'cost' && accountAccessConfirmed ? (
+                {activeTool === 'cost' && developerAccessGranted ? (
                   <AssistantCostTool
                     defaultModel={statusQuery.data?.model ?? ''}
                     developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
-                {activeTool === 'handoff' ? <AssistantHandoffTool /> : null}
-                {activeTool === 'models' && accountAccessConfirmed ? (
+                {activeTool === 'handoff' && developerAccessGranted ? (
+                  <AssistantHandoffTool />
+                ) : null}
+                {activeTool === 'models' && developerAccessGranted ? (
                   <AssistantModelsTool
                     defaultModel={statusQuery.data?.model ?? ''}
                   />
                 ) : null}
-                {activeTool === 'plan' && accountAccessConfirmed ? (
+                {activeTool === 'plan' && developerAccessGranted ? (
                   <AssistantPlanTool
                     developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
-                {activeTool === 'setup' && accountAccessConfirmed ? (
+                {activeTool === 'setup' && developerAccessGranted ? (
                   <AssistantSetupTool
                     rootUrl={baseUrl.replace(/\/v1$/, '')}
                     openAIBaseUrl={baseUrl}
                     defaultModel={statusQuery.data?.model ?? ''}
                     developerAccessGranted={developerAccessGranted}
                     onCreateKey={() => setActiveTool('key')}
+                  />
+                ) : null}
+                {activeTool === 'usage' && developerAccessGranted ? (
+                  <AssistantUsageTool
+                    developerAccessGranted={developerAccessGranted}
                   />
                 ) : null}
                 <div className='grid gap-3 pt-1'>
@@ -768,7 +804,13 @@ export function AssistantPanel(props: {
               >
                 <PromptInputBody>
                   <PromptInputTextarea
-                    placeholder={t('Ask about plans, setup, keys, or costs...')}
+                    placeholder={
+                      developerAccessGranted
+                        ? t('Ask about plans, setup, keys, or costs...')
+                        : t(
+                            'Write a short explanation of what you want to build or why you need L1 access.'
+                          )
+                    }
                     maxLength={4000}
                     disabled={sending}
                     className='min-h-14'
@@ -776,12 +818,8 @@ export function AssistantPanel(props: {
                 </PromptInputBody>
                 <PromptInputFooter>
                   <span className='text-muted-foreground truncate text-xs'>
-                    {statusQuery.data
-                      ? t('Weekly included credit remaining: {{amount}}', {
-                          amount: creditLabel,
-                        })
-                      : t('Weekly included AI credit applies first.')}
-                    {creditResetLabel
+                    {assistantFooterStatus}
+                    {developerAccessGranted && creditResetLabel
                       ? ` · ${t('Resets {{date}}', { date: creditResetLabel })}`
                       : null}
                   </span>
@@ -792,11 +830,13 @@ export function AssistantPanel(props: {
                 </PromptInputFooter>
               </PromptInput>
             </PromptInputProvider>
-            <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
-              {t(
-                'Weekly system credit is used first. Your wallet is charged only after it runs out.'
-              )}
-            </p>
+            {developerAccessGranted ? (
+              <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
+                {t(
+                  'Weekly system credit is used first. Your wallet is charged only after it runs out.'
+                )}
+              </p>
+            ) : null}
             <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
               {t(
                 'AI answers may be inaccurate. Never send passwords or API keys.'

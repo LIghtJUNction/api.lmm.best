@@ -77,24 +77,6 @@ const user: AuthUser = {
   developer_access_granted: false,
 }
 
-const emptyTopupInfo = {
-  enable_online_topup: false,
-  enable_stripe_topup: false,
-  pay_methods: [],
-  min_topup: 1,
-  stripe_min_topup: 1,
-  amount_options: [],
-  discount: {},
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve
-  })
-  return { promise, resolve }
-}
-
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 20))
 }
@@ -106,7 +88,7 @@ function makeRouter() {
     path: '/getting-started',
     component: GettingStarted,
   })
-  const emptyRoutes = ['/wallet', '/support', '/keys', '/dashboard'].map(
+  const emptyRoutes = ['/challenges', '/support', '/keys', '/dashboard'].map(
     (path) =>
       createRoute({
         getParentRoute: () => rootRoute,
@@ -121,7 +103,6 @@ function makeRouter() {
 }
 
 async function renderPage(
-  topupResponse: Promise<{ data: Record<string, unknown> }>,
   bountyCapability = false,
   bountyResponse: { data: Record<string, unknown> } | Error = {
     data: {
@@ -141,7 +122,6 @@ async function renderPage(
     if (url === '/api/user/self') {
       return { data: { success: true, data: currentUser } }
     }
-    if (url === '/api/user/topup/info') return topupResponse
     if (url === '/api/user/developer-access/request') {
       return { data: { success: true, data: accessRequest } }
     }
@@ -207,87 +187,63 @@ afterEach(() => {
 
 after(() => domWindow.close())
 
-describe('getting started payment availability', () => {
+describe('getting started access boundaries', () => {
   test('opens the AI onboarding conversation once when an L0 user enters', async () => {
     const opened: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((preset) =>
       opened.push(preset)
     )
 
-    const first = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
-      false,
-      undefined,
-      null,
-      { id: 7001 }
-    )
+    const first = await renderPage(false, undefined, null, { id: 7001 })
     assert.deepEqual(opened, ['onboarding'])
     await unmountPage(first)
 
-    const second = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
-      false,
-      undefined,
-      null,
-      { id: 7001 }
-    )
+    const second = await renderPage(false, undefined, null, { id: 7001 })
     assert.deepEqual(opened, ['onboarding'])
     await unmountPage(second)
     unsubscribe()
   })
 
-  test('shows the mandatory three-step tutorial and derives progress from account state', async () => {
-    const l0Page = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } })
-    )
+  test('keeps the setup tutorial out of L0 and derives L1 progress from account state', async () => {
+    const l0Page = await renderPage()
     assert.equal(
       l0Page.container.textContent?.includes('Three steps to get started'),
-      true
+      false
     )
-    assert.equal(l0Page.container.textContent?.includes('0/3'), true)
     assert.equal(
-      l0Page.container.textContent?.includes('L0 tutorial required'),
+      l0Page.container.textContent?.includes('Ask for L1 access'),
       true
     )
-    assert.equal(l0Page.container.textContent?.includes('Current step'), true)
     await unmountPage(l0Page)
 
-    const l1Page = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
-      false,
-      undefined,
-      null,
-      {
-        developer_access_granted: true,
-        onboarding: {
-          activation_complete: true,
-          credential_complete: false,
-          first_request_complete: false,
-          stage: 'credential',
-        },
-      }
-    )
+    const l1Page = await renderPage(false, undefined, null, {
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
     assert.equal(l1Page.container.textContent?.includes('1/3'), true)
     assert.equal(l1Page.container.textContent?.includes('Create API key'), true)
     assert.equal(l1Page.container.textContent?.includes('Continue setup'), true)
     await unmountPage(l1Page)
   })
 
-  test('offers guided questions that keep the onboarding action in the assistant input', async () => {
+  test('offers one administrator access preset for L0', async () => {
     const opened: Array<string | undefined> = []
     const messages: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((preset) => {
       opened.push(preset ?? undefined)
       messages.push(consumeQueuedAssistantMessage())
     })
-    const page = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } })
-    )
+    const page = await renderPage()
 
     const question = [...page.container.querySelectorAll('button')].find(
       (button) =>
         button.textContent?.includes(
-          'What are my Base URL, model ID, and API key?'
+          'Ask an administrator to raise my access level'
         )
     )
     assert.ok(question)
@@ -296,8 +252,8 @@ describe('getting started payment availability', () => {
       await flushEffects()
     })
 
-    assert.deepEqual(opened, [undefined])
-    assert.deepEqual(messages, ['What are my Base URL, model ID, and API key?'])
+    assert.deepEqual(opened, ['onboarding'])
+    assert.deepEqual(messages, [undefined])
     await unmountPage(page)
     unsubscribe()
   })
@@ -317,7 +273,6 @@ describe('getting started payment availability', () => {
     }
 
     const first = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
       false,
       { data: { success: true, data: [] } },
       pendingRequest
@@ -326,7 +281,6 @@ describe('getting started payment availability', () => {
     await unmountPage(first)
 
     const second = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
       false,
       { data: { success: true, data: [] } },
       pendingRequest
@@ -336,74 +290,29 @@ describe('getting started payment availability', () => {
     unsubscribe()
   })
 
-  test('shows a non-actionable checking state while payment availability loads', async () => {
-    const topup = deferred<{ data: Record<string, unknown> }>()
-    const page = await renderPage(topup.promise)
-    assert.equal(
-      page.container.textContent?.includes('Checking payment availability...'),
-      true
-    )
+  test('shows only read-only challenges and the AI access request surface to L0', async () => {
+    const page = await renderPage(true)
+    await act(flushEffects)
+
     assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
-    assert.equal(page.container.querySelector('a[href="/support"]'), null)
-
-    topup.resolve({ data: { success: true, data: emptyTopupInfo } })
-    await act(flushEffects)
-    await unmountPage(page)
-  })
-
-  test('offers the administrator request path when payment is unavailable', async () => {
-    for (const response of [
-      { data: { success: false, message: 'offline' } },
-      { data: { success: true, data: emptyTopupInfo } },
-    ]) {
-      const page = await renderPage(Promise.resolve(response))
-      const expected = response.data.success
-        ? 'Online payment is temporarily unavailable. You can submit an administrator unlock request instead.'
-        : 'Payment availability could not be verified. You can submit an administrator unlock request instead.'
-      assert.equal(page.container.textContent?.includes(expected), true)
-      assert.equal(
-        page.container.textContent?.includes('Choose how to unlock access'),
-        true
-      )
-      assert.ok(page.container.querySelector('button'))
-      assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
-      await unmountPage(page)
-    }
-  })
-
-  test('shows wallet activation and optional challenges only from confirmed live capabilities', async () => {
-    const page = await renderPage(
-      Promise.resolve({
-        data: {
-          success: true,
-          data: {
-            ...emptyTopupInfo,
-            enable_online_topup: true,
-            pay_methods: [{ name: 'Card', type: 'card' }],
-          },
-        },
-      }),
-      true
-    )
-    await act(flushEffects)
-
-    assert.ok(page.container.querySelector('a[href="/wallet"]'))
+    assert.equal(page.gets.includes('/api/user/topup/info'), false)
     assert.equal(
-      page.container.textContent?.includes(
-        'Choose either automatic activation after adding funds or an administrator unlock request.'
-      ),
-      true
-    )
-    assert.equal(
-      page.container.textContent?.includes('Optional open-source challenges'),
+      page.container.textContent?.includes('Open-source challenges'),
       true
     )
     assert.equal(
       page.container.textContent?.includes(
-        'Contributions can earn account credit, but they do not activate access.'
+        'Browse challenges in read-only mode.'
       ),
       true
     )
+    assert.ok(page.container.querySelector('a[href="/challenges"]'))
+    assert.equal(page.container.textContent?.includes('Create API key'), false)
+    assert.equal(
+      page.container.textContent?.includes('Open setup guide'),
+      false
+    )
+    assert.equal(page.container.textContent?.includes('Quick links'), false)
     assert.equal(
       page.gets.some((url) => url.startsWith('/api/open-source-bounties?')),
       true
@@ -412,11 +321,7 @@ describe('getting started payment availability', () => {
   })
 
   test('keeps unavailable optional probes inline and does not retry them', async () => {
-    const page = await renderPage(
-      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
-      true,
-      new Error('Not Found')
-    )
+    const page = await renderPage(true, new Error('Not Found'))
     await act(flushEffects)
 
     const bountyCalls = page.gets.filter((url) =>
@@ -429,12 +334,6 @@ describe('getting started payment availability', () => {
       ),
       true
     )
-
-    const topupConfig = page.getConfigs.find(
-      (_, index) => page.gets[index] === '/api/user/topup/info'
-    )
-    assert.equal(topupConfig?.skipBusinessError, true)
-    assert.equal(topupConfig?.skipErrorHandler, true)
 
     const bountyConfig = page.getConfigs.find((_, index) =>
       page.gets[index].startsWith('/api/open-source-bounties?')

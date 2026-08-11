@@ -25,7 +25,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -135,11 +135,67 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
   const canAccept =
     project.status === 'published' &&
     (acceptanceState === 'available' || acceptanceState === 'retryable')
+  const developerAccessGranted = user?.developer_access_granted === true
   const isRetry = acceptanceState === 'retryable'
   const dateFormatter = new Intl.DateTimeFormat(i18n.language, {
     dateStyle: 'medium',
     timeStyle: 'short',
   })
+  let acceptanceAction: ReactNode
+  if (acceptanceState === 'active' || acceptanceState === 'completed') {
+    let statusLabel = 'Accepted'
+    if (project.viewer_challenge?.status === 'submitted') {
+      statusLabel = 'Submitted'
+    } else if (project.viewer_challenge?.status === 'approved') {
+      statusLabel = 'Approved'
+    }
+    acceptanceAction = (
+      <div className='border-foreground flex items-center gap-2 border px-4 py-3 text-sm font-semibold'>
+        <HugeiconsIcon
+          icon={CheckmarkCircle02Icon}
+          className='size-4'
+          strokeWidth={2}
+          aria-hidden='true'
+        />
+        {t(statusLabel)}
+      </div>
+    )
+  } else if (!canAccept) {
+    acceptanceAction = (
+      <div className='border-foreground border px-4 py-3 text-sm font-semibold'>
+        {t(project.status === 'paused' ? 'Paused' : project.status)}
+      </div>
+    )
+  } else if (user && !developerAccessGranted) {
+    acceptanceAction = (
+      <div className='border-foreground border px-4 py-3 text-sm font-semibold'>
+        {t('L0 accounts can browse challenges in read-only mode.')}
+      </div>
+    )
+  } else if (user) {
+    acceptanceAction = (
+      <Button
+        className='bg-primary text-primary-foreground hover:bg-primary/85 w-full rounded-sm'
+        onClick={() => setAcceptOpen(true)}
+      >
+        {t(isRetry ? 'Retry challenge' : 'Accept challenge')}
+      </Button>
+    )
+  } else {
+    acceptanceAction = (
+      <Button
+        className='bg-primary text-primary-foreground hover:bg-primary/85 w-full rounded-sm'
+        render={
+          <Link
+            to='/sign-in'
+            search={{ redirect: `/challenges/${project.id}` }}
+          />
+        }
+      >
+        {t('Sign in to accept')}
+      </Button>
+    )
+  }
 
   return (
     <ForgePublicShell>
@@ -175,47 +231,7 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
                 {formatQuota(project.net_reward_quota || project.reward_quota)}
               </p>
               <p className='mb-7 text-sm'>{t('per approved delivery')}</p>
-              {acceptanceState === 'active' ||
-              acceptanceState === 'completed' ? (
-                <div className='border-foreground flex items-center gap-2 border px-4 py-3 text-sm font-semibold'>
-                  <HugeiconsIcon
-                    icon={CheckmarkCircle02Icon}
-                    className='size-4'
-                    strokeWidth={2}
-                    aria-hidden='true'
-                  />
-                  {t(
-                    project.viewer_challenge?.status === 'submitted'
-                      ? 'Submitted'
-                      : project.viewer_challenge?.status === 'approved'
-                        ? 'Approved'
-                        : 'Accepted'
-                  )}
-                </div>
-              ) : !canAccept ? (
-                <div className='border-foreground border px-4 py-3 text-sm font-semibold'>
-                  {t(project.status === 'paused' ? 'Paused' : project.status)}
-                </div>
-              ) : user ? (
-                <Button
-                  className='bg-primary text-primary-foreground hover:bg-primary/85 w-full rounded-sm'
-                  onClick={() => setAcceptOpen(true)}
-                >
-                  {t(isRetry ? 'Retry challenge' : 'Accept challenge')}
-                </Button>
-              ) : (
-                <Button
-                  className='bg-primary text-primary-foreground hover:bg-primary/85 w-full rounded-sm'
-                  render={
-                    <Link
-                      to='/sign-in'
-                      search={{ redirect: `/challenges/${project.id}` }}
-                    />
-                  }
-                >
-                  {t('Sign in to accept')}
-                </Button>
-              )}
+              {acceptanceAction}
             </aside>
           </div>
         </section>

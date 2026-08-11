@@ -117,7 +117,9 @@ async function waitForCondition(
   throw new Error(`${failureMessage}: ${document.body.textContent}`)
 }
 
-async function renderPanel(initialPreset?: 'api-key' | 'models' | 'plan') {
+async function renderPanel(
+  initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan'
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -260,6 +262,15 @@ describe('AssistantPanel', () => {
         'ai-assistant-panel'
       )
       assert.ok(document.querySelector('#ai-assistant-panel'))
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Which option is the best value?'
+            ) === true,
+          'L1 assistant presets did not render'
+        )
+      )
 
       await act(async () => {
         findButton('Which option is the best value?').click()
@@ -387,6 +398,63 @@ describe('AssistantPanel', () => {
         /What are my Base URL, model ID, and API key\?/
       )
       assert.match(
+        document.body.textContent ?? '',
+        /Which option is the best value\?/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('limits an L0 assistant to the administrator access request', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return {
+          data: {
+            success: true,
+            data: { ...assistantStatus, developer_access_granted: false },
+          },
+        }
+      }
+      if (url === '/api/user/developer-access/request') {
+        return { data: { success: true, data: null } }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+
+    const rendered = await renderPanel('onboarding')
+    try {
+      await act(async () =>
+        waitForCondition(
+          () => document.querySelector('textarea') !== null,
+          'L0 access request did not render'
+        )
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /Ask an administrator to raise my access level/
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Which option is the best value\?/
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /What are my Base URL, model ID, and API key\?/
+      )
+      assert.equal(document.querySelector('a[href="/wallet"]'), null)
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Your wallet is charged/
+      )
+
+      await act(async () => {
+        findButton('Clear conversation').click()
+        await flushEffects()
+      })
+      assert.ok(findButton('Ask an administrator to raise my access level'))
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /Which option is the best value\?/
       )
