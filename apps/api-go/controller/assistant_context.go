@@ -285,6 +285,49 @@ func assistantTextContainsAnyValue(values []string, terms ...string) bool {
 	return false
 }
 
+func assistantHasHighConfidenceSecurityAbuse(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if assistantTextContainsAny(
+		text,
+		"绕过",
+		"破解",
+		"爆破",
+		"盗取",
+		"越权",
+		"jailbreak",
+		"bypass",
+		"brute force",
+		"ignore previous",
+		"忽略 system prompt",
+		"忽略系统提示",
+		"提取 system prompt",
+		"窃取 system prompt",
+		"extract system prompt",
+		"steal system prompt",
+	) {
+		return true
+	}
+	if !assistantTextContainsAny(text, "注入", "sql injection", "prompt injection") {
+		return false
+	}
+	return !assistantTextContainsAny(
+		text,
+		"防护",
+		"防御",
+		"检测",
+		"修复",
+		"授权",
+		"安全测试",
+		"非破坏性",
+		"protect",
+		"defend",
+		"mitigate",
+		"authorized",
+		"non-destructive",
+		"security report",
+	)
+}
+
 func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 	switch profile {
 	case assistantProfileTechnical:
