@@ -86,3 +86,19 @@ func TestDeveloperAccessRequestTextLimit(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDeveloperAccessRequestNoteTooLong)
 	assert.False(t, errors.Is(err, ErrDeveloperAccessRequestReviewed))
 }
+
+func TestDeveloperAccessRequestReasonIsRequiredAndTrimmed(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	user := User{Username: "short-request-user", Password: "password", Role: common.RoleCommonUser}
+	require.NoError(t, db.Create(&user).Error)
+
+	for _, reason := range []string{"", "   ", "abcd", "  四个字  "} {
+		_, err := SubmitDeveloperAccessRequest(user.Id, reason)
+		assert.ErrorIs(t, err, ErrDeveloperAccessRequestReasonTooShort)
+	}
+
+	request, err := SubmitDeveloperAccessRequest(user.Id, "  测试申请说  ")
+	require.NoError(t, err)
+	assert.Equal(t, "测试申请说", request.Reason)
+}

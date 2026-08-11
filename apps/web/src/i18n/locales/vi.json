@@ -6413,6 +6413,9 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Application reason is required.": "Lý do đăng ký là bắt buộc.",
+    "Application reason must contain at least 5 characters.": "Lý do đăng ký phải có ít nhất 5 ký tự.",
+    "{{count}}/5 characters": "{{count}}/5 ký tự"
   }
 }

@@ -6413,6 +6413,9 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Application reason is required.": "Le motif de la demande est obligatoire.",
+    "Application reason must contain at least 5 characters.": "Le motif de la demande doit contenir au moins 5 caractères.",
+    "{{count}}/5 characters": "{{count}}/5 caractères"
   }
 }

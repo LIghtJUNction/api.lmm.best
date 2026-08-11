@@ -30,6 +30,7 @@ for (const key of [
   'location',
   'HTMLElement',
   'HTMLButtonElement',
+  'HTMLTextAreaElement',
   'SVGElement',
   'Node',
   'Element',
@@ -68,6 +69,7 @@ const { api } = await import('@/lib/api')
 const { AssistantActivationTool } = await import('./assistant-activation-tool')
 
 const originalGet = api.get
+const originalPost = api.post
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -145,6 +147,19 @@ function findButton(text: string): HTMLButtonElement {
   return button
 }
 
+async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )?.set
+  assert.ok(setValue)
+  await act(async () => {
+    setValue.call(textarea, value)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushEffects()
+  })
+}
+
 async function waitForCondition(
   condition: () => boolean,
   failureMessage: string
@@ -164,12 +179,66 @@ async function unmount(rendered: Awaited<ReturnType<typeof renderTool>>) {
 
 afterEach(() => {
   api.get = originalGet
+  api.post = originalPost
   document.body.replaceChildren()
 })
 
 after(() => domWindow.close())
 
 describe('AssistantActivationTool', () => {
+  test('requires a trimmed five-character reason before submitting', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: null },
+    })) as typeof api.get
+    let submittedReason: string | undefined
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedReason = (data as { reason: string }).reason
+      return {
+        data: {
+          success: true,
+          data: { ...pendingRequest, reason: submittedReason },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderTool(() => undefined)
+    try {
+      const textarea = document.querySelector('textarea')
+      assert.ok(textarea)
+      const submitButton = findButton('Send free review request')
+      assert.equal(submitButton.disabled, true)
+      assert.equal(
+        document.body.textContent?.includes('Application reason is required.'),
+        true
+      )
+
+      await setTextareaValue(textarea, 'abcd')
+      assert.equal(submitButton.disabled, true)
+      assert.equal(
+        document.body.textContent?.includes(
+          'Application reason must contain at least 5 characters.'
+        ),
+        true
+      )
+
+      await setTextareaValue(textarea, '  abcde  ')
+      assert.equal(submitButton.disabled, false)
+
+      await act(async () => {
+        submitButton.click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedReason !== undefined,
+        'Valid request was not submitted'
+      )
+      assert.equal(submittedReason, 'abcde')
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
   test('refreshes a pending request and opens setup after approval', async () => {
     let getCalls = 0
     api.get = (async (url: string) => {

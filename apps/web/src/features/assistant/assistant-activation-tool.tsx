@@ -55,6 +55,16 @@ export function AssistantActivationTool(props: {
     useState<DeveloperAccessRequest | null>(null)
   const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
+  const trimmedReason = reason.trim()
+  const reasonLength = [...trimmedReason].length
+  const reasonIsValid = reasonLength >= 5
+  const reasonHasError = reason.length > 0 && !reasonIsValid
+  let reasonHelpText = t('{{count}}/5 characters', { count: reasonLength })
+  if (reason.length === 0) {
+    reasonHelpText = t('Application reason is required.')
+  } else if (!reasonIsValid) {
+    reasonHelpText = t('Application reason must contain at least 5 characters.')
+  }
 
   const requestQuery = useQuery({
     queryKey: ['assistant-developer-access-request'],
@@ -77,10 +87,10 @@ export function AssistantActivationTool(props: {
   }
 
   const submit = async () => {
-    if (loading || request?.status === 'pending') return
+    if (loading || request?.status === 'pending' || !reasonIsValid) return
     setLoading(true)
     try {
-      setRequestOverride(await submitDeveloperAccessRequest(reason.trim()))
+      setRequestOverride(await submitDeveloperAccessRequest(trimmedReason))
       setReason('')
       toast.success(t('Unlock request submitted'))
     } catch (error) {
@@ -171,18 +181,33 @@ export function AssistantActivationTool(props: {
         ) : (
           <>
             <Textarea
+              id='assistant-activation-reason'
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               rows={4}
+              required
+              minLength={5}
               maxLength={2000}
+              aria-invalid={reasonHasError}
+              aria-describedby='assistant-activation-reason-help'
               placeholder={t(
                 'Write a short explanation of what you want to build or why you need L1 access.'
               )}
             />
+            <p
+              id='assistant-activation-reason-help'
+              className={
+                reasonHasError
+                  ? 'text-destructive text-xs'
+                  : 'text-muted-foreground text-xs'
+              }
+            >
+              {reasonHelpText}
+            </p>
             <Button
               type='button'
               onClick={() => void submit()}
-              disabled={loading}
+              disabled={loading || !reasonIsValid}
             >
               {loading ? t('Submitting...') : t('Send free review request')}
             </Button>

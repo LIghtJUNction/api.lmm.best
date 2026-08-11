@@ -208,6 +208,34 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('getting started payment availability', () => {
+  test('opens the AI onboarding conversation once when an L0 user enters', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((preset) =>
+      opened.push(preset)
+    )
+
+    const first = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      undefined,
+      null,
+      { id: 7001 }
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(first)
+
+    const second = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      undefined,
+      null,
+      { id: 7001 }
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(second)
+    unsubscribe()
+  })
+
   test('shows the mandatory three-step tutorial and derives progress from account state', async () => {
     const l0Page = await renderPage(
       Promise.resolve({ data: { success: true, data: emptyTopupInfo } })

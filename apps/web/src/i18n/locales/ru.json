@@ -6413,6 +6413,9 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Application reason is required.": "Причина заявки обязательна.",
+    "Application reason must contain at least 5 characters.": "Причина заявки должна содержать не менее 5 символов.",
+    "{{count}}/5 characters": "{{count}}/5 символов"
   }
 }

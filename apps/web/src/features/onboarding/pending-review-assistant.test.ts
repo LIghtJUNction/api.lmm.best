@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { claimPendingReviewAssistantPrompt } from './pending-review-assistant'
+import {
+  claimOnboardingAssistantPrompt,
+  claimPendingReviewAssistantPrompt,
+} from './pending-review-assistant'
 
 function memoryStorage() {
   const values = new Map<string, string>()
@@ -30,6 +33,12 @@ function memoryStorage() {
 }
 
 describe('pending review assistant prompt', () => {
+  test('opens once when a fresh L0 user enters onboarding', () => {
+    const storage = memoryStorage()
+    assert.equal(claimOnboardingAssistantPrompt(900, 0, storage), true)
+    assert.equal(claimOnboardingAssistantPrompt(900, 0, storage), false)
+  })
+
   test('opens once for each valid review request', () => {
     const storage = memoryStorage()
     assert.equal(claimPendingReviewAssistantPrompt(901, 801, storage), true)
@@ -58,6 +67,8 @@ describe('pending review assistant prompt', () => {
 
   test('rejects incomplete identities', () => {
     const storage = memoryStorage()
+    assert.equal(claimOnboardingAssistantPrompt(0, 0, storage), false)
+    assert.equal(claimOnboardingAssistantPrompt(903, -1, storage), false)
     assert.equal(claimPendingReviewAssistantPrompt(0, 804, storage), false)
     assert.equal(claimPendingReviewAssistantPrompt(903, -1, storage), false)
   })

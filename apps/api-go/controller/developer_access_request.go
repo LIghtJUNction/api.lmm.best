@@ -89,6 +89,10 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 	}
 	request, err := model.SubmitDeveloperAccessRequest(user.Id, input.Reason)
 	if err != nil {
+		if errors.Is(err, model.ErrDeveloperAccessRequestReasonTooShort) {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REASON_TOO_SHORT", err.Error())
+			return
+		}
 		if errors.Is(err, model.ErrDeveloperAccessRequestNoteTooLong) {
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REASON_TOO_LONG", err.Error())
 			return
