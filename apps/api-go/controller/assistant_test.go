@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -122,6 +123,46 @@ func TestPrepareAssistantRequestPreservesBoundedConversation(t *testing.T) {
 	assert.Equal(t, "How do I configure Claude Code?", captured.Messages[1].Content)
 	assert.Equal(t, "assistant", captured.Messages[2].Role)
 	assert.Equal(t, "What about Windows?", captured.Messages[3].Content)
+}
+
+func TestPrepareAssistantRequestCacheHitSkipsDuplicateIntentWrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}))
+	original := setting.GetAssistantSettings()
+	setting.SetAssistantEnabled(true)
+	setting.SetAssistantCacheEnabled(true)
+	require.NoError(t, setting.UpdateAssistantModel("assistant-cache-test-model"))
+	require.NoError(t, setting.UpdateAssistantCacheTTLMinutes("10"))
+	t.Cleanup(func() {
+		setting.SetAssistantEnabled(original.Enabled)
+		setting.SetAssistantCacheEnabled(original.CacheEnabled)
+		_ = setting.UpdateAssistantModel(original.Model)
+		_ = setting.UpdateAssistantCacheTTLMinutes(strconv.Itoa(original.CacheTTLMinutes))
+	})
+
+	message := "cache-hit-intent-" + t.Name()
+	settings := setting.GetAssistantSettings()
+	context := assistantUserContextForRequest(42, message)
+	key := assistantCacheKey(settings, []assistantOpenAIMessage{{Role: "user", Content: message}}, context)
+	require.NotEmpty(t, key)
+	storeAssistantCachedResponse(settings, key, http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"cached"}}]}`))
+
+	engine := gin.New()
+	engine.POST("/api/assistant/chat", func(c *gin.Context) {
+		c.Set("id", 42)
+		PrepareAssistantRequest(c)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"`+message+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "HIT", response.Header().Get("X-LMM-Assistant-Cache"))
+	var count int64
+	require.NoError(t, db.Model(&model.AssistantLead{}).Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func TestPrepareAssistantRequestRejectsUnsafeOrOversizedConversation(t *testing.T) {

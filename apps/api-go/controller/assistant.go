@@ -215,12 +215,6 @@ func PrepareAssistantRequest(c *gin.Context) {
 	c.Set(assistantUserContextKey, userContext)
 	intent := model.ClassifyAssistantIntent(latestMessage)
 	c.Header(assistantIntentHeader, intent)
-	if userID := c.GetInt("id"); userID > 0 {
-		if err := model.RecordAssistantIntent(userID, latestMessage); err != nil {
-			// Product analytics must never make customer support unavailable.
-			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
-		}
-	}
 	c.Set("assistant_conversation", conversation)
 	if cacheKey := assistantCacheKey(settings, conversation, userContext); cacheKey != "" {
 		c.Set("assistant_cache_key", cacheKey)
@@ -229,6 +223,15 @@ func PrepareAssistantRequest(c *gin.Context) {
 			c.Abort()
 			c.Data(cached.Status, "application/json; charset=utf-8", cached.Body)
 			return
+		}
+	}
+	// A cache hit is not a model call. Avoid creating a duplicate analytics row
+	// for every repeated cached question; the first uncached turn still records
+	// the deterministic intent category for support and product analysis.
+	if userID := c.GetInt("id"); userID > 0 {
+		if err := model.RecordAssistantIntent(userID, latestMessage); err != nil {
+			// Product analytics must never make customer support unavailable.
+			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
 		}
 	}
 
