@@ -84,6 +84,9 @@ export function AssistantLauncher() {
         className='fixed right-4 bottom-20 z-50 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-20'
         aria-label={t('Open AI assistant')}
         title={t('Open AI assistant')}
+        aria-haspopup='dialog'
+        aria-expanded={open}
+        aria-controls={hasOpened ? 'ai-assistant-panel' : undefined}
         data-testid='assistant-launcher'
         onClick={() => showAssistant()}
         onMouseEnter={preload}
