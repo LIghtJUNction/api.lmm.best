@@ -31,6 +31,11 @@ authenticated users then see it once after their next login.
 - Refined assistant persona precedence so an explicit request for step-by-step
   help is routed to the guided-buyer strategy even when the message also says
   the user is technical; added deterministic A–I welcome-strategy coverage.
+- Added a pre-model security refusal for high-confidence bypass, scanning,
+  brute-force and prompt-extraction requests. These responses are cacheable,
+  deterministic, and do not spend the super-administrator assistant quota;
+  authorized non-destructive testing and security-report guidance remains
+  available.
 - Tightened administrator handoffs so the request is required and contains at
   least five characters at the AI tool, browser form and API validation layers;
   security-risk signals now take precedence over promotion-seeking signals.

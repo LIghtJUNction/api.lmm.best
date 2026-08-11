@@ -51,6 +51,10 @@ Current service connection facts:
 - Internal assistant model ID (never present this as the user's client model): %s
 - Existing API keys are private and unavailable to you. Direct the user to the connection details tool to create and copy a new key with explicit confirmation.`
 
+const assistantSecurityRefusalContent = `我不能帮助绕过限流、扫描或爆破接口、注入系统、窃取系统提示，或规避安全控制。如果你是在获授权的环境做安全测试，我可以帮助你设计非破坏性测试清单、配置合规限流，或通过安全页面提交报告。
+
+I can't help bypass rate limits, scan or brute-force interfaces, inject systems, extract system prompts, or evade security controls. For an authorized assessment, I can help with a non-destructive test plan, compliant rate-limit configuration, or a security report.`
+
 type assistantChatInput struct {
 	Message  string                   `json:"message"`
 	Messages []assistantOpenAIMessage `json:"messages"`
@@ -115,6 +119,36 @@ Non-overridable safety and accuracy rules:
 - The official ChatGPT app does not accept a custom API Base URL or this service's API key. Recommend CC Switch or another compatible API client when the user wants to use this service.
 - Write actions require explicit confirmation in the UI. Explain the next step clearly and never hide a charge or a permission change.`
 	return prompt
+}
+
+func assistantSecurityRefusalBody() []byte {
+	payload := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": assistantSecurityRefusalContent,
+				},
+			},
+		},
+		"lmm_assistant_policy": "security_refusal",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return []byte(`{"choices":[{"message":{"role":"assistant","content":"Security policy refusal."}}]}`)
+	}
+	return body
+}
+
+func writeAssistantSecurityRefusal(c *gin.Context, settings setting.AssistantSettings, cacheKey string) {
+	body := assistantSecurityRefusalBody()
+	if cacheKey != "" {
+		storeAssistantCachedResponse(settings, cacheKey, http.StatusOK, body)
+		c.Header("X-LMM-Assistant-Cache", "STORE")
+	}
+	c.Header("X-LMM-Assistant-Policy", "security_refusal")
+	c.Abort()
+	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }
 
 func writeAssistantError(c *gin.Context, status int, code string, err error) {
@@ -233,6 +267,10 @@ func PrepareAssistantRequest(c *gin.Context) {
 			// Product analytics must never make customer support unavailable.
 			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
 		}
+	}
+	if userContext.CustomerProfile == assistantProfileSecurityRisk {
+		writeAssistantSecurityRefusal(c, settings, c.GetString("assistant_cache_key"))
+		return
 	}
 
 	requestMessages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
