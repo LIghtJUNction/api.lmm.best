@@ -2,6 +2,7 @@ package setting
 
 import (
 	"errors"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -155,12 +156,8 @@ func UpdateAssistantSystemPrompt(value string) error {
 }
 
 func UpdateAssistantSearchURL(value string) error {
-	value = strings.TrimSpace(value)
-	if value != "" {
-		parsed, err := url.ParseRequestURI(value)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return errors.New("assistant search URL must be an absolute HTTP or HTTPS URL")
-		}
+	if err := ValidateAssistantSearchURL(value); err != nil {
+		return err
 	}
 	return updateAssistantText(&assistantSettings.SearchURL, value, 512, "assistant search URL must be at most 512 characters")
 }
@@ -207,13 +204,7 @@ func ValidateAssistantOption(key string, value string) error {
 			return errors.New("assistant system prompt must be at most 8000 characters")
 		}
 	case AssistantSearchURLOptionKey:
-		value = strings.TrimSpace(value)
-		if value != "" {
-			parsed, err := url.ParseRequestURI(value)
-			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-				return errors.New("assistant search URL must be an absolute HTTP or HTTPS URL")
-			}
-		}
+		return ValidateAssistantSearchURL(value)
 	case AssistantSearchAPIKeyOptionKey:
 		if len([]rune(strings.TrimSpace(value))) > 512 {
 			return errors.New("assistant search API key must be at most 512 characters")
@@ -224,4 +215,62 @@ func ValidateAssistantOption(key string, value string) error {
 		}
 	}
 	return nil
+}
+
+// ValidateAssistantSearchURL checks the administrator-supplied search
+// endpoint's syntax and rejects address literals that cannot be a public
+// search provider. Hostnames are checked again at connection time because DNS
+// answers can change after an option is saved.
+func ValidateAssistantSearchURL(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return errors.New("assistant search URL must be an absolute HTTP or HTTPS URL")
+	}
+	if parsed.User != nil {
+		return errors.New("assistant search URL must not contain embedded credentials")
+	}
+	hostname := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if hostname == "" {
+		return errors.New("assistant search URL must include a host")
+	}
+	if ip := net.ParseIP(hostname); ip != nil && !IsAssistantSearchPublicIP(ip) {
+		return errors.New("assistant search URL must resolve to a public address")
+	}
+	return nil
+}
+
+func IsAssistantSearchPublicIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		// Carrier-grade NAT, benchmarking, documentation, and reserved ranges
+		// are not public service addresses even though some are global unicast.
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return false
+		}
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0 {
+			return false
+		}
+		if ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 2 {
+			return false
+		}
+		if ip4[0] == 198 && ip4[1] == 18 {
+			return false
+		}
+		if ip4[0] == 198 && ip4[1] == 19 {
+			return false
+		}
+		if ip4[0] == 198 && ip4[1] == 51 && ip4[2] == 100 {
+			return false
+		}
+		if ip4[0] == 203 && ip4[1] == 0 && ip4[2] == 113 {
+			return false
+		}
+	}
+	return true
 }

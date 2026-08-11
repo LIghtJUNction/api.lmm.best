@@ -1,6 +1,7 @@
 package setting
 
 import (
+	"net"
 	"strconv"
 	"testing"
 )
@@ -64,5 +65,50 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	settings := GetAssistantSettings()
 	if settings.Enabled || settings.Model != "custom-model" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 {
 		t.Fatalf("unexpected updated settings: %+v", settings)
+	}
+}
+
+func TestAssistantSearchURLValidationBlocksPrivateTargetsAndCredentials(t *testing.T) {
+	valid := []string{
+		"https://search.example.com/api/search?q=initial",
+		"http://8.8.8.8/search",
+	}
+	for _, value := range valid {
+		if err := ValidateAssistantSearchURL(value); err != nil {
+			t.Fatalf("expected search URL %q to be valid: %v", value, err)
+		}
+	}
+	invalid := []string{
+		"ftp://search.example.com/api",
+		"http://user:password@search.example.com/api",
+		"http://127.0.0.1/api",
+		"http://10.0.0.7/api",
+		"http://169.254.169.254/latest/meta-data",
+		"http://[::1]/api",
+	}
+	for _, value := range invalid {
+		if err := ValidateAssistantSearchURL(value); err == nil {
+			t.Fatalf("expected search URL %q to be rejected", value)
+		}
+	}
+}
+
+func TestAssistantSearchPublicIPPolicy(t *testing.T) {
+	cases := []struct {
+		address string
+		public  bool
+	}{
+		{address: "8.8.8.8", public: true},
+		{address: "2001:4860:4860::8888", public: true},
+		{address: "10.0.0.1", public: false},
+		{address: "100.64.0.1", public: false},
+		{address: "192.0.2.1", public: false},
+		{address: "fd00::1", public: false},
+	}
+	for _, testCase := range cases {
+		ip := net.ParseIP(testCase.address)
+		if got := IsAssistantSearchPublicIP(ip); got != testCase.public {
+			t.Fatalf("IsAssistantSearchPublicIP(%q) = %t, want %t", testCase.address, got, testCase.public)
+		}
 	}
 }

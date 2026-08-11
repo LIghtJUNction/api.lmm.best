@@ -55,6 +55,9 @@ authenticated users then see it once after their next login.
 - Standardized production operations on the native `lmm-api-go` CLI, with
   checks for package integrity, service health, resource pressure and rollback
   evidence before release promotion.
+- Hardened the administrator-configured assistant search connector against
+  private, loopback, link-local and reserved address targets, embedded
+  credentials, DNS rebinding and unsafe redirects.
 
 ### Verification
 
