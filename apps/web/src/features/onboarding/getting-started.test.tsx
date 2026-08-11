@@ -52,6 +52,8 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { subscribeToAssistantOpen } =
+  await import('@/features/assistant/assistant-events')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { GettingStarted } = await import('./getting-started')
 
@@ -103,18 +105,13 @@ function makeRouter() {
     path: '/getting-started',
     component: GettingStarted,
   })
-  const emptyRoutes = [
-    '/wallet',
-    '/support',
-    '/keys',
-    '/playground',
-    '/dashboard',
-  ].map((path) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path,
-      component: () => null,
-    })
+  const emptyRoutes = ['/wallet', '/support', '/keys', '/dashboard'].map(
+    (path) =>
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path,
+        component: () => null,
+      })
   )
   return createRouter({
     routeTree: rootRoute.addChildren([gettingStartedRoute, ...emptyRoutes]),
@@ -130,7 +127,8 @@ async function renderPage(
       success: true,
       data: { items: [], total: 0, page: 1, page_size: 50 },
     },
-  }
+  },
+  accessRequest: Record<string, unknown> | null = null
 ) {
   const gets: string[] = []
   const getConfigs: Array<ApiRequestConfig | undefined> = []
@@ -142,7 +140,7 @@ async function renderPage(
     }
     if (url === '/api/user/topup/info') return topupResponse
     if (url === '/api/user/developer-access/request') {
-      return { data: { success: true, data: null } }
+      return { data: { success: true, data: accessRequest } }
     }
     if (url === '/api/status') {
       return {
@@ -200,12 +198,47 @@ afterEach(() => {
   api.get = originalGet
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
+  window.sessionStorage.clear()
   document.body.replaceChildren()
 })
 
 after(() => domWindow.close())
 
 describe('getting started payment availability', () => {
+  test('opens onboarding guidance once while administrator review is pending', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((preset) =>
+      opened.push(preset)
+    )
+    const pendingRequest = {
+      id: 9901,
+      status: 'pending',
+      reason: '',
+      admin_note: '',
+      created_at: 1,
+      reviewed_at: 0,
+    }
+
+    const first = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      { data: { success: true, data: [] } },
+      pendingRequest
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(first)
+
+    const second = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      { data: { success: true, data: [] } },
+      pendingRequest
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(second)
+    unsubscribe()
+  })
+
   test('shows a non-actionable checking state while payment availability loads', async () => {
     const topup = deferred<{ data: Record<string, unknown> }>()
     const page = await renderPage(topup.promise)

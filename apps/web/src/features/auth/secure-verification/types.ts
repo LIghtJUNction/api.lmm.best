@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export type VerificationMethod = '2fa' | 'passkey'
+export type VerificationMethod = 'email' | '2fa' | 'passkey'
 
 export type SecurityProofScope =
   | 'channel.key.read'
@@ -31,9 +31,43 @@ export interface SecurityProof {
 }
 
 export interface VerificationMethods {
+  hasEmail: boolean
+  emailHint?: string
   has2FA: boolean
   hasPasskey: boolean
   passkeySupported: boolean
+}
+
+/**
+ * Sensitive dashboard actions use email when it is bound and otherwise fall
+ * back to the existing Passkey flow. Other account capabilities, such as
+ * signing in with 2FA, are intentionally not exposed as step-up methods.
+ */
+export function getPreferredVerificationMethods(
+  methods: VerificationMethods
+): VerificationMethods {
+  if (methods.hasEmail) {
+    return {
+      ...methods,
+      has2FA: false,
+      hasPasskey: false,
+    }
+  }
+
+  if (methods.hasPasskey && methods.passkeySupported) {
+    return {
+      ...methods,
+      hasEmail: false,
+      has2FA: false,
+    }
+  }
+
+  return {
+    ...methods,
+    hasEmail: false,
+    has2FA: false,
+    hasPasskey: false,
+  }
 }
 
 export interface SecureVerificationState {

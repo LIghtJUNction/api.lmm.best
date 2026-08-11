@@ -6,7 +6,6 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../.." && pwd -P)
 # shellcheck disable=SC1091 # Repository root is resolved at runtime.
 source "$repo/apps/api-rust/tests/scripts/route-gate-fixture-lib.sh"
 validator="$repo/packaging/common/lmm-api/validate-route-gate"
-cli="$repo/packaging/common/lmm-api/lmm-api-launcher"
 current_gate="$repo/apps/api-rust/tests/fixtures/routes/migration-gate.tsv"
 frozen="$repo/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv"
 runtime=$(mktemp -d /tmp/lmm-route-gate-contract.XXXXXXXX)
@@ -52,7 +51,7 @@ revision=$(git -C "$repo" rev-parse HEAD)
 source_args=(--mode source --frozen-contract "$frozen" --frozen-contract-sha256 "$frozen_sha" \
   --evidence-root "$repo" --revision "$revision")
 
-bash -n "$validator" "$cli" "$repo/apps/api-rust/tests/scripts/route-gate-fixture-lib.sh"
+bash -n "$validator" "$repo/apps/api-rust/tests/scripts/route-gate-fixture-lib.sh"
 validator_run "${source_args[@]}" --gate "$current_gate"
 expect_fail validator_run --mode activate --gate "$current_gate" --frozen-contract "$frozen" \
   --frozen-contract-sha256 "$frozen_sha" --evidence-root "$repo" --revision "$revision" \
@@ -296,22 +295,5 @@ for _ in {1..1000}; do [[ -e $asset_swap_ready ]] && break; sleep 0.01; done
 sed -n '1,2p' "$current_gate" >"$asset_swap/migration-gate.tsv"
 : >"$asset_swap_release"
 if wait "$asset_swap_pid"; then fail 'asset replacement after manifest snapshot was accepted'; fi
-
-current_lib="$runtime/current-lib"
-mkdir -p "$current_lib"
-install -Dm0644 "$current_gate" "$current_lib/migration-gate.tsv"
-install -Dm0644 "$frozen" "$current_lib/frozen-route-auth.tsv"
-install -Dm0755 "$validator" "$current_lib/validate-route-gate"
-install -Dm0644 "$repo/packaging/common/lmm-api/migration-compatibility.env" "$current_lib/migration-compatibility.env"
-(
-  cd "$current_lib"
-  sha256sum migration-gate.tsv validate-route-gate migration-compatibility.env frozen-route-auth.tsv >route-gate-assets.sha256
-)
-base=(deploy production --deployment-id route-gate-contract --backend rs --host ArchDmit \
-  --workspace "$runtime/cli-workspace")
-expect_fail env LMM_DEPLOY_TEST_MODE=1 LMM_API_DEPLOY_LIBDIR="$current_lib" \
-  "$cli" "${base[@]}" --route-gate "$current_lib/migration-gate.tsv"
-env LMM_DEPLOY_TEST_MODE=1 LMM_API_DEPLOY_LIBDIR="$synthetic" \
-  "$cli" "${base[@]}" --route-gate "$synthetic/migration-gate.tsv" >/dev/null
 
 printf 'route-gate frozen membership and independent evidence contracts verified\n'

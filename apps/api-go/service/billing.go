@@ -13,6 +13,7 @@ import (
 const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
+	BillingSourceAssistant    = "assistant"
 )
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
@@ -34,7 +35,13 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 			types.ErrOptionWithSkipRetry(),
 		)
 	}
-	session, apiErr := NewBillingSession(c, relayInfo, preConsumedQuota)
+	var session *BillingSession
+	var apiErr *types.NewAPIError
+	if relayInfo != nil && relayInfo.IsAssistant {
+		session, apiErr = NewAssistantBillingSession(c, relayInfo, preConsumedQuota)
+	} else {
+		session, apiErr = NewBillingSession(c, relayInfo, preConsumedQuota)
+	}
 	if apiErr != nil {
 		return apiErr
 	}
@@ -79,7 +86,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		if actualQuota != 0 {
 			if relayInfo.BillingSource == BillingSourceSubscription {
 				checkAndSendSubscriptionQuotaNotify(relayInfo)
-			} else {
+			} else if relayInfo.BillingSource != BillingSourceAssistant {
 				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
 			}
 		}

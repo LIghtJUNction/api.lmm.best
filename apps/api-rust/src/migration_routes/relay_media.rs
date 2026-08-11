@@ -488,6 +488,15 @@ impl RelayMediaService for PgRelayMediaService {
             || request.uri().path().to_owned(),
             |value| value.as_str().to_owned(),
         );
+        // The legacy audio transcription/translation handlers call
+        // ParseMultipartForm before selecting a model.  A JSON request (or a
+        // multipart content type without a boundary) therefore fails with a
+        // 500 `count_token_failed` envelope instead of reaching the provider.
+        // Keep that malformed-input boundary identical so Rust cannot turn an
+        // invalid upload into a billable upstream request.
+        if requires_multipart_audio(&path_and_query) && !has_multipart_boundary(&headers) {
+            return media_multipart_parse_error(&request_id);
+        }
         let body = match to_bytes(request.into_body(), self.max_request_bytes).await {
             Ok(body) => body.to_vec(),
             Err(_) => {
@@ -498,10 +507,11 @@ impl RelayMediaService for PgRelayMediaService {
                 );
             }
         };
-        let model = match media_model(&headers, &body) {
+        let model = match media_model(&path_and_query, &headers, &body) {
             Some(model) => model,
             None => return media_error(StatusCode::BAD_REQUEST, "model is required", &request_id),
         };
+        let body = normalize_media_body(&path_and_query, &headers, body);
         let channel = match self.select_channel(&identity, &model).await {
             Ok(channel) => channel,
             Err(error) => return media_failure(error, &request_id),
@@ -562,18 +572,19 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|key| !key.is_empty() && *key != "midjourney-proxy")
 }
 
-fn media_model(headers: &HeaderMap, body: &[u8]) -> Option<String> {
+fn media_model(path_and_query: &str, headers: &HeaderMap, body: &[u8]) -> Option<String> {
     if headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|content_type| content_type.starts_with("application/json"))
     {
-        return serde_json::from_slice::<serde_json::Value>(body)
-            .ok()?
-            .get("model")?
-            .as_str()
+        let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+        return value
+            .get("model")
+            .and_then(serde_json::Value::as_str)
             .filter(|model| !model.trim().is_empty())
-            .map(str::to_owned);
+            .map(str::to_owned)
+            .or_else(|| media_default_model(path_and_query).map(str::to_owned));
     }
     // Multipart bodies are retained byte-for-byte.  Extract only the small
     // `name="model"` text part needed for channel selection; file fields stay opaque.
@@ -596,6 +607,73 @@ fn media_model(headers: &HeaderMap, body: &[u8]) -> Option<String> {
         .map(str::trim)
         .filter(|model| !model.is_empty())
         .map(str::to_owned)
+        .or_else(|| media_default_model(path_and_query).map(str::to_owned))
+}
+
+fn media_default_model(path_and_query: &str) -> Option<&'static str> {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    match path {
+        "/v1/audio/speech" => Some("tts-1"),
+        "/v1/audio/transcriptions" | "/v1/audio/translations" => Some("whisper-1"),
+        "/v1/images/generations" => Some("dall-e"),
+        "/v1/images/edits" => Some("gpt-image-1"),
+        _ => None,
+    }
+}
+
+fn normalize_media_body(path_and_query: &str, headers: &HeaderMap, body: Vec<u8>) -> Vec<u8> {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+    if !is_json || !matches!(path, "/v1/images/generations" | "/v1/images/edits") {
+        return body;
+    }
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return body;
+    };
+    // The Go image adapter applies these defaults while decoding the request,
+    // before it forwards JSON to the selected channel.
+    object
+        .entry("n")
+        .or_insert_with(|| serde_json::Value::from(1));
+    if path == "/v1/images/edits" {
+        object
+            .entry("prompt")
+            .or_insert_with(|| serde_json::Value::String(String::new()));
+    }
+    serde_json::to_vec(&value).unwrap_or(body)
+}
+
+fn requires_multipart_audio(path_and_query: &str) -> bool {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    matches!(path, "/v1/audio/transcriptions" | "/v1/audio/translations")
+}
+
+fn has_multipart_boundary(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(';').next().is_some_and(|media_type| {
+                media_type
+                    .trim()
+                    .eq_ignore_ascii_case("multipart/form-data")
+            }) && value
+                .split(';')
+                .skip(1)
+                .any(|parameter| parameter.trim_start().starts_with("boundary="))
+        })
 }
 
 fn ip_is_allowed(client_ip: Option<IpAddr>, raw_limits: &str) -> bool {
@@ -657,7 +735,28 @@ fn media_failure(error: MediaFailure, request_id: &str) -> Response {
 }
 
 fn media_error(status: StatusCode, message: &str, request_id: &str) -> Response {
-    (status, axum::Json(serde_json::json!({"error":{"message":format!("{message} (request id: {request_id})"),"type":"new_api_error","code":""}}))).into_response()
+    media_error_with_code(status, message, "", request_id)
+}
+
+fn media_multipart_parse_error(request_id: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(serde_json::json!({"error":{"message":format!("error parsing multipart form: multipart boundary not found (request id: {request_id})"),"type":"new_api_error","param":"","code":"count_token_failed"}})),
+    )
+        .into_response()
+}
+
+fn media_error_with_code(
+    status: StatusCode,
+    message: &str,
+    code: &str,
+    request_id: &str,
+) -> Response {
+    (
+        status,
+        axum::Json(serde_json::json!({"error":{"message":format!("{message} (request id: {request_id})"),"type":"new_api_error","code":code}})),
+    )
+        .into_response()
 }
 
 #[derive(Clone)]
@@ -676,9 +775,9 @@ impl RelayMediaHttpState {
 ///
 /// `images/variations` and every `files` endpoint intentionally do **not**
 /// appear here.  The frozen listener authenticates those requests and returns
-/// the legacy 501 envelope; [`super::relay_misc`] owns that behaviour.  Keeping
-/// them out of this forwarding router prevents a successful upstream response
-/// from changing the observable 501 contract.
+/// the legacy fixed error envelope; [`super::relay_misc`] owns that
+/// behaviour.  Keeping them out of this forwarding router prevents a
+/// successful upstream response from changing that observable contract.
 pub fn relay_media_router(state: RelayMediaHttpState) -> Router {
     Router::new()
         .route("/v1/audio/speech", post(relay_media))
@@ -710,7 +809,7 @@ mod tests {
     fn extracts_model_without_mutating_multipart_bytes() {
         let body = b"--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"speech.wav\"\r\n\r\n\x00\xff\r\n--boundary\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n--boundary--\r\n";
         assert_eq!(
-            media_model(&HeaderMap::new(), body).as_deref(),
+            media_model("/v1/audio/transcriptions", &HeaderMap::new(), body).as_deref(),
             Some("whisper-1")
         );
         assert!(body.windows(2).any(|bytes| bytes == b"\x00\xff"));
@@ -724,10 +823,42 @@ mod tests {
             "application/json".parse().expect("header"),
         );
         assert_eq!(
-            media_model(&headers, br#"{"model":"tts-1"}"#).as_deref(),
+            media_model("/v1/audio/speech", &headers, br#"{"model":"tts-1"}"#).as_deref(),
             Some("tts-1")
         );
-        assert!(media_model(&headers, br#"{"model":"   "}"#).is_none());
+        assert_eq!(
+            media_model("/v1/audio/speech", &headers, br#"{"model":"   "}"#).as_deref(),
+            Some("tts-1")
+        );
+    }
+
+    #[test]
+    fn image_json_defaults_match_legacy_forwarded_payload() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/json".parse().expect("header"),
+        );
+        let generations: serde_json::Value = serde_json::from_slice(&normalize_media_body(
+            "/v1/images/generations",
+            &headers,
+            br#"{"model":"gpt-test","prompt":"hello"}"#.to_vec(),
+        ))
+        .expect("generation JSON");
+        assert_eq!(
+            generations,
+            serde_json::json!({"model":"gpt-test","prompt":"hello","n":1})
+        );
+        let edits: serde_json::Value = serde_json::from_slice(&normalize_media_body(
+            "/v1/images/edits",
+            &headers,
+            br#"{"model":"gpt-test","image":"fixture-image"}"#.to_vec(),
+        ))
+        .expect("edit JSON");
+        assert_eq!(
+            edits,
+            serde_json::json!({"model":"gpt-test","image":"fixture-image","n":1,"prompt":""})
+        );
     }
 
     #[test]

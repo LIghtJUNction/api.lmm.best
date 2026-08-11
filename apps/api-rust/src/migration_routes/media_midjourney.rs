@@ -238,8 +238,42 @@ impl MidjourneyHttpState {
     }
 }
 
-/// Builds all dynamic `/:mode/mj` route forms listed in the migration plan.
+const STATIC_IMAGE_PATH: &str = "/mj/image/{id}";
+const STATIC_SWAP_PATH: &str = "/mj/insight-face/swap";
+const STATIC_ACTION_PATH: &str = "/mj/submit/action";
+const STATIC_BLEND_PATH: &str = "/mj/submit/blend";
+const STATIC_CHANGE_PATH: &str = "/mj/submit/change";
+const STATIC_DESCRIBE_PATH: &str = "/mj/submit/describe";
+const STATIC_EDITS_PATH: &str = "/mj/submit/edits";
+const STATIC_IMAGINE_PATH: &str = "/mj/submit/imagine";
+const STATIC_MODAL_PATH: &str = "/mj/submit/modal";
+const STATIC_SHORTEN_PATH: &str = "/mj/submit/shorten";
+const STATIC_SIMPLE_CHANGE_PATH: &str = "/mj/submit/simple-change";
+const STATIC_UPLOAD_PATH: &str = "/mj/submit/upload-discord-images";
+const STATIC_VIDEO_PATH: &str = "/mj/submit/video";
+const STATIC_FETCH_PATH: &str = "/mj/task/{id}/fetch";
+const STATIC_IMAGE_SEED_PATH: &str = "/mj/task/{id}/image-seed";
+const STATIC_LIST_PATH: &str = "/mj/task/list-by-condition";
+
+/// Builds the complete standalone Midjourney compatibility router, including
+/// the static `/mj` aliases used by callers that do not mount the neighbouring
+/// media-task slice.
 pub fn media_midjourney_router(state: MidjourneyHttpState) -> Router {
+    dynamic_routes().merge(static_routes()).with_state(state)
+}
+
+/// Builds only the dynamic `/:mode/mj` aliases.
+///
+/// The isolated candidate listener also mounts [`crate::migration_routes::media_tasks::media_task_router`]
+/// for the static `/mj`, Suno, Kling, and Jimeng families.  Keeping this
+/// dynamic-only view separate prevents Axum from rejecting the intentional
+/// static `/mj` overlap while preserving the full router used by the normal
+/// listener.
+pub fn media_midjourney_dynamic_router(state: MidjourneyHttpState) -> Router {
+    dynamic_routes().with_state(state)
+}
+
+fn dynamic_routes() -> Router<MidjourneyHttpState> {
     Router::new()
         .route("/{mode}/mj/image/{id}", get(image))
         .route("/{mode}/mj/insight-face/swap", post(submit_swap))
@@ -266,7 +300,29 @@ pub fn media_midjourney_router(state: MidjourneyHttpState) -> Router {
             "/{mode}/mj/task/list-by-condition",
             post(task_list_by_condition),
         )
-        .with_state(state)
+}
+
+fn static_routes() -> Router<MidjourneyHttpState> {
+    Router::new()
+        .route(STATIC_IMAGE_PATH, get(static_image))
+        .route(STATIC_SWAP_PATH, post(static_submit_swap))
+        .route(STATIC_ACTION_PATH, post(static_submit_action))
+        .route(STATIC_BLEND_PATH, post(static_submit_blend))
+        .route(STATIC_CHANGE_PATH, post(static_submit_change))
+        .route(STATIC_DESCRIBE_PATH, post(static_submit_describe))
+        .route(STATIC_EDITS_PATH, post(static_submit_edits))
+        .route(STATIC_IMAGINE_PATH, post(static_submit_imagine))
+        .route(STATIC_MODAL_PATH, post(static_submit_modal))
+        .route(STATIC_SHORTEN_PATH, post(static_submit_shorten))
+        .route(STATIC_SIMPLE_CHANGE_PATH, post(static_submit_simple_change))
+        .route(
+            STATIC_UPLOAD_PATH,
+            post(static_submit_upload_discord_images),
+        )
+        .route(STATIC_VIDEO_PATH, post(static_submit_video))
+        .route(STATIC_FETCH_PATH, get(static_task_fetch))
+        .route(STATIC_IMAGE_SEED_PATH, get(static_task_image_seed))
+        .route(STATIC_LIST_PATH, post(static_task_list_by_condition))
 }
 
 macro_rules! submit_handler {
@@ -278,11 +334,32 @@ macro_rules! submit_handler {
             headers: HeaderMap,
             body: Bytes,
         ) -> Response {
+            let client_ip = request_client_ip(context.as_ref());
+            let request_id = request_id(context.as_ref());
+            submit(
+                state, mode, $operation, client_ip, request_id, headers, body,
+            )
+            .await
+        }
+    };
+}
+
+macro_rules! static_submit_handler {
+    ($name:ident, $operation:literal) => {
+        async fn $name(
+            State(state): State<MidjourneyHttpState>,
+            context: Option<Extension<RequestContext>>,
+            headers: HeaderMap,
+            body: Bytes,
+        ) -> Response {
+            let client_ip = request_client_ip(context.as_ref());
+            let request_id = request_id(context.as_ref());
             submit(
                 state,
-                mode,
+                "mj".to_owned(),
                 $operation,
-                request_client_ip(context),
+                client_ip,
+                request_id,
                 headers,
                 body,
             )
@@ -303,22 +380,35 @@ submit_handler!(submit_shorten, "shorten");
 submit_handler!(submit_simple_change, "simple-change");
 submit_handler!(submit_upload_discord_images, "upload-discord-images");
 submit_handler!(submit_video, "video");
+static_submit_handler!(static_submit_swap, "insight-face/swap");
+static_submit_handler!(static_submit_action, "action");
+static_submit_handler!(static_submit_blend, "blend");
+static_submit_handler!(static_submit_change, "change");
+static_submit_handler!(static_submit_describe, "describe");
+static_submit_handler!(static_submit_edits, "edits");
+static_submit_handler!(static_submit_imagine, "imagine");
+static_submit_handler!(static_submit_modal, "modal");
+static_submit_handler!(static_submit_shorten, "shorten");
+static_submit_handler!(static_submit_simple_change, "simple-change");
+static_submit_handler!(static_submit_upload_discord_images, "upload-discord-images");
+static_submit_handler!(static_submit_video, "video");
 
 async fn submit(
     state: MidjourneyHttpState,
     mode: String,
     operation: &str,
     client_ip: Option<IpAddr>,
+    request_id: Option<&str>,
     headers: HeaderMap,
     bytes: Bytes,
 ) -> Response {
     let identity = match state.backend.authenticate(&headers, client_ip).await {
         Ok(identity) => identity,
-        Err(error) => return failure(error),
+        Err(error) => return failure_with_request_id(error, request_id),
     };
     let body = match parse_submit_body(operation, &bytes) {
         Ok(body) => body,
-        Err(error) => return failure(error),
+        Err(error) => return failure_with_request_id(error, request_id),
     };
     let submitted = match state
         .backend
@@ -326,7 +416,7 @@ async fn submit(
         .await
     {
         Ok(reply) => reply,
-        Err(error) => return failure(error),
+        Err(error) => return failure_with_request_id(error, request_id),
     };
     let accepted =
         submitted.response.status == StatusCode::OK && accepts_submit(&submitted.response.body);
@@ -337,7 +427,7 @@ async fn submit(
             .record_submit(&identity, submitted.effect)
             .await
         {
-            return failure(error);
+            return failure_with_request_id(error, request_id);
         }
         normalize_replay_code(&mut body);
     }
@@ -354,15 +444,15 @@ async fn task_fetch(
     context: Option<Extension<RequestContext>>,
     headers: HeaderMap,
 ) -> Response {
-    task_read(
-        state,
-        request_client_ip(context),
-        headers,
-        "fetch",
-        &id,
-        None,
-    )
-    .await
+    task_read(state, context.as_ref(), headers, "fetch", &id, None).await
+}
+async fn static_task_fetch(
+    State(state): State<MidjourneyHttpState>,
+    Path(id): Path<String>,
+    context: Option<Extension<RequestContext>>,
+    headers: HeaderMap,
+) -> Response {
+    task_read(state, context.as_ref(), headers, "fetch", &id, None).await
 }
 async fn task_image_seed(
     State(state): State<MidjourneyHttpState>,
@@ -370,15 +460,15 @@ async fn task_image_seed(
     context: Option<Extension<RequestContext>>,
     headers: HeaderMap,
 ) -> Response {
-    task_read(
-        state,
-        request_client_ip(context),
-        headers,
-        "image-seed",
-        &id,
-        None,
-    )
-    .await
+    task_read(state, context.as_ref(), headers, "image-seed", &id, None).await
+}
+async fn static_task_image_seed(
+    State(state): State<MidjourneyHttpState>,
+    Path(id): Path<String>,
+    context: Option<Extension<RequestContext>>,
+    headers: HeaderMap,
+) -> Response {
+    task_read(state, context.as_ref(), headers, "image-seed", &id, None).await
 }
 async fn task_list_by_condition(
     State(state): State<MidjourneyHttpState>,
@@ -389,11 +479,31 @@ async fn task_list_by_condition(
 ) -> Response {
     let body = match parse_json_object(&body, "do_request_failed") {
         Ok(body) => body,
-        Err(error) => return failure(error),
+        Err(error) => return failure_with_request_id(error, request_id(context.as_ref())),
     };
     task_read(
         state,
-        request_client_ip(context),
+        context.as_ref(),
+        headers,
+        "list-by-condition",
+        "",
+        Some(body),
+    )
+    .await
+}
+async fn static_task_list_by_condition(
+    State(state): State<MidjourneyHttpState>,
+    context: Option<Extension<RequestContext>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let body = match parse_json_object(&body, "do_request_failed") {
+        Ok(body) => body,
+        Err(error) => return failure_with_request_id(error, request_id(context.as_ref())),
+    };
+    task_read(
+        state,
+        context.as_ref(),
         headers,
         "list-by-condition",
         "",
@@ -404,15 +514,19 @@ async fn task_list_by_condition(
 
 async fn task_read(
     state: MidjourneyHttpState,
-    client_ip: Option<IpAddr>,
+    context: Option<&Extension<RequestContext>>,
     headers: HeaderMap,
     operation: &str,
     id: &str,
     body: Option<Value>,
 ) -> Response {
-    let identity = match state.backend.authenticate(&headers, client_ip).await {
+    let identity = match state
+        .backend
+        .authenticate(&headers, request_client_ip(context))
+        .await
+    {
         Ok(identity) => identity,
-        Err(error) => return failure(error),
+        Err(error) => return failure_with_request_id(error, request_id(context)),
     };
     match state
         .backend
@@ -420,7 +534,7 @@ async fn task_read(
         .await
     {
         Ok(reply) => json_response(reply.status, reply.content_type, reply.body),
-        Err(error) => failure(error),
+        Err(error) => failure_with_request_id(error, request_id(context)),
     }
 }
 
@@ -429,6 +543,18 @@ async fn image(
     Path((_, id)): Path<(String, String)>,
     uri: Uri,
 ) -> Response {
+    image_response(state, id, uri).await
+}
+
+async fn static_image(
+    State(state): State<MidjourneyHttpState>,
+    Path(id): Path<String>,
+    uri: Uri,
+) -> Response {
+    image_response(state, id, uri).await
+}
+
+async fn image_response(state: MidjourneyHttpState, id: String, uri: Uri) -> Response {
     let Some(user_id) = signed_image_owner(&uri, &id, state.image_signing_secret.as_deref()) else {
         return invalid_image_signature_response();
     };
@@ -528,8 +654,12 @@ pub(crate) fn signed_image_owner(uri: &Uri, task_id: &str, secret: Option<&[u8]>
     Some(user_id)
 }
 
-fn request_client_ip(context: Option<Extension<RequestContext>>) -> Option<IpAddr> {
+fn request_client_ip(context: Option<&Extension<RequestContext>>) -> Option<IpAddr> {
     context.and_then(|Extension(context)| context.client_ip)
+}
+
+fn request_id(context: Option<&Extension<RequestContext>>) -> Option<&str> {
+    context.map(|Extension(context)| context.request_id.as_str())
 }
 
 fn parse_json_object(
@@ -601,9 +731,15 @@ fn json_response(status: StatusCode, content_type: HeaderValue, body: Value) -> 
         .insert(header::CONTENT_TYPE, content_type);
     response
 }
-fn failure(error: MidjourneyFailure) -> Response {
+fn failure_with_request_id(error: MidjourneyFailure, request_id: Option<&str>) -> Response {
+    let with_request_id = |message: &str| {
+        request_id.map_or_else(
+            || message.to_owned(),
+            |request_id| format!("{message} (request id: {request_id})"),
+        )
+    };
     match error {
-        MidjourneyFailure::Unauthorized => (StatusCode::UNAUTHORIZED, Json(json!({"error":{"message":"Invalid token","type":"new_api_error","code":""}}))).into_response(),
+        MidjourneyFailure::Unauthorized => (StatusCode::UNAUTHORIZED, Json(json!({"error":{"message":with_request_id("Invalid token"),"type":"new_api_error","code":""}}))).into_response(),
         MidjourneyFailure::Forbidden => (StatusCode::FORBIDDEN, Json(json!({"error":{"message":"access denied","type":"new_api_error","code":"access_denied"}}))).into_response(),
         MidjourneyFailure::NotFound => (StatusCode::BAD_REQUEST, Json(json!({"code":4,"description":"task_no_found ","type":"upstream_error"}))).into_response(),
         MidjourneyFailure::Upstream => (StatusCode::BAD_REQUEST, Json(json!({"code":5,"description":"do_request_failed ","type":"upstream_error"}))).into_response(),
@@ -1067,6 +1203,241 @@ impl PgMidjourneyBackend {
     }
 }
 
+/// Selects a production Midjourney channel before delegating to the
+/// request-scoped PostgreSQL/upstream adapter.
+///
+/// `PgMidjourneyBackend` intentionally represents one selected channel so it
+/// can preserve channel affinity for child actions.  The legacy HTTP listener
+/// still needs an outer distributor for first-time submissions; this adapter
+/// owns that missing step and keeps the selected channel secret server-side.
+#[derive(Clone)]
+pub struct PgMidjourneyDispatchBackend {
+    pg: PgPool,
+    client: reqwest::Client,
+    response_header_timeout: Duration,
+    max_response_bytes: usize,
+    settings: MidjourneySettings,
+}
+
+impl PgMidjourneyDispatchBackend {
+    /// Builds a PostgreSQL-backed channel distributor.
+    #[must_use]
+    pub fn new(
+        pg: PgPool,
+        client: reqwest::Client,
+        response_header_timeout: Duration,
+        max_response_bytes: usize,
+    ) -> Self {
+        Self {
+            pg,
+            client,
+            response_header_timeout,
+            max_response_bytes,
+            settings: MidjourneySettings::default(),
+        }
+    }
+
+    /// Applies the authoritative Midjourney option snapshot to every
+    /// request-scoped backend created by this distributor.
+    #[must_use]
+    pub fn with_settings(mut self, settings: MidjourneySettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    fn backend_for_channel(&self, channel: MidjourneyChannel) -> PgMidjourneyBackend {
+        PgMidjourneyBackend::new(
+            self.pg.clone(),
+            self.client.clone(),
+            channel,
+            self.response_header_timeout,
+            self.max_response_bytes,
+        )
+        .with_settings(self.settings.clone())
+    }
+
+    fn authentication_backend(&self) -> PgMidjourneyBackend {
+        self.backend_for_channel(MidjourneyChannel {
+            id: 0,
+            base_url: "http://127.0.0.1:9/".to_owned(),
+            api_key: String::new(),
+            quota: 0,
+        })
+    }
+
+    async fn select_channel(
+        &self,
+        identity: &MidjourneyIdentity,
+        operation: &str,
+        body: &Value,
+    ) -> Result<MidjourneyChannel, MidjourneyFailure> {
+        let token_id = identity
+            .token_id
+            .parse::<i64>()
+            .map_err(|_| MidjourneyFailure::Storage)?;
+        let request = serde_json::from_value::<MidjourneyRequest>(body.clone()).unwrap_or_default();
+        let (action, _) = submit_action_and_parent(operation, &request);
+        let model = format!(
+            "{}{}",
+            if action == "SWAP_FACE" {
+                "swap_face"
+            } else {
+                "mj_"
+            },
+            if action == "SWAP_FACE" {
+                String::new()
+            } else {
+                action.to_ascii_lowercase()
+            }
+        );
+        let model = if action == "SWAP_FACE" {
+            "swap_face".to_owned()
+        } else {
+            model
+        };
+        let row = sqlx::query(
+            r#"SELECT c.id,
+                      COALESCE(c.base_url,'') AS base_url,
+                      c.key AS channel_key,
+                      COALESCE(t."group",'') AS token_group,
+                      COALESCE(u."group",'default') AS user_group
+                 FROM tokens t
+                 JOIN users u ON u.id=t.user_id
+                 JOIN abilities a
+                   ON a."group"=COALESCE(NULLIF(t."group",''),u."group")
+                  AND a.model=$2
+                  AND COALESCE(a.enabled,TRUE)
+                 JOIN channels c ON c.id=a.channel_id
+                WHERE t.id=$1
+                  AND t.deleted_at IS NULL
+                  AND u.deleted_at IS NULL
+                  AND COALESCE(t.status,1)=1
+                  AND COALESCE(u.status,1)=1
+                  AND COALESCE(c.status,1)=1
+                  AND COALESCE(c.type,0) IN (2,5)
+                ORDER BY COALESCE(a.priority,0) DESC,
+                         COALESCE(a.weight,0) DESC,
+                         c.id ASC
+                LIMIT 1"#,
+        )
+        .bind(token_id)
+        .bind(&model)
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| MidjourneyFailure::Storage)?
+        .ok_or(MidjourneyFailure::Request("get_channel_info_failed"))?;
+        let base_url = row
+            .try_get::<String, _>("base_url")
+            .map_err(|_| MidjourneyFailure::Storage)?;
+        let api_key = row
+            .try_get::<String, _>("channel_key")
+            .map_err(|_| MidjourneyFailure::Storage)?;
+        if base_url.trim().is_empty() || api_key.trim().is_empty() {
+            return Err(MidjourneyFailure::Request("get_channel_info_failed"));
+        }
+        let token_group = row
+            .try_get::<String, _>("token_group")
+            .map_err(|_| MidjourneyFailure::Storage)?;
+        let user_group = row
+            .try_get::<String, _>("user_group")
+            .map_err(|_| MidjourneyFailure::Storage)?;
+        let quota = self.model_quota(&model, &token_group, &user_group).await?;
+        Ok(MidjourneyChannel {
+            id: row.try_get("id").map_err(|_| MidjourneyFailure::Storage)?,
+            base_url,
+            api_key,
+            quota,
+        })
+    }
+
+    async fn model_quota(
+        &self,
+        model: &str,
+        token_group: &str,
+        user_group: &str,
+    ) -> Result<i64, MidjourneyFailure> {
+        let rows = sqlx::query(
+            "SELECT key, value FROM options WHERE key IN ('ModelPrice','ModelRatio','GroupRatio','QuotaPerUnit')",
+        )
+        .fetch_all(&self.pg)
+        .await
+        .map_err(|_| MidjourneyFailure::Storage)?;
+        let mut values = std::collections::BTreeMap::<String, String>::new();
+        for row in rows {
+            values.insert(
+                row.try_get::<String, _>("key")
+                    .map_err(|_| MidjourneyFailure::Storage)?,
+                row.try_get::<String, _>("value")
+                    .map_err(|_| MidjourneyFailure::Storage)?,
+            );
+        }
+        let object = |key: &str| {
+            values
+                .get(key)
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default()
+        };
+        let number = |value: Option<&Value>| {
+            value.and_then(Value::as_f64).or_else(|| {
+                value
+                    .and_then(Value::as_str)
+                    .and_then(|raw| raw.parse().ok())
+            })
+        };
+        let model_price = number(object("ModelPrice").get(model));
+        let quota_per_unit = values
+            .get("QuotaPerUnit")
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(500_000.0);
+        let selected_group = if !token_group.trim().is_empty() {
+            token_group.trim()
+        } else if !user_group.trim().is_empty() {
+            user_group.trim()
+        } else {
+            "default"
+        };
+        let group_ratio = number(object("GroupRatio").get(selected_group)).unwrap_or(1.0);
+        let raw = if let Some(price) = model_price {
+            price * quota_per_unit * group_ratio
+        } else if let Some(ratio) = number(object("ModelRatio").get(model)) {
+            ratio / 2.0 * quota_per_unit * group_ratio
+        } else {
+            return Err(MidjourneyFailure::Request("model_price_not_configured"));
+        };
+        if !raw.is_finite() || raw < 0.0 || raw >= i64::MAX as f64 {
+            return Err(MidjourneyFailure::Request("model_price_not_configured"));
+        }
+        Ok(raw.trunc() as i64)
+    }
+}
+
+fn submit_action_and_parent(
+    operation: &str,
+    request: &MidjourneyRequest,
+) -> (String, Option<String>) {
+    let simple = simple_change(&request.content);
+    match operation {
+        "insight-face/swap" => ("SWAP_FACE".to_owned(), None),
+        "upload-discord-images" => ("UPLOAD".to_owned(), None),
+        "simple-change" => simple.as_ref().map_or(
+            ("SIMPLE_CHANGE".to_owned(), None),
+            |(task_id, action, _)| (action.clone(), Some(task_id.clone())),
+        ),
+        "action" => (
+            plus_action(&request.custom_id).unwrap_or_else(|| "ACTION".to_owned()),
+            (!request.task_id.is_empty()).then(|| request.task_id.clone()),
+        ),
+        "change" => (
+            request.action.clone(),
+            (!request.task_id.is_empty()).then(|| request.task_id.clone()),
+        ),
+        "modal" => ("MODAL".to_owned(), Some(request.task_id.clone())),
+        "video" => ("VIDEO".to_owned(), Some(request.task_id.clone())),
+        _ => (operation.replace('-', "_").to_ascii_uppercase(), None),
+    }
+}
+
 #[async_trait]
 impl MidjourneyBackend for PgMidjourneyBackend {
     async fn authenticate(
@@ -1132,26 +1503,7 @@ impl MidjourneyBackend for PgMidjourneyBackend {
         mut body: Value,
     ) -> Result<SubmitReply, MidjourneyFailure> {
         let request = serde_json::from_value::<MidjourneyRequest>(body.clone()).unwrap_or_default();
-        let simple = simple_change(&request.content);
-        let (action, parent_task_id) = match operation {
-            "insight-face/swap" => ("SWAP_FACE".to_owned(), None),
-            "upload-discord-images" => ("UPLOAD".to_owned(), None),
-            "simple-change" => simple.as_ref().map_or(
-                ("SIMPLE_CHANGE".to_owned(), None),
-                |(task_id, action, _)| (action.clone(), Some(task_id.clone())),
-            ),
-            "action" => (
-                plus_action(&request.custom_id).unwrap_or_else(|| "ACTION".to_owned()),
-                (!request.task_id.is_empty()).then(|| request.task_id.clone()),
-            ),
-            "change" => (
-                request.action.clone(),
-                (!request.task_id.is_empty()).then(|| request.task_id.clone()),
-            ),
-            "modal" => ("MODAL".to_owned(), Some(request.task_id.clone())),
-            "video" => ("VIDEO".to_owned(), Some(request.task_id.clone())),
-            _ => (operation.replace('-', "_").to_ascii_uppercase(), None),
-        };
+        let (action, parent_task_id) = submit_action_and_parent(operation, &request);
         let mut channel = self.channel.clone();
         let mut prompt = request.prompt.clone();
         if let Some(parent_task_id) = parent_task_id {
@@ -1199,9 +1551,9 @@ impl MidjourneyBackend for PgMidjourneyBackend {
         }
         self.sanitize_body(&mut body);
         let suffix = if operation == "insight-face/swap" {
-            "insight-face/swap".to_owned()
+            "mj/insight-face/swap".to_owned()
         } else {
-            format!("submit/{operation}")
+            format!("mj/submit/{operation}")
         };
         let response = self
             .upstream_json(
@@ -1212,6 +1564,16 @@ impl MidjourneyBackend for PgMidjourneyBackend {
                 Some(body),
             )
             .await?;
+        let provider_code = response
+            .body
+            .get("code")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let properties = response
+            .body
+            .get("properties")
+            .cloned()
+            .unwrap_or(Value::Null);
         Ok(SubmitReply {
             effect: TaskEffect {
                 mode: mode.to_owned(),
@@ -1223,24 +1585,24 @@ impl MidjourneyBackend for PgMidjourneyBackend {
                     .unwrap_or_default()
                     .to_owned(),
                 action,
-                prompt,
-                state: request.state,
-                code: response
-                    .body
-                    .get("code")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_default(),
+                prompt: if operation == "insight-face/swap" {
+                    "InsightFace".to_owned()
+                } else {
+                    prompt
+                },
+                state: if operation == "insight-face/swap" {
+                    String::new()
+                } else {
+                    request.state
+                },
+                code: provider_code,
                 description: response
                     .body
                     .get("description")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
-                properties: response
-                    .body
-                    .get("properties")
-                    .cloned()
-                    .unwrap_or(Value::Null),
+                properties,
                 channel_id: channel.id,
                 quota,
             },
@@ -1255,7 +1617,10 @@ impl MidjourneyBackend for PgMidjourneyBackend {
     ) -> Result<(), MidjourneyFailure> {
         let now = epoch_millis();
         let quota = effect.quota.max(0);
-        let (status, progress, image_url, start_time, finish_time) = if effect.code == 21 {
+        let (status, progress, image_url, start_time, finish_time) = if effect.action == "SWAP_FACE"
+        {
+            (String::new(), "0%".to_owned(), String::new(), now, 0)
+        } else if effect.code == 21 {
             let status = effect
                 .properties
                 .get("status")
@@ -1278,13 +1643,18 @@ impl MidjourneyBackend for PgMidjourneyBackend {
         } else {
             (String::new(), "0%".to_owned(), String::new(), 0, 0)
         };
+        let stored_code = if effect.code == 21 && status == "SUCCESS" {
+            1
+        } else {
+            effect.code
+        };
         let mut transaction = self
             .pg
             .begin()
             .await
             .map_err(|_| MidjourneyFailure::Storage)?;
         sqlx::query("INSERT INTO midjourneys (code,user_id,action,mj_id,prompt,prompt_en,description,state,submit_time,start_time,finish_time,image_url,video_url,video_urls,status,progress,fail_reason,channel_id,quota,buttons,properties) VALUES ($1,$2,$3,$4,$5,'',$6,$7,$8,$9,$10,$11,'','',$12,$13,'',$14,$15,'','')")
-            .bind(effect.code)
+            .bind(stored_code)
             .bind(identity.user_id)
             .bind(&effect.action)
             .bind(&effect.task_id)
@@ -1423,7 +1793,7 @@ impl MidjourneyBackend for PgMidjourneyBackend {
         self.upstream_json(
             &channel,
             reqwest::Method::GET,
-            &format!("task/{task_id}/image-seed"),
+            &format!("mj/task/{task_id}/image-seed"),
             headers,
             None,
         )
@@ -1479,6 +1849,74 @@ impl MidjourneyBackend for PgMidjourneyBackend {
             status,
             body: String::from_utf8_lossy(&bytes).into_owned(),
         })
+    }
+}
+
+#[async_trait]
+impl MidjourneyBackend for PgMidjourneyDispatchBackend {
+    async fn authenticate(
+        &self,
+        headers: &HeaderMap,
+        client_ip: Option<IpAddr>,
+    ) -> Result<MidjourneyIdentity, MidjourneyFailure> {
+        self.authentication_backend()
+            .authenticate(headers, client_ip)
+            .await
+    }
+
+    async fn submit(
+        &self,
+        identity: &MidjourneyIdentity,
+        mode: &str,
+        operation: &str,
+        headers: &HeaderMap,
+        body: Value,
+    ) -> Result<SubmitReply, MidjourneyFailure> {
+        let channel = self.select_channel(identity, operation, &body).await?;
+        self.backend_for_channel(channel)
+            .submit(identity, mode, operation, headers, body)
+            .await
+    }
+
+    async fn record_submit(
+        &self,
+        identity: &MidjourneyIdentity,
+        effect: TaskEffect,
+    ) -> Result<(), MidjourneyFailure> {
+        self.authentication_backend()
+            .record_submit(identity, effect)
+            .await
+    }
+
+    async fn task_read(
+        &self,
+        identity: &MidjourneyIdentity,
+        operation: &str,
+        task_id: &str,
+        headers: &HeaderMap,
+        body: Option<Value>,
+    ) -> Result<BufferedJsonReply, MidjourneyFailure> {
+        self.authentication_backend()
+            .task_read(identity, operation, task_id, headers, body)
+            .await
+    }
+
+    async fn image_for(&self, task_id: &str) -> Result<StoredImage, MidjourneyFailure> {
+        self.authentication_backend().image_for(task_id).await
+    }
+
+    async fn image_for_owned(
+        &self,
+        user_id: i64,
+        task_id: &str,
+    ) -> Result<StoredImage, MidjourneyFailure> {
+        self.authentication_backend()
+            .image_for_owned(user_id, task_id)
+            .await
+    }
+
+    async fn fetch_image(&self, url: &str) -> Result<ImageReply, MidjourneyFailure> {
+        self.authentication_backend().fetch_image(url).await
     }
 }
 

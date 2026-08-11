@@ -8,7 +8,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const accessPolicyErrorHeader = "access-policy"
+const (
+	accessPolicyErrorHeader  = "access-policy"
+	accessPolicyResultHeader = "X-LMM-Access-Policy"
+	accessPolicyDenied       = "denied"
+)
 
 // GetAccessPolicyErrorPage renders the edge-policy response through the Go
 // service so the user-facing error page is versioned with the application.
@@ -17,7 +21,7 @@ const accessPolicyErrorHeader = "access-policy"
 func GetAccessPolicyErrorPage(c *gin.Context) {
 	if !loopbackPeer(c.Request.RemoteAddr) ||
 		strings.TrimSpace(c.GetHeader("X-LMM-Internal-Error")) != accessPolicyErrorHeader ||
-		strings.TrimSpace(c.GetHeader("X-LMM-CN-Source")) != "1" {
+		strings.TrimSpace(c.GetHeader(accessPolicyResultHeader)) != accessPolicyDenied {
 		c.Status(http.StatusNotFound)
 		return
 	}

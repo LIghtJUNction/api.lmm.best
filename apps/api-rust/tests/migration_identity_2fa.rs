@@ -206,6 +206,12 @@ async fn twofa_enable_reports_an_existing_enabled_factor_from_postgres() {
             user_id: 7,
             role: 1,
         }))
+        .layer(Extension(Identity2FASession {
+            session_id: "fixture-session".to_owned(),
+            client_ip: "127.0.0.1".to_owned(),
+            user_agent: "identity-2fa-integration-test".to_owned(),
+            cookie_secure: false,
+        }))
         .oneshot(
             Request::post("/api/user/2fa/enable")
                 .header("content-type", "application/json")

@@ -65,6 +65,7 @@ func GetStatus(c *gin.Context) {
 	defer common.OptionMapRWMutex.RUnlock()
 
 	passkeySetting := system_setting.GetPasskeySettings()
+	assistantSettings := setting.GetAssistantSettings()
 	data := gin.H{
 		"version":                     common.Version,
 		"start_time":                  common.StartTime,
@@ -114,6 +115,11 @@ func GetStatus(c *gin.Context) {
 			"bounty_public_read":      true,
 			"self_oauth_unbind":       true,
 			"responses_websocket":     true,
+		},
+		"assistant": gin.H{
+			"enabled":           assistantSettings.Enabled,
+			"model":             assistantSettings.Model,
+			"weekly_credit_usd": assistantSettings.WeeklyCreditUSD,
 		},
 
 		"usd_exchange_rate": operation_setting.USDExchangeRate,

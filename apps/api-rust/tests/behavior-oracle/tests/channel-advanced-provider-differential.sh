@@ -52,7 +52,9 @@ done
 
 preflight_port() {
   local name=$1 port=$2
-  if (exec 3<>"/dev/tcp/127.0.0.1/$port"; exec 3>&-) 2>/dev/null; then
+  # The probe runs in a subshell, so the descriptor closes automatically. An
+  # explicit close would mask a refused connection with a zero exit status.
+  if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
     echo "$name port is already occupied: 127.0.0.1:$port" >&2
     exit 1
   fi
@@ -102,7 +104,11 @@ require_source_contract() {
   rg -Fq 'x-accel-buffering' "$route_source"
   rg -Fq 'SecureVerificationRequired' "$legacy_root/router/channel-router.go"
   rg -Fq 'return Err(ChannelAdvancedError::Forbidden);' "$route_source"
-  if grep -Eq 'https://auth\.openai\.com|http://[^127]|https://[^127]' <<<"$production_source"; then
+  # `https://api.openai.com/auth` is a JWT claim namespace, not an outbound
+  # target. Exclude that data key while still rejecting any actual provider
+  # URL embedded in the production portion of the route.
+  if grep -E 'https://auth\.openai\.com|http://[^127]|https://[^127]' <<<"$production_source" \
+      | grep -vF 'get("https://api.openai.com/auth")' >/dev/null; then
     echo "candidate source contains a non-loopback provider target" >&2
     return 1
   fi

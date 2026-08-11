@@ -15,7 +15,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{Extension, RawQuery, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -26,8 +26,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::RequestContext;
 use crate::auth::{
-    AuthErrorKind, DashboardAuth, DashboardUser, UserAuthPolicyError, enforce_user_auth,
-    user_auth_message,
+    AuthErrorKind, DashboardAuth, DashboardUser, DashboardUserView, UserAuthPolicyError,
+    enforce_user_auth, enforce_user_auth_view, user_auth_message,
 };
 
 const ROLE_ADMIN: i64 = 10;
@@ -38,8 +38,6 @@ const TOPUP_SUCCESS: &str = "success";
 const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
 const TOPUP_QUERY_WINDOW_SECONDS: i64 = 30 * 24 * 60 * 60;
 const SEARCH_COUNT_HARD_LIMIT: i64 = 10_000;
-const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
-const TOPUP_HISTORY_PATH: &str = "/api/user/topup";
 
 /// Dependencies owned by this isolated migration slice.
 #[derive(Clone)]
@@ -58,8 +56,8 @@ impl IdentityTopupState {
 /// Routes retained under the legacy `/api/user` namespace.
 pub fn router(state: IdentityTopupState) -> Router {
     topup_read_routes()
-        .route("/api/user/topup", get(all_topups).post(redeem))
-        .route("/api/user/topup/complete", post(complete_topup))
+        .merge(topup_admin_route())
+        .merge(topup_write_route())
         .with_state(state)
 }
 
@@ -73,9 +71,17 @@ pub fn read_router(state: IdentityTopupState) -> Router {
 /// listener.  Redemption and manual completion remain isolated until their
 /// write-side transaction differential is complete.
 pub fn admin_read_router(state: IdentityTopupState) -> Router {
+    topup_admin_route().with_state(state)
+}
+
+fn topup_admin_route() -> Router<IdentityTopupState> {
+    Router::new().route("/api/user/topup", get(all_topups))
+}
+
+fn topup_write_route() -> Router<IdentityTopupState> {
     Router::new()
-        .route(TOPUP_HISTORY_PATH, get(all_topups))
-        .with_state(state)
+        .route("/api/user/topup", post(redeem))
+        .route("/api/user/topup/complete", post(complete_topup))
 }
 
 fn topup_read_routes() -> Router<IdentityTopupState> {
@@ -190,6 +196,30 @@ async fn actor(state: &IdentityTopupState, headers: &HeaderMap) -> Result<Dashbo
             _ => unauthorized(),
         })?;
     enforce_user_auth(&user).map_err(|error| user_auth_error(headers, error))?;
+    Ok(user)
+}
+
+async fn actor_view(
+    state: &IdentityTopupState,
+    headers: &HeaderMap,
+) -> Result<DashboardUserView, Response> {
+    let Some(token) = bearer(headers) else {
+        return Err(unauthorized());
+    };
+    let user = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+        .map_err(|error| match error.kind {
+            AuthErrorKind::UserDisabled => {
+                user_auth_error(headers, UserAuthPolicyError::UserDisabled)
+            }
+            AuthErrorKind::Unauthorized
+            | AuthErrorKind::TokenExpired
+            | AuthErrorKind::SessionRevoked => unauthorized(),
+            _ => unauthorized(),
+        })?;
+    enforce_user_auth_view(&user).map_err(|error| user_auth_error(headers, error))?;
     Ok(user)
 }
 
@@ -308,10 +338,20 @@ struct TopupRecord {
     id: i64,
     user_id: i64,
     amount: i64,
+    credited_quota: i64,
+    expected_amount_micros: i64,
+    settled_amount_micros: i64,
+    settlement_currency: String,
     money: Value,
     trade_no: String,
     payment_method: String,
     payment_provider: String,
+    provider_product_id: String,
+    provider_store_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_transaction_id: Option<String>,
     create_time: i64,
     complete_time: i64,
     status: String,
@@ -349,17 +389,47 @@ impl From<TopupRecord> for TopupSelfRecord {
 fn topup_record(row: &sqlx::postgres::PgRow) -> Result<TopupRecord, sqlx::Error> {
     let money_text: String = row.try_get("money")?;
     let money = money_value(&money_text);
+    let top_up_json: Value = row.try_get("top_up_json")?;
     Ok(TopupRecord {
         id: row.try_get("id")?,
         user_id: row.try_get("user_id")?,
         amount: row.try_get("amount")?,
+        credited_quota: json_i64(&top_up_json, "credited_quota"),
+        expected_amount_micros: json_i64(&top_up_json, "expected_amount_micros"),
+        settled_amount_micros: json_i64(&top_up_json, "settled_amount_micros"),
+        settlement_currency: json_string(&top_up_json, "settlement_currency"),
         money,
         trade_no: row.try_get("trade_no")?,
         payment_method: row.try_get("payment_method")?,
         payment_provider: row.try_get("payment_provider")?,
+        provider_product_id: json_string(&top_up_json, "provider_product_id"),
+        provider_store_id: json_string(&top_up_json, "provider_store_id"),
+        provider_event_id: json_optional_string(&top_up_json, "provider_event_id"),
+        provider_transaction_id: json_optional_string(&top_up_json, "provider_transaction_id"),
         create_time: row.try_get("create_time")?,
         complete_time: row.try_get("complete_time")?,
         status: row.try_get("status")?,
+    })
+}
+
+fn json_i64(row: &Value, key: &str) -> i64 {
+    row.get(key)
+        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+        .unwrap_or(0)
+}
+
+fn json_string(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn json_optional_string(row: &Value, key: &str) -> Option<String> {
+    row.get(key).and_then(|value| match value {
+        Value::Null => None,
+        Value::String(value) => Some(value.to_owned()),
+        _ => Some(value.to_string()),
     })
 }
 
@@ -390,28 +460,23 @@ fn money_value(text: &str) -> Value {
 const TOPUP_COLUMNS: &str = r#"id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount,
 COALESCE(money, 0)::text AS money, COALESCE(trade_no, '') AS trade_no,
 COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider,
-COALESCE(create_time, 0) AS create_time, COALESCE(complete_time, 0) AS complete_time, COALESCE(status, '') AS status"#;
+COALESCE(create_time, 0) AS create_time, COALESCE(complete_time, 0) AS complete_time,
+COALESCE(status, '') AS status, to_jsonb(top_ups) AS top_up_json"#;
 
 async fn all_topups(
     State(state): State<IdentityTopupState>,
     headers: HeaderMap,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
-    let user = match actor(&state, &headers).await {
-        Ok(user) => user,
-        Err(response) => return response,
-    };
-    if user.role < ROLE_ADMIN {
-        return forbidden();
+    if administrator(&state, &headers).await.is_err() {
+        return forbidden_or_unauthorized(&state, &headers).await;
     }
-    with_auth_version(
-        list_topups(
-            &state.pool,
-            &PageQuery::from_raw(raw_query.as_deref()),
-            None,
-        )
-        .await,
+    list_topups(
+        &state.pool,
+        &PageQuery::from_raw(raw_query.as_deref()),
+        None,
     )
+    .await
 }
 
 async fn user_topups(
@@ -423,14 +488,12 @@ async fn user_topups(
         Ok(user) => user,
         Err(response) => return response,
     };
-    with_auth_version(
-        list_self_topups(
-            &state.pool,
-            &PageQuery::from_raw(raw_query.as_deref()),
-            Some(user.id),
-        )
-        .await,
+    list_self_topups(
+        &state.pool,
+        &PageQuery::from_raw(raw_query.as_deref()),
+        Some(user.id),
     )
+    .await
 }
 
 // Preserve the distinction between a missing/invalid credential and a valid ordinary user.
@@ -686,7 +749,7 @@ async fn complete_topup(
             Ok(tx) => tx,
             Err(error) => return fail(legacy_database_error(&error)),
         };
-        let row = match sqlx::query("SELECT id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount, COALESCE(money, 0)::text AS money, COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider, COALESCE(status, '') AS status FROM top_ups WHERE trade_no = $1 FOR UPDATE")
+        let row = match sqlx::query("SELECT id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount, COALESCE(money, 0)::text AS money, COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider, COALESCE(status, '') AS status, to_jsonb(top_ups) AS top_up_json FROM top_ups WHERE trade_no = $1 FOR UPDATE")
             .bind(&request.trade_no).fetch_optional(&mut *tx).await { Ok(Some(row)) => row, Ok(None) => return fail("充值订单不存在"), Err(_) => return fail("系统错误") };
         let status: String = row.get("status");
         if status == TOPUP_SUCCESS {
@@ -709,6 +772,8 @@ async fn complete_topup(
         let payment_method: String = row.get("payment_method");
         let provider: String = row.get("payment_provider");
         let money: String = row.get("money");
+        let top_up_json: Value = row.get("top_up_json");
+        let credited_quota = json_i64(&top_up_json, "credited_quota");
         // Go loads `common.QuotaPerUnit` from the authoritative options table and
         // uses it while this same completion transaction holds the order lock.
         // Keep that snapshot local to this transaction so an option change cannot
@@ -717,12 +782,19 @@ async fn complete_topup(
             Ok(value) => value,
             Err(_) => return fail("系统错误"),
         };
-        let units = completed_quota(amount, &money, &provider, quota_per_unit).unwrap_or(0);
+        let units = normalized_manual_topup_quota(
+            amount,
+            &payment_method,
+            &provider,
+            credited_quota,
+            quota_per_unit,
+        )
+        .unwrap_or(0);
         if units <= 0 {
             return fail("无效的充值额度");
         }
         // Current Go persists the normalized credited amount on the order
-        // while completing it. Keep the fallback update for older schemas
+        // while completing it.  Keep the fallback update for older schemas
         // that predate the settlement columns; those schemas remain readable
         // during the staged migration, but current schemas get exact parity.
         let has_credited_quota = sqlx::query_scalar::<_, bool>(
@@ -1027,15 +1099,36 @@ async fn quota_per_unit(transaction: &mut Transaction<'_, Postgres>) -> Result<f
 /// Mirrors Go's `decimal.NewFromFloat(...).Mul(...).IntPart()` result for the
 /// positive values accepted by manual completion, while rejecting values that
 /// cannot be represented as the legacy integer quota.
-fn completed_quota(amount: i64, money: &str, provider: &str, quota_per_unit: f64) -> Option<i64> {
+fn normalized_manual_topup_quota(
+    amount: i64,
+    payment_method: &str,
+    provider: &str,
+    credited_quota: i64,
+    quota_per_unit: f64,
+) -> Option<i64> {
     if !quota_per_unit.is_finite() {
         return None;
     }
-    let quantity = if provider == "stripe" {
-        money.parse::<f64>().ok()?
-    } else {
-        amount as f64
-    };
+    let provider = provider.trim();
+    let payment_method = payment_method.trim();
+    let known_external_source = matches!(
+        provider,
+        "epay" | "stripe" | "creem" | "fastpay" | "waffo" | "waffo_pancake"
+    ) || (provider.is_empty()
+        && matches!(
+            payment_method,
+            "stripe" | "creem" | "waffo" | "waffo_pancake" | "alipay" | "wxpay"
+        ));
+    if !known_external_source {
+        return Some(0);
+    }
+    if credited_quota > 0 {
+        return Some(credited_quota);
+    }
+    if provider == "creem" || payment_method == "creem" {
+        return Some(amount);
+    }
+    let quantity = amount as f64;
     let quota = (quantity * quota_per_unit).trunc();
     (quota.is_finite() && quota >= i64::MIN as f64 && quota <= i64::MAX as f64)
         .then_some(quota as i64)
@@ -1046,30 +1139,16 @@ async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap)
     // UserAuth principal. Console activation is not part of this route's
     // authorization contract; individual payment writes keep their own
     // compliance and credential guards.
-    let actor = match actor(&state, &headers).await {
+    let actor = match actor_view(&state, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
     let options = match read_options(&state.pool).await {
         Ok(options) => options,
-        Err(_) => return with_auth_version(fail("系统错误")),
+        Err(_) => return fail("系统错误"),
     };
-    let mut data = topup_info_data_for_user(&options, true, &actor.group);
-    // Keep the frozen Go response shape. The activation-aware helper is also
-    // used by newer Rust-only callers, but these two metadata fields were not
-    // present in `controller.GetTopUpInfo` and must not leak on this route.
-    if let Value::Object(ref mut object) = data {
-        object.remove("developer_access_granted");
-        object.remove("topup_group_ratio");
-    }
-    with_auth_version(ok(data))
-}
-
-fn with_auth_version(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
-    response
+    let data = topup_info_data_for_user(&options, actor.developer_access_granted, &actor.group);
+    ok(data)
 }
 
 #[cfg(test)]
@@ -1176,7 +1255,7 @@ fn topup_info_data_for_user(
             "developer_access_granted": false,
             "activation_required": true,
             "payment_available": payment_available,
-            "min_payment": min_payment,
+            "min_payment": legacy_number(min_payment),
             "amount_options": amount_options,
             "discount": discount,
             "payment_compliance_confirmed": compliant,
@@ -1687,18 +1766,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticated_topup_reads_preserve_auth_version_on_errors() {
-        let request = Request::builder()
-            .uri("/api/user/topup/info")
-            .header(header::AUTHORIZATION, "Bearer administrator")
-            .body(Body::empty())
-            .unwrap();
-        let response = app(ROLE_ADMIN).oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["auth-version"], AUTH_VERSION);
-    }
-
-    #[tokio::test]
     async fn raw_pagination_keeps_bad_integer_requests_inside_the_legacy_handler() {
         for uri in [
             "/api/user/topup?p=-1&size=-1",
@@ -1721,13 +1788,23 @@ mod tests {
     }
 
     #[test]
-    fn completed_quota_keeps_the_legacy_default_and_rejects_malformed_values() {
+    fn normalized_manual_topup_quota_keeps_external_rules_and_rejects_malformed_values() {
         assert_eq!(
-            completed_quota(2, "0", "epay", DEFAULT_QUOTA_PER_UNIT),
+            normalized_manual_topup_quota(2, "epay", "epay", 0, DEFAULT_QUOTA_PER_UNIT),
             Some(1_000_000)
         );
-        assert_eq!(completed_quota(2, "0", "epay", 0.0), Some(0));
-        assert_eq!(completed_quota(2, "0", "epay", f64::NAN), None);
+        assert_eq!(
+            normalized_manual_topup_quota(2, "manual", "", 0, DEFAULT_QUOTA_PER_UNIT),
+            Some(0)
+        );
+        assert_eq!(
+            normalized_manual_topup_quota(2, "epay", "epay", 123, DEFAULT_QUOTA_PER_UNIT),
+            Some(123)
+        );
+        assert_eq!(
+            normalized_manual_topup_quota(2, "epay", "epay", 0, f64::NAN),
+            None
+        );
     }
 
     #[test]
@@ -1977,10 +2054,18 @@ mod tests {
             id: 7,
             user_id: 11,
             amount: 20,
+            credited_quota: 0,
+            expected_amount_micros: 0,
+            settled_amount_micros: 0,
+            settlement_currency: String::new(),
             money: json!(20.0),
             trade_no: "trade-7".into(),
             payment_method: "stripe".into(),
             payment_provider: "stripe".into(),
+            provider_product_id: String::new(),
+            provider_store_id: String::new(),
+            provider_event_id: None,
+            provider_transaction_id: None,
             create_time: 100,
             complete_time: 200,
             status: "success".into(),

@@ -54,7 +54,7 @@ fn admin() -> DeploymentActor {
 }
 
 #[tokio::test]
-async fn every_legacy_route_is_admin_gated_with_legacy_failure_envelope() {
+async fn every_legacy_route_is_admin_gated_with_current_go_auth_envelope() {
     let stub = Arc::new(Stub::default());
     let (status, body) = call(
         &app(
@@ -73,8 +73,12 @@ async fn every_legacy_route_is_admin_gated_with_legacy_failure_envelope() {
     assert_eq!(
         (status, body),
         (
-            StatusCode::OK,
-            json!({"success": false, "message": "无权进行此操作"})
+            StatusCode::FORBIDDEN,
+            json!({
+                "success": false,
+                "code": "AUTH_INSUFFICIENT_PRIVILEGE",
+                "message": "Unauthorized, insufficient privileges"
+            })
         )
     );
 }
@@ -104,8 +108,15 @@ async fn authorization_precedes_body_and_query_parsing() {
             .expect("malformed query request"),
     ] {
         let (status, body) = call(&app, request).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({"success": false, "message": "无权进行此操作"}));
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            body,
+            json!({
+                "success": false,
+                "code": "AUTH_INSUFFICIENT_PRIVILEGE",
+                "message": "Unauthorized, insufficient privileges"
+            })
+        );
     }
     assert!(inspected.calls.lock().expect("stub lock").is_empty());
 }

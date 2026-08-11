@@ -55,25 +55,49 @@ pub struct ApiTokenPrincipal {
 #[derive(Clone)]
 pub struct ApiTokenHttpState {
     service: Arc<PgValkeyApiTokenService>,
+    frozen_wire_errors: bool,
 }
 
 impl ApiTokenHttpState {
     #[must_use]
     pub fn new(service: Arc<PgValkeyApiTokenService>) -> Self {
-        Self { service }
+        Self {
+            service,
+            // The isolated listener is the only runtime that must reproduce
+            // the historical 5418ce6 `model.Token` binding errors.  The
+            // normal listener follows the current Go `tokenRequest` wrapper.
+            frozen_wire_errors: std::env::var_os("LMM_RS_TEST_INSTANCE").is_some(),
+        }
+    }
+
+    /// Selects the historical Go top-level JSON binding error spelling for an
+    /// in-process parity fixture. Production/current-Go callers keep the
+    /// default `controller.tokenRequest` spelling.
+    #[must_use]
+    pub fn with_frozen_wire_errors(mut self, enabled: bool) -> Self {
+        self.frozen_wire_errors = enabled;
+        self
     }
 }
 
 pub fn api_token_router(state: ApiTokenHttpState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/api/token/", get(list).post(create).put(update))
         .route("/api/token/search", get(search))
         .route("/api/token/batch", post(batch_delete))
         .route("/api/token/batch/keys", post(batch_keys))
         .route("/api/token/{id}", get(detail).delete(remove))
         .route("/api/token/{id}/key", post(key))
-        .with_state(state)
-        .layer(DefaultBodyLimit::disable())
+        .layer(DefaultBodyLimit::disable());
+    let router = if state.frozen_wire_errors {
+        // The frozen 5418 router has no static auto-groups route, so its
+        // dynamic `/:id` handler receives this path and returns the legacy
+        // strconv.Atoi error. Keep the optional extension on current mounts.
+        router
+    } else {
+        router.route("/api/token/auto-groups", get(auto_groups))
+    };
+    router.with_state(state)
 }
 
 #[derive(Clone)]
@@ -84,6 +108,8 @@ pub struct PgValkeyApiTokenService {
     dependency_timeout: Duration,
     crypto_secret: Arc<str>,
     max_user_tokens: i64,
+    console_activation_on_create: bool,
+    include_auto_groups_cache: bool,
     settings_snapshot: Arc<RwLock<TokenSettings>>,
 }
 
@@ -97,6 +123,8 @@ impl PgValkeyApiTokenService {
             dependency_timeout: Duration::from_secs(2),
             crypto_secret: Arc::from(""),
             max_user_tokens: DEFAULT_MAX_USER_TOKENS,
+            console_activation_on_create: true,
+            include_auto_groups_cache: false,
             settings_snapshot: Arc::new(RwLock::new(TokenSettings::defaults(
                 DEFAULT_MAX_USER_TOKENS,
             ))),
@@ -126,6 +154,28 @@ impl PgValkeyApiTokenService {
         self
     }
 
+    /// Controls the optional dashboard activation side effect on token create.
+    ///
+    /// The normal listener keeps the current Rust policy enabled. The isolated
+    /// frozen Go parity listener disables it because the 5418ce6 oracle's
+    /// `AddToken` path only inserts the token and leaves the user row intact.
+    #[must_use]
+    pub fn with_console_activation_on_create(mut self, enabled: bool) -> Self {
+        self.console_activation_on_create = enabled;
+        self
+    }
+
+    /// Includes the current Go `AutoGroups` field in token cache hashes.
+    ///
+    /// The historical 5418ce6 listener predates this field, so its isolated
+    /// parity mount must keep the old hash shape.  The normal listener opts in
+    /// explicitly when it compares against the current Go model.
+    #[must_use]
+    pub fn with_auto_groups_cache(mut self, enabled: bool) -> Self {
+        self.include_auto_groups_cache = enabled;
+        self
+    }
+
     async fn cache_connection(&self) -> Result<MultiplexedConnection, TokenError> {
         tokio::time::timeout(
             self.dependency_timeout,
@@ -134,6 +184,15 @@ impl PgValkeyApiTokenService {
         .await
         .map_err(|_| TokenError::internal())?
         .map_err(|_| TokenError::internal())
+    }
+
+    async fn has_auto_groups_column(&self) -> Result<bool, TokenError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'tokens' AND column_name = 'auto_groups')",
+        )
+        .fetch_one(&self.pg)
+        .await
+        .map_err(TokenError::db)
     }
 
     async fn invalidate(&self, keys: impl IntoIterator<Item = String>) -> Result<(), TokenError> {
@@ -164,7 +223,18 @@ impl PgValkeyApiTokenService {
         let ttl = self.cache_ttl.as_secs().max(1);
         // HSET and EXPIRE are one Lua operation, preserving the legacy hash
         // layout and ensuring a partial command cannot create an immortal key.
-        const STORE: &str = r#"
+        const STORE_WITH_AUTO_GROUPS: &str = r#"
+redis.call('HSET', KEYS[1],
+  'Id', ARGV[1], 'UserId', ARGV[2], 'Key', '', 'Status', ARGV[3],
+  'Name', ARGV[4], 'CreatedTime', ARGV[5], 'AccessedTime', ARGV[6],
+  'ExpiredTime', ARGV[7], 'RemainQuota', ARGV[8], 'UnlimitedQuota', ARGV[9],
+  'ModelLimitsEnabled', ARGV[10], 'ModelLimits', ARGV[11], 'AllowIps', ARGV[12],
+  'UsedQuota', ARGV[13], 'Group', ARGV[14], 'CrossGroupRetry', ARGV[15],
+  'AutoGroups', ARGV[16])
+redis.call('EXPIRE', KEYS[1], ARGV[17])
+return 1
+"#;
+        const STORE_WITHOUT_AUTO_GROUPS: &str = r#"
 redis.call('HSET', KEYS[1],
   'Id', ARGV[1], 'UserId', ARGV[2], 'Key', '', 'Status', ARGV[3],
   'Name', ARGV[4], 'CreatedTime', ARGV[5], 'AccessedTime', ARGV[6],
@@ -174,28 +244,54 @@ redis.call('HSET', KEYS[1],
 redis.call('EXPIRE', KEYS[1], ARGV[16])
 return 1
 "#;
-        redis::Script::new(STORE)
-            .key(self.cache_key(&token.key)?)
-            .arg(token.id)
-            .arg(token.user_id)
-            .arg(token.status)
-            .arg(&token.name)
-            .arg(token.created_time)
-            .arg(token.accessed_time)
-            .arg(token.expired_time)
-            .arg(token.remain_quota)
-            .arg(token.unlimited_quota)
-            .arg(token.model_limits_enabled)
-            .arg(&token.model_limits)
-            .arg(token.allow_ips.as_deref().unwrap_or_default())
-            .arg(token.used_quota)
-            .arg(&token.group)
-            .arg(token.cross_group_retry)
-            .arg(ttl)
-            .invoke_async::<i64>(&mut connection)
-            .await
-            .map(|_| ())
-            .map_err(|_| TokenError::internal())
+        let cache_key = self.cache_key(&token.key)?;
+        let result = if self.include_auto_groups_cache {
+            let script = redis::Script::new(STORE_WITH_AUTO_GROUPS);
+            script
+                .key(&cache_key)
+                .arg(token.id)
+                .arg(token.user_id)
+                .arg(token.status)
+                .arg(&token.name)
+                .arg(token.created_time)
+                .arg(token.accessed_time)
+                .arg(token.expired_time)
+                .arg(token.remain_quota)
+                .arg(token.unlimited_quota)
+                .arg(token.model_limits_enabled)
+                .arg(&token.model_limits)
+                .arg(token.allow_ips.as_deref().unwrap_or_default())
+                .arg(token.used_quota)
+                .arg(&token.group)
+                .arg(token.cross_group_retry)
+                .arg(&token.auto_groups_raw)
+                .arg(ttl)
+                .invoke_async::<i64>(&mut connection)
+                .await
+        } else {
+            let script = redis::Script::new(STORE_WITHOUT_AUTO_GROUPS);
+            script
+                .key(&cache_key)
+                .arg(token.id)
+                .arg(token.user_id)
+                .arg(token.status)
+                .arg(&token.name)
+                .arg(token.created_time)
+                .arg(token.accessed_time)
+                .arg(token.expired_time)
+                .arg(token.remain_quota)
+                .arg(token.unlimited_quota)
+                .arg(token.model_limits_enabled)
+                .arg(&token.model_limits)
+                .arg(token.allow_ips.as_deref().unwrap_or_default())
+                .arg(token.used_quota)
+                .arg(&token.group)
+                .arg(token.cross_group_retry)
+                .arg(ttl)
+                .invoke_async::<i64>(&mut connection)
+                .await
+        };
+        result.map(|_| ()).map_err(|_| TokenError::internal())
     }
 
     fn cache_key(&self, key: &str) -> Result<String, TokenError> {
@@ -212,11 +308,11 @@ return 1
         let fallback = self
             .settings_snapshot
             .read()
-            .map(|settings| *settings)
+            .map(|settings| settings.clone())
             .unwrap_or_else(|_| TokenSettings::defaults(self.max_user_tokens));
         let refreshed = async {
             let rows = sqlx::query(
-                "SELECT key, value FROM options WHERE key IN ('token_setting.max_user_tokens', 'QuotaPerUnit')",
+                "SELECT key, value FROM options WHERE key IN ('token_setting.max_user_tokens', 'QuotaPerUnit', 'AutoGroups', 'MaxTokenAutoGroups')",
             )
             .fetch_all(&self.pg)
             .await?;
@@ -231,6 +327,16 @@ return 1
                     // zero value when the stored value is not an integer.
                     settings.max_user_tokens =
                         parse_max_user_tokens_option(&value, settings.max_user_tokens);
+                } else if key == "AutoGroups" {
+                    if let Ok(groups) = serde_json::from_str::<Vec<String>>(&value) {
+                        settings.auto_groups = groups;
+                    }
+                } else if key == "MaxTokenAutoGroups" {
+                    if let Ok(max_count) = value.parse::<i64>() {
+                        if max_count > 0 {
+                            settings.max_token_auto_groups = max_count;
+                        }
+                    }
                 } else {
                     // Go uses `strconv.ParseFloat(value, 64)` and deliberately
                     // assigns its zero value on failure.  Preserve that behavior
@@ -248,7 +354,7 @@ return 1
         .await;
         if let Ok(settings) = refreshed {
             if let Ok(mut cached) = self.settings_snapshot.write() {
-                *cached = settings;
+                *cached = settings.clone();
             }
             settings
         } else {
@@ -258,6 +364,80 @@ return 1
             // last successful snapshot (or the configured defaults).
             fallback
         }
+    }
+
+    async fn auto_groups(&self, user_id: i64) -> Result<serde_json::Value, TokenError> {
+        let settings = self.token_settings().await;
+        let user_group = sqlx::query_scalar::<_, String>(
+            "SELECT COALESCE(\"group\", 'default') FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(TokenError::db)?
+        .unwrap_or_else(|| "default".to_owned());
+
+        // `GetUserAutoGroup` preserves the configured order, removes
+        // duplicates, and only exposes groups selectable by the authenticated
+        // user's current group.  The option snapshot carries the same
+        // global AutoGroups list; default/vip/svip are the legacy built-in
+        // ratio groups when no custom snapshot has been persisted.
+        let mut seen = std::collections::BTreeSet::new();
+        let groups = settings
+            .auto_groups
+            .iter()
+            .filter(|group| {
+                let group = group.as_str();
+                !group.is_empty()
+                    && group != "auto"
+                    && (matches!(group, "default" | "vip" | "svip") || group == user_group)
+                    && seen.insert(group.to_owned())
+            })
+            .take(settings.max_token_auto_groups.max(0) as usize)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({
+            "groups": groups,
+            "max_count": settings.max_token_auto_groups,
+        }))
+    }
+
+    async fn encode_auto_groups(
+        &self,
+        user_id: i64,
+        groups: &[String],
+    ) -> Result<String, TokenError> {
+        if groups.is_empty() {
+            return Ok(String::new());
+        }
+        let settings = self.token_settings().await;
+        if groups.len() > settings.max_token_auto_groups.max(0) as usize {
+            return Err(TokenError::invalid(format!(
+                "令牌自动分组数量不能超过 {}",
+                settings.max_token_auto_groups
+            )));
+        }
+        let user_group = sqlx::query_scalar::<_, String>(
+            "SELECT COALESCE(\"group\", 'default') FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(TokenError::db)?
+        .unwrap_or_else(|| "default".to_owned());
+        let mut seen = std::collections::BTreeSet::new();
+        for group in groups {
+            if !seen.insert(group) {
+                return Err(TokenError::invalid(format!("自动分组重复: {group}")));
+            }
+            if group.is_empty()
+                || group == "auto"
+                || !(matches!(group.as_str(), "default" | "vip" | "svip") || group == &user_group)
+            {
+                return Err(TokenError::invalid(format!("无效的自动分组: {group}")));
+            }
+        }
+        serde_json::to_string(groups).map_err(|_| TokenError::internal())
     }
 
     async fn list(&self, user_id: i64, page: Page) -> Result<PageResult, TokenError> {
@@ -412,6 +592,12 @@ return 1
     async fn create(&self, user_id: i64, input: TokenInput) -> Result<(), TokenError> {
         let settings = self.token_settings().await;
         validate_input(&input, settings.max_quota())?;
+        let auto_groups_raw = if input.group == "auto" {
+            self.encode_auto_groups(user_id, &input.auto_groups).await?
+        } else {
+            String::new()
+        };
+        let has_auto_groups_column = self.has_auto_groups_column().await?;
         let key = generate_key();
         let now = unix_now();
         let mut tx = self.pg.begin().await.map_err(TokenError::db)?;
@@ -429,16 +615,24 @@ return 1
         // GORM applies its `status:1` and `expired_time:-1` defaults whenever
         // the incoming expiration is omitted or zero.
         let expired_time = legacy_create_expired_time(input.expired_time);
-        sqlx::query("INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry) VALUES ($1,$2,1,$3,$4,$4,$5,$6,$7,$8,$9,$10,0,$11,$12)")
-        .bind(user_id).bind(&key).bind(input.name).bind(now).bind(expired_time).bind(input.remain_quota).bind(input.unlimited_quota).bind(input.model_limits_enabled).bind(input.model_limits).bind(input.allow_ips.unwrap_or_default()).bind(input.group).bind(input.cross_group_retry)
-            .execute(&mut *tx).await.map_err(TokenError::db)?;
-        sqlx::query(
-            "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
-        )
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(TokenError::db)?;
+        if has_auto_groups_column {
+            sqlx::query("INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry, auto_groups) VALUES ($1,$2,1,$3,$4,$4,$5,$6,$7,$8,$9,$10,0,$11,$12,$13)")
+                .bind(user_id).bind(&key).bind(input.name).bind(now).bind(expired_time).bind(input.remain_quota).bind(input.unlimited_quota).bind(input.model_limits_enabled).bind(input.model_limits).bind(input.allow_ips.unwrap_or_default()).bind(input.group).bind(input.cross_group_retry).bind(auto_groups_raw)
+                .execute(&mut *tx).await.map_err(TokenError::db)?;
+        } else {
+            sqlx::query("INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry) VALUES ($1,$2,1,$3,$4,$4,$5,$6,$7,$8,$9,$10,0,$11,$12)")
+                .bind(user_id).bind(&key).bind(input.name).bind(now).bind(expired_time).bind(input.remain_quota).bind(input.unlimited_quota).bind(input.model_limits_enabled).bind(input.model_limits).bind(input.allow_ips.unwrap_or_default()).bind(input.group).bind(input.cross_group_retry)
+                .execute(&mut *tx).await.map_err(TokenError::db)?;
+        }
+        if self.console_activation_on_create {
+            sqlx::query(
+                "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
+            )
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(TokenError::db)?;
+        }
         tx.commit().await.map_err(TokenError::db)
     }
 
@@ -454,6 +648,7 @@ return 1
         let settings = self.token_settings().await;
         validate_input(&input.token, settings.max_quota())?;
         let current = self.get(user_id, input.id).await?;
+        let has_auto_groups_column = self.has_auto_groups_column().await?;
         if input.status == 1
             && current.status == 3
             && current.expired_time != -1
@@ -475,10 +670,17 @@ return 1
             // field, but Token.Update still selects and writes every mutable
             // column. Preserve that observable UPDATE OF column set while
             // retaining the loaded values (including NULL allow_ips).
-            sqlx::query("UPDATE tokens SET name=$1, status=$2, expired_time=$3, remain_quota=$4, unlimited_quota=$5, model_limits_enabled=$6, model_limits=$7, allow_ips=$8, \"group\"=$9, cross_group_retry=$10 WHERE id=$11 AND user_id=$12 AND deleted_at IS NULL")
-                .bind(&updated.name).bind(updated.status).bind(updated.expired_time).bind(updated.remain_quota).bind(updated.unlimited_quota).bind(updated.model_limits_enabled).bind(&updated.model_limits).bind(&updated.allow_ips).bind(&updated.group).bind(updated.cross_group_retry).bind(input.id).bind(user_id).execute(&self.pg).await.map_err(TokenError::db)?;
+            if has_auto_groups_column {
+                sqlx::query("UPDATE tokens SET name=$1, status=$2, expired_time=$3, remain_quota=$4, unlimited_quota=$5, model_limits_enabled=$6, model_limits=$7, allow_ips=$8, \"group\"=$9, cross_group_retry=$10, auto_groups=$11 WHERE id=$12 AND user_id=$13 AND deleted_at IS NULL")
+                    .bind(&updated.name).bind(updated.status).bind(updated.expired_time).bind(updated.remain_quota).bind(updated.unlimited_quota).bind(updated.model_limits_enabled).bind(&updated.model_limits).bind(&updated.allow_ips).bind(&updated.group).bind(updated.cross_group_retry).bind(&updated.auto_groups_raw).bind(input.id).bind(user_id).execute(&self.pg).await.map_err(TokenError::db)?;
+            } else {
+                sqlx::query("UPDATE tokens SET name=$1, status=$2, expired_time=$3, remain_quota=$4, unlimited_quota=$5, model_limits_enabled=$6, model_limits=$7, allow_ips=$8, \"group\"=$9, cross_group_retry=$10 WHERE id=$11 AND user_id=$12 AND deleted_at IS NULL")
+                    .bind(&updated.name).bind(updated.status).bind(updated.expired_time).bind(updated.remain_quota).bind(updated.unlimited_quota).bind(updated.model_limits_enabled).bind(&updated.model_limits).bind(&updated.allow_ips).bind(&updated.group).bind(updated.cross_group_retry).bind(input.id).bind(user_id).execute(&self.pg).await.map_err(TokenError::db)?;
+            }
         } else {
             let t = input.token;
+            let auto_groups_set = t.auto_groups_set;
+            let requested_auto_groups = t.auto_groups;
             updated.name = t.name;
             updated.expired_time = t.expired_time.unwrap_or_default();
             updated.remain_quota = t.remain_quota;
@@ -488,8 +690,23 @@ return 1
             updated.allow_ips = t.allow_ips;
             updated.group = t.group;
             updated.cross_group_retry = t.cross_group_retry;
-            sqlx::query("UPDATE tokens SET name=$1, expired_time=$2, remain_quota=$3, unlimited_quota=$4, model_limits_enabled=$5, model_limits=$6, allow_ips=$7, \"group\"=$8, cross_group_retry=$9 WHERE id=$10 AND user_id=$11 AND deleted_at IS NULL")
-                .bind(&updated.name).bind(updated.expired_time).bind(updated.remain_quota).bind(updated.unlimited_quota).bind(updated.model_limits_enabled).bind(&updated.model_limits).bind(&updated.allow_ips).bind(&updated.group).bind(updated.cross_group_retry).bind(input.id).bind(user_id).execute(&self.pg).await.map_err(TokenError::db)?;
+            if updated.group != "auto" {
+                updated.cross_group_retry = false;
+                updated.auto_groups_raw.clear();
+                updated.auto_groups = None;
+            } else if auto_groups_set {
+                updated.auto_groups_raw = self
+                    .encode_auto_groups(user_id, &requested_auto_groups)
+                    .await?;
+                updated.auto_groups = parse_auto_groups(&updated.auto_groups_raw);
+            }
+            if has_auto_groups_column {
+                sqlx::query("UPDATE tokens SET name=$1, expired_time=$2, remain_quota=$3, unlimited_quota=$4, model_limits_enabled=$5, model_limits=$6, allow_ips=$7, \"group\"=$8, cross_group_retry=$9, auto_groups=$10 WHERE id=$11 AND user_id=$12 AND deleted_at IS NULL")
+                    .bind(&updated.name).bind(updated.expired_time).bind(updated.remain_quota).bind(updated.unlimited_quota).bind(updated.model_limits_enabled).bind(&updated.model_limits).bind(&updated.allow_ips).bind(&updated.group).bind(updated.cross_group_retry).bind(&updated.auto_groups_raw).bind(input.id).bind(user_id).execute(&self.pg).await.map_err(TokenError::db)?;
+            } else {
+                sqlx::query("UPDATE tokens SET name=$1, expired_time=$2, remain_quota=$3, unlimited_quota=$4, model_limits_enabled=$5, model_limits=$6, allow_ips=$7, \"group\"=$8, cross_group_retry=$9 WHERE id=$10 AND user_id=$11 AND deleted_at IS NULL")
+                    .bind(&updated.name).bind(updated.expired_time).bind(updated.remain_quota).bind(updated.unlimited_quota).bind(updated.model_limits_enabled).bind(&updated.model_limits).bind(&updated.allow_ips).bind(&updated.group).bind(updated.cross_group_retry).bind(input.id).bind(user_id).execute(&self.pg).await.map_err(TokenError::db)?;
+            }
         }
         // This is intentionally best-effort, matching GORM's background
         // cache refresh. A database update is authoritative even if Valkey is
@@ -544,7 +761,7 @@ async fn list(
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    respond(
+    respond_token(
         state
             .service
             .list(
@@ -554,6 +771,7 @@ async fn list(
             .await,
         true,
         request_locale(&principal, &headers),
+        state.frozen_wire_errors,
     )
 }
 async fn search(
@@ -568,9 +786,26 @@ async fn search(
     };
     let query = SearchQuery::from_raw(query.0.as_deref());
     let page = query.page.page();
-    respond(
+    respond_token(
         state.service.search(principal.user_id, query, page).await,
         true,
+        request_locale(&principal, &headers),
+        state.frozen_wire_errors,
+    )
+}
+
+async fn auto_groups(
+    State(state): State<ApiTokenHttpState>,
+    principal: Option<Extension<ApiTokenPrincipal>>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = match require_principal(principal, &headers) {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    respond(
+        state.service.auto_groups(principal.user_id).await,
+        false,
         request_locale(&principal, &headers),
     )
 }
@@ -585,10 +820,11 @@ async fn detail(
         Err(response) => return response,
     };
     match legacy_id(&id) {
-        Ok(id) => respond(
+        Ok(id) => respond_token(
             state.service.get(principal.user_id, id).await,
             true,
             request_locale(&principal, &headers),
+            state.frozen_wire_errors,
         ),
         Err(error) => error.response_for(request_locale(&principal, &headers)),
     }
@@ -621,7 +857,7 @@ async fn create(
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    let input = match decode_legacy_json::<TokenInput>(&body) {
+    let input = match decode_legacy_json_for_route::<TokenInput>(&body, state.frozen_wire_errors) {
         Ok(input) => input,
         Err(error) => {
             return error.response_for(request_locale(&principal, &headers));
@@ -643,18 +879,19 @@ async fn update(
         Ok(principal) => principal,
         Err(response) => return response,
     };
-    let input = match decode_legacy_json::<TokenUpdate>(&body) {
+    let input = match decode_legacy_json_for_route::<TokenUpdate>(&body, state.frozen_wire_errors) {
         Ok(input) => input,
         Err(error) => return error.response_for(request_locale(&principal, &headers)),
     };
     let query = StatusOnlyQuery::from_raw(query.0.as_deref());
-    respond(
+    respond_token(
         state
             .service
             .update(principal.user_id, input, query.enabled())
             .await,
         true,
         request_locale(&principal, &headers),
+        state.frozen_wire_errors,
     )
 }
 async fn remove(
@@ -739,19 +976,59 @@ fn respond<T: Serialize>(
     masked: bool,
     locale: TokenLocale,
 ) -> Response {
+    respond_with_options(result, masked, locale, false)
+}
+
+fn respond_token<T: Serialize>(
+    result: Result<T, TokenError>,
+    masked: bool,
+    locale: TokenLocale,
+    omit_auto_groups: bool,
+) -> Response {
+    respond_with_options(result, masked, locale, omit_auto_groups)
+}
+
+fn respond_with_options<T: Serialize>(
+    result: Result<T, TokenError>,
+    masked: bool,
+    locale: TokenLocale,
+    omit_auto_groups: bool,
+) -> Response {
     match result {
         Ok(value) => {
-            let value = if masked {
+            let mut value = if masked {
                 mask_json(value)
             } else {
                 serde_json::to_value(value).map_err(|_| TokenError::internal())
             };
+            if omit_auto_groups {
+                if let Ok(value) = &mut value {
+                    omit_auto_groups_field(value);
+                }
+            }
             match value {
                 Ok(value) => success(value),
                 Err(error) => error.response_for(locale),
             }
         }
         Err(error) => error.response_for(locale),
+    }
+}
+
+fn omit_auto_groups_field(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.remove("auto_groups");
+            for child in map.values_mut() {
+                omit_auto_groups_field(child);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for child in values {
+                omit_auto_groups_field(child);
+            }
+        }
+        _ => {}
     }
 }
 fn mask_json<T: Serialize>(value: T) -> Result<serde_json::Value, TokenError> {
@@ -1015,6 +1292,35 @@ fn decode_legacy_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, TokenError>
     })
 }
 
+fn decode_legacy_json_for_route<T: DeserializeOwned>(
+    body: &[u8],
+    frozen_wire_errors: bool,
+) -> Result<T, TokenError> {
+    if frozen_wire_errors {
+        // The frozen 5418 listener bound create/update bodies directly to
+        // `model.Token`, while the current Go listener binds them through the
+        // `controller.tokenRequest` wrapper. Probe only a complete top-level
+        // JSON value here so malformed input keeps the normal decoder's exact
+        // EOF and syntax errors.
+        let mut decoder = serde_json::Deserializer::from_slice(body);
+        if let Ok(value) = serde_json::Value::deserialize(&mut decoder) {
+            let kind = match value {
+                serde_json::Value::Array(_) => Some("array"),
+                serde_json::Value::Bool(_) => Some("bool"),
+                serde_json::Value::String(_) => Some("string"),
+                serde_json::Value::Number(_) => Some("number"),
+                serde_json::Value::Null | serde_json::Value::Object(_) => None,
+            };
+            if let Some(kind) = kind {
+                return Err(TokenError::invalid(format!(
+                    "json: cannot unmarshal {kind} into Go value of type model.Token"
+                )));
+            }
+        }
+    }
+    decode_legacy_json(body)
+}
+
 #[derive(Default)]
 struct TokenWire {
     id: i64,
@@ -1033,6 +1339,8 @@ struct TokenWire {
     used_quota: i64,
     group: String,
     cross_group_retry: bool,
+    auto_groups_set: bool,
+    auto_groups: Vec<String>,
 }
 
 impl<'de> Deserialize<'de> for TokenWire {
@@ -1160,6 +1468,8 @@ impl<'de> Visitor<'de> for TokenWireVisitor {
                 set_string(&mut wire.group, &value, "group")
             } else if field.eq_ignore_ascii_case("cross_group_retry") {
                 set_bool(&mut wire.cross_group_retry, &value, "cross_group_retry")
+            } else if field.eq_ignore_ascii_case("auto_groups") {
+                set_auto_groups(&mut wire.auto_groups_set, &mut wire.auto_groups, &value)
             } else if field.eq_ignore_ascii_case("DeletedAt") {
                 set_deleted_at(&value)
             } else {
@@ -1238,11 +1548,31 @@ fn raw_json_kind(value: &serde_json::value::RawValue) -> Option<&'static str> {
 }
 
 fn type_error(field: &str, actual: &str, expected: &str) -> String {
-    format!("json: cannot unmarshal {actual} into Go struct field Token.{field} of type {expected}")
+    format!(
+        "json: cannot unmarshal {actual} into Go struct field {}.{field} of type {expected}",
+        token_request_field_prefix()
+    )
+}
+
+fn token_request_field_prefix() -> &'static str {
+    // The frozen 5418ce6 model used a direct Token decoder. Current Go embeds
+    // model.Token inside controller.tokenRequest, and encoding/json exposes
+    // that containing type in its type errors. The isolated test listener
+    // selects the historical spelling explicitly.
+    if std::env::var_os("LMM_RS_TEST_INSTANCE").is_some() {
+        "Token"
+    } else {
+        "tokenRequest.Token"
+    }
 }
 
 fn top_level_type_error(actual: &str) -> String {
-    format!("json: cannot unmarshal {actual} into Go value of type model.Token")
+    let target = if std::env::var_os("LMM_RS_TEST_INSTANCE").is_some() {
+        "model.Token"
+    } else {
+        "controller.tokenRequest"
+    };
+    format!("json: cannot unmarshal {actual} into Go value of type {target}")
 }
 
 fn batch_type_error(actual: &str) -> String {
@@ -1315,8 +1645,9 @@ fn set_i64(
             // where their mathematical value happens to be integral.
             *destination = value.get().parse::<i64>().map_err(|_| {
                 format!(
-                    "json: cannot unmarshal number {} into Go struct field Token.{} of type {}",
+                    "json: cannot unmarshal number {} into Go struct field {}.{} of type {}",
                     value.get(),
+                    token_request_field_prefix(),
                     field,
                     expected
                 )
@@ -1338,8 +1669,9 @@ fn set_optional_i64(
         Some("number") => {
             *destination = Some(value.get().parse::<i64>().map_err(|_| {
                 format!(
-                    "json: cannot unmarshal number {} into Go struct field Token.{} of type {}",
+                    "json: cannot unmarshal number {} into Go struct field {}.{} of type {}",
                     value.get(),
+                    token_request_field_prefix(),
                     field,
                     expected
                 )
@@ -1364,6 +1696,33 @@ fn set_deleted_at(value: &serde_json::value::RawValue) -> Result<(), String> {
             Ok(())
         }
         Some(_) => Err("Time.UnmarshalJSON: input is not a JSON string".to_owned()),
+    }
+}
+
+fn set_auto_groups(
+    set: &mut bool,
+    destination: &mut Vec<String>,
+    value: &serde_json::value::RawValue,
+) -> Result<(), String> {
+    *set = true;
+    match raw_json_kind(value) {
+        None => {
+            destination.clear();
+            Ok(())
+        }
+        Some("array") => {
+            *destination = serde_json::from_str(value.get()).map_err(|_| {
+                format!(
+                    "json: cannot unmarshal array into Go struct field {}.auto_groups of type []string",
+                    token_request_field_prefix()
+                )
+            })?;
+            Ok(())
+        }
+        Some(actual) => Err(format!(
+            "json: cannot unmarshal {actual} into Go struct field {}.auto_groups of type []string",
+            token_request_field_prefix()
+        )),
     }
 }
 
@@ -1530,11 +1889,15 @@ struct ApiToken {
     used_quota: i64,
     group: String,
     cross_group_retry: bool,
+    auto_groups: Option<Vec<String>>,
+    #[serde(skip)]
+    auto_groups_raw: String,
     #[serde(rename = "DeletedAt")]
     deleted_at: Option<()>,
 }
-const TOKEN_SELECT: &str = "SELECT id, user_id, COALESCE(key,''), COALESCE(status,0)::BIGINT, COALESCE(name,''), COALESCE(created_time,0), COALESCE(accessed_time,0), COALESCE(expired_time,0), COALESCE(remain_quota,0), COALESCE(unlimited_quota,FALSE), COALESCE(model_limits_enabled,FALSE), COALESCE(model_limits,''), allow_ips, COALESCE(used_quota,0), COALESCE(\"group\",''), COALESCE(cross_group_retry,FALSE) FROM tokens";
+const TOKEN_SELECT: &str = "SELECT id, user_id, COALESCE(key,''), COALESCE(status,0)::BIGINT, COALESCE(name,''), COALESCE(created_time,0), COALESCE(accessed_time,0), COALESCE(expired_time,0), COALESCE(remain_quota,0), COALESCE(unlimited_quota,FALSE), COALESCE(model_limits_enabled,FALSE), COALESCE(model_limits,''), allow_ips, COALESCE(used_quota,0), COALESCE(\"group\",''), COALESCE(cross_group_retry,FALSE), COALESCE(to_jsonb(tokens)->>'auto_groups','') AS auto_groups FROM tokens";
 fn token_from_row(row: &sqlx::postgres::PgRow) -> Result<ApiToken, TokenError> {
+    let auto_groups_raw: String = row.try_get(16).map_err(TokenError::db)?;
     Ok(ApiToken {
         id: row.try_get(0).map_err(TokenError::db)?,
         user_id: row.try_get(1).map_err(TokenError::db)?,
@@ -1552,8 +1915,19 @@ fn token_from_row(row: &sqlx::postgres::PgRow) -> Result<ApiToken, TokenError> {
         used_quota: row.try_get(13).map_err(TokenError::db)?,
         group: row.try_get(14).map_err(TokenError::db)?,
         cross_group_retry: row.try_get(15).map_err(TokenError::db)?,
+        auto_groups: parse_auto_groups(&auto_groups_raw),
+        auto_groups_raw,
         deleted_at: None,
     })
+}
+
+fn parse_auto_groups(raw: &str) -> Option<Vec<String>> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str::<Vec<String>>(raw)
+        .ok()
+        .filter(|groups| !groups.is_empty())
 }
 #[derive(Debug)]
 struct TokenInput {
@@ -1566,6 +1940,8 @@ struct TokenInput {
     allow_ips: Option<String>,
     group: String,
     cross_group_retry: bool,
+    auto_groups_set: bool,
+    auto_groups: Vec<String>,
 }
 impl From<TokenWire> for TokenInput {
     fn from(wire: TokenWire) -> Self {
@@ -1579,6 +1955,8 @@ impl From<TokenWire> for TokenInput {
             allow_ips: wire.allow_ips,
             group: wire.group,
             cross_group_retry: wire.cross_group_retry,
+            auto_groups_set: wire.auto_groups_set,
+            auto_groups: wire.auto_groups,
         }
     }
 }
@@ -1798,16 +2176,20 @@ struct PageResult {
     total: i64,
     items: Vec<ApiToken>,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct TokenSettings {
     max_user_tokens: i64,
     quota_per_unit: f64,
+    auto_groups: Vec<String>,
+    max_token_auto_groups: i64,
 }
 impl TokenSettings {
     fn defaults(max_user_tokens: i64) -> Self {
         Self {
             max_user_tokens,
             quota_per_unit: DEFAULT_QUOTA_PER_UNIT,
+            auto_groups: vec!["default".to_owned()],
+            max_token_auto_groups: 5,
         }
     }
 }
@@ -2045,7 +2427,7 @@ mod tests {
             .expect_err("wrong quota type must fail");
         assert_eq!(
             error.message,
-            "json: cannot unmarshal string into Go struct field Token.remain_quota of type int"
+            "json: cannot unmarshal string into Go struct field tokenRequest.Token.remain_quota of type int"
         );
         let input = decode_legacy_json::<TokenInput>(br#"{"name":null,"expired_time":null}"#)
             .expect("Go accepts null scalar fields");
@@ -2061,8 +2443,9 @@ mod tests {
             ("string", br#""token""#.as_slice()),
             ("number", br#"1"#.as_slice()),
         ] {
-            let expected =
-                format!("json: cannot unmarshal {shape} into Go value of type model.Token");
+            let expected = format!(
+                "json: cannot unmarshal {shape} into Go value of type controller.tokenRequest"
+            );
             assert_eq!(
                 decode_legacy_json::<TokenInput>(body)
                     .expect_err("create shape error")
@@ -2098,7 +2481,7 @@ mod tests {
         .expect_err("known unused fields still bind");
         assert_eq!(
             error.message,
-            "json: cannot unmarshal string into Go struct field Token.created_time of type int64"
+            "json: cannot unmarshal string into Go struct field tokenRequest.Token.created_time of type int64"
         );
 
         let input = decode_legacy_json::<TokenInput>(
@@ -2114,7 +2497,7 @@ mod tests {
             .expect_err("the first type error is retained");
         assert_eq!(
             error.message,
-            "json: cannot unmarshal number 1.5 into Go struct field Token.remain_quota of type int"
+            "json: cannot unmarshal number 1.5 into Go struct field tokenRequest.Token.remain_quota of type int"
         );
 
         for number in ["1e-1", "9223372036854775808"] {

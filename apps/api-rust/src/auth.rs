@@ -10,7 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, to_value};
 use thiserror::Error;
 
-pub use http::{AuthHttpState, TurnstileVerifier, anonymous_registration_surface, auth_router};
+pub use http::{
+    AnonymousRequestSecurity, AuthHttpState, TurnstileCheckOutcome, TurnstileVerifier,
+    anonymous_registration_surface, auth_router, turnstile_failure_response,
+    turnstile_missing_response,
+};
 pub use postgres::{AuthConfig, PgValkeyDashboardAuth};
 pub(crate) use token::dashboard_token_candidate;
 
@@ -95,8 +99,8 @@ pub struct DashboardUser {
 }
 
 /// Server-derived identity and live session metadata for route slices that
-/// need the current browser session SID. Personal access tokens do not expose
-/// this context.
+/// must rotate the current browser session after a security change.  The
+/// access token itself never exposes this context to request handlers.
 #[derive(Clone, Debug)]
 pub struct DashboardSessionContext {
     pub user: DashboardUser,
@@ -201,11 +205,10 @@ impl DashboardUserView {
         let Some(object) = value.as_object_mut() else {
             return value;
         };
-
-        // These fields are useful to Rust-only capability decisions, but they
-        // are not part of the frozen Go dashboard-user DTO. Keep them on the
-        // internal view and strip them only at the compatibility boundary so
-        // login, refresh, and `/api/user/self` remain strict-wire compatible.
+        // These derived access/onboarding/trust fields belong to the newer
+        // Rust internal projection, not the frozen Gin DTO used by the Go
+        // oracle. Keep them available to policy consumers while excluding
+        // them from the wire shape used for takeover parity.
         for field in [
             "developer_access_granted",
             "trust_level_info",
@@ -501,7 +504,7 @@ mod dashboard_user_view_tests {
     }
 
     #[test]
-    fn legacy_go_shape_excludes_rust_only_dashboard_access_fields() {
+    fn legacy_go_shape_matches_frozen_dashboard_user_fields() {
         let value = DashboardUserView::build(
             dashboard_user(1),
             DashboardSelfUserFacts {
@@ -796,8 +799,9 @@ pub trait DashboardAuth: Send + Sync {
 
     async fn self_user(&self, access_token: SecretString) -> Result<DashboardUser, AuthError>;
 
-    /// Resolves a live browser session, including its server-owned SID.
-    /// Adapters without a session authority fail closed.
+    /// Resolves a live browser session, including the server-owned SID and
+    /// request metadata needed by sensitive account routes. Personal access
+    /// tokens and adapters without a session authority fail closed.
     async fn current_session(
         &self,
         _access_token: SecretString,

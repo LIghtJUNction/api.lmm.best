@@ -10,7 +10,7 @@ use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn public_bounty_router_exposes_only_the_read_method_until_writes_are_migrated() {
+async fn public_bounty_write_requires_dashboard_auth_before_draft_validation() {
     let pg = PgPoolOptions::new()
         .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
         .expect("lazy PostgreSQL pool");
@@ -38,9 +38,13 @@ async fn public_bounty_router_exposes_only_the_read_method_until_writes_are_migr
         .await
         .expect("route response");
 
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
     assert_eq!(
-        response.status(),
-        axum::http::StatusCode::METHOD_NOT_ALLOWED
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
+        "AUTH_UNAUTHORIZED"
     );
 }
 
@@ -299,7 +303,7 @@ async fn mcp_token_status_requires_dashboard_auth_before_token_lookup() {
         .await
         .expect("route response");
 
-    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     assert_eq!(
         response
             .headers()
@@ -311,8 +315,8 @@ async fn mcp_token_status_requires_dashboard_auth_before_token_lookup() {
         .await
         .expect("response body");
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
-        "AUTH_UNAUTHORIZED"
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope"),
+        serde_json::json!({"message": "Not Found"})
     );
 }
 
@@ -344,7 +348,7 @@ async fn mcp_token_rotation_requires_dashboard_auth_before_token_write() {
         .await
         .expect("route response");
 
-    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     assert_eq!(
         response
             .headers()
@@ -356,8 +360,8 @@ async fn mcp_token_rotation_requires_dashboard_auth_before_token_write() {
         .await
         .expect("response body");
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
-        "AUTH_UNAUTHORIZED"
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope"),
+        serde_json::json!({"message": "Not Found"})
     );
 }
 
@@ -389,7 +393,7 @@ async fn mcp_token_revocation_requires_dashboard_auth_before_token_delete() {
         .await
         .expect("route response");
 
-    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
     assert_eq!(
         response
             .headers()
@@ -401,8 +405,8 @@ async fn mcp_token_revocation_requires_dashboard_auth_before_token_delete() {
         .await
         .expect("response body");
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope")["code"],
-        "AUTH_UNAUTHORIZED"
+        serde_json::from_slice::<serde_json::Value>(&body).expect("failure envelope"),
+        serde_json::json!({"message": "Not Found"})
     );
 }
 

@@ -55,7 +55,7 @@ fn app(provider: Arc<MemorySecurityProvider>, authorizer: Authorizer) -> axum::R
 async fn registration_router_exposes_only_the_completed_anonymous_registration_slice() {
     let provider = Arc::new(MemorySecurityProvider::new(Ok(serde_json::Value::Null)));
     let response = registration_router(IdentitySecurityState::new(
-        provider,
+        provider.clone(),
         Arc::new(Authorizer {
             user: Err(SecurityError::Unauthorized),
             admin: Err(SecurityError::Unauthorized),
@@ -72,15 +72,20 @@ async fn registration_router_exposes_only_the_completed_anonymous_registration_s
     .await
     .expect("registration response");
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "registration must fail closed until its listener-owned anonymous security policy is configured"
+    );
+    assert!(provider.calls().expect("provider calls").is_empty());
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("registration body");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&body).expect("JSON"),
         json!({
-            "success": true,
-            "message": ""
+            "success": false,
+            "message": "Security service is temporarily unavailable"
         })
     );
 }
@@ -129,7 +134,7 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
         ("GET", "/api/user/passkey", ""),
         ("GET", "/api/user/sessions", ""),
         ("GET", "/api/verification?email=ada@example.test", ""),
-        ("POST", "/api/user/login/2fa", "{}"),
+        ("POST", "/api/user/login/2fa", r#"{"code":"123456"}"#),
         ("POST", "/api/user/passkey/login/begin", "{}"),
         ("POST", "/api/user/passkey/login/finish", "{}"),
         ("POST", "/api/user/passkey/register/begin", "{}"),
@@ -137,7 +142,11 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
         ("POST", "/api/user/passkey/verify/begin", "{}"),
         ("POST", "/api/user/passkey/verify/finish", "{}"),
         ("POST", "/api/user/register", "{}"),
-        ("POST", "/api/user/reset", "{}"),
+        (
+            "POST",
+            "/api/user/reset",
+            r#"{"email":"ada@example.test","token":"reset-token"}"#,
+        ),
         ("POST", "/api/user/sessions/revoke-others", "{}"),
         ("POST", "/api/verify", "{}"),
     ];
@@ -155,9 +164,14 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
             )
             .await
             .expect("candidate responds");
-        assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+        let expected_status = if uri == "/api/user/register" {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::OK
+        };
+        assert_eq!(response.status(), expected_status, "{method} {uri}");
     }
-    assert_eq!(provider.calls().expect("fake calls").len(), 20);
+    assert_eq!(provider.calls().expect("fake calls").len(), 19);
 }
 
 #[tokio::test]
