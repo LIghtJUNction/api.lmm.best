@@ -26,7 +26,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { nanoid } from 'nanoid'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -78,7 +78,10 @@ import {
   type AssistantAccountAccessState,
 } from './assistant-access'
 import { AssistantCostTool } from './assistant-cost-tool'
-import type { AssistantPresetId } from './assistant-events'
+import {
+  subscribeToAssistantOpen,
+  type AssistantPresetId,
+} from './assistant-events'
 import { AssistantHandoffTool } from './assistant-handoff-tool'
 import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
@@ -377,7 +380,7 @@ export function AssistantPanel(props: {
     [i18n.language, statusQuery.data]
   )
 
-  const appendPreset = (preset: AssistantPreset) => {
+  const appendPreset = useCallback((preset: AssistantPreset) => {
     setActiveTool(null)
     setEntries((current) => [
       ...current,
@@ -393,7 +396,17 @@ export function AssistantPanel(props: {
         action: preset.action,
       },
     ])
-  }
+  }, [])
+
+  useEffect(
+    () =>
+      subscribeToAssistantOpen((presetId) => {
+        if (!presetId) return
+        const preset = presets.find((item) => item.id === presetId)
+        if (preset) appendPreset(preset)
+      }),
+    [appendPreset, presets]
+  )
 
   const handleOpenChange = (open: boolean) => {
     if (!open) setActiveTool(null)

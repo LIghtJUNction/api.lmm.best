@@ -71,6 +71,8 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { requestAssistantOpen } = await import('./assistant-events')
+const { AssistantLauncher } = await import('./assistant-launcher')
 const { AssistantPanel } = await import('./assistant-panel')
 
 const originalGet = api.get
@@ -115,7 +117,7 @@ async function waitForCondition(
   throw new Error(`${failureMessage}: ${document.body.textContent}`)
 }
 
-async function renderPanel() {
+async function renderPanel(initialPreset?: 'api-key' | 'plan') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -123,7 +125,45 @@ async function renderPanel() {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantPanel open onOpenChange={() => {}} />
+          <AssistantPanel
+            open
+            initialPreset={initialPreset}
+            onOpenChange={() => {}}
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    ),
+  })
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => null,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(<RouterProvider router={router} />)
+    await flushEffects()
+  })
+  await act(flushEffects)
+  return { container, queryClient, root }
+}
+
+async function renderLauncher() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const rootRoute = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssistantLauncher />
         </I18nextProvider>
       </QueryClientProvider>
     ),
@@ -173,12 +213,126 @@ async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
 afterEach(() => {
   api.get = originalGet
   api.post = originalPost
+  window.localStorage.clear()
+  window.sessionStorage.clear()
   document.body.replaceChildren()
 })
 
 after(() => domWindow.close())
 
 describe('AssistantPanel', () => {
+  test('keeps the conversation when the floating assistant is closed and reopened', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/status') {
+        return {
+          data: {
+            success: true,
+            data: { assistant: { enabled: true } },
+          },
+        }
+      }
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderLauncher()
+    try {
+      const launcherButton = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open AI assistant"]'
+      )
+      assert.ok(launcherButton)
+      await act(async () => {
+        launcherButton.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => document.body.textContent?.includes('How can I help?') === true,
+          'Assistant panel did not open'
+        )
+      )
+
+      await act(async () => {
+        findButton('Which option is the best value?').click()
+        await flushEffects()
+      })
+      assert.match(
+        document.body.textContent ?? '',
+        /Choose by workload rather than list price\./
+      )
+
+      const closeButton = document.querySelector<HTMLButtonElement>(
+        '[data-slot="sheet-close"]'
+      )
+      assert.ok(closeButton)
+      await act(async () => {
+        closeButton.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => document.querySelector('[data-slot="sheet-content"]') === null,
+          'Assistant panel did not close'
+        )
+      )
+
+      await act(async () => {
+        launcherButton.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Choose by workload rather than list price.'
+            ) === true,
+          'Assistant conversation was not restored'
+        )
+      )
+      assert.equal(
+        (document.body.textContent ?? '').match(
+          /Which option is the best value\?/g
+        )?.length,
+        1
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('appends guided presets without replacing the current conversation', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel('api-key')
+    try {
+      assert.match(
+        document.body.textContent ?? '',
+        /What are my Base URL, model ID, and API key\?/
+      )
+
+      await act(async () => {
+        requestAssistantOpen('plan')
+        await flushEffects()
+      })
+
+      assert.match(
+        document.body.textContent ?? '',
+        /What are my Base URL, model ID, and API key\?/
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /Which option is the best value\?/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('formats weekly credit with internal Chinese locale codes', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
