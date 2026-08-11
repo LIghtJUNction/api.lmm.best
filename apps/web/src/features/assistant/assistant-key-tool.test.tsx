@@ -91,7 +91,8 @@ async function flushEffects() {
 }
 
 async function renderTool(
-  developerAccessGranted: boolean
+  developerAccessGranted: boolean,
+  onContinueSetup = () => {}
 ): Promise<RenderedTool> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -104,6 +105,7 @@ async function renderTool(
             baseUrl='https://api.example.test/v1'
             defaultModel='deepseek-v4-flash'
             developerAccessGranted={developerAccessGranted}
+            onContinueSetup={onContinueSetup}
           />
         </I18nextProvider>
       </QueryClientProvider>
@@ -181,6 +183,7 @@ describe('AssistantKeyTool', () => {
 
   test('keeps L1 key creation confirmation-gated and shows the new secret', async () => {
     let posted: { url: string; data: unknown; config: unknown } | undefined
+    let continued = 0
     api.post = (async (url: string, data: unknown, config: unknown) => {
       posted = { url, data, config }
       return {
@@ -196,7 +199,9 @@ describe('AssistantKeyTool', () => {
         },
       }
     }) as typeof api.post
-    const rendered = await renderTool(true)
+    const rendered = await renderTool(true, () => {
+      continued += 1
+    })
 
     await act(async () => {
       findButton('Review key creation').click()
@@ -217,6 +222,13 @@ describe('AssistantKeyTool', () => {
     assert.match(rendered.container.textContent ?? '', /API key created/)
     assert.match(rendered.container.textContent ?? '', /sk-created-by-test/)
     assert.match(rendered.container.textContent ?? '', /deepseek-v4-flash/)
+    assert.equal(continued, 0)
+
+    await act(async () => {
+      findButton('I copied it — continue setup').click()
+      await flushEffects()
+    })
+    assert.equal(continued, 1)
 
     await unmount(rendered)
   })

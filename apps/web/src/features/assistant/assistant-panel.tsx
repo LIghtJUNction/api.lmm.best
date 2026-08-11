@@ -580,6 +580,7 @@ export function AssistantPanel(props: {
                     baseUrl={baseUrl}
                     defaultModel={statusQuery.data?.model ?? ''}
                     developerAccessGranted={developerAccessGranted}
+                    onContinueSetup={() => setActiveTool('setup')}
                   />
                 ) : null}
                 {activeTool === 'cost' && accountAccessConfirmed ? (
