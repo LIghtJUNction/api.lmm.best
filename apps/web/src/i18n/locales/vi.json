@@ -72,6 +72,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "{{count}} nhóm Uptime Kuma sẽ bị xóa khỏi danh sách.",
     "{{count}} vendors": "{{count}} nhà cung cấp",
     "{{count}} weeks ago": "{{count}} tuần trước",
+    "{{count}}/5 characters": "{{count}}/5 ký tự",
     "{{days}} days": "{{days}} ngày",
     "{{days}}-day review": "Đánh giá mỗi {{days}} ngày",
     "{{field}} updated to {{value}}": "{{field}} đã cập nhật thành {{value}}",
@@ -522,6 +523,8 @@
     "Append value to array / string / object end": "Thêm giá trị vào cuối mảng / chuỗi / đối tượng",
     "appended": "đã thêm vào cuối, được phụ lục",
     "Application": "Ứng dụng",
+    "Application reason is required.": "Lý do đăng ký là bắt buộc.",
+    "Application reason must contain at least 5 characters.": "Lý do đăng ký phải có ít nhất 5 ký tự.",
     "Applied {{name}} pricing to {{count}} models": "Đã áp dụng giá của {{name}} cho {{count}} mô hình",
     "Applied upstream model changes to {{count}} channels": "Đã áp dụng thay đổi mô hình thượng nguồn cho {{count}} kênh",
     "Applied upstream model changes to channel (ID: {{id}})": "Đã áp dụng thay đổi mô hình thượng nguồn cho kênh (ID: {{id}})",
@@ -1570,6 +1573,7 @@
     "Days to Retain": "Số ngày giữ lại",
     "decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.": "quyết định hệ số nạp tiền, các nhóm người dùng có thể chọn cho token, và có áp dụng hệ số ghi đè hay không.",
     "decides which channels are used and which base ratio applies.": "quyết định dùng kênh nào và áp dụng hệ số cơ bản nào.",
+    "Decrease trust level": "Giảm cấp độ tin cậy",
     "Decreased user quota by {{quota}}": "Đã giảm hạn mức người dùng {{quota}}",
     "Decrement": "Giảm",
     "Dedicated gateway pricing": "Giá riêng của cổng thanh toán",
@@ -2342,6 +2346,7 @@
     "Failed to update setting": "Không thể cập nhật cài đặt",
     "Failed to update settings": "Không thể cập nhật cài đặt",
     "Failed to update tag": "Không thể cập nhật thẻ",
+    "Failed to update trust level": "Không thể cập nhật cấp độ tin cậy",
     "Failed to update user": "Không thể cập nhật người dùng",
     "Failure keywords": "Từ khóa thất bại",
     "Fair": "Công bằng",
@@ -2809,6 +2814,7 @@
     "Incoming path must not include query": "Path đầu vào không được chứa query",
     "Incoming path must start with /": "Path đầu vào phải bắt đầu bằng /",
     "Incomplete": "Chưa hoàn tất",
+    "Increase trust level": "Tăng cấp độ tin cậy",
     "Increased user quota by {{quota}}": "Đã tăng hạn mức người dùng thêm {{quota}}",
     "Increment": "Tăng",
     "Index": "Chỉ mục",
@@ -6413,9 +6419,6 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng",
-    "Application reason is required.": "Lý do đăng ký là bắt buộc.",
-    "Application reason must contain at least 5 characters.": "Lý do đăng ký phải có ít nhất 5 ký tự.",
-    "{{count}}/5 characters": "{{count}}/5 ký tự"
+    "Zoom": "Thu phóng"
   }
 }

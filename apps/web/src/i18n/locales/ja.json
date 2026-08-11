@@ -72,6 +72,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "{{count}} 件の Uptime Kuma グループがリストから削除されます。",
     "{{count}} vendors": "{{count}} ベンダー",
     "{{count}} weeks ago": "{{count}} 週間前",
+    "{{count}}/5 characters": "{{count}}/5文字",
     "{{days}} days": "{{days}} 日",
     "{{days}}-day review": "{{days}}日ごとの確認",
     "{{field}} updated to {{value}}": "{{field}} を {{value}} に更新しました",
@@ -522,6 +523,8 @@
     "Append value to array / string / object end": "配列/文字列/オブジェクトの末尾に値を追加",
     "appended": "追加済み",
     "Application": "アプリケーション",
+    "Application reason is required.": "申請理由は必須です。",
+    "Application reason must contain at least 5 characters.": "申請理由は5文字以上で入力してください。",
     "Applied {{name}} pricing to {{count}} models": "{{name}} の料金を {{count}} 個のモデルに適用しました",
     "Applied upstream model changes to {{count}} channels": "{{count}} 件のチャネルに上流モデルの変更を適用しました",
     "Applied upstream model changes to channel (ID: {{id}})": "チャネル（ID: {{id}}）に上流モデルの変更を適用しました",
@@ -1570,6 +1573,7 @@
     "Days to Retain": "保持日数",
     "decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.": "チャージ倍率、トークン作成時に選べるグループ、上書き倍率の適用有無を決めます。",
     "decides which channels are used and which base ratio applies.": "使用するチャネルと適用される基本倍率を決めます。",
+    "Decrease trust level": "信頼レベルを下げる",
     "Decreased user quota by {{quota}}": "ユーザーのクォータを {{quota}} 減らしました",
     "Decrement": "減少",
     "Dedicated gateway pricing": "専用ゲートウェイ価格",
@@ -2342,6 +2346,7 @@
     "Failed to update setting": "設定の更新に失敗しました",
     "Failed to update settings": "設定を更新できませんでした",
     "Failed to update tag": "タグの更新に失敗しました",
+    "Failed to update trust level": "信頼レベルの更新に失敗しました",
     "Failed to update user": "ユーザーの更新に失敗しました",
     "Failure keywords": "失敗キーワード",
     "Fair": "公平",
@@ -2809,6 +2814,7 @@
     "Incoming path must not include query": "受信パスに query を含めることはできません",
     "Incoming path must start with /": "受信パスは / で始める必要があります",
     "Incomplete": "未完了",
+    "Increase trust level": "信頼レベルを上げる",
     "Increased user quota by {{quota}}": "ユーザーのクォータを {{quota}} 増やしました",
     "Increment": "増加",
     "Index": "インデックス",
@@ -6413,9 +6419,6 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム",
-    "Application reason is required.": "申請理由は必須です。",
-    "Application reason must contain at least 5 characters.": "申請理由は5文字以上で入力してください。",
-    "{{count}}/5 characters": "{{count}}/5文字"
+    "Zoom": "ズーム"
   }
 }

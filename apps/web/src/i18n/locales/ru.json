@@ -72,6 +72,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "{{count}} групп Uptime Kuma будут удалены из списка.",
     "{{count}} vendors": "поставщиков: {{count}}",
     "{{count}} weeks ago": "{{count}} недель назад",
+    "{{count}}/5 characters": "{{count}}/5 символов",
     "{{days}} days": "{{days}} дней",
     "{{days}}-day review": "Проверка каждые {{days}} дн.",
     "{{field}} updated to {{value}}": "{{field}} обновлено на {{value}}",
@@ -522,6 +523,8 @@
     "Append value to array / string / object end": "Добавить значение в конец массива / строки / объекта",
     "appended": "добавлено",
     "Application": "Приложение",
+    "Application reason is required.": "Причина заявки обязательна.",
+    "Application reason must contain at least 5 characters.": "Причина заявки должна содержать не менее 5 символов.",
     "Applied {{name}} pricing to {{count}} models": "Тариф {{name}} применён к {{count}} моделям",
     "Applied upstream model changes to {{count}} channels": "Изменения вышестоящих моделей применены к {{count}} каналам",
     "Applied upstream model changes to channel (ID: {{id}})": "Изменения вышестоящих моделей применены к каналу (ID: {{id}})",
@@ -1570,6 +1573,7 @@
     "Days to Retain": "Дней хранения",
     "decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.": "определяет коэффициент пополнения, какие группы пользователь может выбирать для токенов и применяется ли переопределение коэффициента.",
     "decides which channels are used and which base ratio applies.": "определяет используемые каналы и применяемый базовый коэффициент.",
+    "Decrease trust level": "Понизить уровень доверия",
     "Decreased user quota by {{quota}}": "Квота пользователя уменьшена на {{quota}}",
     "Decrement": "Уменьшить",
     "Dedicated gateway pricing": "Отдельная цена платёжного шлюза",
@@ -2342,6 +2346,7 @@
     "Failed to update setting": "Не удалось обновить настройку",
     "Failed to update settings": "Не удалось обновить настройки",
     "Failed to update tag": "Не удалось обновить тег",
+    "Failed to update trust level": "Не удалось обновить уровень доверия",
     "Failed to update user": "Не удалось обновить пользователя",
     "Failure keywords": "Ключевые слова сбоя",
     "Fair": "Удовлетворительно",
@@ -2809,6 +2814,7 @@
     "Incoming path must not include query": "Входящий путь не должен содержать query",
     "Incoming path must start with /": "Входящий путь должен начинаться с /",
     "Incomplete": "Не завершено",
+    "Increase trust level": "Повысить уровень доверия",
     "Increased user quota by {{quota}}": "Квота пользователя увеличена на {{quota}}",
     "Increment": "Увеличить",
     "Index": "Индекс",
@@ -6413,9 +6419,6 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб",
-    "Application reason is required.": "Причина заявки обязательна.",
-    "Application reason must contain at least 5 characters.": "Причина заявки должна содержать не менее 5 символов.",
-    "{{count}}/5 characters": "{{count}}/5 символов"
+    "Zoom": "Масштаб"
   }
 }

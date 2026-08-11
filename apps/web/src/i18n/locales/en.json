@@ -72,6 +72,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "{{count}} Uptime Kuma groups will be removed from the list.",
     "{{count}} vendors": "{{count}} vendors",
     "{{count}} weeks ago": "{{count}} weeks ago",
+    "{{count}}/5 characters": "{{count}}/5 characters",
     "{{days}} days": "{{days}} days",
     "{{days}}-day review": "{{days}}-day review",
     "{{field}} updated to {{value}}": "{{field}} updated to {{value}}",
@@ -522,6 +523,8 @@
     "Append value to array / string / object end": "Append value to array / string / object end",
     "appended": "appended",
     "Application": "Application",
+    "Application reason is required.": "Application reason is required.",
+    "Application reason must contain at least 5 characters.": "Application reason must contain at least 5 characters.",
     "Applied {{name}} pricing to {{count}} models": "Applied {{name}} pricing to {{count}} models",
     "Applied upstream model changes to {{count}} channels": "Applied upstream model changes to {{count}} channels",
     "Applied upstream model changes to channel (ID: {{id}})": "Applied upstream model changes to channel (ID: {{id}})",
@@ -1570,6 +1573,7 @@
     "Days to Retain": "Days to Retain",
     "decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.": "decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.",
     "decides which channels are used and which base ratio applies.": "decides which channels are used and which base ratio applies.",
+    "Decrease trust level": "Decrease trust level",
     "Decreased user quota by {{quota}}": "Decreased user quota by {{quota}}",
     "Decrement": "Decrement",
     "Dedicated gateway pricing": "Dedicated gateway pricing",
@@ -2342,6 +2346,7 @@
     "Failed to update setting": "Failed to update setting",
     "Failed to update settings": "Failed to update settings",
     "Failed to update tag": "Failed to update tag",
+    "Failed to update trust level": "Failed to update trust level",
     "Failed to update user": "Failed to update user",
     "Failure keywords": "Failure keywords",
     "Fair": "Fair",
@@ -2809,6 +2814,7 @@
     "Incoming path must not include query": "Incoming path must not include query",
     "Incoming path must start with /": "Incoming path must start with /",
     "Incomplete": "Incomplete",
+    "Increase trust level": "Increase trust level",
     "Increased user quota by {{quota}}": "Increased user quota by {{quota}}",
     "Increment": "Increment",
     "Index": "Index",
@@ -6413,9 +6419,6 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "Application reason is required.": "Application reason is required.",
-    "Application reason must contain at least 5 characters.": "Application reason must contain at least 5 characters.",
-    "{{count}}/5 characters": "{{count}}/5 characters"
+    "Zoom": "Zoom"
   }
 }

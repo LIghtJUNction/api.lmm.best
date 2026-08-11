@@ -72,6 +72,7 @@
     "{{count}} Uptime Kuma groups will be removed from the list.": "將從列表中移除 {{count}} 個 Uptime Kuma 分組。",
     "{{count}} vendors": "{{count}} 間供應商",
     "{{count}} weeks ago": "{{count}} 週前",
+    "{{count}}/5 characters": "{{count}}/5 字",
     "{{days}} days": "{{days}} 天",
     "{{days}}-day review": "{{days}} 天複核",
     "{{field}} updated to {{value}}": "{{field}} 已更新為 {{value}}",
@@ -522,6 +523,8 @@
     "Append value to array / string / object end": "把值追加到陣列/字串/物件最後",
     "appended": "已追加",
     "Application": "套用程式",
+    "Application reason is required.": "申請說明為必填項。",
+    "Application reason must contain at least 5 characters.": "申請說明至少需要 5 個字。",
     "Applied {{name}} pricing to {{count}} models": "已將 {{name}} 的定價套用到 {{count}} 個模型",
     "Applied upstream model changes to {{count}} channels": "對 {{count}} 個渠道套用了上游模型變更",
     "Applied upstream model changes to channel (ID: {{id}})": "對渠道（ID: {{id}}）套用了上游模型變更",
@@ -1570,6 +1573,7 @@
     "Days to Retain": "保留天數",
     "decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.": "決定儲值倍率、用戶建令牌時可選哪些分組，以及是否命中覆蓋倍率。",
     "decides which channels are used and which base ratio applies.": "決定走哪些渠道、用哪個基礎倍率。",
+    "Decrease trust level": "降低信任等級",
     "Decreased user quota by {{quota}}": "減少用戶額度 {{quota}}",
     "Decrement": "減少",
     "Dedicated gateway pricing": "專用閘道計價",
@@ -2342,6 +2346,7 @@
     "Failed to update setting": "更新設定失敗",
     "Failed to update settings": "無法更新設定",
     "Failed to update tag": "更新標籤失敗",
+    "Failed to update trust level": "更新信任等級失敗",
     "Failed to update user": "更新用戶失敗",
     "Failure keywords": "失敗關鍵詞",
     "Fair": "公平",
@@ -2809,6 +2814,7 @@
     "Incoming path must not include query": "入口路徑不能包含 query",
     "Incoming path must start with /": "入口路徑必須以 / 開頭",
     "Incomplete": "未完成",
+    "Increase trust level": "提高信任等級",
     "Increased user quota by {{quota}}": "增加用戶額度 {{quota}}",
     "Increment": "增加",
     "Index": "索引",
@@ -6413,9 +6419,6 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放",
-    "Application reason is required.": "申請說明為必填項。",
-    "Application reason must contain at least 5 characters.": "申請說明至少需要 5 個字。",
-    "{{count}}/5 characters": "{{count}}/5 字"
+    "Zoom": "縮放"
   }
 }
