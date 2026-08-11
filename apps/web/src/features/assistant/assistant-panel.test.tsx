@@ -464,6 +464,38 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('does not mistake a failed access check for L0 or expose presets', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      throw new Error('status unavailable')
+    }) as typeof api.get
+
+    const rendered = await renderPanel()
+    try {
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Unable to verify account access'
+            ) === true,
+          'Assistant did not render the access error'
+        )
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Ask an administrator to raise my access level/
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Which option is the best value\?/
+      )
+      assert.ok(findButton('Retry'))
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('shows the signed-in model IDs inside the assistant', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/status') {

@@ -112,12 +112,14 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   const plansQuery = useQuery({
     queryKey: ['subscription-plans'],
     queryFn: getPublicPlans,
+    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
   const topupQuery = useQuery({
     queryKey: ['topup-info'],
     queryFn: getTopupInfo,
+    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -138,6 +140,20 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
     () => getAssistantTopupOffers(topupQuery.data?.data?.discount),
     [topupQuery.data?.data?.discount]
   )
+
+  if (!props.developerAccessGranted) {
+    return (
+      <Alert>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
 
   let planContent: ReactNode = (
     <div className='grid gap-2'>
@@ -374,9 +390,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
           )}
         </p>
         <Button variant='outline' render={<Link to='/wallet' />}>
-          {props.developerAccessGranted
-            ? t('Review plans and exact checkout prices')
-            : t('Add funds')}
+          {t('Review plans and exact checkout prices')}
           <HugeiconsIcon
             icon={ArrowRight01Icon}
             strokeWidth={2}

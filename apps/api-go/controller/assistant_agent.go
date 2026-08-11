@@ -593,11 +593,16 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
 	result := map[string]any{
-		"ok":                           true,
+		"ok":                           access.Granted,
 		"developer_access_granted":     access.Granted,
 		"plans":                        []any{},
 		"topup_discounts":              []any{},
 		"payment_compliance_confirmed": operation_setting.IsPaymentComplianceConfirmed(),
+	}
+	if !access.Granted {
+		result["error"] = "L1 access is required to view plans and top-up discounts"
+		result["next_step"] = "Ask the user to submit an administrator access request from the onboarding assistant."
+		return result
 	}
 	if !operation_setting.IsPaymentComplianceConfirmed() {
 		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."

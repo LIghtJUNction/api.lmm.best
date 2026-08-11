@@ -326,6 +326,26 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_REQUIRED")
 }
 
+func TestAssistantPlanOffersRejectL0WithoutLoadingBillingData(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	user := model.User{
+		Username: "assistant-plan-l0-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	result := executeAssistantPlanOffersTool(user.Id)
+	assert.Equal(t, false, result["ok"])
+	assert.Equal(t, false, result["developer_access_granted"])
+	assert.Contains(t, result["error"], "L1 access is required")
+	assert.Empty(t, result["plans"])
+	assert.Empty(t, result["topup_discounts"])
+}
+
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
