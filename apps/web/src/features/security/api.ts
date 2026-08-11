@@ -16,25 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 import { api } from '@/lib/api'
 
-import type { SecurityOverviewResponse } from './types'
+import type { SecurityPolicyResponse, SecurityStatsResponse } from './types'
 
-export const SECURITY_OVERVIEW_ENDPOINT = '/api/security/overview'
+export const SECURITY_POLICY_ENDPOINT = '/api/security/policy'
+export const SECURITY_STATS_ENDPOINT = '/api/security/stats'
 
-/**
- * Fetches live security metrics and the public charge schedule.
- *
- * The endpoint is intentionally best-effort for the public page: a missing
- * endpoint must not turn a policy explainer into a toast/error loop. The
- * caller renders an explicit unavailable state until the backend publishes
- * this contract.
- */
-export async function getSecurityOverview(): Promise<SecurityOverviewResponse> {
-  const res = await api.get<SecurityOverviewResponse>(
-    SECURITY_OVERVIEW_ENDPOINT,
-    {
-      skipBusinessError: true,
-      skipErrorHandler: true,
-    }
-  )
+export async function getSecurityPolicy(): Promise<SecurityPolicyResponse> {
+  const res = await api.get<SecurityPolicyResponse>(SECURITY_POLICY_ENDPOINT, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return res.data
+}
+
+export async function getSecurityStats(): Promise<SecurityStatsResponse> {
+  const res = await api.get<SecurityStatsResponse>(SECURITY_STATS_ENDPOINT, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return res.data
 }
