@@ -92,6 +92,8 @@ export default defineConfig(({ envMode }) => {
         plugins: [
           tanstackRouter({
             target: 'react',
+            // Keep colocated tests out of the generated route tree.
+            routeFileIgnorePattern: '\\.test\\.',
             // Dev: avoid per-route async chunks (reduces white flash on navigation + faster HMR feedback).
             // Prod: keep route-based code splitting.
             autoCodeSplitting: isProd,
