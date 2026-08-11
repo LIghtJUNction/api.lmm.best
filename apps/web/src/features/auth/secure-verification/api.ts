@@ -94,7 +94,9 @@ export async function sendSecurityEmailVerification(): Promise<{
     data?: { email_hint?: string }
   }>('/api/verify/email')
   if (!res.data?.success) {
-    throw new Error(res.data?.message || i18next.t('Failed to send verification email'))
+    throw new Error(
+      res.data?.message || i18next.t('Failed to send verification email')
+    )
   }
   return res.data.data ?? {}
 }

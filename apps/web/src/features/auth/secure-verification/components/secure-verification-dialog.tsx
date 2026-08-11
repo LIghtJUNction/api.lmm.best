@@ -141,7 +141,7 @@ export function SecureVerificationDialog({
           </div>
           <p className='text-muted-foreground text-sm'>
             {t(
-            'Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
+              'Bind an email, or enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
             )}
           </p>
         </div>
