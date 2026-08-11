@@ -23,6 +23,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { LayoutProvider } from '@/context/layout-provider'
 import { SearchProvider } from '@/context/search-provider'
 import { AssistantLauncher } from '@/features/assistant/assistant-launcher'
+import { ReleaseNoteDialog } from '@/features/release-notes/release-note-dialog'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { getCookie } from '@/lib/cookies'
 import { cn } from '@/lib/utils'
@@ -62,6 +63,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
           </div>
           <AccessRestrictionNotice className='shrink-0' />
           <AssistantLauncher />
+          <ReleaseNoteDialog />
         </SidebarProvider>
       </SearchProvider>
     </LayoutProvider>

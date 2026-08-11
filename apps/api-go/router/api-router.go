@@ -47,6 +47,18 @@ func SetApiRouter(router *gin.Engine) {
 			securityAdminRoute.GET("/stats", controller.GetAdminSecurityStats)
 			securityAdminRoute.GET("/events", controller.ListAdminSecurityEvents)
 		}
+		releaseNoteRoute := apiRouter.Group("/release-notes")
+		releaseNoteRoute.Use(middleware.UserAuth())
+		{
+			releaseNoteRoute.GET("/latest", middleware.DisableCache(), controller.GetLatestUnreadReleaseNote)
+			releaseNoteRoute.POST("/:id/read", middleware.DisableCache(), controller.MarkReleaseNoteRead)
+		}
+		releaseNoteAdminRoute := apiRouter.Group("/release-notes/admin")
+		releaseNoteAdminRoute.Use(middleware.AdminAuth())
+		{
+			releaseNoteAdminRoute.GET("", middleware.DisableCache(), controller.ListAdminReleaseNotes)
+			releaseNoteAdminRoute.POST("", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.PublishAdminReleaseNote)
+		}
 		// Compatibility alias for older edge configurations. New package-managed
 		// Nginx uses /internal/access-ip-policy outside the API rate-limit group.
 		apiRouter.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)

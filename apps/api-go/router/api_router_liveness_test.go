@@ -20,3 +20,22 @@ func TestApiRouterRegistersPublicLivenessRoute(t *testing.T) {
 	}
 	t.Fatal("GET /api/livez was not registered")
 }
+
+func TestApiRouterRegistersReleaseNoteRoutes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	routes := make(map[string]bool)
+	for _, route := range engine.Routes() {
+		routes[route.Method+" "+route.Path] = true
+	}
+	for _, expected := range []string{
+		"GET /api/release-notes/latest",
+		"POST /api/release-notes/:id/read",
+		"GET /api/release-notes/admin",
+		"POST /api/release-notes/admin",
+	} {
+		require.True(t, routes[expected], expected)
+	}
+}
