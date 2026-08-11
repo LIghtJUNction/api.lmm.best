@@ -13,29 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.T) {
+func TestPreActivationRouteMatrixKeepsChallengesReadOnly(t *testing.T) {
 	allowed := []struct {
 		method string
 		path   string
 	}{
 		{http.MethodGet, "/api/open-source-bounties"},
 		{http.MethodGet, "/api/open-source-bounties/projects/7"},
-		{http.MethodGet, "/api/open-source-bounties/accepted"},
-		{http.MethodGet, "/api/open-source-bounties/disputes/mine"},
-		{http.MethodPost, "/api/open-source-bounties/projects/7/accept"},
-		{http.MethodPost, "/api/open-source-bounties/projects/7/submit"},
-		{http.MethodPost, "/api/open-source-bounties/challenges/9/withdraw"},
-		{http.MethodPost, "/api/open-source-bounties/challenges/9/rate-owner"},
-		{http.MethodPost, "/api/open-source-bounties/challenges/9/disputes"},
-		{http.MethodGet, "/api/user/topup/info"},
 		{http.MethodGet, "/api/user/developer-access/request"},
 		{http.MethodPost, "/api/user/developer-access/request"},
-		{http.MethodGet, "/api/user/checkin"},
-		{http.MethodPost, "/api/user/checkin"},
 		{http.MethodGet, "/api/security/policy"},
 		{http.MethodGet, "/api/security/stats"},
-		{http.MethodPost, "/api/user/stripe/pay"},
-		{http.MethodGet, "/api/user/aff"},
 		{http.MethodPut, "/api/user/self"},
 		{http.MethodPost, "/api/user/passkey/register/begin"},
 		{http.MethodGet, "/api/subscription/epay/notify"},
@@ -53,6 +41,19 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		path   string
 	}{
 		{http.MethodGet, "/api/token"},
+		{http.MethodGet, "/api/open-source-bounties/accepted"},
+		{http.MethodGet, "/api/open-source-bounties/disputes/mine"},
+		{http.MethodPost, "/api/open-source-bounties/projects/7/accept"},
+		{http.MethodPost, "/api/open-source-bounties/projects/7/submit"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/withdraw"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/rate-owner"},
+		{http.MethodPost, "/api/open-source-bounties/challenges/9/disputes"},
+		{http.MethodGet, "/api/user/topup/info"},
+		{http.MethodGet, "/api/user/topup/self"},
+		{http.MethodPost, "/api/user/stripe/pay"},
+		{http.MethodGet, "/api/user/aff"},
+		{http.MethodGet, "/api/user/checkin"},
+		{http.MethodPost, "/api/user/checkin"},
 		{http.MethodGet, "/api/user/developer-access/unknown"},
 		{http.MethodGet, "/api/models"},
 		{http.MethodGet, "/api/channel"},

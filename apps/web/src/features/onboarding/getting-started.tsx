@@ -6,15 +6,15 @@ it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
-import { Link } from '@tanstack/react-router'
 import {
-  ArrowRight,
-  Check,
-  KeyRound,
-  LayoutDashboard,
-  MessageCircleQuestion,
-  Wallet,
-} from 'lucide-react'
+  AiChat02Icon,
+  ArrowRight01Icon,
+  CheckmarkCircle02Icon,
+  DashboardSquare01Icon,
+  Key01Icon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { Link } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -26,8 +26,6 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
-import { useTopupInfo } from '@/features/wallet/hooks/use-topup-info'
-import { getTopupAvailability } from '@/features/wallet/lib/payment'
 import { getOnboardingState } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -45,8 +43,6 @@ export function GettingStarted() {
   const [accessRequest, setAccessRequest] =
     useState<DeveloperAccessRequest | null>(null)
   const [requestLoaded, setRequestLoaded] = useState(false)
-  const { topupInfo, loading: topupLoading, error: topupError } = useTopupInfo()
-  const topupAvailability = getTopupAvailability(topupInfo)
 
   useEffect(() => {
     if (onboarding.stage !== 'activate') {
@@ -76,20 +72,6 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding')
   }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
 
-  const activationMessage = topupLoading
-    ? t('Checking payment availability...')
-    : topupError
-      ? t(
-          'Payment availability could not be verified. You can submit an administrator unlock request instead.'
-        )
-      : !topupAvailability.hasPaymentMethod
-        ? t(
-            'Online payment is temporarily unavailable. You can submit an administrator unlock request instead.'
-          )
-        : t(
-            'Choose either automatic activation after adding funds or an administrator unlock request.'
-          )
-
   const submitPrompt = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const message = prompt.trim()
@@ -97,11 +79,134 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding', message)
   }
 
-  const stageLabel = onboarding.activationComplete
-    ? onboarding.stage === 'complete'
-      ? t('Setup complete')
-      : t('Continue setup')
-    : t('L0 tutorial required')
+  if (!onboarding.activationComplete) {
+    return (
+      <SectionPageLayout>
+        <SectionPageLayout.Title>
+          {t('Getting started')}
+        </SectionPageLayout.Title>
+        <SectionPageLayout.Content>
+          <div className='mx-auto flex w-full max-w-4xl flex-col gap-8 pb-14'>
+            <section className='border-primary/40 bg-primary/5 border px-5 py-8 shadow-sm sm:px-8 sm:py-10'>
+              <div className='flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between'>
+                <div className='max-w-2xl'>
+                  <p className='text-primary text-sm font-semibold'>
+                    {t('AI assistant')}
+                  </p>
+                  <h3 className='mt-2 text-2xl font-semibold sm:text-3xl'>
+                    {t('Ask for L1 access')}
+                  </h3>
+                  <p className='text-muted-foreground mt-3 text-sm leading-6'>
+                    {t(
+                      'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+                    )}
+                  </p>
+                </div>
+                <div className='flex shrink-0 flex-wrap gap-2'>
+                  <Badge variant='outline'>
+                    {t('L{{level}}', { level: trustLevel })}
+                  </Badge>
+                  <Badge variant='outline'>{t('Read-only')}</Badge>
+                </div>
+              </div>
+
+              <form
+                className='mt-7 flex flex-col gap-3 sm:flex-row'
+                onSubmit={submitPrompt}
+              >
+                <Input
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  maxLength={4000}
+                  className='bg-background h-12 flex-1'
+                  placeholder={t(
+                    'Write a short explanation of what you want to build or why you need L1 access.'
+                  )}
+                  aria-label={t('Tell the AI assistant what you need')}
+                />
+                <Button type='submit' size='lg' disabled={!prompt.trim()}>
+                  <HugeiconsIcon
+                    icon={AiChat02Icon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                    aria-hidden='true'
+                  />
+                  {t('Start with AI assistant')}
+                  <HugeiconsIcon
+                    icon={ArrowRight01Icon}
+                    strokeWidth={2}
+                    data-icon='inline-end'
+                    aria-hidden='true'
+                  />
+                </Button>
+              </form>
+
+              <Button
+                type='button'
+                variant='outline'
+                className='bg-background mt-3 h-auto min-h-11 w-full justify-between px-4 py-3 text-left whitespace-normal'
+                onClick={() => requestAssistantOpen('onboarding')}
+              >
+                <span>
+                  {t('Ask an administrator to raise my access level')}
+                </span>
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  className='shrink-0'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
+              </Button>
+
+              {accessRequest?.status === 'pending' ? (
+                <p className='bg-background/70 mt-4 border px-3 py-2 text-xs leading-5'>
+                  {t(
+                    'Your free unlock request is waiting for administrator review.'
+                  )}
+                </p>
+              ) : null}
+
+              <p className='text-muted-foreground mt-3 text-xs leading-5'>
+                {t(
+                  'Never paste a password, API key, session cookie, or other secret into the conversation.'
+                )}
+              </p>
+            </section>
+
+            <section className='border-y px-5 py-6 sm:px-8'>
+              <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
+                <div>
+                  <h3 className='text-sm font-semibold'>
+                    {t('Open-source challenges')}
+                  </h3>
+                  <p className='text-muted-foreground mt-1 text-sm'>
+                    {t('Browse challenges in read-only mode.')}
+                  </p>
+                </div>
+                <Button variant='outline' render={<Link to='/challenges' />}>
+                  {t('Browse challenges')}
+                  <HugeiconsIcon
+                    icon={ArrowRight01Icon}
+                    strokeWidth={2}
+                    data-icon='inline-end'
+                    aria-hidden='true'
+                  />
+                </Button>
+              </div>
+              <ChallengeList
+                limit={3}
+                showHeading={false}
+                heading={t('Open-source challenges')}
+              />
+            </section>
+          </div>
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
+    )
+  }
+
+  const stageLabel =
+    onboarding.stage === 'complete' ? t('Setup complete') : t('Continue setup')
 
   const tutorialSteps = [
     {
@@ -143,31 +248,19 @@ export function GettingStarted() {
                   {t('One conversation to get started')}
                 </p>
                 <h3 className='mt-2 text-2xl font-semibold sm:text-3xl'>
-                  {onboarding.activationComplete
-                    ? t('Tell the AI assistant what you want to do')
-                    : t('Tell the AI assistant what you want to build')}
+                  {t('Tell the AI assistant what you want to do')}
                 </h3>
                 <p className='text-muted-foreground mt-3 text-sm leading-6'>
-                  {onboarding.activationComplete
-                    ? t(
-                        'Ask for a setup guide, model ID, API key, usage report, plan comparison, or any other next step. The assistant can guide the action from here.'
-                      )
-                    : t(
-                        'L0 accounts start here. The assistant will explain L1 activation, recharge options, the free review path, and then guide you through software setup.'
-                      )}
+                  {t(
+                    'Ask for a setup guide, model ID, API key, usage report, plan comparison, or any other next step. The assistant can guide the action from here.'
+                  )}
                 </p>
               </div>
               <div className='flex shrink-0 flex-wrap gap-2'>
                 <Badge variant='outline'>
                   {t('L{{level}}', { level: trustLevel })}
                 </Badge>
-                <Badge
-                  variant={
-                    onboarding.activationComplete ? 'secondary' : 'outline'
-                  }
-                >
-                  {stageLabel}
-                </Badge>
+                <Badge variant='secondary'>{stageLabel}</Badge>
               </div>
             </div>
 
@@ -186,12 +279,19 @@ export function GettingStarted() {
                 aria-label={t('Tell the AI assistant what you need')}
               />
               <Button type='submit' size='lg' disabled={!prompt.trim()}>
-                <MessageCircleQuestion
+                <HugeiconsIcon
+                  icon={AiChat02Icon}
+                  strokeWidth={2}
                   data-icon='inline-start'
                   aria-hidden='true'
                 />
                 {t('Start with AI assistant')}
-                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-end'
+                  aria-hidden='true'
+                />
               </Button>
             </form>
             <div
@@ -291,7 +391,11 @@ export function GettingStarted() {
                     <div className='flex items-start gap-3'>
                       <span className={markerClass} aria-hidden='true'>
                         {step.complete ? (
-                          <Check className='size-4' />
+                          <HugeiconsIcon
+                            icon={CheckmarkCircle02Icon}
+                            className='size-4'
+                            strokeWidth={2}
+                          />
                         ) : (
                           index + 1
                         )}
@@ -315,7 +419,9 @@ export function GettingStarted() {
                           onClick={() => requestAssistantOpen(step.preset)}
                         >
                           {t('Continue')}
-                          <ArrowRight
+                          <HugeiconsIcon
+                            icon={ArrowRight01Icon}
+                            strokeWidth={2}
                             data-icon='inline-end'
                             aria-hidden='true'
                           />
@@ -331,7 +437,12 @@ export function GettingStarted() {
           <section className='border px-5 py-5 sm:px-8'>
             <div className='flex items-start gap-3'>
               <span className='bg-primary text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-full'>
-                <MessageCircleQuestion aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={AiChat02Icon}
+                  className='size-5'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
               </span>
               <div className='min-w-0'>
                 <h3 className='text-sm font-semibold'>
@@ -346,66 +457,32 @@ export function GettingStarted() {
             </div>
           </section>
 
-          {!onboarding.activationComplete ? (
-            <section className='border px-5 py-6 sm:px-8'>
-              <div className='flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between'>
-                <div className='max-w-2xl'>
-                  <h3 className='text-sm font-semibold'>
-                    {t('Choose how to unlock access')}
-                  </h3>
-                  <p className='text-muted-foreground mt-2 text-sm leading-6'>
-                    {activationMessage}
-                  </p>
-                  {accessRequest?.status === 'pending' ? (
-                    <p className='bg-muted/30 mt-4 border px-3 py-2 text-xs leading-5'>
-                      {t(
-                        'Your free unlock request is waiting for administrator review.'
-                      )}
-                    </p>
-                  ) : null}
-                </div>
-                <div className='flex shrink-0 flex-wrap gap-2'>
-                  {!topupLoading &&
-                  !topupError &&
-                  topupAvailability.hasPaymentMethod ? (
-                    <Button render={<Link to='/wallet' />}>
-                      <Wallet data-icon='inline-start' aria-hidden='true' />
-                      {t('Recharge to unlock')}
-                    </Button>
-                  ) : null}
-                  <Button
-                    type='button'
-                    variant='outline'
-                    onClick={() => requestAssistantOpen('onboarding')}
-                  >
-                    {t('Ask AI to submit a free request')}
-                  </Button>
-                </div>
+          <section className='border px-5 py-6 sm:px-8'>
+            <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+              <div>
+                <h3 className='text-sm font-semibold'>
+                  {t('Continue with your first integration')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Ask the assistant to create a key, configure a client, or send a first test request.'
+                  )}
+                </p>
               </div>
-            </section>
-          ) : (
-            <section className='border px-5 py-6 sm:px-8'>
-              <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
-                <div>
-                  <h3 className='text-sm font-semibold'>
-                    {t('Continue with your first integration')}
-                  </h3>
-                  <p className='text-muted-foreground mt-1 text-sm leading-6'>
-                    {t(
-                      'Ask the assistant to create a key, configure a client, or send a first test request.'
-                    )}
-                  </p>
-                </div>
-                <Button
-                  variant='outline'
-                  onClick={() => requestAssistantOpen('client-setup')}
-                >
-                  <KeyRound data-icon='inline-start' aria-hidden='true' />
-                  {t('Open setup guide')}
-                </Button>
-              </div>
-            </section>
-          )}
+              <Button
+                variant='outline'
+                onClick={() => requestAssistantOpen('client-setup')}
+              >
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
+                {t('Open setup guide')}
+              </Button>
+            </div>
+          </section>
 
           <section className='border-y px-5 py-5 sm:px-8'>
             <div className='flex flex-wrap items-center justify-between gap-3'>
@@ -416,15 +493,15 @@ export function GettingStarted() {
                 </p>
               </div>
               <div className='flex flex-wrap gap-2'>
-                {onboarding.activationComplete ? (
-                  <Button variant='outline' render={<Link to='/dashboard' />}>
-                    <LayoutDashboard
-                      data-icon='inline-start'
-                      aria-hidden='true'
-                    />
-                    {t('Dashboard')}
-                  </Button>
-                ) : null}
+                <Button variant='outline' render={<Link to='/dashboard' />}>
+                  <HugeiconsIcon
+                    icon={DashboardSquare01Icon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                    aria-hidden='true'
+                  />
+                  {t('Dashboard')}
+                </Button>
                 <Button
                   variant='outline'
                   render={<Link to='/open-source-bounties' />}

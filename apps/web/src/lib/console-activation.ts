@@ -131,11 +131,11 @@ export function getAuthenticatedLandingRoute(
 }
 
 export function isContributorRoute(pathname: string): boolean {
-  // L0 is intentionally a narrow, non-console surface: the activation
-  // page (which contains the administrator request path), recharge, and
-  // public open-source bounties only.
-  return ['/getting-started', '/wallet', '/open-source-bounties'].some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  // L0 gets one authenticated surface only. Public challenge browsing lives
+  // outside the console under /challenges; wallet and bounty-management
+  // routes must remain unavailable until L1 is approved.
+  return (
+    pathname === '/getting-started' || pathname.startsWith('/getting-started/')
   )
 }
 

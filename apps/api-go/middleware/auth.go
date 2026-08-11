@@ -312,24 +312,10 @@ func preActivationRouteAllowed(method string, path string) bool {
 	if path == "/api/open-source-bounties" {
 		return method == http.MethodGet
 	}
-	if path == "/api/open-source-bounties/accepted" || path == "/api/open-source-bounties/disputes/mine" {
-		return method == http.MethodGet
-	}
 	if strings.HasPrefix(path, "/api/open-source-bounties/projects/") {
 		projectPath := strings.TrimPrefix(path, "/api/open-source-bounties/projects/")
 		segments := strings.Split(projectPath, "/")
-		if len(segments) == 1 && segments[0] != "" {
-			return method == http.MethodGet
-		}
-		return len(segments) == 2 && segments[0] != "" &&
-			(segments[1] == "accept" || segments[1] == "submit") && method == http.MethodPost
-	}
-	if strings.HasPrefix(path, "/api/open-source-bounties/challenges/") {
-		challengePath := strings.TrimPrefix(path, "/api/open-source-bounties/challenges/")
-		segments := strings.Split(challengePath, "/")
-		return len(segments) == 2 && segments[0] != "" &&
-			(segments[1] == "withdraw" || segments[1] == "rate-owner" || segments[1] == "disputes") &&
-			method == http.MethodPost
+		return len(segments) == 1 && segments[0] != "" && method == http.MethodGet
 	}
 	switch path {
 	case "/api/setup", "/api/status", "/api/notice", "/api/user-agreement", "/api/privacy-policy", "/api/about", "/api/home_page_content", "/api/security/policy", "/api/security/stats":
@@ -344,14 +330,12 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete
 	case "/api/user/passkey":
 		return method == http.MethodGet || method == http.MethodDelete
-	case "/api/user/sessions", "/api/user/aff", "/api/user/topup/info", "/api/user/topup/self", "/api/user/oauth/bindings", "/api/user/2fa/status":
+	case "/api/user/sessions", "/api/user/oauth/bindings", "/api/user/2fa/status":
 		return method == http.MethodGet
 	case "/api/user/developer-access/request":
 		return method == http.MethodGet || method == http.MethodPost
-	case "/api/user/sessions/revoke-others", "/api/user/passkey/register/begin", "/api/user/passkey/register/finish", "/api/user/passkey/verify/begin", "/api/user/passkey/verify/finish", "/api/user/2fa/setup", "/api/user/2fa/enable", "/api/user/2fa/disable", "/api/user/2fa/backup_codes", "/api/user/topup", "/api/user/pay", "/api/user/fastpay/pay", "/api/user/amount", "/api/user/stripe/pay", "/api/user/stripe/amount", "/api/user/creem/pay", "/api/user/waffo/amount", "/api/user/waffo/pay", "/api/user/waffo-pancake/amount", "/api/user/waffo-pancake/pay", "/api/user/aff_transfer":
+	case "/api/user/sessions/revoke-others", "/api/user/passkey/register/begin", "/api/user/passkey/register/finish", "/api/user/passkey/verify/begin", "/api/user/passkey/verify/finish", "/api/user/2fa/setup", "/api/user/2fa/enable", "/api/user/2fa/disable", "/api/user/2fa/backup_codes":
 		return method == http.MethodPost
-	case "/api/user/checkin":
-		return method == http.MethodGet || method == http.MethodPost
 	case "/api/user/setting":
 		return method == http.MethodPut
 	}

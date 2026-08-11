@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { QuotaDataItem } from '@/features/dashboard/types'
 import { api } from '@/lib/api'
 
 type AssistantChatPayload = {
@@ -226,6 +227,25 @@ export async function getAssistantAvailableModels(): Promise<string[]> {
     }
   )
   return requireAssistantData(response.data, 'Unable to load available models')
+}
+
+export async function getAssistantUsageData(
+  days: 7 | 30 | 90
+): Promise<QuotaDataItem[]> {
+  const endTimestamp = Math.floor(Date.now() / 1000)
+  const response = await api.get<AssistantAPIResponse<QuotaDataItem[]>>(
+    '/api/data/self',
+    {
+      params: {
+        start_timestamp: endTimestamp - days * 24 * 60 * 60,
+        end_timestamp: endTimestamp,
+        default_time: 'day',
+      },
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Failed to fetch usage')
 }
 
 export async function createAssistantDefaultKey(

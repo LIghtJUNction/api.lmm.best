@@ -191,10 +191,11 @@ describe('console activation boundary', () => {
     )
   })
 
-  test('allows only onboarding, wallet, and open-source bounty routes before activation', () => {
+  test('allows only onboarding before activation', () => {
     assert.equal(isContributorRoute('/getting-started'), true)
-    assert.equal(isContributorRoute('/wallet'), true)
-    assert.equal(isContributorRoute('/open-source-bounties'), true)
+    assert.equal(isContributorRoute('/getting-started/request'), true)
+    assert.equal(isContributorRoute('/wallet'), false)
+    assert.equal(isContributorRoute('/open-source-bounties'), false)
     assert.equal(isContributorRoute('/profile/security'), false)
     assert.equal(isContributorRoute('/support'), false)
     assert.equal(isContributorRoute('/workspace'), false)

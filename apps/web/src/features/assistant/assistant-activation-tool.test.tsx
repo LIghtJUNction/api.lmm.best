@@ -118,13 +118,8 @@ async function renderTool(onContinueSetup: () => void) {
     path: '/',
     component: () => null,
   })
-  const walletRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/wallet',
-    component: () => null,
-  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, walletRoute]),
+    routeTree: rootRoute.addChildren([indexRoute]),
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   const container = document.createElement('div')
@@ -206,6 +201,11 @@ describe('AssistantActivationTool', () => {
     try {
       const textarea = document.querySelector('textarea')
       assert.ok(textarea)
+      assert.equal(document.querySelector('a[href="/wallet"]'), null)
+      assert.equal(
+        document.body.textContent?.includes('Open recharge and plans'),
+        false
+      )
       const submitButton = findButton('Send free review request')
       assert.equal(submitButton.disabled, true)
       assert.equal(
