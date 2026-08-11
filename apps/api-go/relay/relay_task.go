@@ -19,6 +19,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -158,6 +159,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
 	}
+	if taskErr := checkAdvancedSecurityTaskPrompt(c, info); taskErr != nil {
+		return nil, taskErr
+	}
 
 	// 2. 确定模型名称
 	modelName := info.OriginModelName
@@ -257,6 +261,62 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+// checkAdvancedSecurityTaskPrompt closes the gap between the normal model
+// relay (which has a TokenCountMeta) and task adaptors (which parse their own
+// request types). It runs after validation, but before pricing, pre-charge, or
+// any upstream request. Adaptors without a textual prompt are left untouched.
+func checkAdvancedSecurityTaskPrompt(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
+	if !setting.ShouldCheckAdvancedSecurityPrompt() {
+		return nil
+	}
+
+	prompt, ok := taskPromptFromContext(c)
+	if !ok || strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	matches := service.CheckAdvancedSecurityText(prompt)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	decision := model.AdvancedSecurityDecisionAudited
+	if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
+		decision = model.AdvancedSecurityDecisionBlocked
+	}
+	service.RecordAdvancedSecurityDetection(c, info, prompt, matches, decision)
+	if decision != model.AdvancedSecurityDecisionBlocked {
+		return nil
+	}
+	return service.TaskErrorWrapperLocal(
+		errors.New("prompt blocked by advanced security guardrail"),
+		"advanced_security_guardrail",
+		http.StatusBadRequest,
+	)
+}
+
+func taskPromptFromContext(c *gin.Context) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	value, ok := c.Get("task_request")
+	if !ok || value == nil {
+		return "", false
+	}
+	switch request := value.(type) {
+	case relaycommon.TaskSubmitReq:
+		return request.Prompt, true
+	case *dto.SunoSubmitReq:
+		if request == nil {
+			return "", false
+		}
+		return strings.Join([]string{request.GptDescriptionPrompt, request.Prompt, request.Title, request.Tags}, "\n"), true
+	case dto.SunoSubmitReq:
+		return strings.Join([]string{request.GptDescriptionPrompt, request.Prompt, request.Title, request.Tags}, "\n"), true
+	default:
+		return "", false
+	}
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
