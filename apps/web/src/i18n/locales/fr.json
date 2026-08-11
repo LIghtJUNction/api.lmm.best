@@ -5970,6 +5970,15 @@
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
     "Unlocks at L1": "Débloqué au niveau L1",
-    "Reach trust level L1 to register one public IP address for direct access.": "Atteignez le niveau de confiance L1 pour enregistrer une adresse IP publique d’accès direct."
+    "Reach trust level L1 to register one public IP address for direct access.": "Atteignez le niveau de confiance L1 pour enregistrer une adresse IP publique d’accès direct.",
+    "Compensation Gifts": "Cadeaux de compensation",
+    "Claim time-limited compensation quota": "Réclamez un quota de compensation à durée limitée",
+    "Claimed": "Réclamé",
+    "Ends at {{time}}": "Se termine le {{time}}",
+    "Claim": "Réclamer",
+    "Claiming...": "Réclamation…",
+    "You have already claimed this gift": "Vous avez déjà réclamé ce cadeau",
+    "Gift claimed successfully": "Cadeau réclamé avec succès",
+    "Failed to claim gift": "Échec de la réclamation"
   }
 }

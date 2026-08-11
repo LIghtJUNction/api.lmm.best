@@ -5970,6 +5970,15 @@
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
     "Unlocks at L1": "L1 で解放",
-    "Reach trust level L1 to register one public IP address for direct access.": "信頼レベル L1 に達すると、直接アクセス用のパブリック IP を 1 つ登録できます。"
+    "Reach trust level L1 to register one public IP address for direct access.": "信頼レベル L1 に達すると、直接アクセス用のパブリック IP を 1 つ登録できます。",
+    "Compensation Gifts": "補償ギフト",
+    "Claim time-limited compensation quota": "期間限定の補償クォータを受け取る",
+    "Claimed": "受取済み",
+    "Ends at {{time}}": "{{time}} 終了",
+    "Claim": "受け取る",
+    "Claiming...": "受取中…",
+    "You have already claimed this gift": "このギフトは既に受け取っています",
+    "Gift claimed successfully": "受け取りました",
+    "Failed to claim gift": "受け取りに失敗しました"
   }
 }

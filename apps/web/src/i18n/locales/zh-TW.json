@@ -5970,6 +5970,15 @@
     "Zhipu V4": "智譜 V4",
     "Zoom": "縮放",
     "Unlocks at L1": "L1 解鎖",
-    "Reach trust level L1 to register one public IP address for direct access.": "達到 L1 信任等級後，可登記一個公網 IP 用於直接存取。"
+    "Reach trust level L1 to register one public IP address for direct access.": "達到 L1 信任等級後，可登記一個公網 IP 用於直接存取。",
+    "Compensation Gifts": "補償禮包",
+    "Claim time-limited compensation quota": "領取限時補償額度",
+    "Claimed": "已領取",
+    "Ends at {{time}}": "{{time}} 截止",
+    "Claim": "領取",
+    "Claiming...": "領取中…",
+    "You have already claimed this gift": "你已領取過該禮包",
+    "Gift claimed successfully": "領取成功",
+    "Failed to claim gift": "領取失敗"
   }
 }
