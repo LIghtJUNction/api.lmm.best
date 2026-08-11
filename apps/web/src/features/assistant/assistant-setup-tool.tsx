@@ -171,6 +171,7 @@ export function AssistantSetupTool(props: {
   modelsLoading?: boolean
   developerAccessGranted: boolean
   onCreateKey: () => void
+  onRequestAccess: () => void
 }) {
   const { t } = useTranslation()
   const [platform, setPlatform] = useState<AssistantSetupPlatform>(
@@ -178,22 +179,212 @@ export function AssistantSetupTool(props: {
   )
   const [clientTab, setClientTab] = useState<ClientTab>('claude-code')
   const [selectedModel, setSelectedModel] = useState('')
+  const installCommand = getClaudeInstallCommand(platform)
+  const ccSwitchInstall = getCCSwitchInstallGuide(platform)
+  const codexInstallCommand = getCodexInstallCommand(platform)
+  const chatGPTDesktopAvailable = platform !== 'linux'
+
+  if (!props.developerAccessGranted) {
+    return (
+      <Card size='sm'>
+        <CardHeader>
+          <CardTitle className='flex items-center gap-2'>
+            <HugeiconsIcon
+              icon={LaptopIcon}
+              className='size-4'
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+            {t('Client setup guide')}
+          </CardTitle>
+          <CardDescription>
+            {t(
+              'You can install clients while L0 access is under review. API requests become available after L1 approval.'
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='grid gap-4'>
+          <Alert>
+            <HugeiconsIcon
+              icon={LaptopIcon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+            <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
+            <AlertDescription>
+              {t(
+                'Connection values and API key creation unlock only after an administrator approves L1.'
+              )}
+            </AlertDescription>
+          </Alert>
+
+          <div className='grid gap-1.5'>
+            <span className='text-muted-foreground text-xs'>
+              {t('Platform')}
+            </span>
+            <div className='flex flex-wrap gap-2' aria-label={t('Platform')}>
+              {(['windows', 'macos', 'linux'] as const).map((item) => (
+                <Button
+                  key={item}
+                  type='button'
+                  size='sm'
+                  variant={platform === item ? 'default' : 'outline'}
+                  aria-pressed={platform === item}
+                  onClick={() => setPlatform(item)}
+                >
+                  {PLATFORM_LABELS[item]}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <Tabs
+            value={clientTab}
+            onValueChange={(value) => setClientTab(value as ClientTab)}
+          >
+            <TabsList className='flex h-auto w-full flex-wrap justify-start gap-1'>
+              <TabsTrigger value='claude-code'>Claude Code</TabsTrigger>
+              <TabsTrigger value='cc-switch'>CC Switch</TabsTrigger>
+              <TabsTrigger value='claude-desktop'>Claude Desktop</TabsTrigger>
+              <TabsTrigger value='chatgpt'>ChatGPT</TabsTrigger>
+              <TabsTrigger value='codex'>Codex</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value='claude-code' className='mt-3 grid gap-3'>
+              <CodeSnippet
+                label={t('Install command')}
+                value={installCommand}
+              />
+              <div className='flex flex-wrap gap-2'>
+                <OfficialLink
+                  href={CLAUDE_INSTALL_DOCS}
+                  label={t('Official installation guide')}
+                />
+                <OfficialLink
+                  href={CLAUDE_DESKTOP_DOCS}
+                  label='Claude Code Desktop'
+                />
+              </div>
+            </TabsContent>
+
+            <TabsContent value='cc-switch' className='mt-3 grid gap-3'>
+              <Alert>
+                <AlertTitle>
+                  {t('Use official CC Switch downloads only')}
+                </AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'CC Switch is free and open source. An installer asking for payment, top-ups, or account credentials is not official.'
+                  )}
+                </AlertDescription>
+              </Alert>
+              {ccSwitchInstall.command ? (
+                <CodeSnippet
+                  label={t('Install CC Switch on {{platform}}', {
+                    platform: PLATFORM_LABELS[platform],
+                  })}
+                  value={ccSwitchInstall.command}
+                />
+              ) : (
+                <div className='bg-muted/40 rounded-lg border p-3 text-xs leading-5'>
+                  {t(
+                    'Download {{artifact}} from GitHub Releases, open it, and finish the Windows installer.',
+                    { artifact: ccSwitchInstall.artifact }
+                  )}
+                </div>
+              )}
+              <div className='flex flex-wrap gap-2'>
+                <OfficialLink
+                  href={CC_SWITCH_RELEASES}
+                  label={t('Open official releases')}
+                />
+                <OfficialLink
+                  href={CC_SWITCH_INSTALL_DOCS}
+                  label={t('Installation manual')}
+                />
+              </div>
+            </TabsContent>
+
+            <TabsContent value='claude-desktop' className='mt-3 grid gap-3'>
+              {platform === 'linux' ? (
+                <Alert>
+                  <AlertTitle>
+                    {t(
+                      'CC Switch Desktop provider setup is not available on Linux'
+                    )}
+                  </AlertTitle>
+                  <AlertDescription>
+                    {t(
+                      'Claude Desktop for Linux is available in beta, but CC Switch currently writes third-party Desktop profiles only on Windows and macOS. Use Claude Code on Linux for this service.'
+                    )}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <OfficialLink
+                href={CLAUDE_DESKTOP_DOCS}
+                label={t('Official Desktop guide')}
+              />
+            </TabsContent>
+
+            <TabsContent value='chatgpt' className='mt-3 grid gap-3'>
+              <Alert>
+                <AlertTitle>
+                  {t('Official ChatGPT desktop uses OpenAI sign-in')}
+                </AlertTitle>
+                <AlertDescription>
+                  {t(
+                    'The official ChatGPT desktop app does not accept this service Base URL and API key as a custom provider. Use CC Switch or an OpenAI-compatible client for this service.'
+                  )}
+                </AlertDescription>
+              </Alert>
+              <OfficialLink
+                href={chatGPTDesktopAvailable ? CHATGPT_DOWNLOAD : CHATGPT_WEB}
+                label={
+                  chatGPTDesktopAvailable
+                    ? t('Download official ChatGPT')
+                    : t('Open ChatGPT in browser')
+                }
+              />
+            </TabsContent>
+
+            <TabsContent value='codex' className='mt-3 grid gap-3'>
+              <CodeSnippet
+                label={t('Install command')}
+                value={codexInstallCommand}
+              />
+              <OfficialLink
+                href={CODEX_DOCS}
+                label={t('Official Codex guide')}
+              />
+            </TabsContent>
+          </Tabs>
+
+          <Button type='button' onClick={props.onRequestAccess}>
+            {t('Unlock L1 access')}
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              data-icon='inline-end'
+              aria-hidden='true'
+            />
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
   const model = props.availableModels.includes(selectedModel)
     ? selectedModel
     : (props.availableModels[0] ?? '<MODEL_ID>')
-  const installCommand = getClaudeInstallCommand(platform)
   const sessionCommand = getClaudeSessionCommand(platform, props.rootUrl, model)
-  const ccSwitchInstall = getCCSwitchInstallGuide(platform)
   const ccSwitchConfig = getCCSwitchClaudeProviderJSON(props.rootUrl, model)
   const openAICompatibleConfig = getOpenAICompatibleClientJSON(
     props.openAIBaseUrl,
     model
   )
-  const codexInstallCommand = getCodexInstallCommand(platform)
   const codexAPIKeyCommand = getCodexAPIKeyCommand(platform)
   const codexConfigPath = getCodexConfigPath(platform)
   const codexConfig = getCodexConfig(props.openAIBaseUrl, model)
-  const chatGPTDesktopAvailable = platform !== 'linux'
   let modelOptions: ReactNode = (
     <NativeSelectOption value='<MODEL_ID>'>
       {t('No available models')}
@@ -211,20 +402,6 @@ export function AssistantSetupTool(props: {
         {item}
       </NativeSelectOption>
     ))
-  }
-
-  if (!props.developerAccessGranted) {
-    return (
-      <Alert>
-        <HugeiconsIcon icon={LaptopIcon} strokeWidth={2} aria-hidden='true' />
-        <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
-        <AlertDescription>
-          {t(
-            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-          )}
-        </AlertDescription>
-      </Alert>
-    )
   }
 
   return (

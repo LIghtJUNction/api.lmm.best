@@ -1316,6 +1316,7 @@
     "Connection info detected in clipboard": "Infos de connexion détectées dans le presse-papiers",
     "Connection info filled in": "Infos de connexion remplies",
     "Connection successful": "Connexion réussie",
+    "Connection values and API key creation unlock only after an administrator approves L1.": "Les informations de connexion et la création de clés API seront accessibles après l’approbation du niveau L1 par un administrateur.",
     "Consistent, verified activity can improve value over time.": "Une activité régulière et vérifiée peut améliorer les avantages au fil du temps.",
     "Console": "Console",
     "Console area": "Zone de console",
