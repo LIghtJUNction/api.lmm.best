@@ -624,9 +624,8 @@ func generateDefaultSidebarConfig(userRole int) string {
 
 	// 聊天区域 - 所有用户都可以访问
 	defaultConfig["chat"] = map[string]interface{}{
-		"enabled":    true,
-		"playground": true,
-		"chat":       true,
+		"enabled": true,
+		"chat":    true,
 	}
 
 	// 控制台区域 - 所有用户都可以访问
@@ -773,7 +772,9 @@ func UpdateUser(c *gin.Context) {
 		}
 		if trustLevelSpecified {
 			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).
-				Update("trust_level_override", trustLevelOverride).Error; err != nil {
+				// Trust levels are automatic; accept the legacy field only to clear
+				// stale overrides without allowing a manual freeze.
+				Update("trust_level_override", nil).Error; err != nil {
 				return err
 			}
 		}

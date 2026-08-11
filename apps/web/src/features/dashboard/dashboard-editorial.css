@@ -46,7 +46,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   --forge-model-2: var(--forge-cactus-light);
   --forge-model-3: var(--forge-clay-light);
   --forge-model-4: var(--forge-sage-light);
-  --forge-model-5: var(--forge-secondary-light);
+  /* Keep every series visibly above the paper/card surface. The secondary
+   * token is intentionally close to the background and disappears in bars. */
+  --forge-model-5: var(--forge-extra-honey-light);
   --forge-chart-text: color-mix(
     in oklch,
     var(--forge-ink-light) 62%,
@@ -100,7 +102,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   --forge-model-2: var(--forge-cactus-dark);
   --forge-model-3: var(--forge-clay-dark);
   --forge-model-4: var(--forge-sage-dark);
-  --forge-model-5: var(--forge-secondary-dark);
+  /* The dark secondary token is only a few steps away from the chart card;
+   * use a warm chart accent so the fifth/repeated series remains visible. */
+  --forge-model-5: var(--forge-extra-honey-dark);
   --forge-chart-text: color-mix(
     in oklch,
     var(--forge-foreground-dark) 72%,

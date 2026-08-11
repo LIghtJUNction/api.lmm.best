@@ -23,16 +23,20 @@ import {
   Circle,
   KeyRound,
   LayoutDashboard,
-  LifeBuoy,
+  MessageCircleQuestion,
   Send,
   Wallet,
 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Textarea } from '@/components/ui/textarea'
+import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
 import { useTopupInfo } from '@/features/wallet/hooks/use-topup-info'
 import { getTopupAvailability } from '@/features/wallet/lib/payment'
@@ -40,6 +44,12 @@ import { getOnboardingState } from '@/lib/console-activation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
+import {
+  getDeveloperAccessRequest,
+  submitDeveloperAccessRequest,
+  type DeveloperAccessRequest,
+} from './api'
+import { claimPendingReviewAssistantPrompt } from './pending-review-assistant'
 import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
@@ -48,32 +58,79 @@ export function GettingStarted() {
   const user = useAuthStore((state) => state.auth.user)
   const onboarding = getOnboardingState(user)
   const trustLevel = user?.trust_level_info?.level ?? 0
+  const [accessRequest, setAccessRequest] =
+    useState<DeveloperAccessRequest | null>(null)
+  const [requestReason, setRequestReason] = useState('')
+  const [requestLoading, setRequestLoading] = useState(false)
+  const [requestLoaded, setRequestLoaded] = useState(false)
   const { topupInfo, loading: topupLoading, error: topupError } = useTopupInfo()
   const topupAvailability = getTopupAvailability(topupInfo)
+  useEffect(() => {
+    if (onboarding.stage !== 'activate') return
+    let cancelled = false
+    getDeveloperAccessRequest()
+      .then((request) => {
+        if (!cancelled) setAccessRequest(request)
+      })
+      .catch(() => {
+        // The request form remains usable when a legacy backend has not yet
+        // mounted the optional status endpoint.
+      })
+      .finally(() => {
+        if (!cancelled) setRequestLoaded(true)
+      })
+      .catch(() => {
+        // Keep the optional request status probe non-blocking.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [onboarding.stage])
+  const pendingRequestId =
+    accessRequest?.status === 'pending' ? accessRequest.id : 0
+  const userId = user?.id ?? 0
+  useEffect(() => {
+    if (!requestLoaded || onboarding.stage !== 'activate') return
+    if (!claimPendingReviewAssistantPrompt(userId, pendingRequestId)) return
+    requestAssistantOpen('onboarding')
+  }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
   const activationMessage = topupLoading
     ? t('Checking payment availability...')
     : topupError
       ? t(
-          'Payment availability could not be verified. Contact support before attempting to add funds.'
+          'Payment availability could not be verified. You can submit an administrator unlock request instead.'
         )
       : !topupAvailability.hasPaymentMethod
         ? t(
-            'Online payment is temporarily unavailable. Contact support before attempting to add funds.'
+            'Online payment is temporarily unavailable. You can submit an administrator unlock request instead.'
           )
-        : t('Any successful external top-up activates access.')
+        : t(
+            'Choose either automatic activation after adding funds or an administrator unlock request.'
+          )
   const activationCommand = topupLoading
     ? null
     : topupError || !topupAvailability.hasPaymentMethod
-      ? {
-          to: '/support' as const,
-          label: t('Contact support'),
-          icon: LifeBuoy,
-        }
-      : {
-          to: '/wallet' as const,
-          label: t('Add funds'),
-          icon: Wallet,
-        }
+      ? null
+      : { to: '/wallet' as const, label: t('Add funds'), icon: Wallet }
+
+  const submitUnlockRequest = async () => {
+    if (requestLoading || accessRequest?.status === 'pending') return
+    setRequestLoading(true)
+    try {
+      const request = await submitDeveloperAccessRequest(requestReason.trim())
+      setAccessRequest(request)
+      setRequestReason('')
+      toast.success(t('Unlock request submitted'))
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Unable to submit unlock request')
+      )
+    } finally {
+      setRequestLoading(false)
+    }
+  }
 
   const primaryCommand =
     onboarding.stage === 'activate'
@@ -85,11 +142,7 @@ export function GettingStarted() {
             icon: KeyRound,
           }
         : onboarding.stage === 'first_request'
-          ? {
-              to: '/playground' as const,
-              label: t('Open playground'),
-              icon: Send,
-            }
+          ? null
           : {
               to: '/dashboard' as const,
               label: t('Open dashboard'),
@@ -162,6 +215,39 @@ export function GettingStarted() {
                 </Badge>
               </div>
             </div>
+          </section>
+
+          <section className='bg-primary/5 flex flex-col gap-4 border px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-8'>
+            <div className='flex max-w-2xl items-start gap-3'>
+              <span className='bg-primary text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-full'>
+                <MessageCircleQuestion aria-hidden='true' />
+              </span>
+              <div>
+                <h3 className='text-sm font-semibold'>
+                  {t('Need help with the next step?')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Ask about administrator review, plans, API keys, client setup, or open-source bounties.'
+                  )}
+                </p>
+              </div>
+            </div>
+            <Button
+              type='button'
+              className='w-full sm:w-auto'
+              onClick={() =>
+                requestAssistantOpen(
+                  onboarding.stage === 'activate' ? 'onboarding' : 'api-key'
+                )
+              }
+            >
+              <MessageCircleQuestion
+                data-icon='inline-start'
+                aria-hidden='true'
+              />
+              {t('Ask AI assistant')}
+            </Button>
           </section>
 
           <section className='border'>
@@ -237,6 +323,69 @@ export function GettingStarted() {
             </ol>
           </section>
 
+          {onboarding.stage === 'activate' && requestLoaded ? (
+            <section className='border px-5 py-6 sm:px-8 sm:py-7'>
+              <div className='max-w-2xl'>
+                <h3 className='text-sm font-semibold'>
+                  {t('Choose how to unlock access')}
+                </h3>
+                <p className='text-muted-foreground mt-2 text-sm leading-6'>
+                  {t(
+                    'Adding funds is optional. You may request administrator review instead; an approved request unlocks L1 access without a charge.'
+                  )}
+                </p>
+              </div>
+              {accessRequest?.status === 'pending' ? (
+                <div className='bg-muted/30 text-muted-foreground mt-5 border px-4 py-3 text-sm leading-6'>
+                  {t(
+                    'Your unlock request is waiting for administrator review. You can continue using the recharge and open-source bounty pages.'
+                  )}
+                </div>
+              ) : (
+                <div className='mt-5 flex flex-col gap-3'>
+                  {accessRequest?.status === 'rejected' ? (
+                    <div className='bg-muted/30 text-muted-foreground border px-4 py-3 text-sm leading-6'>
+                      <p>
+                        {t('Your previous unlock request was not approved.')}
+                      </p>
+                      {accessRequest.admin_note ? (
+                        <p className='mt-1'>
+                          {t('Administrator note: {{note}}', {
+                            note: accessRequest.admin_note,
+                          })}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <Textarea
+                    value={requestReason}
+                    onChange={(event) => setRequestReason(event.target.value)}
+                    placeholder={t(
+                      'Explain why you need developer access (optional)'
+                    )}
+                    maxLength={2000}
+                    rows={3}
+                  />
+                  <div className='flex flex-wrap items-center gap-3'>
+                    <Button
+                      onClick={submitUnlockRequest}
+                      disabled={requestLoading}
+                    >
+                      {requestLoading
+                        ? t('Submitting...')
+                        : t('Submit unlock request')}
+                    </Button>
+                    <span className='text-muted-foreground text-xs'>
+                      {t(
+                        'An administrator will review the request before access is enabled.'
+                      )}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </section>
+          ) : null}
+
           <section className='flex flex-col gap-4 border-y px-5 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-7'>
             <div className='max-w-2xl'>
               <p className='text-sm font-semibold'>{t('Next step')}</p>
@@ -250,7 +399,18 @@ export function GettingStarted() {
                       : t('Go to your dashboard to continue.')}
               </p>
             </div>
-            {primaryCommand && PrimaryIcon ? (
+            {onboarding.stage === 'first_request' ? (
+              <Button
+                type='button'
+                className='w-full sm:w-auto'
+                size='lg'
+                onClick={() => requestAssistantOpen('client-setup')}
+              >
+                <Send data-icon='inline-start' aria-hidden='true' />
+                {t('Open AI assistant')}
+                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+              </Button>
+            ) : primaryCommand && PrimaryIcon ? (
               <Button
                 className='w-full sm:w-auto'
                 size='lg'

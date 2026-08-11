@@ -7,8 +7,8 @@ description: Safely inspect, stage, back up, deploy, update, confirm, roll back,
 
 Apply one controlled deployment transaction. Do not infer production authority
 from an earlier turn, a generic request to “update,” or access to an SSH host.
-The installed package exposes one public operator CLI, `/usr/bin/lmm-api`:
-use `lmm-api deploy ...` for deployment phases and `lmm-api serve` for the
+The installed package exposes one public operator CLI, `/usr/bin/lmm-api-go`:
+use `lmm-api-go deploy ...` for deployment phases and `lmm-api-go serve` for the
 systemd service. Do not invoke a source-tree deployment helper or document a
 second public deploy command.
 
@@ -51,7 +51,8 @@ marker-owned deployment directory:
 
 - controller default:
   `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work`
-- target default: `/var/lib/lmm-api/deploy-work`
+- target default: `/var/lib/lmm-api-go/deploy-work` (resolved private state:
+  `/var/lib/private/lmm-api-go/deploy-work`)
 
 Export the emitted task-specific `TMPDIR`, `GOCACHE`, `GOMODCACHE`,
 `CARGO_TARGET_DIR`, and `BUN_INSTALL_CACHE_DIR` values for every build or
@@ -93,6 +94,59 @@ kill user applications, merely to satisfy a metric. This policy does not weaken
 the SQLite prohibition; fresh marker-owned PostgreSQL and Valkey requirements;
 production backup, rollback, and identity controls; workspace ownership; or
 heavy-work serialization.
+
+## Production resource safety lines and performance cadence
+
+The production host is a small 20 GiB root filesystem with a sub-1 GiB RAM
+budget. Treat these lines as release gates, not as targets to approach:
+
+| Signal | Green | Warning / action | Stop or emergency |
+| --- | --- | --- | --- |
+| root filesystem used | `<70%` | `70-80%`: no new heavy build until the workspace is pruned and headroom is rechecked | `>=80%`: stop builds/releases; `>=90%` or any write failure: incident cleanup first |
+| root inode used | `<70%` | `70-80%`: investigate generated-file growth | `>=80%`: stop builds/releases; `>=90%`: emergency cleanup |
+| `MemAvailable` | `>=30%` of RAM | `20-30%` for 5 minutes: serialize work and reduce concurrency | `<20%`, OOM, or sustained reclaim/thrash: stop mutation |
+| swap used | `<10%` | `10-25%`: no additional heavy work without a fresh check | `>25%` or swap-in/out churn with latency: stop mutation |
+| CPU / load | `<70%` for 5 minutes | `70-85%`: one heavy job only | `>85%` for 5 minutes, `>95%` for 2 minutes, or required requests timing out: stop mutation |
+| service memory cgroup | below `MemoryHigh=320M` | at/above high for 5 minutes: investigate | `MemoryMax=384M`, repeated restart, or OOM: rollback/incident path |
+
+The filesystem line is absolute: a successful build is not safe when it
+leaves less free space than the largest candidate package plus three backup
+copies and 1 GiB of operating headroom. On this host, keep at least 4 GiB
+free before starting a production package/backup transaction. A yellow metric
+may be observed and reported, but a red metric blocks the mutation.
+
+Run a read-only baseline before every production mutation and again at least
+every 30 seconds during a build or backup transfer:
+
+```bash
+df -h /; df -i /
+free -h
+vmstat 1 5
+systemctl show lmm-api-go.service -p ActiveState -p SubState -p MainPID \
+  -p NRestarts -p MemoryCurrent -p MemoryHigh -p MemoryMax -p MemorySwapMax
+pg_isready
+/usr/bin/lmm-api-go request --base-url http://127.0.0.1:3000 \
+  --path /api/status --show-status --timeout 10s
+/usr/bin/lmm-api-go request --base-url http://127.0.0.1:3000 \
+  --path /api/livez --show-status --timeout 10s
+journalctl --no-pager -u lmm-api-go.service -u nginx.service \
+  --since '5 minutes ago' -p err..alert
+```
+
+After a switch, repeat native CLI status/livez probes three times, verify
+`NRestarts` is unchanged, check PostgreSQL and Valkey readiness, inspect the
+error journal, and record disk/RAM/swap before confirming. Continue a
+read-only check at least every 15 minutes while a release is in its watchdog
+window, and at least hourly during normal operation. A failed check is an
+incident signal; do not hide it by clearing journals or restarting blindly.
+
+The production package also owns the regional edge policy. Its Nginx templates
+and Go-rendered access error page are installed from
+`/usr/share/lmm-api-go/edge-policy` by the native transaction; do not edit
+`/etc/nginx/site-policy`, install a second GeoIP shell hook, or keep the old
+APNIC prefix units. Use `lmm-api-go deploy production edge-policy verify` after
+an activation. The monthly DB-IP update is `lmm-api-go geoip update` via the
+package-owned `geoip2-country-update.timer`.
 
 ## Inspect without exposing secrets
 
@@ -173,6 +227,59 @@ Run [scripts/verify-backup-set.sh](scripts/verify-backup-set.sh). Do not mutate
 the target unless it succeeds. Encrypt every archive that can contain secrets
 before it leaves the target. Never print archive contents or secret values.
 
+## Canonical backup and workspace layout
+
+Use these exact, marker-owned paths; do not invent a per-run path under `/tmp`:
+
+| Scope | Canonical path | Retention rule |
+| --- | --- | --- |
+| controller build/workspace | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>` | keep the marker and final status; remove `staging`, `tmp`, and caches after terminal state |
+| controller durable backup | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` | encrypted controller copy, `manifest.env`, `SHA256SUMS`; never delete active/latest-known-good |
+| production target workspace | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | keep only marker/status after confirmation; staging is disposable |
+| production target backup | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | root-only, checksum-verified target snapshot; retain the configured latest-known-good set |
+| off-host backup | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on `ArchCzy` | encrypted controller/off-host archives; verify checksum after transfer |
+
+The controller workspace is not a backup. Before removing it, prove the
+durable controller, target, and off-host copies exist, decrypt verification
+passes, and the transaction is `CONFIRMED` or `ROLLED_BACK`. Production
+cleanup may remove only the exact `<deployment-id>/staging`, `<deployment-id>/tmp`,
+and cache paths; it must not remove a backup root, release root, active
+workspace, transaction lock, or unresolved glob. Use mode `0700` for private
+directories and `0600` for manifests, status, encrypted archives, and identity
+files. Keep package bytes in the release package store or durable backup, not
+in a long-lived staging tree.
+
+If the root filesystem reaches the warning line, stop creating new workspaces,
+measure each candidate directory, and prune only terminal, inactive LMM
+workspaces after checksum verification. If it reaches the stop line, repair
+storage before touching application state. Never “solve” a full disk with
+`rm -rf /tmp`, a wildcard over `/var`, journal deletion, or deletion of the
+database/cache.
+
+## Production mutation checklist
+
+1. Record current UTC time, Git revision, remote `origin/main`, installed
+   package/version, service PID, backend, PostgreSQL/Valkey identity, and the
+   resource baseline. Verify SSH alias `ArchDmit` resolves to `arch-dmit` and
+   `ArchCzy` is the intended off-host.
+2. Require a clean source checkout whose HEAD equals `origin/main`. Create one
+   marker-owned controller workspace and export all build caches into it.
+3. Build once, record artifact/package/frontend SHA-256, and run Go/frontend
+   tests plus the native CLI preflight. Do not build on the production host.
+4. Create target, controller, and off-host backups; verify encrypted archives
+   offline and compare every transferred checksum. A missing or unverified
+   copy is a hard stop.
+5. Arm the persistent 600-second rollback watchdog, apply the immutable package,
+   run migrations only when N/N-1 compatible, and observe for at least 120
+   seconds while checking the resource and error-journal gates.
+6. Confirm only the exact deployment ID after three successful native CLI
+   status/livez checks, stable service restart count, clean DB/cache readiness,
+   and acceptable resource headroom. Confirming disables the watchdog; if any
+   gate fails, leave it armed and use the scoped rollback path.
+7. After a terminal state, remove remote/controller staging and caches by exact
+   path, retain status plus durable backups, and re-run disk/inode/memory probes.
+   Record what was removed and the remaining free-space margin.
+
 ## Arm rollback before switching
 
 Production and production-like test switches require a persistent systemd
@@ -200,6 +307,15 @@ only for the exact marker-owned deployment directory after a durable
 `CONFIRMED` or `ROLLED_BACK` state. Preview first. Never clean a broad temp
 directory, backup root, release root, unresolved variable, glob, symlink, or
 another deployment's workspace.
+
+For production, a terminal workspace must not retain package staging or build
+caches: remove only its exact `staging`, `tmp`, and cache children after the
+durable status and three backup copies are verified. Retain the marker and
+status as a small audit record. A scheduled cleanup may prune only terminal,
+inactive workspaces older than 24 hours, oldest first, and must stop before the
+filesystem crosses the 70% warning line. If the host is already above that
+line, run a measured, exact-path cleanup and recheck `df`, inodes, RAM, swap,
+service state, and database readiness before any other production operation.
 
 ## Report the outcome
 

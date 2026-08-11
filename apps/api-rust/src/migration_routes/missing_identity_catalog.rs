@@ -31,6 +31,7 @@ const DEFAULT_USABLE_GROUPS: &[(&str, &str)] = &[("default", "默认分组"), ("
 const DEFAULT_GROUP_RATIOS: &[(&str, f64)] = &[("default", 1.0), ("vip", 1.0), ("svip", 1.0)];
 const DEFAULT_GROUP_GROUP_RATIOS: &[(&str, &[(&str, f64)])] = &[("vip", &[("edit_this", 0.9)])];
 const DEFAULT_AUTO_GROUPS: &[&str] = &["default"];
+const TOKEN_PATH: &str = "/api/user/token";
 
 /// Listener dependencies for the identity-catalogue route family.
 #[derive(Clone)]
@@ -70,6 +71,15 @@ pub fn public_router(state: IdentityCatalogState) -> Router {
 /// shared dashboard-auth service accepts the request.
 pub fn protected_read_router(state: IdentityCatalogState) -> Router {
     protected_read_routes().with_state(state)
+}
+
+/// Mounts only personal-token generation for the normal auth integration
+/// tests. The handler still performs the same server-side auth and developer
+/// access checks as the combined catalogue router.
+pub fn token_router(state: IdentityCatalogState) -> Router {
+    Router::new()
+        .route(TOKEN_PATH, get(generate_access_token))
+        .with_state(state)
 }
 
 fn public_routes() -> Router<IdentityCatalogState> {

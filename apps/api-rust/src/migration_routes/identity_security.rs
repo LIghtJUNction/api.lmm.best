@@ -42,6 +42,8 @@ use secrecy::SecretString;
 
 const ADMIN_ROLE: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const SESSIONS_PATH: &str = "/api/user/sessions";
+const PASSKEY_PATH: &str = "/api/user/passkey";
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -950,6 +952,23 @@ pub fn registration_router(state: IdentitySecurityState) -> Router {
         .map_or(MAX_BODY_BYTES, AnonymousRequestSecurity::body_limit_bytes);
     registration_route()
         .layer(DefaultBodyLimit::max(body_limit_bytes))
+        .with_state(state)
+}
+
+/// Builds only the read-only dashboard session inventory route for the
+/// normal-listener compatibility tests. Session mutations remain isolated in
+/// the full candidate router.
+pub fn sessions_read_router(state: IdentitySecurityState) -> Router {
+    Router::new()
+        .route(SESSIONS_PATH, get(list_sessions))
+        .with_state(state)
+}
+
+/// Builds only the authenticated passkey status read. Registration,
+/// verification, and deletion remain isolated in the full candidate router.
+pub fn passkey_read_router(state: IdentitySecurityState) -> Router {
+    Router::new()
+        .route(PASSKEY_PATH, get(passkey_status))
         .with_state(state)
 }
 

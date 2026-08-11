@@ -395,6 +395,7 @@ CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), use
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 CREATE TABLE channels (id BIGINT PRIMARY KEY, type INTEGER DEFAULT 0, status INTEGER DEFAULT 1);
 CREATE TABLE abilities ("group" VARCHAR(64), model VARCHAR(255), channel_id BIGINT, enabled BOOLEAN, priority INTEGER DEFAULT 0, weight INTEGER DEFAULT 0, PRIMARY KEY ("group", model, channel_id));
+ALTER SCHEMA lmm_test_models_rust OWNER TO lmm_test_models_runtime;
 GRANT USAGE ON SCHEMA lmm_test_models_rust TO lmm_test_models_runtime;
 GRANT SELECT ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, tokens, channels, abilities TO lmm_test_models_runtime;
 GRANT UPDATE ON users TO lmm_test_models_runtime;

@@ -84,6 +84,11 @@ const TEST_INSTANCE_COMPOSED_MODULES: &[(&str, &str)] = &[
     ("relay_misc_frozen", "relay_misc_routes"),
 ];
 
+/// Some migration modules provide a production dependency boundary rather
+/// than owning an HTTP route constructor. They still need a direct integration
+/// test so they cannot silently disappear from the migration inventory.
+const ADAPTER_ONLY_MODULES: &[&str] = &["relay_anthropic_gemini_postgres"];
+
 #[test]
 fn every_migration_route_module_should_have_a_router_integration_test() {
     let root = manifest_dir();
@@ -123,11 +128,15 @@ fn every_migration_route_module_should_have_a_router_integration_test() {
         let source =
             fs::read_to_string(modules_dir.join(format!("{module}.rs"))).expect("migration source");
         let constructors = router_constructors(&source);
+        let direct_test = tests_dir.join(format!("migration_{module}.rs"));
+        if constructors.is_empty() && ADAPTER_ONLY_MODULES.contains(&module.as_str()) {
+            assert!(direct_test.is_file(), "{module} is missing its adapter test");
+            continue;
+        }
         assert!(
             !constructors.is_empty(),
             "{module} exposes no public router constructor"
         );
-        let direct_test = tests_dir.join(format!("migration_{module}.rs"));
         let composed_marker = TEST_INSTANCE_COMPOSED_MODULES
             .iter()
             .find_map(|(covered_module, marker)| (*covered_module == module).then_some(*marker));

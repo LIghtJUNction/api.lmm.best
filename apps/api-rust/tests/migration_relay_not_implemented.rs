@@ -341,7 +341,7 @@ async fn model_delete_authenticates_then_returns_exact_501_without_channel_selec
         )
         .await
         .expect("router response");
-    assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(rejected.status(), StatusCode::NOT_FOUND);
     assert_eq!(rejected_backend.authenticated.load(Ordering::Relaxed), 0);
     assert_eq!(rejected_backend.selected.load(Ordering::Relaxed), 0);
     assert_eq!(rejected_backend.invoked.load(Ordering::Relaxed), 0);

@@ -8,8 +8,9 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::to_bytes,
-    extract::{Path, Request, State},
+    extract::{Extension, Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, put},
 };
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use crate::auth::{AuthErrorKind, DashboardAuth};
 
 const ROLE_ROOT: i64 = 100;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Authenticated identity supplied by the listener after token validation.
 #[derive(Clone, Copy, Debug)]
@@ -143,7 +145,32 @@ pub fn router(state: ProfileState) -> Router {
             "/api/user/bindings/{binding_type}",
             delete(clear_self_oauth_binding),
         )
+        // Go's UserAuth runs before the handler's body binding and publishes
+        // Auth-Version on every downstream response. Inject the verified
+        // principal once so profile handlers do not re-query auth or trust
+        // client-supplied identity headers.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            profile_auth_boundary,
+        ))
         .with_state(state)
+}
+
+async fn profile_auth_boundary(
+    State(state): State<ProfileState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let identity = match authenticated(&state, request.headers()).await {
+        Ok(identity) => identity,
+        Err(error) => return error.into_response(),
+    };
+    request.extensions_mut().insert(identity);
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 fn self_oauth_binding_column(binding_type: &str) -> Option<(&'static str, &'static str)> {
@@ -160,10 +187,9 @@ fn self_oauth_binding_column(binding_type: &str) -> Option<(&'static str, &'stat
 
 async fn clear_self_oauth_binding(
     State(state): State<ProfileState>,
-    headers: HeaderMap,
+    Extension(identity): Extension<ProfileIdentity>,
     Path(binding_type): Path<String>,
 ) -> Result<Response, ProfileError> {
-    let identity = authenticated(&state, &headers).await?;
     let Some((column, provider)) = self_oauth_binding_column(&binding_type) else {
         // Go's controller keeps this legacy API error at HTTP 200 and exposes
         // only the success/message envelope for invalid binding names.
@@ -217,10 +243,10 @@ async fn clear_self_oauth_binding(
 
 async fn update_self(
     State(state): State<ProfileState>,
+    Extension(identity): Extension<ProfileIdentity>,
     request: Request,
 ) -> Result<Response, ProfileError> {
     let request_locale = locale(request.headers());
-    let identity = authenticated(&state, request.headers()).await?;
     let mut request = request_object(request).await?;
     if request.contains_key("sidebar_modules") || request.contains_key("language") {
         return update_self_setting(&state, identity.user_id, &mut request, request_locale).await;
@@ -314,9 +340,8 @@ async fn update_self_setting(
 
 async fn delete_self(
     State(state): State<ProfileState>,
-    headers: HeaderMap,
+    Extension(identity): Extension<ProfileIdentity>,
 ) -> Result<Json<Success<()>>, ProfileError> {
-    let identity = authenticated(&state, &headers).await?;
     let mut transaction = state
         .pg
         .begin()
@@ -423,10 +448,26 @@ impl ProfileError {
             message: "identity profile operation failed",
         }
     }
+
+    fn auth_internal(locale: LegacyLocale) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: Some("AUTH_INTERNAL_ERROR"),
+            message: locale.database_error(),
+        }
+    }
 }
 
 impl IntoResponse for ProfileError {
     fn into_response(self) -> Response {
+        // Gin's ApiError/ApiErrorI18n deliberately keep profile business and
+        // database failures at HTTP 200. Only middleware-auth failures carry
+        // an explicit auth code and retain their transport status.
+        let status = if self.code.is_some() {
+            self.status
+        } else {
+            StatusCode::OK
+        };
         let mut body = serde_json::Map::from_iter([
             ("success".to_owned(), Value::Bool(false)),
             ("message".to_owned(), Value::String(self.message.to_owned())),
@@ -434,15 +475,14 @@ impl IntoResponse for ProfileError {
         if let Some(code) = self.code {
             body.insert("code".to_owned(), Value::String(code.to_owned()));
         }
-        (self.status, Json(Value::Object(body))).into_response()
+        (status, Json(Value::Object(body))).into_response()
     }
 }
 
 async fn get_aff_code(
     State(state): State<ProfileState>,
-    headers: HeaderMap,
+    Extension(identity): Extension<ProfileIdentity>,
 ) -> Result<Json<Success<String>>, ProfileError> {
-    let identity = authenticated(&state, &headers).await?;
     let existing =
         sqlx::query_scalar::<_, Option<String>>("SELECT aff_code FROM users WHERE id = $1")
             .bind(identity.user_id)
@@ -485,10 +525,10 @@ fn generate_aff_code() -> String {
 
 async fn update_setting(
     State(state): State<ProfileState>,
+    Extension(identity): Extension<ProfileIdentity>,
     request: Request,
 ) -> Result<Response, ProfileError> {
     let request_locale = locale(request.headers());
-    let identity = authenticated(&state, request.headers()).await?;
     let object = match request_object(request).await {
         Ok(object) => object,
         Err(_) => return Err(ProfileError::legacy(request_locale.invalid_parameters())),
@@ -971,7 +1011,7 @@ async fn authenticated(
         .await
         .map_err(|error| match error {
             ProfileAuthError::Unauthorized => ProfileError::unauthorized(locale(headers)),
-            ProfileAuthError::Internal => ProfileError::internal(),
+            ProfileAuthError::Internal => ProfileError::auth_internal(locale(headers)),
         })
 }
 
@@ -1005,6 +1045,14 @@ impl LegacyLocale {
             Self::En => "Unauthorized, invalid access token",
             Self::ZhCn => "无权进行此操作，access token 无效",
             Self::ZhTw => "無權進行此操作，access token 無效",
+        }
+    }
+
+    fn database_error(self) -> &'static str {
+        match self {
+            Self::En => "Database error, please contact the administrator",
+            Self::ZhCn => "数据库出错，请联系管理员",
+            Self::ZhTw => "資料庫出錯，請聯繫管理員",
         }
     }
 

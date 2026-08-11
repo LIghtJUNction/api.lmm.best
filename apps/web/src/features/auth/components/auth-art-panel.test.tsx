@@ -42,7 +42,15 @@ for (const key of [
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+const { createInstance } = await import('i18next')
+const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { AuthArtPanel } = await import('./auth-art-panel')
+
+const i18n = createInstance()
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: { en: { translation: {} } },
+})
 
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
@@ -53,7 +61,13 @@ async function renderArtwork() {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
-  await act(async () => root.render(<AuthArtPanel />))
+  await act(async () =>
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <AuthArtPanel />
+      </I18nextProvider>
+    )
+  )
   return { container, root }
 }
 
@@ -61,60 +75,28 @@ afterEach(() => document.body.replaceChildren())
 after(() => domWindow.close())
 
 describe('AuthArtPanel', () => {
-  test('uses one ivory core and broad black handoff gestures', async () => {
+  test('renders a current Responses API example with a live visual signal', async () => {
     const rendered = await renderArtwork()
+    const preview = rendered.container.querySelector(
+      '[data-live-request-preview]'
+    )
+
+    assert.ok(preview)
     assert.equal(
-      rendered.container.querySelectorAll('.auth-art-carrier').length,
-      0
+      preview.querySelector('[data-request-endpoint]')?.textContent?.trim(),
+      '/v1/responses'
     )
     assert.equal(
-      rendered.container.querySelectorAll('.auth-art-core').length,
-      1
+      preview.querySelector('[data-request-model]')?.textContent?.trim(),
+      'gpt-5.6-terra'
     )
-    assert.equal(
-      rendered.container.querySelectorAll('.auth-art-left-gesture').length,
-      1
-    )
-    assert.equal(
-      rendered.container.querySelectorAll('.auth-art-right-gesture').length,
-      1
-    )
-    assert.equal(rendered.container.querySelectorAll('[data-field]').length, 0)
-    assert.equal(
-      rendered.container.querySelectorAll('svg[aria-hidden="true"]').length,
-      1
-    )
-    assert.equal(
-      rendered.container.querySelectorAll('.auth-art-clay').length,
-      1
-    )
+    assert.ok(preview.querySelector('.auth-art-request-sweep'))
+    assert.ok(preview.querySelector('.auth-art-request-pulse'))
 
     await act(async () => rendered.root.unmount())
   })
 
-  test('keeps the three insight choices keyboard-accessible', async () => {
-    const rendered = await renderArtwork()
-    const tabs = [
-      ...rendered.container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-    ]
-    assert.equal(tabs.length, 3)
-    assert.equal(tabs[0].getAttribute('aria-selected'), 'true')
-    assert.equal(tabs[1].getAttribute('aria-selected'), 'false')
-
-    await act(async () => tabs[1].click())
-    assert.equal(tabs[0].getAttribute('aria-selected'), 'false')
-    assert.equal(tabs[1].getAttribute('aria-selected'), 'true')
-    assert.equal(
-      rendered.container
-        .querySelector('[role="tabpanel"]')
-        ?.getAttribute('aria-labelledby'),
-      'auth-art-tab-1'
-    )
-
-    await act(async () => rendered.root.unmount())
-  })
-
-  test('contains no technical-web motion machinery or hairline art rules', () => {
+  test('does not regress to the retired gpt-4o static example', () => {
     const source = readFileSync(
       new URL('./auth-art-panel.tsx', import.meta.url),
       'utf8'
@@ -124,31 +106,10 @@ describe('AuthArtPanel', () => {
       'utf8'
     )
 
-    for (const forbidden of [
-      'CONTRIBUTION_PATHS',
-      'CONTRIBUTION_NODES',
-      'requestAnimationFrame',
-      'pointermove',
-      'data-field',
-      'auth-art-foundation',
-    ]) {
-      assert.equal(source.includes(forbidden), false, forbidden)
-    }
-    assert.equal(source.includes('auth-art-carrier'), false)
-    assert.equal(
-      styles.includes('.auth-art-surface svg path[data-field]'),
-      false
-    )
-    assert.equal(styles.includes('stroke-width: 12'), true)
-    assert.equal(styles.includes('stroke-width: 8'), false)
-    assert.equal(
-      styles.includes('--art-surface: var(--forge-cactus-dark);'),
-      true
-    )
-    assert.equal(styles.includes('--art-field: var(--forge-paper-dark);'), true)
-    assert.equal(
-      styles.includes('--art-foundation: var(--forge-ink-light);'),
-      true
-    )
+    assert.equal(source.includes('gpt-4o'), false)
+    assert.match(source, /REQUEST_MODELS/)
+    assert.match(source, /setInterval/)
+    assert.match(styles, /@keyframes auth-art-request-sweep/)
+    assert.match(styles, /\.auth-art-request-pulse/)
   })
 })

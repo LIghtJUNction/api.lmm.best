@@ -33,9 +33,8 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/about", controller.GetAbout)
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
-		// Nginx auth_request target for the mainland-China direct-access gate.
-		// The handler additionally requires a loopback peer and a valid dashboard
-		// credential, so this route is not a public policy oracle.
+		// Compatibility alias for older edge configurations. New package-managed
+		// Nginx uses /internal/access-ip-policy outside the API rate-limit group.
 		apiRouter.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
@@ -70,6 +69,7 @@ func SetApiRouter(router *gin.Engine) {
 
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UniversalVerify)
+		apiRouter.POST("/verify/email", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.EmailVerificationRateLimit(), middleware.DisableCache(), controller.SendSecurityEmailVerification)
 
 		userRoute := apiRouter.Group("/user")
 		{
@@ -98,6 +98,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.PUT("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SetPersonalAccessIP)
 				selfRoute.DELETE("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.DeletePersonalAccessIP)
 				selfRoute.GET("/models", controller.GetUserModels)
+				selfRoute.GET("/developer-access/request", controller.GetDeveloperAccessRequest)
+				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), controller.SubmitDeveloperAccessRequest)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
@@ -162,6 +164,14 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 			}
+		}
+
+		developerAccessRequestRoute := apiRouter.Group("/developer-access/requests")
+		developerAccessRequestRoute.Use(middleware.AdminAuth())
+		{
+			developerAccessRequestRoute.GET("", controller.ListDeveloperAccessRequests)
+			developerAccessRequestRoute.POST("/:id/approve", middleware.CriticalRateLimit(), controller.ApproveDeveloperAccessRequest)
+			developerAccessRequestRoute.POST("/:id/reject", middleware.CriticalRateLimit(), controller.RejectDeveloperAccessRequest)
 		}
 
 		// Subscription billing (plans, purchase, admin management)
@@ -316,6 +326,8 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/projects/:id/pause", controller.PauseOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/resume", controller.ResumeOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/close", middleware.CriticalRateLimit(), controller.CloseOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/archive", controller.ArchiveOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/unarchive", controller.UnarchiveOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/accept", controller.AcceptOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/submit", controller.SubmitOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/withdraw", controller.WithdrawOpenSourceBountyChallenge)

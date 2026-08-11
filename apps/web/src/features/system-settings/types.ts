@@ -179,6 +179,14 @@ export type ContentSettings = {
   DataExportDefaultTime: string
   DataExportInterval: number
   Chats: string
+  AssistantEnabled: boolean
+  AssistantModel: string
+  AssistantWeeklyCreditUSD: number
+  AssistantAgentLoopEnabled: boolean
+  AssistantMaxSteps: number
+  AssistantTimeoutSeconds: number
+  AssistantCacheEnabled: boolean
+  AssistantCacheTTLMinutes: number
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean

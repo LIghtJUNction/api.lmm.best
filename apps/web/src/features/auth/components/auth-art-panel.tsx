@@ -17,16 +17,32 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Braces, Check, Gauge, ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-const REQUEST_LINES = [
-  ['POST', '/v1/chat/completions'],
-  ['model', 'gpt-4o'],
-  ['stream', 'true'],
-] as const
+const REQUEST_MODELS = ['gpt-5.6-terra', 'gpt-5.4', 'gemini-2.5-flash'] as const
+
+const REQUEST_ENDPOINT = '/v1/responses'
+const REQUEST_MODEL_ROTATION_MS = 4200
 
 export function AuthArtPanel() {
   const { t } = useTranslation()
+  const [requestModelIndex, setRequestModelIndex] = useState(0)
+
+  useEffect(() => {
+    const rotation = window.setInterval(() => {
+      setRequestModelIndex((current) => (current + 1) % REQUEST_MODELS.length)
+    }, REQUEST_MODEL_ROTATION_MS)
+
+    return () => window.clearInterval(rotation)
+  }, [])
+
+  const requestModel = REQUEST_MODELS[requestModelIndex]
+  const requestLines = [
+    ['POST', REQUEST_ENDPOINT],
+    ['model', requestModel],
+    ['stream', 'true'],
+  ] as const
 
   const capabilities = [
     {
@@ -65,24 +81,41 @@ export function AuthArtPanel() {
           )}
         </p>
 
-        <div className='bg-background/65 mt-9 overflow-hidden rounded-2xl border'>
+        <div
+          className='bg-background/65 relative mt-9 overflow-hidden rounded-2xl border'
+          data-live-request-preview
+        >
+          <span
+            aria-hidden='true'
+            className='auth-art-request-sweep bg-primary/60 pointer-events-none absolute inset-x-0 top-0 h-px'
+          />
           <div className='border-b px-5 py-3 text-xs font-semibold tracking-[0.12em] uppercase'>
             {t('Request preview')}
           </div>
           <dl className='divide-y font-mono text-sm'>
-            {REQUEST_LINES.map(([label, value]) => (
+            {requestLines.map(([label, value]) => (
               <div
                 className='grid grid-cols-[5.5rem_1fr] gap-4 px-5 py-3.5'
-                key={label}
+                key={`${label}-${value}`}
               >
                 <dt className='text-muted-foreground'>{label}</dt>
-                <dd className='truncate'>{value}</dd>
+                <dd
+                  className='auth-art-request-value truncate'
+                  data-request-endpoint={label === 'POST' ? value : undefined}
+                  data-request-model={label === 'model' ? value : undefined}
+                >
+                  {value}
+                </dd>
               </div>
             ))}
           </dl>
           <div className='bg-muted/40 flex items-center justify-between gap-4 border-t px-5 py-3.5 text-sm'>
             <span className='text-muted-foreground'>{t('Response')}</span>
             <span className='text-success flex items-center gap-2 font-medium'>
+              <span
+                aria-hidden='true'
+                className='auth-art-request-pulse bg-success size-1.5 rounded-full'
+              />
               <Check className='size-4' aria-hidden='true' />
               200 · {t('stream ready')}
             </span>

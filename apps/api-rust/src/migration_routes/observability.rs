@@ -13,7 +13,7 @@ use std::{
 use async_trait::async_trait;
 use axum::{
     extract::{RawQuery, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -29,6 +29,7 @@ use crate::auth::DashboardAuth;
 const ADMIN_ROLE: i64 = 10;
 const ROOT_ROLE: i64 = 100;
 const MAX_SELF_RANGE_SECONDS: i64 = 30 * 24 * 60 * 60;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 // Go's log queries apply each timestamp predicate only when that query value
 // is non-zero.  Keeping this separate from the bounded data/stat queries
 // prevents a no-parameter log read from becoming `created_at <= 0`.
@@ -1806,7 +1807,8 @@ async fn execute_authorized(
     operation: ObservabilityOperation,
     query: BTreeMap<String, String>,
 ) -> Response {
-    match state
+    let dashboard_user = matches!(&principal, ObservabilityPrincipal::User { .. });
+    let response = match state
         .store
         .execute(ObservabilityCall {
             operation,
@@ -1818,6 +1820,11 @@ async fn execute_authorized(
         Ok(data) => success(data),
         Err(ObservabilityStoreError::Legacy(message)) => failure(StatusCode::OK, message),
         Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    if dashboard_user {
+        with_auth_version(response)
+    } else {
+        response
     }
 }
 
@@ -1827,7 +1834,8 @@ async fn execute_authorized_data_only(
     operation: ObservabilityOperation,
     query: BTreeMap<String, String>,
 ) -> Response {
-    match state
+    let dashboard_user = matches!(&principal, ObservabilityPrincipal::User { .. });
+    let response = match state
         .store
         .execute(ObservabilityCall {
             operation,
@@ -1838,6 +1846,11 @@ async fn execute_authorized_data_only(
     {
         Ok(data) => success_data(data),
         Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    if dashboard_user {
+        with_auth_version(response)
+    } else {
+        response
     }
 }
 
@@ -1853,6 +1866,21 @@ async fn execute_raw(
         Err(response) => return response,
     };
     execute_authorized(state, principal, operation, parse_query(raw_query)).await
+}
+
+fn with_auth_version(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+fn with_auth_version_for_user(response: Response, principal: &ObservabilityPrincipal) -> Response {
+    if matches!(principal, ObservabilityPrincipal::User { .. }) {
+        with_auth_version(response)
+    } else {
+        response
+    }
 }
 
 fn parse_query(raw_query: RawQuery) -> BTreeMap<String, String> {

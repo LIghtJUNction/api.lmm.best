@@ -25,7 +25,11 @@ import {
   isVerificationRequiredError,
 } from '@/lib/secure-verification'
 
-import { checkVerificationMethods, verify } from '../api'
+import {
+  checkVerificationMethods,
+  sendSecurityEmailVerification,
+  verify,
+} from '../api'
 import type {
   SecureVerificationState,
   StartVerificationOptions,
@@ -33,6 +37,7 @@ import type {
   VerificationMethod,
   VerificationMethods,
 } from '../types'
+import { getPreferredVerificationMethods } from '../types'
 
 type ApiCall = ((proofToken?: string) => Promise<unknown>) | null
 
@@ -41,6 +46,7 @@ interface InternalState extends SecureVerificationState {
 }
 
 const defaultMethods: VerificationMethods = {
+  hasEmail: false,
   has2FA: false,
   hasPasskey: false,
   passkeySupported: false,
@@ -63,6 +69,8 @@ export function useSecureVerification(
   const [methods, setMethods] = useState<VerificationMethods>(defaultMethods)
   const [state, setState] = useState<InternalState>(initialState)
   const [open, setOpen] = useState(false)
+  const [emailCodeSending, setEmailCodeSending] = useState(false)
+  const [emailCodeSent, setEmailCodeSent] = useState(false)
 
   const fetchVerificationMethods = useCallback(async () => {
     const result = await checkVerificationMethods()
@@ -77,6 +85,7 @@ export function useSecureVerification(
   const reset = useCallback(() => {
     setState(initialState)
     setOpen(false)
+    setEmailCodeSent(false)
   }, [])
 
   const startVerification = useCallback(
@@ -84,39 +93,30 @@ export function useSecureVerification(
       apiCall: (proofToken?: string) => Promise<unknown>,
       config: StartVerificationOptions
     ) => {
-      const { preferredMethod, scope, title, description } = config
-      const availableMethods = await fetchVerificationMethods()
+      const { scope, title, description } = config
+      const availableMethods = getPreferredVerificationMethods(
+        await fetchVerificationMethods()
+      )
 
-      if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
+      if (!availableMethods.hasEmail && !availableMethods.hasPasskey) {
         toast.error(
           i18next.t(
-            'Please enable Two-factor Authentication or Passkey before proceeding'
+            'Please bind an email or set up a Passkey before proceeding'
           )
         )
         onError?.(
           new Error(
-            'No verification methods available. Enable 2FA or Passkey to continue.'
+            'No verification methods available. Bind an email or set up a Passkey to continue.'
           )
         )
         return false
       }
 
-      let defaultMethod: VerificationMethod | null = preferredMethod ?? null
-      if (
-        (defaultMethod === 'passkey' &&
-          (!availableMethods.hasPasskey ||
-            !availableMethods.passkeySupported)) ||
-        (defaultMethod === '2fa' && !availableMethods.has2FA)
-      ) {
-        defaultMethod = null
-      }
-      if (!defaultMethod) {
-        if (availableMethods.hasPasskey && availableMethods.passkeySupported) {
-          defaultMethod = 'passkey'
-        } else if (availableMethods.has2FA) {
-          defaultMethod = '2fa'
-        }
-      }
+      const defaultMethod: VerificationMethod | null = availableMethods.hasEmail
+        ? 'email'
+        : availableMethods.hasPasskey
+          ? 'passkey'
+          : null
 
       setState((prev) => ({
         ...prev,
@@ -126,11 +126,37 @@ export function useSecureVerification(
         title,
         description,
       }))
+      setEmailCodeSent(false)
       setOpen(true)
       return true
     },
     [fetchVerificationMethods, onError]
   )
+
+  const sendEmailCode = useCallback(async () => {
+    setEmailCodeSending(true)
+    try {
+      const result = await sendSecurityEmailVerification()
+      setEmailCodeSent(true)
+      toast.success(
+        result.email_hint
+          ? i18next.t('Verification code sent to {{email}}', {
+              email: result.email_hint,
+            })
+          : i18next.t('Verification code sent')
+      )
+      return result
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : i18next.t('Failed to send verification email')
+      toast.error(message)
+      throw error
+    } finally {
+      setEmailCodeSending(false)
+    }
+  }, [])
 
   const executeVerification = useCallback(
     async (method?: VerificationMethod, code?: string) => {
@@ -218,20 +244,25 @@ export function useSecureVerification(
 
   const canUseMethod = useCallback(
     (method: VerificationMethod) => {
-      if (method === '2fa') return methods.has2FA
-      if (method === 'passkey') {
-        return methods.hasPasskey && methods.passkeySupported
-      }
+      const preferredMethods = getPreferredVerificationMethods(methods)
+      if (method === 'email') return preferredMethods.hasEmail
+      if (method === 'passkey') return preferredMethods.hasPasskey
       return false
     },
     [methods]
   )
 
   const recommendedMethod = useMemo<VerificationMethod | null>(() => {
-    if (methods.hasPasskey && methods.passkeySupported) return 'passkey'
-    if (methods.has2FA) return '2fa'
+    const preferredMethods = getPreferredVerificationMethods(methods)
+    if (preferredMethods.hasEmail) return 'email'
+    if (preferredMethods.hasPasskey) return 'passkey'
     return null
   }, [methods])
+
+  const preferredMethods = useMemo(
+    () => getPreferredVerificationMethods(methods),
+    [methods]
+  )
 
   return {
     open,
@@ -241,6 +272,9 @@ export function useSecureVerification(
     startVerification,
     executeVerification,
     cancel,
+    sendEmailCode,
+    emailCodeSending,
+    emailCodeSent,
     reset,
     setCode,
     switchMethod,
@@ -248,7 +282,8 @@ export function useSecureVerification(
     fetchVerificationMethods,
     canUseMethod,
     recommendedMethod,
-    hasAnyMethod: methods.has2FA || methods.hasPasskey,
+    hasAnyMethod: preferredMethods.hasEmail || preferredMethods.hasPasskey,
+    preferredMethods,
     isLoading: state.loading,
     currentMethod: state.method,
     code: state.code,

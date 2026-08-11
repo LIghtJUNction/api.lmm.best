@@ -13,7 +13,8 @@ use lmm_api_rs::{
     },
     migration_routes::control_admin::{
         ControlAdminAuthorizer, ControlAdminIdentity, ControlAdminState,
-        DashboardControlAdminAuthorizer, OAuthDiscoveryClient, control_admin_router,
+        DashboardControlAdminAuthorizer, OAuthDiscoveryClient, control_admin_read_router,
+        control_admin_router,
     },
 };
 use secrecy::{ExposeSecret, SecretString};
@@ -58,6 +59,17 @@ fn router(authorizer: Arc<dyn ControlAdminAuthorizer>) -> axum::Router {
         .connect_lazy("postgresql://lmm:lmm@127.0.0.1:1/lmm")
         .expect("lazy PostgreSQL pool");
     control_admin_router(ControlAdminState::new(
+        pg,
+        authorizer,
+        Arc::new(NoopDiscovery),
+    ))
+}
+
+fn read_router(authorizer: Arc<dyn ControlAdminAuthorizer>) -> axum::Router {
+    let pg = PgPoolOptions::new()
+        .connect_lazy("postgresql://lmm:lmm@127.0.0.1:1/lmm")
+        .expect("lazy PostgreSQL pool");
+    control_admin_read_router(ControlAdminState::new(
         pg,
         authorizer,
         Arc::new(NoopDiscovery),
@@ -196,4 +208,19 @@ async fn admin_identity_cannot_enter_root_control_routes() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let body = response_json(response).await;
     assert_eq!(body["code"], "AUTH_INSUFFICIENT_PRIVILEGE");
+}
+
+#[tokio::test]
+async fn read_only_control_mount_keeps_the_dashboard_auth_boundary() {
+    let response = read_router(Arc::new(RejectingAuthorizer))
+        .oneshot(
+            Request::get("/api/system-task/list")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response_json(response).await["code"], "AUTH_UNAUTHORIZED");
 }

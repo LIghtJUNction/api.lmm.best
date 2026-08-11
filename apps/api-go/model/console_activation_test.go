@@ -90,3 +90,26 @@ func TestLegacyConsoleBackfillOnlyRunsWhenColumnWasIntroduced(t *testing.T) {
 	assert.Positive(t, legacy.ConsoleActivatedAt)
 	assert.Zero(t, newUser.ConsoleActivatedAt)
 }
+
+func TestExistingUsersL1BackfillRunsOnceAndLeavesLaterUsersAtL0(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	existing := User{Username: "existing-l1-floor", Password: "password", AffCode: "existing-l1-floor-aff"}
+	require.NoError(t, db.Create(&existing).Error)
+
+	require.NoError(t, InitializeExistingUsersL1Backfill())
+	var activated User
+	require.NoError(t, db.First(&activated, existing.Id).Error)
+	assert.Positive(t, activated.ConsoleActivatedAt)
+
+	later := User{Username: "later-l0-user", Password: "password", AffCode: "later-l0-user-aff"}
+	require.NoError(t, db.Create(&later).Error)
+	require.NoError(t, InitializeExistingUsersL1Backfill())
+	var stillL0 User
+	require.NoError(t, db.First(&stillL0, later.Id).Error)
+	assert.Zero(t, stillL0.ConsoleActivatedAt)
+
+	var marker Option
+	require.NoError(t, db.First(&marker, "key = ?", existingUsersL1BackfillOptionKey).Error)
+	assert.NotEmpty(t, marker.Value)
+}

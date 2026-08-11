@@ -17,9 +17,35 @@
 - Use marker-owned persistent storage, never `/tmp` or `/var/tmp`.
 - Place `TMPDIR`, Go build cache, Go module cache, Cargo target output, Bun
   cache, package staging, manifests, and logs under that deployment directory.
+- The controller workspace is
+  `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>`;
+  do not leave build or package bytes in the repository or in `/tmp`.
 - Build once. Record and verify the same artifact SHA-256 at every promotion
   boundary.
 - Never overwrite an existing immutable release with different bytes.
+
+### Production resource gates
+
+The production root filesystem is 20 GiB and the service cgroup is bounded by
+`MemoryHigh=320M`, `MemoryMax=384M`, and `MemorySwapMax=256M`. Before a
+mutation, during every build/backup transfer, and throughout the watchdog
+window, record `df -h /`, `df -i /`, `free -h`, `vmstat 1 5`, the service
+`NRestarts`/memory counters, PostgreSQL readiness, Valkey readiness, and native
+CLI `/api/status` plus `/api/livez` probes.
+
+- Green: root and inode use `<70%`, `MemAvailable >=30%`, swap `<10%`, CPU
+  `<70%` for 5 minutes, and at least 4 GiB free before a production package.
+- Warning: root/inode use `70-80%`, `MemAvailable 20-30%`, swap `10-25%`, or
+  CPU `70-85%`; serialize heavy work and prune only measured terminal work.
+- Stop: root/inode `>=80%`, root free space below the known package plus three
+  backup copies and 1 GiB headroom, `MemAvailable <20%`, swap `>25%` with
+  churn, CPU `>85%` for 5 minutes, repeated restart/OOM, or a required probe
+  timeout. At `>=90%` storage use, treat the host as an emergency and clean
+  storage before touching application state.
+
+Do not clear swap, journals, caches, or the database to make a metric green.
+Do not kill unrelated processes. A failed resource or health check is an
+incident signal and must be recorded before any retry.
 
 ## Database detection
 
@@ -98,6 +124,24 @@ Prune only after confirmation or verified rollback. Never remove the active
 release, an unconfirmed deployment, the latest known-good backup, or a copy
 whose remaining peers have not been verified.
 
+Canonical roots are fixed:
+
+- controller workspace: `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>`;
+- durable controller copy: `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`;
+- production target workspace: `/var/lib/lmm-api-go/deploy-work/<deployment-id>`
+  (resolved private state is below `/var/lib/private/lmm-api-go`);
+- production target backup: `/var/lib/lmm-api-go/deploy-backups/<deployment-id>`;
+- off-host copy: `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>`
+  on `ArchCzy`.
+
+Only the exact workspace's `staging`, `tmp`, and cache children are disposable.
+After terminal state, retain its marker/status audit record and the three
+durable copies; remove staging by exact path. Never recursively clean a backup
+root, release root, home/root, `/tmp`, `/var/tmp`, an unresolved variable, or a
+glob. A terminal workspace older than 24 hours may be pruned oldest first only
+after checksum/decryption verification and only while the storage gate remains
+green.
+
 ## Rollback watchdog
 
 - Install a persistent systemd watchdog before the first switch.
@@ -143,6 +187,9 @@ whose remaining peers have not been verified.
 - Preview cleanup before execution.
 - Never implement “clear tmp” as a broad directory deletion. Identify and
   remove only stale, inactive, marker-owned LMM deployment workspaces.
+- Re-run disk/inode/RAM/swap, service state, PostgreSQL/Valkey readiness, and
+  native CLI status/livez checks after cleanup; record exact paths removed and
+  the remaining free-space margin.
 
 ## Minimum validation before production enablement
 

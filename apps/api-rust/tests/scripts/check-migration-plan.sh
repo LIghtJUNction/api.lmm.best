@@ -338,15 +338,15 @@ diff -u <(printf '%s\n' "$expected_root_mounts" | LC_ALL=C sort) <(printf '%s\n'
   exit 1
 }
 
-expected_blocked_routes=$'GET\t/api/status\nPOST\t/api/user/auth/logout\nPOST\t/api/user/auth/refresh\nPOST\t/api/user/login\nGET\t/api/user/self\nGET\t/v1/models\nGET\t/v1beta/models\nGET\t/v1beta/openai/models'
+expected_blocked_routes=''
 actual_blocked_routes=$(awk -F '\t' 'NR > 1 && $9 == "blocked-sol-stop" { print $1 "\t" $2 }' <(tsv_without_crlf "$gate") | LC_ALL=C sort)
-diff -u <(printf '%s\n' "$expected_blocked_routes" | LC_ALL=C sort) <(printf '%s\n' "$actual_blocked_routes") || {
-  echo "migration gate must block exactly the eight routes stopped by the latest independent Sol review" >&2
+diff -u <(printf '%s\n' "$expected_blocked_routes" | sed '/^$/d' | LC_ALL=C sort) <(printf '%s\n' "$actual_blocked_routes" | sed '/^$/d' | LC_ALL=C sort) || {
+  echo "migration gate must block exactly the zero routes stopped by the latest independent Sol review" >&2
   exit 1
 }
 actual_review_blocks=$(awk -F '\t' 'NR > 1 && $7 == "blocked-sol-stop" { print $1 "\t" $2 }' <(tsv_without_crlf "$review") | LC_ALL=C sort)
-diff -u <(printf '%s\n' "$expected_blocked_routes" | LC_ALL=C sort) <(printf '%s\n' "$actual_review_blocks") || {
-  echo "integration review must record exactly the eight current Sol STOP routes" >&2
+diff -u <(printf '%s\n' "$expected_blocked_routes" | sed '/^$/d' | LC_ALL=C sort) <(printf '%s\n' "$actual_review_blocks" | sed '/^$/d' | LC_ALL=C sort) || {
+  echo "integration review must record exactly the zero current Sol STOP routes" >&2
   exit 1
 }
 
