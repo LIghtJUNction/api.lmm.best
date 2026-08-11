@@ -1147,11 +1147,7 @@ async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap)
         Ok(options) => options,
         Err(_) => return fail("系统错误"),
     };
-    let data = topup_info_data_for_user(
-        &options,
-        actor.developer_access_granted,
-        &actor.group,
-    );
+    let data = topup_info_data_for_user(&options, actor.developer_access_granted, &actor.group);
     ok(data)
 }
 

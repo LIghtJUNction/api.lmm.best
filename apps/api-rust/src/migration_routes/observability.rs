@@ -12,11 +12,11 @@ use std::{
 
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     extract::{RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
 };
 use secrecy::SecretString;
 use serde::Serialize;
@@ -33,11 +33,15 @@ const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 // Go's log queries apply each timestamp predicate only when that query value
 // is non-zero.  Keeping this separate from the bounded data/stat queries
 // prevents a no-parameter log read from becoming `created_at <= 0`.
+#[cfg(test)]
 const OPTIONAL_LOG_TIME_RANGE: &str =
     "($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3)";
+#[cfg(test)]
 const MAX_RECENT_LOGS: i64 = 1000;
+#[cfg(test)]
 const LOG_JSON: &str = r#"jsonb_strip_nulls(jsonb_build_object('id', id, 'user_id', COALESCE(user_id, 0), 'created_at', COALESCE(created_at, 0), 'type', COALESCE(type, 0), 'content', COALESCE(content, ''), 'username', COALESCE(username, ''), 'token_name', COALESCE(token_name, ''), 'model_name', COALESCE(model_name, ''), 'quota', COALESCE(quota, 0), 'prompt_tokens', COALESCE(prompt_tokens, 0), 'completion_tokens', COALESCE(completion_tokens, 0), 'use_time', COALESCE(use_time, 0), 'is_stream', COALESCE(is_stream, false), 'channel', COALESCE(channel_id, 0), 'channel_name', COALESCE(channel_name, ''), 'token_id', COALESCE(token_id, 0), 'group', COALESCE("group", ''), 'ip', COALESCE(ip, ''), 'request_id', NULLIF(COALESCE(request_id, ''), ''), 'upstream_request_id', NULLIF(COALESCE(upstream_request_id, ''), ''), 'other', COALESCE(other, '')))"#;
 
+#[cfg(test)]
 fn log_query(operation: ObservabilityOperation) -> String {
     match operation {
         ObservabilityOperation::SelfLogs => format!(
@@ -1560,6 +1564,7 @@ fn values(rows: Vec<sqlx::postgres::PgRow>) -> Value {
     )
 }
 
+#[cfg(test)]
 fn format_user_visible_logs(value: Value) -> Value {
     let Value::Array(items) = value else {
         return value;
@@ -1994,7 +1999,10 @@ async fn self_quota_dates(
     };
     let query = parse_query(raw_query);
     if self_range_is_too_large(&query) {
-        return failure(StatusCode::OK, "时间跨度不能超过 1 个月");
+        return with_auth_version_for_user(
+            failure(StatusCode::OK, "时间跨度不能超过 1 个月"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
@@ -2016,7 +2024,7 @@ async fn all_flow_quota_dates(
     };
     let query = parse_query(raw_query);
     if let Err(message) = flow_range(&query) {
-        return failure(StatusCode::OK, message);
+        return with_auth_version_for_user(failure(StatusCode::OK, message), &principal);
     }
     execute_authorized(
         &state,
@@ -2038,10 +2046,13 @@ async fn self_flow_quota_dates(
     };
     let query = parse_query(raw_query);
     if let Err(message) = flow_range(&query) {
-        return failure(StatusCode::OK, message);
+        return with_auth_version_for_user(failure(StatusCode::OK, message), &principal);
     }
     if self_range_is_too_large(&query) {
-        return failure(StatusCode::OK, "时间跨度不能超过 1 个月");
+        return with_auth_version_for_user(
+            failure(StatusCode::OK, "时间跨度不能超过 1 个月"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
@@ -2078,10 +2089,16 @@ async fn channel_affinity_usage_cache_stats(
     };
     let query = parse_query(raw_query);
     if query.get("rule_name").is_none_or(String::is_empty) {
-        return failure(StatusCode::BAD_REQUEST, "missing param: rule_name");
+        return with_auth_version_for_user(
+            failure(StatusCode::BAD_REQUEST, "missing param: rule_name"),
+            &principal,
+        );
     }
     if query.get("key_fp").is_none_or(String::is_empty) {
-        return failure(StatusCode::BAD_REQUEST, "missing param: key_fp");
+        return with_auth_version_for_user(
+            failure(StatusCode::BAD_REQUEST, "missing param: key_fp"),
+            &principal,
+        );
     }
     execute_authorized(
         &state,
@@ -2187,7 +2204,10 @@ async fn perf_metrics(
     };
     let query = parse_query(raw_query);
     if query.get("model").is_none_or(String::is_empty) {
-        return failure(StatusCode::BAD_REQUEST, "model is required");
+        return with_auth_version_for_user(
+            failure(StatusCode::BAD_REQUEST, "model is required"),
+            &principal,
+        );
     }
     execute_authorized_data_only(
         &state,
@@ -2381,7 +2401,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use axum::{
-        body::{to_bytes, Body},
+        body::{Body, to_bytes},
         http::Request,
     };
     use std::sync::{
@@ -2681,14 +2701,18 @@ mod tests {
     #[tokio::test]
     async fn unavailable_runtime_adapters_fail_closed_without_success_payloads() {
         let query = BTreeMap::new();
-        assert!(UnavailableObservabilityMetrics
-            .query(ObservabilityOperation::PerfMetrics, &query)
-            .await
-            .is_err());
-        assert!(UnavailableObservabilityMaintenance
-            .execute(ObservabilityOperation::ForceGc, &query)
-            .await
-            .is_err());
+        assert!(
+            UnavailableObservabilityMetrics
+                .query(ObservabilityOperation::PerfMetrics, &query)
+                .await
+                .is_err()
+        );
+        assert!(
+            UnavailableObservabilityMaintenance
+                .execute(ObservabilityOperation::ForceGc, &query)
+                .await
+                .is_err()
+        );
 
         let store = PgObservabilityStore::new(
             PgPool::connect_lazy("postgres://unused:unused@localhost/unused").unwrap(),

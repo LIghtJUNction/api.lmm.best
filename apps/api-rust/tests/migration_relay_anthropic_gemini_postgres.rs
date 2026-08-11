@@ -4,8 +4,7 @@
 //! this test keeps the production adapter's listener dependency boundary in the
 //! migration inventory as well.
 
-use lmm_api_rs::migration_routes::relay_anthropic_gemini_postgres::
-    PgAnthropicGeminiRelayBackend;
+use lmm_api_rs::migration_routes::relay_anthropic_gemini_postgres::PgAnthropicGeminiRelayBackend;
 use sqlx::postgres::PgPoolOptions;
 use std::time::Duration;
 

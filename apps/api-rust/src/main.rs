@@ -48,6 +48,9 @@ use lmm_api_rs::{
         identity_security::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
         },
+        media_midjourney::{
+            MidjourneyHttpState, PgMidjourneyDispatchBackend, media_midjourney_router,
+        },
         missing_billing_dashboard::{
             BillingDashboardState, PgBillingDashboardAuthorizer, PgBillingDashboardStore,
             billing_dashboard_router,
@@ -69,13 +72,7 @@ use lmm_api_rs::{
             PgStripeCreemStore, amount_router as identity_stripe_amount_router,
         },
         missing_identity_topup::{IdentityTopupState, router as identity_topup_router},
-        missing_relay_models_billing::{
-            ModelLookupState, PgStaticModelLookup,
-        },
-        media_midjourney::{
-            MidjourneyHttpState, PgMidjourneyDispatchBackend,
-            media_midjourney_router,
-        },
+        missing_relay_models_billing::{ModelLookupState, PgStaticModelLookup},
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityAuthorizer, ObservabilityState,
             PgObservabilityStore, PgReadOnlyObservabilityTokenAuthorizer,
@@ -83,7 +80,9 @@ use lmm_api_rs::{
             observability_read_router,
         },
         open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
-        relay_anthropic_gemini::{RelayHttpState as AnthropicGeminiHttpState, router_with_model_lookup},
+        relay_anthropic_gemini::{
+            RelayHttpState as AnthropicGeminiHttpState, router_with_model_lookup,
+        },
         relay_anthropic_gemini_postgres::PgAnthropicGeminiRelayBackend,
         relay_media::{
             MediaUpstreamClient, PgRelayMediaService, RelayMediaHttpState, relay_media_router,

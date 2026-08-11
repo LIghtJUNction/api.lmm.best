@@ -259,9 +259,7 @@ const STATIC_LIST_PATH: &str = "/mj/task/list-by-condition";
 /// the static `/mj` aliases used by callers that do not mount the neighbouring
 /// media-task slice.
 pub fn media_midjourney_router(state: MidjourneyHttpState) -> Router {
-    dynamic_routes()
-        .merge(static_routes())
-        .with_state(state)
+    dynamic_routes().merge(static_routes()).with_state(state)
 }
 
 /// Builds only the dynamic `/:mode/mj` aliases.
@@ -317,7 +315,10 @@ fn static_routes() -> Router<MidjourneyHttpState> {
         .route(STATIC_MODAL_PATH, post(static_submit_modal))
         .route(STATIC_SHORTEN_PATH, post(static_submit_shorten))
         .route(STATIC_SIMPLE_CHANGE_PATH, post(static_submit_simple_change))
-        .route(STATIC_UPLOAD_PATH, post(static_submit_upload_discord_images))
+        .route(
+            STATIC_UPLOAD_PATH,
+            post(static_submit_upload_discord_images),
+        )
         .route(STATIC_VIDEO_PATH, post(static_submit_video))
         .route(STATIC_FETCH_PATH, get(static_task_fetch))
         .route(STATIC_IMAGE_SEED_PATH, get(static_task_image_seed))
@@ -336,13 +337,7 @@ macro_rules! submit_handler {
             let client_ip = request_client_ip(context.as_ref());
             let request_id = request_id(context.as_ref());
             submit(
-                state,
-                mode,
-                $operation,
-                client_ip,
-                request_id,
-                headers,
-                body,
+                state, mode, $operation, client_ip, request_id, headers, body,
             )
             .await
         }
@@ -449,15 +444,7 @@ async fn task_fetch(
     context: Option<Extension<RequestContext>>,
     headers: HeaderMap,
 ) -> Response {
-    task_read(
-        state,
-        context.as_ref(),
-        headers,
-        "fetch",
-        &id,
-        None,
-    )
-    .await
+    task_read(state, context.as_ref(), headers, "fetch", &id, None).await
 }
 async fn static_task_fetch(
     State(state): State<MidjourneyHttpState>,
@@ -465,15 +452,7 @@ async fn static_task_fetch(
     context: Option<Extension<RequestContext>>,
     headers: HeaderMap,
 ) -> Response {
-    task_read(
-        state,
-        context.as_ref(),
-        headers,
-        "fetch",
-        &id,
-        None,
-    )
-    .await
+    task_read(state, context.as_ref(), headers, "fetch", &id, None).await
 }
 async fn task_image_seed(
     State(state): State<MidjourneyHttpState>,
@@ -481,15 +460,7 @@ async fn task_image_seed(
     context: Option<Extension<RequestContext>>,
     headers: HeaderMap,
 ) -> Response {
-    task_read(
-        state,
-        context.as_ref(),
-        headers,
-        "image-seed",
-        &id,
-        None,
-    )
-    .await
+    task_read(state, context.as_ref(), headers, "image-seed", &id, None).await
 }
 async fn static_task_image_seed(
     State(state): State<MidjourneyHttpState>,
@@ -497,15 +468,7 @@ async fn static_task_image_seed(
     context: Option<Extension<RequestContext>>,
     headers: HeaderMap,
 ) -> Response {
-    task_read(
-        state,
-        context.as_ref(),
-        headers,
-        "image-seed",
-        &id,
-        None,
-    )
-    .await
+    task_read(state, context.as_ref(), headers, "image-seed", &id, None).await
 }
 async fn task_list_by_condition(
     State(state): State<MidjourneyHttpState>,
@@ -768,10 +731,6 @@ fn json_response(status: StatusCode, content_type: HeaderValue, body: Value) -> 
         .insert(header::CONTENT_TYPE, content_type);
     response
 }
-fn failure(error: MidjourneyFailure) -> Response {
-    failure_with_request_id(error, None)
-}
-
 fn failure_with_request_id(error: MidjourneyFailure, request_id: Option<&str>) -> Response {
     let with_request_id = |message: &str| {
         request_id.map_or_else(

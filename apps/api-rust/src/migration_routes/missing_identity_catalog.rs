@@ -440,7 +440,10 @@ fn success<T: Serialize>(data: Option<T>) -> Response {
 
 fn not_found() -> Response {
     legacy_json_content_type(
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"message": "Not Found"})))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"message": "Not Found"})),
+        )
             .into_response(),
     )
 }
@@ -558,7 +561,6 @@ impl CatalogError {
             UserAuthPolicyError::InvalidUserInfo => Self::invalid_user(locale),
         }
     }
-
 }
 
 impl IntoResponse for CatalogError {

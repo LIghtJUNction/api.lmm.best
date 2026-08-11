@@ -413,11 +413,8 @@ fn auth_failure(error: BillingDashboardAuthError, request: &Request) -> Response
         |context| context.request_id.clone(),
     );
     if matches!(error, BillingDashboardAuthError::Unauthorized) {
-        let mut response = (
-            StatusCode::NOT_FOUND,
-            Json(json!({"message": "Not Found"})),
-        )
-            .into_response();
+        let mut response =
+            (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
         response.headers_mut().insert(
             header::CONTENT_TYPE,
             "application/json; charset=utf-8"
