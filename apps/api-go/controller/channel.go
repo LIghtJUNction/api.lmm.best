@@ -1119,7 +1119,9 @@ func UpdateChannel(c *gin.Context) {
 					}
 				}
 
-				seen := make(map[string]struct{}, len(existingKeys)+len(newKeys))
+				// Avoid combining attacker-influenced lengths in an allocation hint.
+				// The map grows only for keys that survive normalization.
+				seen := make(map[string]struct{})
 				for _, key := range existingKeys {
 					normalized := strings.TrimSpace(key)
 					if normalized == "" {

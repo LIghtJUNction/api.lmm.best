@@ -536,8 +536,8 @@ fi
 jq -s -e '
   length == 2 and .[0] == .[1]
   and .[0].path == "/v1/embeddings"
-  and .[0].authorization == "Bearer provider-owned-secret"
-  and .[0].caller_secret == ""
+  and .[0].authorization_valid == true
+  and .[0].caller_secret_present == false
   and .[0].content_type == "application/json"
   and .[0].body == {model:"gpt-test",input:"hello"}
 ' "$runtime/provider-hits.jsonl" >/dev/null
@@ -725,8 +725,8 @@ jq -s -e '
   and .[14] == .[15]
   and all(.[];
     .path == "/v1/embeddings"
-    and .authorization == "Bearer provider-owned-secret"
-    and .caller_secret == ""
+    and .authorization_valid == true
+    and .caller_secret_present == false
     and .content_encoding == "")
   and [.[2].body.input,.[4].body.input,.[6].body.input]
     == ["compressed-gzip","compressed-br","compressed-zstd"]
