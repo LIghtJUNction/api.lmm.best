@@ -1168,6 +1168,7 @@ fn require_admin(actor: Option<Extension<DeploymentActor>>) -> Option<Deployment
         .filter(|actor| actor.user_id > 0 && actor.role >= ADMIN_ROLE)
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeploymentAuthRejection {
     /// The Go `ConsoleAccessGate` conceals deployment discovery routes from

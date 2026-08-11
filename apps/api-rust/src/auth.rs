@@ -11,9 +11,9 @@ use serde_json::{Value, to_value};
 use thiserror::Error;
 
 pub use http::{
-    anonymous_registration_surface,
-    AnonymousRequestSecurity, AuthHttpState, TurnstileCheckOutcome, TurnstileVerifier, auth_router,
-    turnstile_failure_response, turnstile_missing_response,
+    AnonymousRequestSecurity, AuthHttpState, TurnstileCheckOutcome, TurnstileVerifier,
+    anonymous_registration_surface, auth_router, turnstile_failure_response,
+    turnstile_missing_response,
 };
 pub use postgres::{AuthConfig, PgValkeyDashboardAuth};
 pub(crate) use token::dashboard_token_candidate;

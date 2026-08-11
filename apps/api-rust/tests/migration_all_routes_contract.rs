@@ -130,7 +130,10 @@ fn every_migration_route_module_should_have_a_router_integration_test() {
         let constructors = router_constructors(&source);
         let direct_test = tests_dir.join(format!("migration_{module}.rs"));
         if constructors.is_empty() && ADAPTER_ONLY_MODULES.contains(&module.as_str()) {
-            assert!(direct_test.is_file(), "{module} is missing its adapter test");
+            assert!(
+                direct_test.is_file(),
+                "{module} is missing its adapter test"
+            );
             continue;
         }
         assert!(

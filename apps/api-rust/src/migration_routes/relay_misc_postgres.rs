@@ -2028,9 +2028,11 @@ fn upstream_error_response(
     upstream_status: StatusCode,
     request_id: &str,
 ) -> Response {
-    let mut response = Response::new(Body::from(
-        normalized_upstream_error_body_with_context(body, upstream_status, request_id),
-    ));
+    let mut response = Response::new(Body::from(normalized_upstream_error_body_with_context(
+        body,
+        upstream_status,
+        request_id,
+    )));
     *response.status_mut() = status;
     response.headers_mut().insert(
         header::CONTENT_TYPE,
