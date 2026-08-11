@@ -36,12 +36,20 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
 import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
 
 import { getPaymentMethodRatePresets } from './payment-method-rate-presets'
 
 const SETTLEMENT_UNIT_PATTERN = /^[A-Za-z0-9._-]{1,16}$/
 const POSITIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
+const NON_NEGATIVE_INTEGER_PATTERN = /^(?:0|[1-9][0-9]*)$/
+const NON_NEGATIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
 
 const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
   z
@@ -50,6 +58,40 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
       type: z.string().min(1, t('Payment type key is required')),
       icon: z.string().optional(),
       min_topup: z.string().optional(),
+      unlock_after_days: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_INTEGER_PATTERN.test(value.trim()) &&
+              Number.isSafeInteger(Number(value.trim()))),
+          { message: t('Unlock delay must be a non-negative whole number') }
+        ),
+      audience_mode: z.enum(['legacy', 'all', 'include', 'exclude']),
+      audience_match: z.enum(['any', 'all']),
+      audience_email_contains: z.string().optional(),
+      audience_oauth_provider: z.string().optional(),
+      audience_linuxdo_score_min: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_DECIMAL_PATTERN.test(value.trim()) &&
+              Number.isFinite(Number(value.trim()))),
+          { message: t('LinuxDO score must be a non-negative number') }
+        ),
+      audience_linuxdo_score_max: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_DECIMAL_PATTERN.test(value.trim()) &&
+              Number.isFinite(Number(value.trim()))),
+          { message: t('LinuxDO score must be a non-negative number') }
+        ),
       topup_ratio: z
         .string()
         .optional()
@@ -103,6 +145,34 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
           path: ['settlement_unit'],
         })
       }
+
+      const hasAudienceCondition =
+        !!values.audience_email_contains?.trim() ||
+        (!!values.audience_oauth_provider?.trim() &&
+          values.audience_oauth_provider !== 'none') ||
+        !!values.audience_linuxdo_score_min?.trim() ||
+        !!values.audience_linuxdo_score_max?.trim()
+      if (
+        (values.audience_mode === 'include' ||
+          values.audience_mode === 'exclude') &&
+        !hasAudienceCondition
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Add at least one audience condition'),
+          path: ['audience_mode'],
+        })
+      }
+
+      const scoreMin = values.audience_linuxdo_score_min?.trim()
+      const scoreMax = values.audience_linuxdo_score_max?.trim()
+      if (scoreMin && scoreMax && Number(scoreMin) > Number(scoreMax)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Minimum LinuxDO score cannot exceed maximum score'),
+          path: ['audience_linuxdo_score_max'],
+        })
+      }
     })
 
 type PaymentMethodDialogFormValues = z.infer<
@@ -116,6 +186,13 @@ export type PaymentMethodData = {
   type: string
   icon?: string
   min_topup?: string
+  unlock_after_days?: string
+  audience_mode?: 'legacy' | 'all' | 'include' | 'exclude'
+  audience_match?: 'any' | 'all'
+  audience_email_contains?: string
+  audience_oauth_provider?: string
+  audience_linuxdo_score_min?: string
+  audience_linuxdo_score_max?: string
   topup_ratio?: string
   settlement_unit?: string
   unit_price?: string
@@ -169,6 +246,18 @@ export function PaymentMethodDialog({
       value: 'stripe',
     },
     {
+      iconName: '',
+      label: 'Creem (creem)',
+      name: 'Creem',
+      value: 'creem',
+    },
+    {
+      iconName: '',
+      label: 'Waffo (waffo)',
+      name: 'Waffo',
+      value: 'waffo',
+    },
+    {
       iconName: 'SiLinux',
       label: 'LINUX DO Credit (Epay: epay)',
       name: 'LINUX DO Credit',
@@ -191,6 +280,13 @@ export function PaymentMethodDialog({
       type: '',
       icon: '',
       min_topup: '',
+      unlock_after_days: '',
+      audience_mode: 'legacy',
+      audience_match: 'any',
+      audience_email_contains: '',
+      audience_oauth_provider: 'none',
+      audience_linuxdo_score_min: '',
+      audience_linuxdo_score_max: '',
       topup_ratio: '',
       settlement_unit: '',
       unit_price: '',
@@ -202,6 +298,7 @@ export function PaymentMethodDialog({
   const settlementUnitValue = form.watch('settlement_unit')?.trim()
   const unitPriceValue = form.watch('unit_price')?.trim()
   const usesDedicatedPricing = usesDedicatedPaymentPricing(selectedType)
+  const audienceMode = form.watch('audience_mode')
   const ratePresets = getPaymentMethodRatePresets(globalPrice)
 
   useEffect(() => {
@@ -211,6 +308,13 @@ export function PaymentMethodDialog({
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
         min_topup: editData.min_topup ?? '',
+        unlock_after_days: editData.unlock_after_days ?? '',
+        audience_mode: editData.audience_mode ?? 'legacy',
+        audience_match: editData.audience_match ?? 'any',
+        audience_email_contains: editData.audience_email_contains ?? '',
+        audience_oauth_provider: editData.audience_oauth_provider ?? 'none',
+        audience_linuxdo_score_min: editData.audience_linuxdo_score_min ?? '',
+        audience_linuxdo_score_max: editData.audience_linuxdo_score_max ?? '',
         topup_ratio: editData.topup_ratio ?? '',
         settlement_unit: editData.settlement_unit ?? '',
         unit_price: editData.unit_price ?? '',
@@ -221,6 +325,13 @@ export function PaymentMethodDialog({
         type: '',
         icon: '',
         min_topup: '',
+        unlock_after_days: '',
+        audience_mode: 'legacy',
+        audience_match: 'any',
+        audience_email_contains: '',
+        audience_oauth_provider: 'none',
+        audience_linuxdo_score_min: '',
+        audience_linuxdo_score_max: '',
         topup_ratio: '',
         settlement_unit: '',
         unit_price: '',
@@ -238,6 +349,38 @@ export function PaymentMethodDialog({
     }
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
+    }
+    if (
+      values.unlock_after_days?.trim() &&
+      values.unlock_after_days.trim() !== '0'
+    ) {
+      data.unlock_after_days = values.unlock_after_days.trim()
+    }
+    if (values.audience_mode !== 'legacy') {
+      data.audience_mode = values.audience_mode
+      if (
+        values.audience_mode === 'include' ||
+        values.audience_mode === 'exclude'
+      ) {
+        data.audience_match = values.audience_match
+        if (values.audience_email_contains?.trim()) {
+          data.audience_email_contains = values.audience_email_contains.trim()
+        }
+        if (
+          values.audience_oauth_provider?.trim() &&
+          values.audience_oauth_provider !== 'none'
+        ) {
+          data.audience_oauth_provider = values.audience_oauth_provider.trim()
+        }
+        if (values.audience_linuxdo_score_min?.trim()) {
+          data.audience_linuxdo_score_min =
+            values.audience_linuxdo_score_min.trim()
+        }
+        if (values.audience_linuxdo_score_max?.trim()) {
+          data.audience_linuxdo_score_max =
+            values.audience_linuxdo_score_max.trim()
+        }
+      }
     }
     if (
       !usesDedicatedPaymentPricing(values.type) &&
@@ -430,6 +573,237 @@ export function PaymentMethodDialog({
               </FormItem>
             )}
           />
+
+          <FormField
+            control={form.control}
+            name='unlock_after_days'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Unlock after registration (days)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min='0'
+                    step='1'
+                    placeholder='0'
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Users can use this payment method after this many full days. Leave empty or set 0 for immediate access.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <div className='bg-muted/20 space-y-4 rounded-md border p-3'>
+            <div>
+              <p className='text-sm font-medium'>{t('Payment audience')}</p>
+              <p className='text-muted-foreground mt-1 text-xs leading-relaxed'>
+                {t(
+                  'Control who can see and use this method. Checkout uses the same server-side rules.'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='audience_mode'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Visibility')}</FormLabel>
+                  <FormControl>
+                    <Combobox
+                      options={[
+                        {
+                          label: t('Follow legacy account restrictions'),
+                          value: 'legacy',
+                        },
+                        { label: t('Visible to everyone'), value: 'all' },
+                        {
+                          label: t('Visible only to matching users'),
+                          value: 'include',
+                        },
+                        {
+                          label: t('Hidden from matching users'),
+                          value: 'exclude',
+                        },
+                      ]}
+                      value={field.value}
+                      onValueChange={(value) => {
+                        if (value) field.onChange(value)
+                      }}
+                      placeholder={t('Select visibility')}
+                      searchPlaceholder={t('Search visibility options...')}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Legacy mode preserves the existing special-account payment marker until you define a rule.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {(audienceMode === 'include' || audienceMode === 'exclude') && (
+              <>
+                <FormField
+                  control={form.control}
+                  name='audience_match'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('When multiple conditions exist')}
+                      </FormLabel>
+                      <FormControl>
+                        <Combobox
+                          options={[
+                            {
+                              label: t('Match any condition'),
+                              value: 'any',
+                            },
+                            {
+                              label: t('Match all conditions'),
+                              value: 'all',
+                            },
+                          ]}
+                          value={field.value}
+                          onValueChange={(value) => {
+                            if (value) field.onChange(value)
+                          }}
+                          placeholder={t('Select condition matching')}
+                          searchPlaceholder={t('Search matching options...')}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='audience_email_contains'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Email contains')}</FormLabel>
+                      <FormControl>
+                        <InputGroup>
+                          <InputGroupInput placeholder='linux.do' {...field} />
+                          <InputGroupAddon align='inline-end'>
+                            <InputGroupButton
+                              type='button'
+                              variant='ghost'
+                              onClick={() =>
+                                form.setValue(
+                                  'audience_email_contains',
+                                  'linux.do',
+                                  { shouldDirty: true, shouldValidate: true }
+                                )
+                              }
+                            >
+                              {t('Use linux.do preset')}
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        </InputGroup>
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Case-insensitive substring match against the email.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='audience_oauth_provider'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('OAuth login method')}</FormLabel>
+                      <FormControl>
+                        <Combobox
+                          options={[
+                            { label: t('No OAuth condition'), value: 'none' },
+                            { label: 'LinuxDO', value: 'linuxdo' },
+                            { label: 'GitHub', value: 'github' },
+                            { label: 'Discord', value: 'discord' },
+                            { label: 'OIDC', value: 'oidc' },
+                            { label: t('WeChat'), value: 'wechat' },
+                            { label: 'Telegram', value: 'telegram' },
+                          ]}
+                          value={field.value || 'none'}
+                          onValueChange={(value) => {
+                            if (value) field.onChange(value)
+                          }}
+                          placeholder={t('Select OAuth login method')}
+                          searchPlaceholder={t('Search OAuth login methods...')}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'LinuxDO is the preset; other supported account bindings can also be matched.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className='grid gap-3 sm:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='audience_linuxdo_score_min'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Minimum LinuxDO score')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min='0'
+                            step='any'
+                            placeholder='0'
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='audience_linuxdo_score_max'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Maximum LinuxDO score')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min='0'
+                            step='any'
+                            placeholder={t('No maximum')}
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <p className='text-muted-foreground text-xs leading-relaxed'>
+                  {t(
+                    'LinuxDO score is refreshed when the user signs in with LinuxDO OAuth.'
+                  )}
+                </p>
+              </>
+            )}
+          </div>
 
           {!usesDedicatedPricing && (
             <FormField

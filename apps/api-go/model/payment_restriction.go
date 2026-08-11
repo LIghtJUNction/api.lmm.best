@@ -2,6 +2,7 @@ package model
 
 import (
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -50,11 +51,61 @@ func AddPaymentRestrictionFlags(userID int, flags int) error {
 	return invalidateUserCache(userID)
 }
 
+// UpdateLinuxDOGamificationScore records the current score used by payment
+// audience rules and keeps the legacy high-score marker in sync. Older builds
+// only persisted the marker, so the marker remains a fallback until a user
+// signs in with LinuxDO again and refreshes the exact score.
+func UpdateLinuxDOGamificationScore(userID int, score float64) error {
+	if userID <= 0 || score < 0 {
+		return gorm.ErrInvalidData
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+			"linux_do_gamification_score": score,
+			"linux_do_score_updated_at":   time.Now().Unix(),
+		}).Error; err != nil {
+			return err
+		}
+
+		flagsExpression := gorm.Expr("payment_restriction_flags & ?", ^PaymentRestrictionLinuxDOHighScore)
+		if score > LinuxDOGamificationScorePaymentThreshold {
+			flagsExpression = gorm.Expr("payment_restriction_flags | ?", PaymentRestrictionLinuxDOHighScore)
+		}
+		if err := tx.Model(&User{}).Where("id = ?", userID).
+			UpdateColumn("payment_restriction_flags", flagsExpression).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return invalidateUserCache(userID)
+}
+
+func LinuxDOGamificationScoreForAudience(user *User) (float64, bool) {
+	if user == nil {
+		return 0, false
+	}
+	if user.LinuxDOScoreUpdatedAt > 0 {
+		return user.LinuxDOGamificationScore, true
+	}
+	if EffectivePaymentRestrictionFlags(user)&PaymentRestrictionLinuxDOHighScore != 0 {
+		return float64(LinuxDOGamificationScorePaymentThreshold) + 1, true
+	}
+	return 0, false
+}
+
 func PopulateAdminPaymentRestriction(user *User) {
 	if user == nil {
 		return
 	}
 	user.AdminPaymentRestrictionFlags = EffectivePaymentRestrictionFlags(user)
+	if user.LinuxDOScoreUpdatedAt > 0 {
+		score := user.LinuxDOGamificationScore
+		user.AdminLinuxDOGamificationScore = &score
+	}
+	user.AdminLinuxDOScoreUpdatedAt = user.LinuxDOScoreUpdatedAt
 }
 
 func PopulateAdminPaymentRestrictions(users []*User) {

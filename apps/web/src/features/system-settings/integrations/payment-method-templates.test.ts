@@ -28,7 +28,7 @@ describe('payment method templates', () => {
   test('defines only gateway-safe built-in payment types', () => {
     assert.deepEqual(
       PAYMENT_METHOD_TEMPLATES.map(({ method }) => method.type),
-      ['alipay', 'wxpay', 'epay', 'stripe', 'waffo_pancake']
+      ['alipay', 'wxpay', 'epay', 'stripe', 'creem', 'waffo', 'waffo_pancake']
     )
     assert.equal(
       PAYMENT_METHOD_TEMPLATES.find(

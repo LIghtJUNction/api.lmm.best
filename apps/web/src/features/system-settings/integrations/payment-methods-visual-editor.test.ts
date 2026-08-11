@@ -47,6 +47,23 @@ describe('payment method JSON validation', () => {
     )
   })
 
+  test('accepts unlock delay and unified audience filters', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'LinuxDO card',
+        type: 'stripe',
+        unlock_after_days: '7',
+        audience_mode: 'include',
+        audience_match: 'any',
+        audience_email_contains: 'linux.do',
+        audience_oauth_provider: 'linuxdo',
+        audience_linuxdo_score_min: '10000',
+        audience_linuxdo_score_max: '20000.5',
+      }),
+      true
+    )
+  })
+
   test('rejects incomplete, unsafe, and non-decimal metadata', () => {
     const base = { name: 'LINUX DO Credit', type: 'epay' }
     for (const value of [
@@ -61,6 +78,17 @@ describe('payment method JSON validation', () => {
       { ...base, topup_ratio: '-1' },
       { ...base, topup_ratio: '1e2' },
       { ...base, topup_ratio: 2 },
+      { ...base, unlock_after_days: '-1' },
+      { ...base, unlock_after_days: '1.5' },
+      { ...base, unlock_after_days: 7 },
+      { ...base, audience_mode: 'include' },
+      {
+        ...base,
+        audience_mode: 'include',
+        audience_linuxdo_score_min: '20',
+        audience_linuxdo_score_max: '10',
+      },
+      { ...base, audience_mode: 'sometimes' },
     ]) {
       assert.equal(isValidPaymentMethodData(value), false)
     }

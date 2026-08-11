@@ -229,6 +229,9 @@ func RequestFastPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "FAST 易支付仅支持支付宝或微信支付"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+		return
+	}
 	int64Amount := int64(req.Amount)
 	if int64Amount < getMinTopup() {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})

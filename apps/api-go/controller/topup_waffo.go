@@ -117,6 +117,9 @@ func RequestWaffoAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffo) {
+		return
+	}
 
 	waffoMinTopup := int64(setting.WaffoMinTopUp)
 	if req.Amount < waffoMinTopup {
@@ -150,6 +153,9 @@ func RequestWaffoPay(c *gin.Context) {
 	var req WaffoPayRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+		return
+	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffo) {
 		return
 	}
 	waffoMinTopup := int64(setting.WaffoMinTopUp)
