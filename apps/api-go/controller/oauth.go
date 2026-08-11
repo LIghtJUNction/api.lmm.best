@@ -37,6 +37,21 @@ func providerParams(name string) map[string]any {
 	return map[string]any{"Provider": name}
 }
 
+func applyLinuxDOPaymentRestriction(provider oauth.Provider, oauthUser *oauth.OAuthUser, user *model.User) error {
+	if _, ok := provider.(*oauth.LinuxDOProvider); !ok || oauthUser == nil || user == nil {
+		return nil
+	}
+	score, ok := oauthUser.Extra["gamification_score"].(float64)
+	if !ok || score <= model.LinuxDOGamificationScorePaymentThreshold {
+		return nil
+	}
+	if err := model.AddPaymentRestrictionFlags(user.Id, model.PaymentRestrictionLinuxDOHighScore); err != nil {
+		return err
+	}
+	user.PaymentRestrictionFlags |= model.PaymentRestrictionLinuxDOHighScore
+	return nil
+}
+
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
 func GenerateOAuthCode(c *gin.Context) {
 	var request oauthStateRequest
@@ -237,6 +252,10 @@ func HandleOAuth(c *gin.Context) {
 		default:
 			common.ApiError(c, err)
 		}
+		return
+	}
+	if err := applyLinuxDOPaymentRestriction(provider, oauthUser, user); err != nil {
+		common.ApiError(c, err)
 		return
 	}
 

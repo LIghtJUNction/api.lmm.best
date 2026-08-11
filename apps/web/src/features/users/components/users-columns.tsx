@@ -90,6 +90,16 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const username = row.getValue('username') as string
         const displayName = row.original.display_name
         const remark = row.original.remark
+        const paymentRestrictionFlags =
+          row.original.payment_restriction_flags || 0
+        const paymentRestrictionReasons = [
+          paymentRestrictionFlags & 1
+            ? t('Registered with a linux.do email address')
+            : null,
+          paymentRestrictionFlags & 2
+            ? t('LinuxDO community score exceeded 10,000')
+            : null,
+        ].filter(Boolean) as string[]
 
         return (
           <div className='flex min-w-[160px] flex-col gap-1'>
@@ -97,6 +107,31 @@ export function useUsersColumns(): ColumnDef<User>[] {
               <LongText className='max-w-[140px] font-medium'>
                 {username}
               </LongText>
+              {paymentRestrictionReasons.length > 0 && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className='cursor-help text-amber-500'
+                        role='img'
+                        aria-label={t('Payment-restricted special account')}
+                      >
+                        ★
+                      </span>
+                    }
+                  />
+                  <TooltipContent>
+                    <p className='mb-1 text-xs font-medium'>
+                      {t('Payment-restricted special account')}
+                    </p>
+                    {paymentRestrictionReasons.map((reason) => (
+                      <p key={reason} className='text-xs'>
+                        {reason}
+                      </p>
+                    ))}
+                  </TooltipContent>
+                </Tooltip>
+              )}
               {remark && (
                 <Tooltip>
                   <TooltipTrigger

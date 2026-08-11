@@ -146,6 +146,28 @@ func TestPasswordRegistrationFailsClosedBeforeUserCreation(t *testing.T) {
 	}
 }
 
+func TestPasswordRegistrationMarksLinuxDOEmailAccount(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	setRegistrationGateTestState(t, "terms", "privacy")
+	common.EmailVerificationEnabled = true
+	email := "member@linux.do"
+	code := "123456"
+	common.RegisterVerificationCodeWithKey(email, code, common.EmailVerificationPurpose)
+	t.Cleanup(func() { common.DeleteKey(email, common.EmailVerificationPurpose) })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/register", strings.NewReader(
+		`{"username":"linuxdo-email-user","password":"password1","email":"member@linux.do","verification_code":"123456","accepted_legal":true}`,
+	))
+	Register(c)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var user model.User
+	require.NoError(t, db.Where("username = ?", "linuxdo-email-user").First(&user).Error)
+	assert.Equal(t, model.PaymentRestrictionLinuxDOEmail, user.PaymentRestrictionFlags)
+}
+
 func TestOAuthFirstCreateUsesStateBoundConsentAndExistingLoginBypassesGate(t *testing.T) {
 	setupAuthFlowControllerTest(t)
 	setRegistrationGateTestState(t, "terms", "privacy")

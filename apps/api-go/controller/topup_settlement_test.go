@@ -251,6 +251,42 @@ func TestGetTopUpInfoPreservesGrantedResponseAndAddsAccessDecision(t *testing.T)
 	assert.Contains(t, payload.Data, "topup_group_ratio")
 }
 
+func TestGetTopUpInfoHidesPaymentMethodsForRestrictedAccount(t *testing.T) {
+	db := setupUserOnboardingTestDB(t)
+	configureNeutralTopUpInfoTest(t)
+	levelOne := 1
+	user := model.User{
+		Username:                "restricted-topup",
+		Password:                "password",
+		Role:                    common.RoleCommonUser,
+		Status:                  common.UserStatusEnabled,
+		TrustLevelOverride:      &levelOne,
+		PaymentRestrictionFlags: model.PaymentRestrictionLinuxDOHighScore,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Set("id", user.Id)
+	GetTopUpInfo(context)
+
+	var payload struct {
+		Success bool           `json:"success"`
+		Data    map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	require.True(t, payload.Success)
+	assert.Equal(t, true, payload.Data["developer_access_granted"])
+	assert.Equal(t, false, payload.Data["payment_available"])
+	assert.Equal(t, false, payload.Data["enable_online_topup"])
+	assert.Equal(t, false, payload.Data["enable_stripe_topup"])
+	assert.Equal(t, []any{}, payload.Data["pay_methods"])
+	assert.Equal(t, []any{}, payload.Data["amount_options"])
+	assert.NotContains(t, response.Body.String(), "payment_restriction")
+	assert.NotContains(t, response.Body.String(), "LDC")
+}
+
 func TestRequestCreemPayRejectsConfiguredProductWithoutCurrency(t *testing.T) {
 	previousProducts := setting.CreemProducts
 	setting.CreemProducts = `[{"productId":"prod_blank","price":12.34,"currency":"","quota":1000}]`

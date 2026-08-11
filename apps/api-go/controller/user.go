@@ -297,6 +297,9 @@ func Register(c *gin.Context) {
 	}
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
+		if model.IsLinuxDOEmail(cleanUser.Email) {
+			cleanUser.PaymentRestrictionFlags = model.PaymentRestrictionLinuxDOEmail
+		}
 	}
 	if err := cleanUser.Insert(inviterId); err != nil {
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
@@ -358,6 +361,7 @@ func GetAllUsers(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.PopulateAdminPaymentRestrictions(users)
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -389,6 +393,7 @@ func SearchUsers(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	model.PopulateAdminPaymentRestrictions(users)
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -423,6 +428,7 @@ func GetUser(c *gin.Context) {
 	}
 	user.TrustLevelInfo = &trustLevel
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	model.PopulateAdminPaymentRestriction(user)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
