@@ -344,6 +344,45 @@ func AdminGetAssistantProfileSummary(c *gin.Context) {
 	common.ApiSuccess(c, summary)
 }
 
+func AdminGetAssistantFundingSummary(c *gin.Context) {
+	since, ok := assistantSummarySince(c, "ASSISTANT_FUNDING_DAYS_INVALID")
+	if !ok {
+		return
+	}
+	billingUser, err := loadAssistantBillingUser()
+	if err != nil || billingUser == nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_BILLING_ACCOUNT_UNAVAILABLE", errors.New("AI assistant billing account is unavailable"))
+		return
+	}
+	end := time.Now().Unix()
+	summary, err := model.GetAssistantFundingSummary(billingUser.Id, since, end)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	remainingQuota, err := model.GetUserQuota(billingUser.Id, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	remainingUSD := float64(remainingQuota)
+	if common.QuotaPerUnit > 0 {
+		remainingUSD /= common.QuotaPerUnit
+	}
+	common.ApiSuccess(c, gin.H{
+		"start_timestamp":   summary.StartTimestamp,
+		"end_timestamp":     summary.EndTimestamp,
+		"requests":          summary.Requests,
+		"prompt_tokens":     summary.PromptTokens,
+		"completion_tokens": summary.CompletionTokens,
+		"total_tokens":      summary.TotalTokens,
+		"quota":             summary.Quota,
+		"cost_usd":          summary.CostUSD,
+		"remaining_quota":   remainingQuota,
+		"remaining_usd":     remainingUSD,
+	})
+}
+
 func AdminResolveAssistantHandoff(c *gin.Context) {
 	leadID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || leadID <= 0 {

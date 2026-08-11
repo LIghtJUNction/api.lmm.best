@@ -6,6 +6,10 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+- Added an administrator-only assistant funding summary. The user-management
+  panel now separates assistant requests from ordinary root-account traffic
+  and shows the last 30 days' USD spend, token volume and remaining
+  super-administrator quota.
 - Strengthened the shell-only A–I persona acceptance suite: every selected
   persona now verifies its deterministic intent route, security-risk persona
   still requires the refusal policy, and focused runs can select only the

@@ -96,6 +96,7 @@ func SetRelayRouter(router *gin.Engine) {
 		assistantAdminRouter.POST("/handoffs/:id/resolve", middleware.CriticalRateLimit(), controller.AdminResolveAssistantHandoff)
 		assistantAdminRouter.GET("/intents", controller.AdminGetAssistantIntentSummary)
 		assistantAdminRouter.GET("/profiles", controller.AdminGetAssistantProfileSummary)
+		assistantAdminRouter.GET("/funding", controller.AdminGetAssistantFundingSummary)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
