@@ -323,6 +323,93 @@ describe('getting started access boundaries', () => {
     unsubscribe()
   })
 
+  test('shows the submitted statement and AI recommendation while review is pending', async () => {
+    const page = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      {
+        id: 9902,
+        status: 'pending',
+        reason: 'I am building a small Claude Code integration.',
+        source: 'assistant_recommendation',
+        ai_recommendation:
+          'Recommend L1 for a documented development use case.',
+        admin_note: '',
+        created_at: 1,
+        reviewed_at: 0,
+      },
+      { id: 7002 }
+    )
+
+    assert.equal(
+      page.container.textContent?.includes('AI recommendation submitted'),
+      true
+    )
+    assert.equal(page.container.textContent?.includes('Pending review'), true)
+    assert.equal(
+      page.container.textContent?.includes(
+        'I am building a small Claude Code integration.'
+      ),
+      true
+    )
+    assert.equal(
+      page.container.textContent?.includes(
+        'Recommend L1 for a documented development use case.'
+      ),
+      true
+    )
+    assert.ok(
+      page.container.querySelector('[role="progressbar"][aria-valuenow="66"]')
+    )
+    await unmountPage(page)
+  })
+
+  test('shows administrator feedback and lets a rejected user revise with AI', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((preset) =>
+      opened.push(preset)
+    )
+    const page = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      {
+        id: 9903,
+        status: 'rejected',
+        reason: 'Need access.',
+        source: 'assistant_recommendation',
+        ai_recommendation: 'The use case needs more detail.',
+        admin_note: 'Please explain which client and models you plan to use.',
+        created_at: 1,
+        reviewed_at: 2,
+      },
+      { id: 7003 }
+    )
+
+    assert.equal(
+      page.container.textContent?.includes('Access request rejected'),
+      true
+    )
+    assert.equal(
+      page.container.textContent?.includes(
+        'Please explain which client and models you plan to use.'
+      ),
+      true
+    )
+
+    const revise = [...page.container.querySelectorAll('button')].find(
+      (button) => button.textContent?.includes('Revise')
+    )
+    assert.ok(revise)
+    await act(async () => {
+      revise.click()
+      await flushEffects()
+    })
+    assert.equal(opened.at(-1), 'onboarding')
+
+    await unmountPage(page)
+    unsubscribe()
+  })
+
   test('shows only read-only challenges and the AI access request surface to L0', async () => {
     const page = await renderPage(true)
     await act(flushEffects)

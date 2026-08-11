@@ -19,6 +19,7 @@ import { type FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,7 +36,7 @@ import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
   const { t } = useTranslation()
-  useAuthUserRefresh()
+  const { refreshUser } = useAuthUserRefresh()
   const user = useAuthStore((state) => state.auth.user)
   const onboarding = getOnboardingState(user)
   const trustLevel = user?.trust_level_info?.level ?? 0
@@ -212,11 +213,143 @@ export function GettingStarted() {
               </div>
 
               {accessRequest?.status === 'pending' ? (
-                <p className='bg-background/70 mt-4 border px-3 py-2 text-xs leading-5'>
-                  {t(
-                    'Your AI recommendation is waiting for administrator review.'
-                  )}
-                </p>
+                <Alert className='border-primary/30 bg-background/80 mt-5 px-4 py-4'>
+                  <AlertTitle className='flex flex-wrap items-center justify-between gap-2'>
+                    <span>{t('AI recommendation submitted')}</span>
+                    <Badge variant='outline'>{t('Pending review')}</Badge>
+                  </AlertTitle>
+                  <AlertDescription className='mt-1 leading-5'>
+                    {t(
+                      'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
+                    )}
+                  </AlertDescription>
+                  <div className='mt-4 flex items-center gap-3'>
+                    <Progress
+                      value={66}
+                      className='flex-1'
+                      aria-label={t('Pending review')}
+                    />
+                    <span className='text-muted-foreground shrink-0 text-xs tabular-nums'>
+                      2/3
+                    </span>
+                  </div>
+                  {accessRequest.reason || accessRequest.ai_recommendation ? (
+                    <div className='mt-4 grid gap-3 sm:grid-cols-2'>
+                      {accessRequest.reason ? (
+                        <div className='bg-muted/20 border p-3'>
+                          <p className='text-xs font-medium'>
+                            {t('Your statement')}
+                          </p>
+                          <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
+                            {accessRequest.reason}
+                          </p>
+                        </div>
+                      ) : null}
+                      {accessRequest.ai_recommendation ? (
+                        <div className='bg-muted/20 border p-3'>
+                          <p className='text-xs font-medium'>
+                            {t('AI recommendation')}
+                          </p>
+                          <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
+                            {accessRequest.ai_recommendation}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <Separator className='my-4' />
+                  <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                    <p className='text-muted-foreground text-xs leading-5'>
+                      {t(
+                        'Choose a common question or ask anything about using LMM.'
+                      )}
+                    </p>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      className='bg-background shrink-0'
+                      onClick={() => requestAssistantOpen('service')}
+                    >
+                      {t('Continue')}
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        strokeWidth={2}
+                        data-icon='inline-end'
+                        aria-hidden='true'
+                      />
+                    </Button>
+                  </div>
+                </Alert>
+              ) : null}
+
+              {accessRequest?.status === 'rejected' ? (
+                <Alert variant='destructive' className='mt-5 px-4 py-4'>
+                  <AlertTitle>{t('Access request rejected')}</AlertTitle>
+                  <AlertDescription className='mt-1 leading-5'>
+                    {t('Your previous unlock request was not approved.')}
+                  </AlertDescription>
+                  {accessRequest.admin_note ? (
+                    <div className='bg-background text-foreground mt-4 border p-3'>
+                      <p className='text-xs font-medium'>
+                        {t('Administrator reply')}
+                      </p>
+                      <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
+                        {accessRequest.admin_note}
+                      </p>
+                    </div>
+                  ) : null}
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    className='bg-background mt-4'
+                    onClick={() => requestAssistantOpen('onboarding')}
+                  >
+                    {t('Revise')}
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      strokeWidth={2}
+                      data-icon='inline-end'
+                      aria-hidden='true'
+                    />
+                  </Button>
+                </Alert>
+              ) : null}
+
+              {accessRequest?.status === 'approved' ? (
+                <Alert className='border-primary/30 bg-background/80 mt-5 px-4 py-4'>
+                  <AlertTitle>{t('Access request approved')}</AlertTitle>
+                  <AlertDescription className='mt-1 leading-5'>
+                    {t(
+                      'Your developer access is active. Continue setup to create a key and connect your client.'
+                    )}
+                  </AlertDescription>
+                  {accessRequest.admin_note ? (
+                    <div className='bg-muted/20 mt-4 border p-3'>
+                      <p className='text-xs font-medium'>
+                        {t('Administrator reply')}
+                      </p>
+                      <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
+                        {accessRequest.admin_note}
+                      </p>
+                    </div>
+                  ) : null}
+                  <Button
+                    type='button'
+                    size='sm'
+                    className='mt-4'
+                    onClick={() => void refreshUser()}
+                  >
+                    {t('Continue setup')}
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      strokeWidth={2}
+                      data-icon='inline-end'
+                      aria-hidden='true'
+                    />
+                  </Button>
+                </Alert>
               ) : null}
 
               <p className='text-muted-foreground mt-3 text-xs leading-5'>
