@@ -15,6 +15,7 @@ use lmm_api_rs::{
             router as admin_catalog_router,
         },
         api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
+        assistant::{AssistantReadState, assistant_read_router},
         billing_subscriptions::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
             spawn_maintenance as spawn_subscription_maintenance,
@@ -448,6 +449,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let _subscription_maintenance =
             spawn_subscription_maintenance(pg.clone(), Some(valkey.clone()));
+        let assistant_reads =
+            assistant_read_router(AssistantReadState::new(pg.clone(), Arc::clone(&auth)));
         let billing_dashboard = billing_dashboard_router(BillingDashboardState::new(
             Arc::new(PgBillingDashboardStore::new(pg.clone())),
             Arc::new(PgBillingDashboardAuthorizer::new(pg.clone())),
@@ -612,6 +615,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(channel_advanced)
             .merge(deployment)
             .merge(control_admin)
+            .merge(assistant_reads)
             .merge(billing_subscriptions)
             .merge(billing_dashboard)
             .merge(control_tasks)

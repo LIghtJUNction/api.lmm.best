@@ -92,13 +92,8 @@ const assistantStatus = {
   enabled: true,
   model: 'deepseek-v4-flash',
   developer_access_granted: true,
-  credit: {
-    weekly_credit_usd: 1,
-    limit_quota: 500_000,
-    used_quota: 0,
-    remaining_quota: 500_000,
-    week_start: 1_786_320_000,
-    resets_at: 1_786_924_800,
+  funding: {
+    mode: 'super_administrator' as const,
   },
 }
 
@@ -451,6 +446,7 @@ describe('AssistantPanel', () => {
       })
       assert.ok(findButton('Ask an administrator to raise my access level'))
       assert.ok(findButton('Which option is the best value?'))
+      assert.ok(findButton('How is request cost calculated?'))
       assert.ok(findButton('What can I do while access is under review?'))
       assert.ok(findButton('How do I set up Claude Code or CC Switch?'))
 
@@ -460,10 +456,12 @@ describe('AssistantPanel', () => {
       })
       assert.match(
         document.body.textContent ?? '',
-        /live prices, discounts, and checkout remain locked until L1 approval/
+        /prepare an L1 recommendation for your confirmation/
       )
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
-      assert.doesNotMatch(document.body.textContent ?? '', /Compare live plans/)
+      assert.throws(() => findButton('Compare live plans'))
+      assert.ok(findButton('Unlock L1 access'))
+      assert.equal(document.querySelector('a[href="/wallet"]'), null)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -543,20 +541,138 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('formats weekly credit with internal Chinese locale codes', async () => {
+  test('shows that the super administrator funds assistant usage', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: assistantStatus } }
     }) as typeof api.get
 
-    await i18n.changeLanguage('zhCN')
     const rendered = await renderPanel()
     try {
-      assert.match(document.body.textContent ?? '', /月/)
+      assert.match(
+        document.body.textContent ?? '',
+        /Funded by the super administrator/
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /charged to the super administrator account, not your wallet/
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /Weekly included/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
-      await i18n.changeLanguage('en')
+    }
+  })
+
+  test('opens an explicit confirmation for an AI L1 recommendation', async () => {
+    let submittedRecommendation: unknown
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return {
+          data: {
+            success: true,
+            data: { ...assistantStatus, developer_access_granted: false },
+          },
+        }
+      }
+      if (url === '/api/user/developer-access/request') {
+        return { data: { success: true, data: null } }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      if (url === '/api/assistant/chat') {
+        return {
+          data: {
+            choices: [
+              {
+                message: {
+                  content: 'I have enough detail to recommend L1 access.',
+                },
+              },
+            ],
+            lmm_assistant_action: {
+              type: 'l1_recommendation',
+              user_statement: 'I will connect Claude Code for private work.',
+              recommendation:
+                'Recommend L1 because the user identified a specific client and purpose.',
+              confirmation_token: 'assistant-confirmation-token',
+            },
+          },
+          headers: { 'x-lmm-assistant-intent': 'onboarding' },
+        }
+      }
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedRecommendation = data
+      return {
+        data: {
+          success: true,
+          data: {
+            id: 11,
+            status: 'pending',
+            reason: 'I will connect Claude Code for private work.',
+            source: 'assistant_recommendation',
+            ai_recommendation:
+              'Recommend L1 because the user identified a specific client and purpose.',
+            admin_note: '',
+            created_at: 1_786_400_000,
+            reviewed_at: 0,
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder="Write a short explanation of what you want to build or why you need L1 access."]'
+      )
+      assert.ok(textarea)
+      await setTextareaValue(
+        textarea,
+        'I want Claude Code access for my private project.'
+      )
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Confirm AI recommendation') ===
+            true,
+          'AI recommendation confirmation did not render'
+        )
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /I will connect Claude Code for private work\./
+      )
+
+      await act(async () => {
+        findButton('Confirm and send to administrator').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => submittedRecommendation !== undefined,
+          'Confirmed recommendation was not submitted'
+        )
+      )
+      assert.deepEqual(submittedRecommendation, {
+        reason: 'I will connect Claude Code for private work.',
+        ai_recommendation:
+          'Recommend L1 because the user identified a specific client and purpose.',
+        confirmation_token: 'assistant-confirmation-token',
+        confirmed: true,
+      })
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
     }
   })
 
@@ -585,10 +701,9 @@ describe('AssistantPanel', () => {
       'textarea[placeholder="Ask about plans, setup, keys, or costs..."]'
     )
     assert.ok(textarea)
-    assert.match(document.body.textContent ?? '', /Resets /)
     assert.match(
       document.body.textContent ?? '',
-      /Weekly system credit is used first\. Your wallet is charged only after it runs out\./
+      /AI customer-service token usage is charged to the super administrator account, not your wallet\./
     )
     await setTextareaValue(textarea, 'How do I configure Claude Code?')
     const submit = document.querySelector<HTMLButtonElement>(

@@ -617,9 +617,9 @@ async fn admin(
     Ok(user)
 }
 
-async fn payment_compliance_confirmed(pg: &PgPool) -> Result<bool, sqlx::Error> {
+pub(crate) async fn payment_compliance_confirmed(pg: &PgPool) -> Result<bool, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT key, value FROM options WHERE key IN ('payment_setting.compliance_confirmed', 'payment_setting.compliance_terms_version')",
+        "SELECT key, value FROM options WHERE key IN ('payment_setting.compliance_confirmed', 'payment_setting.compliance_terms_version', 'payment_setting')",
     )
     .fetch_all(pg)
     .await?;
@@ -632,12 +632,26 @@ async fn payment_compliance_confirmed(pg: &PgPool) -> Result<bool, sqlx::Error> 
             ))
         })
         .collect::<Result<HashMap<_, _>, sqlx::Error>>()?;
-    Ok(values
+    let split_options = values
         .get("payment_setting.compliance_confirmed")
         .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
         && values
             .get("payment_setting.compliance_terms_version")
-            .is_some_and(|value| value == "v1"))
+            .is_some_and(|value| value == "v1");
+    Ok(split_options
+        || values
+            .get("payment_setting")
+            .and_then(|value| serde_json::from_str::<Value>(value).ok())
+            .is_some_and(|value| {
+                value
+                    .get("compliance_confirmed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && value
+                        .get("compliance_terms_version")
+                        .and_then(Value::as_str)
+                        == Some("v1")
+            }))
 }
 
 fn compliance_message(headers: &HeaderMap) -> &'static str {
@@ -712,7 +726,7 @@ where
 }
 
 #[derive(Serialize)]
-struct PlanView {
+pub(crate) struct PlanView {
     plan: Plan,
 }
 #[derive(Deserialize)]
@@ -894,6 +908,12 @@ async fn plans(pg: &PgPool, enabled_only: bool) -> Result<Vec<Plan>, sqlx::Error
         .iter()
         .map(plan_from_row)
         .collect()
+}
+
+pub(crate) async fn enabled_plan_views(pg: &PgPool) -> Result<Vec<PlanView>, sqlx::Error> {
+    plans(pg, true)
+        .await
+        .map(|plans| plans.into_iter().map(|plan| PlanView { plan }).collect())
 }
 const PLAN_SELECT: &str = "SELECT id, title, COALESCE(subtitle, '') subtitle, price_amount::FLOAT8 price_amount, COALESCE(currency, 'USD') currency, COALESCE(duration_unit, 'month') duration_unit, COALESCE(duration_value, 1) duration_value, COALESCE(custom_seconds, 0) custom_seconds, enabled, COALESCE(sort_order, 0) sort_order, COALESCE(allow_balance_pay, TRUE) allow_balance_pay, COALESCE(allow_wallet_overflow, TRUE) allow_wallet_overflow, COALESCE(stripe_price_id, '') stripe_price_id, COALESCE(creem_product_id, '') creem_product_id, COALESCE(waffo_pancake_product_id, '') waffo_pancake_product_id, COALESCE(max_purchase_per_user, 0) max_purchase_per_user, COALESCE(total_amount, 0) total_amount, COALESCE(upgrade_group, '') upgrade_group, COALESCE(downgrade_group, '') downgrade_group, COALESCE(quota_reset_period, 'never') quota_reset_period, COALESCE(quota_reset_custom_seconds, 0) quota_reset_custom_seconds, COALESCE(created_at, 0) created_at, COALESCE(updated_at, 0) updated_at FROM subscription_plans";
 fn plan_from_row(row: &sqlx::postgres::PgRow) -> Result<Plan, sqlx::Error> {

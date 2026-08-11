@@ -143,7 +143,7 @@ after(() => domWindow.close())
 describe('AssistantCostTool', () => {
   test('formats live costs with internal Chinese locale codes', async () => {
     api.get = (async (url: string) => {
-      assert.equal(url, '/api/pricing')
+      assert.equal(url, '/api/assistant/pricing')
       return { data: pricingFixture }
     }) as typeof api.get
 
@@ -157,26 +157,28 @@ describe('AssistantCostTool', () => {
     }
   })
 
-  test('keeps L0 restricted without requesting pricing', async () => {
+  test('gives L0 a live read-only cost estimate', async () => {
     let calls = 0
-    api.get = (async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/pricing')
       calls += 1
       return { data: pricingFixture }
     }) as typeof api.get
 
     const rendered = await renderTool(false)
-    assert.equal(calls, 0)
+    assert.equal(calls, 1)
     assert.match(
       rendered.container.textContent ?? '',
-      /Live cost calculation requires L1/
+      /read-only while your L1 request is under review/
     )
+    assert.match(rendered.container.textContent ?? '', /\$0\.3600/)
     await unmount(rendered)
   })
 
   test('expands all usable groups and recovers from a pricing error', async () => {
     let calls = 0
     api.get = (async (url: string) => {
-      assert.equal(url, '/api/pricing')
+      assert.equal(url, '/api/assistant/pricing')
       calls += 1
       if (calls === 1) throw new Error('offline')
       return { data: pricingFixture }

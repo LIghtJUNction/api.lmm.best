@@ -72,6 +72,8 @@ func SetRelayRouter(router *gin.Engine) {
 	assistantRouter.Use(middleware.UserAuth())
 	{
 		assistantRouter.GET("/status", controller.GetAssistantStatus)
+		assistantRouter.GET("/pricing", controller.GetAssistantPricing)
+		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
 		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
 		assistantRouter.GET("/handoffs/self", middleware.DisableCache(), controller.GetAssistantHandoff)
 		assistantRouter.POST("/handoffs", middleware.UserCriticalRateLimit("assistant-handoff"), middleware.DisableCache(), controller.SubmitAssistantHandoff)

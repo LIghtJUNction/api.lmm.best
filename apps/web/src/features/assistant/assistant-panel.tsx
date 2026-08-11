@@ -67,14 +67,13 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { toIntlLocale } from '@/i18n/languages'
 
 import {
   getAssistantAvailableModels,
   getAssistantStatus,
   sendAssistantMessage,
   type AssistantChatMessage,
-  type AssistantStatus,
+  type AssistantL1RecommendationAction,
 } from './api'
 import {
   getAssistantAccountAccessState,
@@ -203,32 +202,6 @@ function PresetAction(props: {
   )
 }
 
-function remainingCreditUSD(status: AssistantStatus | undefined): number {
-  const credit = status?.credit
-  if (!credit || credit.limit_quota <= 0 || credit.remaining_quota <= 0) {
-    return 0
-  }
-  return (
-    credit.weekly_credit_usd * (credit.remaining_quota / credit.limit_quota)
-  )
-}
-
-function assistantCreditResetLabel(
-  status: AssistantStatus | undefined,
-  language: string
-): string | null {
-  const resetsAt = status?.credit.resets_at
-  if (!Number.isFinite(resetsAt) || !resetsAt || resetsAt <= 0) return null
-  const resetDate = new Date(resetsAt * 1000)
-  if (Number.isNaN(resetDate.getTime())) return null
-  return new Intl.DateTimeFormat(toIntlLocale(language), {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(resetDate)
-}
-
 function AssistantAccountStatusNotice(props: {
   state: Extract<AssistantAccountAccessState, 'loading' | 'error'>
   onRetry: () => void
@@ -302,7 +275,7 @@ export function AssistantPanel(props: {
   initialMessageRevision?: number
   onOpenChange: (open: boolean) => void
 }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const baseUrl = getBaseUrl()
   const presets = useMemo<AssistantPreset[]>(
@@ -337,7 +310,7 @@ export function AssistantPanel(props: {
         ),
         restricted: {
           answer: t(
-            'While review is pending, I can explain LMM, help compare future plans, estimate costs, and prepare client setup. API keys, payment, and account changes remain locked until L1 approval.'
+            'L0 access is restricted. Explain your real use case to me; after I have enough information, I can prepare an L1 recommendation for your confirmation.'
           ),
         },
       },
@@ -354,8 +327,13 @@ export function AssistantPanel(props: {
         },
         restricted: {
           answer: t(
-            'Tell me your expected monthly usage and budget. I can explain how to compare plan value now; live prices, discounts, and checkout remain locked until L1 approval.'
+            'L0 access is restricted. Explain your real use case to me; after I have enough information, I can prepare an L1 recommendation for your confirmation.'
           ),
+          action: {
+            kind: 'tool',
+            label: t('Unlock L1 access'),
+            tool: 'activation',
+          },
         },
       },
       {
@@ -420,6 +398,16 @@ export function AssistantPanel(props: {
           kind: 'tool',
           label: t('Calculate with live pricing'),
           tool: 'cost',
+        },
+        restricted: {
+          answer: t(
+            'Choose a model and enter expected input and output tokens. I can calculate a read-only estimate from live pricing while your L1 request is under review.'
+          ),
+          action: {
+            kind: 'tool',
+            label: t('Calculate with live pricing'),
+            tool: 'cost',
+          },
         },
       },
       {
@@ -488,6 +476,8 @@ export function AssistantPanel(props: {
     ]
   })
   const [sending, setSending] = useState(false)
+  const [recommendationDraft, setRecommendationDraft] =
+    useState<AssistantL1RecommendationAction | null>(null)
   const [activeTool, setActiveTool] = useState<
     | 'activation'
     | 'key'
@@ -513,6 +503,8 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
+  const superAdministratorFunded =
+    statusQuery.data?.funding?.mode === 'super_administrator'
   const connectionModelsQuery = useQuery({
     queryKey: ['assistant-available-models'],
     queryFn: getAssistantAvailableModels,
@@ -531,34 +523,21 @@ export function AssistantPanel(props: {
     visiblePresets = presets
   }
 
-  const creditLabel = useMemo(
-    () =>
-      new Intl.NumberFormat(toIntlLocale(i18n.language), {
-        style: 'currency',
-        currency: 'USD',
-        maximumFractionDigits: 2,
-      }).format(remainingCreditUSD(statusQuery.data)),
-    [i18n.language, statusQuery.data]
-  )
-  const creditResetLabel = useMemo(
-    () => assistantCreditResetLabel(statusQuery.data, i18n.language),
-    [i18n.language, statusQuery.data]
-  )
   let assistantFooterStatus = t('Loading...')
   let assistantDescription = t('Loading...')
   let assistantPromptPlaceholder = t('Ask AI assistant')
   if (developerAccessGranted) {
-    assistantFooterStatus = statusQuery.data
-      ? t('Weekly included credit remaining: {{amount}}', {
-          amount: creditLabel,
-        })
-      : t('Weekly included AI credit applies first.')
+    assistantFooterStatus = superAdministratorFunded
+      ? t('Funded by the super administrator')
+      : t('Loading...')
     assistantDescription = t(
       'Guidance for plans, setup, API keys, costs, and support.'
     )
     assistantPromptPlaceholder = t('Ask about plans, setup, keys, or costs...')
   } else if (accountAccessState === 'restricted') {
-    assistantFooterStatus = t('Ask for L1 access')
+    assistantFooterStatus = superAdministratorFunded
+      ? t('Funded by the super administrator')
+      : t('Loading...')
     assistantDescription = t(
       'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
     )
@@ -627,9 +606,18 @@ export function AssistantPanel(props: {
       const suggestedPreset = suggestedPresetId
         ? presets.find((preset) => preset.id === suggestedPresetId)
         : undefined
-      const suggestedAction = developerAccessGranted
+      let suggestedAction = developerAccessGranted
         ? suggestedPreset?.action
         : suggestedPreset?.restricted?.action
+      if (reply.action) {
+        setRecommendationDraft(reply.action)
+        setActiveTool('activation')
+        suggestedAction = {
+          kind: 'tool',
+          label: t('Review AI recommendation'),
+          tool: 'activation',
+        }
+      }
       setEntries((current) => [
         ...current,
         {
@@ -810,10 +798,24 @@ export function AssistantPanel(props: {
                 ) : null}
                 {activeTool === 'activation' && accountAccessConfirmed ? (
                   <AssistantActivationTool
+                    recommendationDraft={recommendationDraft}
                     onContinueSetup={() => setActiveTool('setup')}
+                    onSubmitted={() => {
+                      setRecommendationDraft(null)
+                      setEntries((current) => [
+                        ...current,
+                        {
+                          id: nanoid(),
+                          role: 'assistant',
+                          content: t(
+                            'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
+                          ),
+                        },
+                      ])
+                    }}
                   />
                 ) : null}
-                {activeTool === 'cost' && developerAccessGranted ? (
+                {activeTool === 'cost' && accountAccessConfirmed ? (
                   <AssistantCostTool
                     developerAccessGranted={developerAccessGranted}
                   />
@@ -824,9 +826,10 @@ export function AssistantPanel(props: {
                 {activeTool === 'models' && developerAccessGranted ? (
                   <AssistantModelsTool />
                 ) : null}
-                {activeTool === 'plan' && developerAccessGranted ? (
+                {activeTool === 'plan' && accountAccessConfirmed ? (
                   <AssistantPlanTool
                     developerAccessGranted={developerAccessGranted}
+                    onRequestAccess={() => setActiveTool('activation')}
                   />
                 ) : null}
                 {activeTool === 'setup' && developerAccessGranted ? (
@@ -853,6 +856,7 @@ export function AssistantPanel(props: {
                     onClick={() => {
                       setEntries([])
                       setActiveTool(null)
+                      setRecommendationDraft(null)
                     }}
                     disabled={sending}
                   >
@@ -895,9 +899,6 @@ export function AssistantPanel(props: {
                 <PromptInputFooter>
                   <span className='text-muted-foreground truncate text-xs'>
                     {assistantFooterStatus}
-                    {developerAccessGranted && creditResetLabel
-                      ? ` · ${t('Resets {{date}}', { date: creditResetLabel })}`
-                      : null}
                   </span>
                   <PromptInputSubmit
                     status={sending ? 'submitted' : 'ready'}
@@ -906,10 +907,10 @@ export function AssistantPanel(props: {
                 </PromptInputFooter>
               </PromptInput>
             </PromptInputProvider>
-            {developerAccessGranted ? (
+            {accountAccessConfirmed && superAdministratorFunded ? (
               <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
                 {t(
-                  'Weekly system credit is used first. Your wallet is charged only after it runs out.'
+                  'AI customer-service token usage is charged to the super administrator account, not your wallet.'
                 )}
               </p>
             ) : null}

@@ -101,7 +101,7 @@ export interface BackendCapabilities {
 export interface AssistantStatus {
   enabled?: boolean
   model?: string
-  weekly_credit_usd?: number
+  funding_mode?: 'super_administrator'
 }
 
 export interface SystemStatus {

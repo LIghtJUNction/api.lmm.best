@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -9,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDeveloperAccessRequestApprovalUnlocksL1WithoutPayment(t *testing.T) {
+func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
 
@@ -21,15 +22,27 @@ func TestDeveloperAccessRequestApprovalUnlocksL1WithoutPayment(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&user).Error)
 
-	request, err := SubmitDeveloperAccessRequest(user.Id, "I need access for a verified integration")
+	request, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I need access for a verified integration",
+		"The user described a concrete integration and understands the API key setup steps.",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, DeveloperAccessRequestPending, request.Status)
+	assert.Equal(t, DeveloperAccessRequestSourceAI, request.Source)
+	assert.NotEmpty(t, request.AIRecommendation)
 
 	// Repeated submissions are idempotent while the first request is pending.
-	repeated, err := SubmitDeveloperAccessRequest(user.Id, "a second browser tab")
+	repeated, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"a second browser tab should not replace the original reason",
+		"A second recommendation should not replace the original pending recommendation.",
+	)
 	require.NoError(t, err)
 	assert.Equal(t, request.Id, repeated.Id)
 	assert.Equal(t, request.Reason, repeated.Reason)
+	assert.Equal(t, request.AIRecommendation, repeated.AIRecommendation)
+	assert.Equal(t, DeveloperAccessRequestSourceAI, repeated.Source)
 
 	pending, err := ListDeveloperAccessRequests(DeveloperAccessRequestPending, 10)
 	require.NoError(t, err)
@@ -54,14 +67,27 @@ func TestDeveloperAccessRequestApprovalUnlocksL1WithoutPayment(t *testing.T) {
 	assert.ErrorIs(t, err, ErrDeveloperAccessRequestReviewed)
 }
 
-func TestDeveloperAccessRequestRejectionDoesNotActivate(t *testing.T) {
+func TestAssistantDeveloperAccessRecommendationRejectionDoesNotActivate(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
 
 	user := User{Username: "rejected-request-user", Password: "password", Role: common.RoleCommonUser}
 	require.NoError(t, db.Create(&user).Error)
-	request, err := SubmitDeveloperAccessRequest(user.Id, "please review")
+	request, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"please review my API integration",
+		"The user has a plausible use case, but the administrator should request more detail.",
+	)
 	require.NoError(t, err)
+
+	for _, note := range []string{"", " ", "a", "同"} {
+		_, err := ReviewDeveloperAccessRequest(99, request.Id, false, note)
+		assert.ErrorIs(t, err, ErrDeveloperAccessReviewNoteTooShort)
+	}
+
+	var stillPending DeveloperAccessRequest
+	require.NoError(t, db.First(&stillPending, request.Id).Error)
+	assert.Equal(t, DeveloperAccessRequestPending, stillPending.Status)
 
 	rejected, err := ReviewDeveloperAccessRequest(99, request.Id, false, "please provide more detail")
 	require.NoError(t, err)
@@ -82,23 +108,57 @@ func TestDeveloperAccessRequestTextLimit(t *testing.T) {
 	user := User{Username: "long-request-user", Password: "password", Role: common.RoleCommonUser}
 	require.NoError(t, db.Create(&user).Error)
 
-	_, err := SubmitDeveloperAccessRequest(user.Id, string(make([]rune, maxDeveloperAccessRequestNote+1)))
+	_, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		string(make([]rune, maxDeveloperAccessRequestNote+1)),
+		strings.Repeat("r", minDeveloperAccessRecommendation),
+	)
 	assert.ErrorIs(t, err, ErrDeveloperAccessRequestNoteTooLong)
 	assert.False(t, errors.Is(err, ErrDeveloperAccessRequestReviewed))
+
+	_, err = SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"valid reason",
+		string(make([]rune, maxDeveloperAccessRequestNote+1)),
+	)
+	assert.ErrorIs(t, err, ErrDeveloperAccessRequestNoteTooLong)
 }
 
-func TestDeveloperAccessRequestReasonIsRequiredAndTrimmed(t *testing.T) {
+func TestAssistantDeveloperAccessRecommendationValidationAndRedaction(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
 	user := User{Username: "short-request-user", Password: "password", Role: common.RoleCommonUser}
 	require.NoError(t, db.Create(&user).Error)
 
 	for _, reason := range []string{"", "   ", "abcd", "  四个字  "} {
-		_, err := SubmitDeveloperAccessRequest(user.Id, reason)
+		_, err := SubmitAssistantDeveloperAccessRecommendation(
+			user.Id,
+			reason,
+			strings.Repeat("r", minDeveloperAccessRecommendation),
+		)
 		assert.ErrorIs(t, err, ErrDeveloperAccessRequestReasonTooShort)
 	}
 
-	request, err := SubmitDeveloperAccessRequest(user.Id, "  测试申请说  ")
+	for _, recommendation := range []string{"", "   ", strings.Repeat("推", minDeveloperAccessRecommendation-1)} {
+		_, err := SubmitAssistantDeveloperAccessRecommendation(user.Id, "valid reason", recommendation)
+		assert.ErrorIs(t, err, ErrDeveloperAccessRecommendationTooShort)
+	}
+
+	request, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"  测试申请说，password: hunter2  ",
+		"AI recommends approval because the use case is clear; key=sk-secret-token-123.",
+	)
 	require.NoError(t, err)
-	assert.Equal(t, "测试申请说", request.Reason)
+	assert.Equal(t, DeveloperAccessRequestSourceAI, request.Source)
+	assert.NotContains(t, request.Reason, "hunter2")
+	assert.NotContains(t, request.AIRecommendation, "sk-secret-token-123")
+	assert.Contains(t, request.Reason, "[REDACTED]")
+	assert.Contains(t, request.AIRecommendation, "[REDACTED_API_KEY]")
+
+	var persisted DeveloperAccessRequest
+	require.NoError(t, db.First(&persisted, request.Id).Error)
+	assert.Equal(t, request.Reason, persisted.Reason)
+	assert.Equal(t, request.AIRecommendation, persisted.AIRecommendation)
+	assert.Equal(t, DeveloperAccessRequestSourceAI, persisted.Source)
 }

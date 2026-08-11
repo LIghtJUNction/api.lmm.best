@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -298,10 +297,9 @@ func NewAssistantBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo
 	if relayInfo == nil {
 		return nil, types.NewError(errors.New("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
-	weekStart := model.AssistantWeekStartUTC(time.Now())
 	session := &BillingSession{
 		relayInfo: relayInfo,
-		funding:   NewAssistantFunding(relayInfo.UserId, weekStart, assistantWeeklyQuotaLimit()),
+		funding:   NewAssistantFunding(relayInfo.UserId),
 	}
 	if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 		return nil, apiErr

@@ -315,7 +315,7 @@ export function AssistantKeyTool(props: {
                 </p>
                 <p className='text-muted-foreground mt-1 text-xs leading-5'>
                   {t(
-                    'Only L0 is restricted. Ask an administrator to approve L1, then return here to create a key.'
+                    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after administrator approval, return here to create a key.'
                   )}
                 </p>
               </div>

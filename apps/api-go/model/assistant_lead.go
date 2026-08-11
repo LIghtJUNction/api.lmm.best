@@ -92,6 +92,9 @@ func ClassifyAssistantIntent(message string) string {
 	normalized := strings.ToLower(strings.TrimSpace(message))
 	switch {
 	case assistantMessageContains(normalized,
+		"新手", "入门", "审核", "解锁", "l0", "l1", "onboarding", "review", "approval", "getting started"):
+		return AssistantIntentOnboarding
+	case assistantMessageContains(normalized,
 		"人工", "客服", "管理员", "工单", "human", "support", "administrator", "agent"):
 		return AssistantIntentHumanSupport
 	case assistantMessageContains(normalized,
@@ -118,9 +121,6 @@ func ClassifyAssistantIntent(message string) string {
 	case assistantMessageContains(normalized,
 		"套餐", "购买", "划算", "优惠", "折扣", "订阅", "plan", "purchase", "discount", "best value"):
 		return AssistantIntentPlanPurchase
-	case assistantMessageContains(normalized,
-		"新手", "入门", "审核", "解锁", "l0", "l1", "onboarding", "review", "approval", "getting started"):
-		return AssistantIntentOnboarding
 	default:
 		return AssistantIntentOther
 	}

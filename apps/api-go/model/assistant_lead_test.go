@@ -36,6 +36,7 @@ func TestClassifyAssistantIntent(t *testing.T) {
 		"帮我计算 token 成本":                      AssistantIntentCost,
 		"哪个套餐最划算，有优惠吗":                       AssistantIntentPlanPurchase,
 		"L0 审核多久能到 L1":                       AssistantIntentOnboarding,
+		"请管理员帮我审核 L1":                        AssistantIntentOnboarding,
 		"hello":                              AssistantIntentOther,
 	}
 	for message, expected := range tests {

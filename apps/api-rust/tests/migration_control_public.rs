@@ -65,6 +65,13 @@ impl MissingControlAuthorizer for MissingControlAuth {
     ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
         self.0.ok_or(MissingControlAuthError::UnmatchedOpaque)
     }
+
+    async fn browser_session_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+        self.principal(headers).await.map(Some)
+    }
 }
 
 struct FixedMissingControlAuth(MissingControlAuthError);
@@ -1382,6 +1389,47 @@ async fn pricing_route_preserves_go_top_level_shape_and_version() {
     assert_eq!(body["success"], true);
     assert_eq!(body["data"], serde_json::json!([]));
     assert_eq!(body["pricing_version"], "a42d372ccf0b5dd13ecf71203521f9d2");
+}
+
+#[tokio::test]
+async fn assistant_pricing_should_require_a_dashboard_user_and_reuse_pricing_shape() {
+    let (status, content_type, body) = missing_json(
+        missing_control_app(missing_control_store(), Some(1)),
+        Request::get("/api/assistant/pricing")
+            .header(header::AUTHORIZATION, "Bearer dashboard")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type, "application/json; charset=utf-8");
+    assert_eq!(body["success"], true);
+    assert_eq!(body["data"], serde_json::json!([]));
+    assert_eq!(body["pricing_version"], "a42d372ccf0b5dd13ecf71203521f9d2");
+}
+
+#[tokio::test]
+async fn assistant_pricing_should_reject_a_personal_token_without_a_browser_session() {
+    let app = missing_control_public_router(MissingControlPublicState::new(
+        Arc::new(missing_control_store()),
+        Arc::new(DashboardMissingControlAuthorizer::new(Arc::new(
+            RecordingDashboardAuth {
+                credentials: Arc::new(Mutex::new(Vec::new())),
+            },
+        ))),
+    ));
+    let (status, _, body) = missing_json(
+        app,
+        Request::get("/api/assistant/pricing")
+            .header(header::AUTHORIZATION, "Bearer dashboard")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "ASSISTANT_SESSION_REQUIRED");
 }
 
 #[tokio::test]

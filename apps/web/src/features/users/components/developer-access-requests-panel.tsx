@@ -66,12 +66,17 @@ export function DeveloperAccessRequestsPanel() {
     approve: boolean
   ) => {
     if (reviewing !== null) return
+    const note = (notes[request.id] ?? '').trim()
+    if ([...note].length < 2) {
+      toast.error(t('Administrator reply must contain at least 2 characters.'))
+      return
+    }
     setReviewing(request.id)
     try {
       const response = await reviewDeveloperAccessRequest(
         request.id,
         approve ? 'approve' : 'reject',
-        notes[request.id] ?? ''
+        note
       )
       if (!response.success) {
         throw new Error(
@@ -100,12 +105,14 @@ export function DeveloperAccessRequestsPanel() {
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
           <div className='flex items-center gap-2'>
-            <h2 className='text-sm font-semibold'>{t('Unlock requests')}</h2>
+            <h2 className='text-sm font-semibold'>
+              {t('AI access recommendations')}
+            </h2>
             <Badge variant='secondary'>{requests.length}</Badge>
           </div>
           <p className='text-muted-foreground mt-1 text-sm'>
             {t(
-              'Review requests from L0 users who need L1 access without a payment.'
+              'Review AI recommendations from L0 conversations. L1 is granted only after your approval.'
             )}
           </p>
         </div>
@@ -125,11 +132,13 @@ export function DeveloperAccessRequestsPanel() {
 
       {loading && requests.length === 0 ? (
         <p className='text-muted-foreground mt-5 text-sm'>{t('Loading...')}</p>
-      ) : requests.length === 0 ? (
+      ) : null}
+      {!loading && requests.length === 0 ? (
         <p className='text-muted-foreground mt-5 text-sm'>
           {t('No pending unlock requests.')}
         </p>
-      ) : (
+      ) : null}
+      {requests.length > 0 ? (
         <div className='mt-5 grid gap-3'>
           {requests.map((request) => (
             <article key={request.id} className='bg-background border p-4'>
@@ -140,16 +149,45 @@ export function DeveloperAccessRequestsPanel() {
                     {request.email || t('No email provided')} · #{request.id}
                   </p>
                 </div>
-                <Badge variant='outline'>{t('Pending review')}</Badge>
+                <div className='flex flex-wrap items-center gap-2'>
+                  <Badge variant='outline'>
+                    {request.source === 'assistant_recommendation'
+                      ? t('AI recommendation')
+                      : t('Legacy request')}
+                  </Badge>
+                  <Badge variant='outline'>{t('Pending review')}</Badge>
+                </div>
               </div>
-              <p className='text-muted-foreground mt-3 text-sm whitespace-pre-wrap'>
-                {request.reason || t('No reason provided.')}
-              </p>
+              <div className='mt-3 grid gap-3 sm:grid-cols-2'>
+                <div className='bg-muted/20 border p-3'>
+                  <p className='text-xs font-medium'>{t('User statement')}</p>
+                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                    {request.reason || t('No reason provided.')}
+                  </p>
+                </div>
+                <div className='bg-muted/20 border p-3'>
+                  <p className='text-xs font-medium'>
+                    {t('AI recommendation')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+                    {request.ai_recommendation ||
+                      t('No AI recommendation was recorded.')}
+                  </p>
+                </div>
+              </div>
               <Textarea
                 className='mt-3'
                 rows={2}
+                required
+                minLength={2}
                 maxLength={2000}
-                placeholder={t('Optional note for the user')}
+                aria-invalid={
+                  [...(notes[request.id] ?? '').trim()].length > 0 &&
+                  [...(notes[request.id] ?? '').trim()].length < 2
+                }
+                placeholder={t(
+                  'Required reply to the user (at least 2 characters)'
+                )}
                 value={notes[request.id] ?? ''}
                 onChange={(event) =>
                   setNotes((current) => ({
@@ -163,7 +201,10 @@ export function DeveloperAccessRequestsPanel() {
                   size='sm'
                   variant='destructive'
                   onClick={() => void review(request, false)}
-                  disabled={reviewing !== null}
+                  disabled={
+                    reviewing !== null ||
+                    [...(notes[request.id] ?? '').trim()].length < 2
+                  }
                 >
                   <X data-icon='inline-start' />
                   {t('Reject')}
@@ -171,7 +212,10 @@ export function DeveloperAccessRequestsPanel() {
                 <Button
                   size='sm'
                   onClick={() => void review(request, true)}
-                  disabled={reviewing !== null}
+                  disabled={
+                    reviewing !== null ||
+                    [...(notes[request.id] ?? '').trim()].length < 2
+                  }
                 >
                   <Check data-icon='inline-start' />
                   {t('Approve and unlock L1')}
@@ -180,7 +224,7 @@ export function DeveloperAccessRequestsPanel() {
             </article>
           ))}
         </div>
-      )}
+      ) : null}
     </section>
   )
 }

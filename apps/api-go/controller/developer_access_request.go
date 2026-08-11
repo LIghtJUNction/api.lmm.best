@@ -1,9 +1,11 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -12,7 +14,10 @@ import (
 )
 
 type developerAccessRequestInput struct {
-	Reason string `json:"reason"`
+	Reason            string `json:"reason"`
+	AIRecommendation  string `json:"ai_recommendation"`
+	ConfirmationToken string `json:"confirmation_token"`
+	Confirmed         bool   `json:"confirmed"`
 }
 
 type developerAccessRequestReviewInput struct {
@@ -20,12 +25,14 @@ type developerAccessRequestReviewInput struct {
 }
 
 type developerAccessRequestSelfResponse struct {
-	Id         int    `json:"id"`
-	Status     string `json:"status"`
-	Reason     string `json:"reason"`
-	AdminNote  string `json:"admin_note"`
-	CreatedAt  int64  `json:"created_at"`
-	ReviewedAt int64  `json:"reviewed_at"`
+	Id               int    `json:"id"`
+	Status           string `json:"status"`
+	Source           string `json:"source"`
+	Reason           string `json:"reason"`
+	AIRecommendation string `json:"ai_recommendation"`
+	AdminNote        string `json:"admin_note"`
+	CreatedAt        int64  `json:"created_at"`
+	ReviewedAt       int64  `json:"reviewed_at"`
 }
 
 func toDeveloperAccessRequestSelfResponse(request *model.DeveloperAccessRequest) any {
@@ -33,12 +40,14 @@ func toDeveloperAccessRequestSelfResponse(request *model.DeveloperAccessRequest)
 		return nil
 	}
 	return developerAccessRequestSelfResponse{
-		Id:         request.Id,
-		Status:     request.Status,
-		Reason:     request.Reason,
-		AdminNote:  request.AdminNote,
-		CreatedAt:  request.CreatedAt,
-		ReviewedAt: request.ReviewedAt,
+		Id:               request.Id,
+		Status:           request.Status,
+		Source:           request.Source,
+		Reason:           request.Reason,
+		AIRecommendation: request.AIRecommendation,
+		AdminNote:        request.AdminNote,
+		CreatedAt:        request.CreatedAt,
+		ReviewedAt:       request.ReviewedAt,
 	}
 }
 
@@ -87,13 +96,45 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_INVALID_REQUEST", "invalid unlock request")
 		return
 	}
-	request, err := model.SubmitDeveloperAccessRequest(user.Id, input.Reason)
+	if !input.Confirmed {
+		developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_CONFIRMATION_REQUIRED", "explicit confirmation of the AI recommendation is required")
+		return
+	}
+	sessionID := strings.TrimSpace(c.GetString("session_id"))
+	if sessionID == "" {
+		developerAccessRequestError(c, http.StatusForbidden, "DEVELOPER_ACCESS_SESSION_REQUIRED", "a browser login session is required")
+		return
+	}
+	flow, err := model.ConsumeAuthFlow(input.ConfirmationToken, model.AuthFlowMatch{
+		Purpose:   model.AuthFlowPurposeAssistantL1,
+		UserId:    user.Id,
+		SessionId: sessionID,
+	})
 	if err != nil {
-		if errors.Is(err, model.ErrDeveloperAccessRequestReasonTooShort) {
-			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REASON_TOO_SHORT", err.Error())
+		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is invalid or expired; continue the conversation to prepare a new one")
 			return
 		}
-		if errors.Is(err, model.ErrDeveloperAccessRequestNoteTooLong) {
+		common.ApiError(c, err)
+		return
+	}
+	var draft assistantL1RecommendationDraft
+	if json.Unmarshal([]byte(flow.Payload), &draft) != nil ||
+		strings.TrimSpace(input.Reason) != draft.UserStatement ||
+		strings.TrimSpace(input.AIRecommendation) != draft.Recommendation {
+		developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation does not match the confirmed draft")
+		return
+	}
+	request, err := model.SubmitAssistantDeveloperAccessRecommendation(user.Id, draft.UserStatement, draft.Recommendation)
+	if err != nil {
+		switch {
+		case errors.Is(err, model.ErrDeveloperAccessRequestReasonTooShort):
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REASON_TOO_SHORT", err.Error())
+			return
+		case errors.Is(err, model.ErrDeveloperAccessRecommendationTooShort):
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_RECOMMENDATION_TOO_SHORT", err.Error())
+			return
+		case errors.Is(err, model.ErrDeveloperAccessRequestNoteTooLong):
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REASON_TOO_LONG", err.Error())
 			return
 		}
@@ -136,6 +177,10 @@ func reviewDeveloperAccessRequest(c *gin.Context, approve bool) {
 			developerAccessRequestError(c, http.StatusNotFound, "DEVELOPER_ACCESS_REQUEST_NOT_FOUND", err.Error())
 		case errors.Is(err, model.ErrDeveloperAccessRequestReviewed):
 			developerAccessRequestError(c, http.StatusConflict, "DEVELOPER_ACCESS_REQUEST_ALREADY_REVIEWED", err.Error())
+		case errors.Is(err, model.ErrDeveloperAccessReviewNoteTooShort):
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REVIEW_NOTE_TOO_SHORT", err.Error())
+		case errors.Is(err, model.ErrDeveloperAccessRequestNoteTooLong):
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REVIEW_NOTE_TOO_LONG", err.Error())
 		default:
 			common.ApiError(c, err)
 		}

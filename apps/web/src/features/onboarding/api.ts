@@ -22,6 +22,8 @@ export type DeveloperAccessRequest = {
   id: number
   status: 'pending' | 'approved' | 'rejected'
   reason: string
+  source: 'assistant_recommendation' | 'legacy'
+  ai_recommendation: string
   admin_note: string
   created_at: number
   reviewed_at: number
@@ -55,8 +57,13 @@ export function getDeveloperAccessRequest() {
   )
 }
 
-export function submitDeveloperAccessRequest(reason: string) {
+export function submitDeveloperAccessRequest(input: {
+  reason: string
+  ai_recommendation: string
+  confirmation_token: string
+  confirmed: true
+}) {
   return unwrap<DeveloperAccessRequest>(
-    api.post('/api/user/developer-access/request', { reason })
+    api.post('/api/user/developer-access/request', input)
   )
 }
