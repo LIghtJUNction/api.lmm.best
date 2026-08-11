@@ -95,7 +95,7 @@ describe('AssistantSetupTool', () => {
             rootUrl='https://api.example.test'
             openAIBaseUrl='https://api.example.test/v1'
             defaultModel='deepseek-v4-flash'
-            developerAccessGranted={false}
+            developerAccessGranted
             onCreateKey={() => {
               createKeyCalls += 1
             }}
@@ -124,7 +124,7 @@ describe('AssistantSetupTool', () => {
     assert.equal(findButton('Windows').getAttribute('aria-pressed'), 'true')
     assert.equal(findButton('Linux').getAttribute('aria-pressed'), 'false')
     const createKeyButton = findButton('Create API key')
-    assert.equal(createKeyButton.disabled, true)
+    assert.equal(createKeyButton.disabled, false)
 
     await act(async () => {
       findButton('CC Switch').click()
@@ -195,6 +195,34 @@ describe('AssistantSetupTool', () => {
       'Codex'
     )
     assert.equal(createKeyCalls, 0)
+
+    await act(async () => root.unmount())
+  })
+
+  test('does not expose client configuration to L0', async () => {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(
+        <I18nextProvider i18n={i18n}>
+          <AssistantSetupTool
+            rootUrl='https://api.example.test'
+            openAIBaseUrl='https://api.example.test/v1'
+            defaultModel='deepseek-v4-flash'
+            developerAccessGranted={false}
+            onCreateKey={() => {}}
+          />
+        </I18nextProvider>
+      )
+      await flushEffects()
+    })
+
+    assert.match(container.textContent ?? '', /Ask for L1 access/)
+    assert.doesNotMatch(container.textContent ?? '', /deepseek-v4-flash/)
+    assert.doesNotMatch(container.textContent ?? '', /api\.example\.test/)
+    assert.equal(container.querySelector('button'), null)
 
     await act(async () => root.unmount())
   })

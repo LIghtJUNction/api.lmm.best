@@ -180,6 +180,20 @@ export function AssistantSetupTool(props: {
   )
   const chatGPTDesktopAvailable = platform !== 'linux'
 
+  if (!props.developerAccessGranted) {
+    return (
+      <Alert>
+        <HugeiconsIcon icon={LaptopIcon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
   return (
     <Card size='sm'>
       <CardHeader>
@@ -199,14 +213,6 @@ export function AssistantSetupTool(props: {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {!props.developerAccessGranted ? (
-          <div className='bg-muted/40 mb-3 rounded-lg border p-3 text-xs leading-5'>
-            {t(
-              'You can install clients while L0 access is under review. API requests become available after L1 approval.'
-            )}
-          </div>
-        ) : null}
-
         <div className='mb-3 grid gap-1.5'>
           <span className='text-muted-foreground text-xs'>{t('Platform')}</span>
           <div className='flex flex-wrap gap-2' aria-label={t('Platform')}>

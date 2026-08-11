@@ -213,54 +213,29 @@ describe('AssistantPlanTool', () => {
     }
   })
 
-  test('shows live plans and top-up discounts to L0 without enabling write actions', async () => {
+  test('keeps plans and top-up discounts unavailable to L0', async () => {
     let topupCalls = 0
     let planCalls = 0
     api.get = (async (url: string) => {
-      if (url === '/api/user/topup/info') {
-        topupCalls += 1
-        return {
-          data: {
-            success: true,
-            data: {
-              developer_access_granted: false,
-              activation_required: true,
-              payment_available: true,
-              enable_online_topup: true,
-              enable_stripe_topup: false,
-              pay_methods: [{ name: 'Card', type: 'epay' }],
-              min_topup: 10,
-              stripe_min_topup: 10,
-              amount_options: [100],
-              discount: { 100: 0.8 },
-            },
-          },
-        }
-      }
-      if (url === '/api/subscription/plans') {
-        planCalls += 1
-        return { data: plansFixture }
-      }
+      if (url === '/api/user/topup/info') topupCalls += 1
+      if (url === '/api/subscription/plans') planCalls += 1
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
     const rendered = await renderTool(false)
 
-    assert.equal(topupCalls, 1)
-    assert.equal(planCalls, 1)
-    assert.match(rendered.container.textContent ?? '', /Pro/)
-    assert.match(rendered.container.textContent ?? '', /Closest fit/)
-    assert.match(
+    assert.equal(topupCalls, 0)
+    assert.equal(planCalls, 0)
+    assert.match(rendered.container.textContent ?? '', /Ask for L1 access/)
+    assert.doesNotMatch(
       rendered.container.textContent ?? '',
       /Best current top-up discounts/
     )
-    assert.match(rendered.container.textContent ?? '', /save 20%/)
-    assert.match(rendered.container.textContent ?? '', /Add funds/)
-    assert.ok(
-      rendered.container.querySelector<HTMLInputElement>(
-        '#assistant-expected-credit'
-      )
+    assert.equal(
+      rendered.container.querySelector('#assistant-expected-credit'),
+      null
     )
+    assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
 
     await unmount(rendered)
   })

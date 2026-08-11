@@ -466,14 +466,13 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
-  const accountToolActive = activeTool !== null && activeTool !== 'handoff'
-  const visiblePresets = useMemo(
-    () =>
-      developerAccessGranted
-        ? presets
-        : presets.filter((preset) => preset.id === 'onboarding'),
-    [developerAccessGranted, presets]
-  )
+  const accountToolActive = activeTool !== null
+  let visiblePresets: AssistantPreset[] = []
+  if (accountAccessState === 'restricted') {
+    visiblePresets = presets.filter((preset) => preset.id === 'onboarding')
+  } else if (developerAccessGranted) {
+    visiblePresets = presets
+  }
 
   const creditLabel = useMemo(
     () =>
@@ -488,13 +487,30 @@ export function AssistantPanel(props: {
     () => assistantCreditResetLabel(statusQuery.data, i18n.language),
     [i18n.language, statusQuery.data]
   )
-  let assistantFooterStatus = t('Ask for L1 access')
+  let assistantFooterStatus = t('Loading...')
+  let assistantDescription = t('Loading...')
+  let assistantPromptPlaceholder = t('Ask AI assistant')
   if (developerAccessGranted) {
     assistantFooterStatus = statusQuery.data
       ? t('Weekly included credit remaining: {{amount}}', {
           amount: creditLabel,
         })
       : t('Weekly included AI credit applies first.')
+    assistantDescription = t(
+      'Guidance for plans, setup, API keys, costs, and support.'
+    )
+    assistantPromptPlaceholder = t('Ask about plans, setup, keys, or costs...')
+  } else if (accountAccessState === 'restricted') {
+    assistantFooterStatus = t('Ask for L1 access')
+    assistantDescription = t(
+      'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+    )
+    assistantPromptPlaceholder = t(
+      'Write a short explanation of what you want to build or why you need L1 access.'
+    )
+  } else if (accountAccessState === 'error') {
+    assistantFooterStatus = t('Unable to verify account access')
+    assistantDescription = t('Unable to verify account access')
   }
 
   const appendPreset = useCallback((preset: AssistantPreset) => {
@@ -519,10 +535,16 @@ export function AssistantPanel(props: {
     () =>
       subscribeToAssistantOpen((presetId) => {
         if (!presetId) return
-        const preset = visiblePresets.find((item) => item.id === presetId)
+        const preset = presets.find((item) => item.id === presetId)
+        if (
+          accountAccessState !== 'granted' &&
+          !(accountAccessState === 'restricted' && preset?.id === 'onboarding')
+        ) {
+          return
+        }
         if (preset) appendPreset(preset)
       }),
-    [appendPreset, visiblePresets]
+    [accountAccessState, appendPreset, presets]
   )
 
   const handleOpenChange = (open: boolean) => {
@@ -613,13 +635,7 @@ export function AssistantPanel(props: {
               <Badge variant='outline'>{statusQuery.data.model}</Badge>
             ) : null}
           </div>
-          <SheetDescription>
-            {developerAccessGranted
-              ? t('Guidance for plans, setup, API keys, costs, and support.')
-              : t(
-                  'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-                )}
-          </SheetDescription>
+          <SheetDescription>{assistantDescription}</SheetDescription>
         </SheetHeader>
 
         <Conversation className='bg-muted/20'>
@@ -636,6 +652,13 @@ export function AssistantPanel(props: {
                     )}
                   </p>
                 </div>
+                {accountAccessState === 'loading' ||
+                accountAccessState === 'error' ? (
+                  <AssistantAccountStatusNotice
+                    state={accountAccessState === 'error' ? 'error' : 'loading'}
+                    onRetry={() => void statusQuery.refetch()}
+                  />
+                ) : null}
                 <div className='grid gap-2'>
                   {visiblePresets.map((preset) => (
                     <Button
@@ -804,13 +827,7 @@ export function AssistantPanel(props: {
               >
                 <PromptInputBody>
                   <PromptInputTextarea
-                    placeholder={
-                      developerAccessGranted
-                        ? t('Ask about plans, setup, keys, or costs...')
-                        : t(
-                            'Write a short explanation of what you want to build or why you need L1 access.'
-                          )
-                    }
+                    placeholder={assistantPromptPlaceholder}
                     maxLength={4000}
                     disabled={sending}
                     className='min-h-14'
