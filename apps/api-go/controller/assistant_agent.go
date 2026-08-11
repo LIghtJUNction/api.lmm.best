@@ -154,10 +154,10 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_setup_guide",
-				Description: "Return a concise platform-specific setup checklist for Claude Code, CC Switch, or ChatGPT-compatible clients.",
+				Description: "Return verified platform-specific install commands and gateway configuration for Claude Code, CC Switch, Claude Desktop, Codex, and compatible clients. Use this instead of guessing client capabilities or endpoint formats.",
 				Parameters: objectSchema(map[string]any{
 					"platform": map[string]any{"type": "string", "enum": []string{"windows", "linux", "macos"}},
-					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
+					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "claude-desktop", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
 				}, []string{"platform", "topic"}),
 			},
 		},
@@ -801,53 +801,138 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 	if platform != "windows" && platform != "linux" && platform != "macos" {
 		return map[string]any{"ok": false, "error": "platform must be windows, linux, or macos"}
 	}
-	if topic != "claude-code" && topic != "cc-switch" && topic != "chatgpt-client" && topic != "codex" && topic != "cursor" && topic != "open-webui" && topic != "other-openai-compatible" {
+	if topic != "claude-code" && topic != "cc-switch" && topic != "claude-desktop" && topic != "chatgpt-client" && topic != "codex" && topic != "cursor" && topic != "open-webui" && topic != "other-openai-compatible" {
 		return map[string]any{"ok": false, "error": "topic is not supported"}
 	}
-	steps := []string{
-		"Install the official client or package for the selected platform and keep it updated.",
-		"Use the console's OpenAI-compatible Base URL with the /v1 suffix.",
-		"Choose the exact Model ID shown in the model list; do not substitute a display name.",
-		"Create or copy an API key only from the API key page and keep it private.",
+	rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
+	if rootURL == "" {
+		rootURL = "<SERVICE_ROOT_URL>"
 	}
-	if topic == "cc-switch" {
-		steps = append(steps,
-			"Open CC Switch, add a provider, then fill Base URL, Model ID, and API key in the provider fields.",
-			"Send a small test request before changing the active profile.",
-		)
-	} else if topic == "claude-code" {
-		steps = append(steps,
-			"Install Claude Code using the current official instructions for your platform.",
-			"If the client exposes an OpenAI-compatible provider setting, use the same Base URL, Model ID, and key fields.",
-		)
-	} else {
-		steps = append(steps,
-			"Open the desktop or compatible ChatGPT client settings and select a custom OpenAI-compatible endpoint if supported.",
-			"Verify the endpoint and model with a short test conversation.",
-		)
+	openAIBaseURL := rootURL + "/v1"
+	if rootURL == "<SERVICE_ROOT_URL>" {
+		openAIBaseURL = "<OPENAI_BASE_URL>"
 	}
-	if topic == "codex" {
-		steps = append(steps,
-			"Install Codex using the official instructions and choose its OpenAI-compatible provider or endpoint settings.",
-			"Set the Base URL, Model ID, and API key in the provider profile, then run a small test request.",
-		)
-	} else if topic == "cursor" {
-		steps = append(steps,
-			"Open Cursor Settings, locate Models or API configuration, and add a custom OpenAI-compatible provider if your version exposes it.",
-			"Paste the Base URL, Model ID, and API key, then verify with a short chat or completion.",
-		)
-	} else if topic == "open-webui" {
-		steps = append(steps,
-			"Open Open WebUI administrator settings and configure an OpenAI-compatible connection.",
-			"Use the Base URL, Model ID, and API key shown by this console, then refresh the model list.",
-		)
-	} else if topic == "other-openai-compatible" {
-		steps = append(steps,
-			"Find the client's custom provider or OpenAI-compatible endpoint settings.",
-			"Paste the Base URL, Model ID, and API key, then confirm the client sends requests to /v1.",
-		)
+	defaultModel := strings.TrimSpace(setting.GetAssistantSettings().Model)
+	if defaultModel == "" {
+		defaultModel = "<MODEL_ID>"
 	}
-	return map[string]any{"ok": true, "platform": platform, "topic": topic, "steps": steps}
+
+	result := map[string]any{
+		"ok":               true,
+		"platform":         platform,
+		"topic":            topic,
+		"service_root":     rootURL,
+		"openai_base_url":  openAIBaseURL,
+		"default_model_id": defaultModel,
+		"api_key":          "<YOUR_API_KEY>",
+		"security_note":    "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session.",
+	}
+
+	switch topic {
+	case "claude-code":
+		installCommand := "curl -fsSL https://claude.ai/install.sh | bash"
+		configuration := fmt.Sprintf("export ANTHROPIC_BASE_URL=%q\nexport ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\nexport ANTHROPIC_MODEL=%q\nclaude", rootURL, defaultModel)
+		if platform == "windows" {
+			installCommand = "winget install Anthropic.ClaudeCode"
+			configuration = fmt.Sprintf("$env:ANTHROPIC_BASE_URL=%q\n$env:ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\n$env:ANTHROPIC_MODEL=%q\nclaude", rootURL, defaultModel)
+		} else if platform == "macos" {
+			installCommand = "brew install --cask claude-code"
+		}
+		result["install_command"] = installCommand
+		result["configuration"] = configuration
+		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
+		result["steps"] = []string{
+			"Install Claude Code with the command returned by this tool, then run claude --version.",
+			"Create an API key in this console and replace only the <YOUR_API_KEY> placeholder.",
+			"Apply the returned environment variables in a terminal opened for the project, then run claude.",
+		}
+		result["official_docs"] = "https://code.claude.com/docs/en/setup"
+	case "cc-switch":
+		installGuide := "Download CC-Switch-v{version}-Windows.msi from the official GitHub Releases page."
+		if platform == "macos" {
+			installGuide = "brew install --cask cc-switch"
+		} else if platform == "linux" {
+			installGuide = "Download the official AppImage or distribution package; on Arch Linux use paru -S cc-switch-bin."
+		}
+		result["install_guide"] = installGuide
+		result["provider"] = map[string]any{
+			"application": "Claude",
+			"env": map[string]string{
+				"ANTHROPIC_BASE_URL":   rootURL,
+				"ANTHROPIC_AUTH_TOKEN": "<YOUR_API_KEY>",
+				"ANTHROPIC_MODEL":      defaultModel,
+			},
+		}
+		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
+		result["steps"] = []string{
+			"Install CC Switch only from its official site or GitHub Releases.",
+			"Select Claude, add a Custom provider, and enter the returned service root, model ID, and a newly created API key.",
+			"Save and enable the provider, open a new terminal, and send a short test with Claude Code.",
+		}
+		result["official_docs"] = "https://github.com/farion1231/cc-switch"
+	case "claude-desktop":
+		result["direct_custom_gateway_supported"] = false
+		result["endpoint_format"] = "Anthropic Messages through CC Switch local routing"
+		if platform == "linux" {
+			result["supported"] = false
+			result["limitation"] = "CC Switch currently manages third-party Claude Desktop profiles on Windows and macOS; use Claude Code on Linux for this service."
+		} else {
+			result["supported"] = true
+			result["steps"] = []string{
+				"Install and launch the official Claude Desktop app once.",
+				"In CC Switch, enable Claude Desktop and import the Claude Code provider or add a custom provider.",
+				"Map the Sonnet role to the returned model ID, enable local routing, then fully restart Claude Desktop.",
+			}
+		}
+		result["official_docs"] = "https://code.claude.com/docs/en/desktop-quickstart"
+		result["cc_switch_docs"] = "https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/2-providers/2.6-claude-desktop.md"
+	case "chatgpt-client":
+		result["supported"] = false
+		result["direct_custom_gateway_supported"] = false
+		result["limitation"] = "The official ChatGPT app uses OpenAI sign-in and does not accept this service's Base URL or API key as a custom provider."
+		result["recommended_alternatives"] = []string{"CC Switch", "Codex CLI", "Open WebUI", "another client that explicitly supports custom OpenAI-compatible providers"}
+		result["official_download"] = "https://chatgpt.com/download/"
+	case "codex":
+		apiKeyCommand := "export LMM_API_KEY='<YOUR_API_KEY>'"
+		if platform == "windows" {
+			apiKeyCommand = "$env:LMM_API_KEY='<YOUR_API_KEY>'"
+		}
+		result["install_command"] = "npm install -g @openai/codex"
+		result["api_key_command"] = apiKeyCommand
+		result["config_path"] = "~/.codex/config.toml"
+		result["config_toml"] = fmt.Sprintf("model = %q\nmodel_provider = \"lmm\"\n\n[model_providers.lmm]\nname = \"LMM\"\nbase_url = %q\nenv_key = \"LMM_API_KEY\"\nwire_api = \"responses\"", defaultModel, openAIBaseURL)
+		result["endpoint_format"] = "OpenAI Responses API; use the /v1 Base URL"
+		result["steps"] = []string{
+			"Install Codex, then create the user-level ~/.codex/config.toml with the returned provider configuration.",
+			"Set LMM_API_KEY in the current shell without writing the key into config.toml.",
+			"Run codex in a project directory and verify the provider and model shown by /status.",
+		}
+		result["official_docs"] = "https://developers.openai.com/codex/cli"
+		result["config_reference"] = "https://developers.openai.com/codex/config-reference"
+	case "cursor":
+		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL only if the installed Cursor version exposes a custom Base URL"
+		result["steps"] = []string{
+			"Open Cursor Settings and check whether the installed version exposes a custom OpenAI-compatible Base URL.",
+			"If supported, enter the returned /v1 Base URL, exact model ID, and a newly created API key.",
+			"If the setting is absent, do not assume the official client can use this gateway; choose CC Switch or another compatible client.",
+		}
+	case "open-webui":
+		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL"
+		result["steps"] = []string{
+			"Open Open WebUI administrator settings and add an OpenAI-compatible connection.",
+			"Enter the returned /v1 Base URL and a newly created API key, then refresh the model list.",
+			"Select the exact returned model ID and send a short test request.",
+		}
+		result["official_docs"] = "https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/"
+	case "other-openai-compatible":
+		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL"
+		result["steps"] = []string{
+			"Confirm that the client explicitly supports a custom OpenAI-compatible Base URL.",
+			"Enter the returned /v1 Base URL, exact model ID, and a newly created API key.",
+			"Send a short test and verify that the client uses a route supported by this service.",
+		}
+	}
+	return result
 }
 
 func inputString(input map[string]any, key string) string {
