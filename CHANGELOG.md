@@ -6,6 +6,9 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+- Improved the anonymous homepage entry points and added a real L0 black-box
+  check: L0 users are guided to the AI assistant while key creation remains
+  denied until the access boundary changes.
 - Added the L0 AI assistant entry flow. L0 users can browse the permitted
   read-only areas and use the assistant to prepare an upgrade request; console,
   key creation, payment, plan and discount actions remain unavailable until an

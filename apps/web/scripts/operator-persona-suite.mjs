@@ -76,15 +76,21 @@ async function validateArtifactWorkspace(workspaceInput, outputInput) {
     throw new Error('deployment workspace marker is missing or unsafe')
   }
   const marker = Object.create(null)
-  for (const line of (await readFile(markerPath, 'utf8')).trimEnd().split('\n')) {
+  for (const line of (await readFile(markerPath, 'utf8'))
+    .trimEnd()
+    .split('\n')) {
     const separator = line.indexOf('=')
     if (separator <= 0) throw new Error('deployment marker is malformed')
     const key = line.slice(0, separator)
     const value = line.slice(separator + 1)
     if (
-      !['format', 'deployment_id', 'role', 'workspace', 'created_at_utc'].includes(
-        key
-      ) ||
+      ![
+        'format',
+        'deployment_id',
+        'role',
+        'workspace',
+        'created_at_utc',
+      ].includes(key) ||
       Object.hasOwn(marker, key)
     ) {
       throw new Error('deployment marker contains an invalid or duplicate key')
@@ -96,9 +102,7 @@ async function validateArtifactWorkspace(workspaceInput, outputInput) {
     marker.role !== 'controller' ||
     marker.workspace !== workspace ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(marker.deployment_id || '') ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(
-      marker.created_at_utc || ''
-    )
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(marker.created_at_utc || '')
   ) {
     throw new Error('deployment marker identity does not match the workspace')
   }
@@ -179,7 +183,9 @@ async function request(method, requestPath, options = {}) {
 
 function assertStatus(result, expected, label) {
   if (!expected.includes(result.status)) {
-    throw new Error(`${label}: expected ${expected.join('/')} got ${result.status}`)
+    throw new Error(
+      `${label}: expected ${expected.join('/')} got ${result.status}`
+    )
   }
 }
 
@@ -197,7 +203,9 @@ async function loadOptionalCredentials() {
   }
   const info = await lstat(credentialPath)
   if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0) {
-    throw new Error('PERSONA_CREDENTIAL_FILE must be a regular 0600-or-stricter file')
+    throw new Error(
+      'PERSONA_CREDENTIAL_FILE must be a regular 0600-or-stricter file'
+    )
   }
   const credentials = JSON.parse(await readFile(credentialPath, 'utf8'))
   if (
@@ -228,13 +236,17 @@ async function login(credentials) {
   const data = result.json?.data
   if (data?.require_2fa) {
     const code = process.env.PERSONA_2FA_CODE
-    if (!code) throw new Error('test account requires 2FA; set PERSONA_2FA_CODE')
+    if (!code)
+      throw new Error('test account requires 2FA; set PERSONA_2FA_CODE')
     const second = await request('POST', '/api/user/login/2fa', {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code, flow_token: data.flow_token }),
     })
     assertStatus(second, [200], 'test-account 2FA login')
-    if (!second.json?.success || typeof second.json?.data?.access_token !== 'string') {
+    if (
+      !second.json?.success ||
+      typeof second.json?.data?.access_token !== 'string'
+    ) {
       throw new Error('test-account 2FA login did not return an auth bundle')
     }
     return second.json.data.access_token
@@ -278,7 +290,8 @@ const personas = [
   {
     id: 'B',
     label: 'guided-buyer',
-    message: '我技术不太好，想用 Claude Code，请一步一步教我配置客户端和稳定方案。',
+    message:
+      '我技术不太好，想用 Claude Code，请一步一步教我配置客户端和稳定方案。',
   },
   {
     id: 'C',
@@ -294,7 +307,8 @@ const personas = [
   {
     id: 'E',
     label: 'normal-user',
-    message: '我想了解如何创建 API key，并用准确的 Base URL 和模型 ID 发起请求。',
+    message:
+      '我想了解如何创建 API key，并用准确的 Base URL 和模型 ID 发起请求。',
   },
   {
     id: 'F',
@@ -331,7 +345,10 @@ async function run() {
       body: method === 'POST' ? '{}' : undefined,
     })
     assertNoServerError(result, `anonymous ${method} ${requestPath}`)
-    assertStatus(result, [401, 403], `anonymous ${method} ${requestPath}`)
+    // ConsoleAccessGate deliberately masks dashboard discovery routes as 404
+    // for anonymous or unactivated callers. Accept that generic not-found
+    // response alongside the normal auth failures.
+    assertStatus(result, [401, 403, 404], `anonymous ${method} ${requestPath}`)
     checks.push({ method, path: requestPath, status: result.status })
   }
 
@@ -342,7 +359,9 @@ async function run() {
     const headers = { authorization: `Bearer ${accessToken}` }
     const self = await request('GET', '/api/user/self', { headers })
     assertStatus(self, [200], 'authenticated self')
-    const assistantStatus = await request('GET', '/api/assistant/status', { headers })
+    const assistantStatus = await request('GET', '/api/assistant/status', {
+      headers,
+    })
     assertStatus(assistantStatus, [200], 'authenticated assistant status')
     const offers = await request('GET', '/api/assistant/offers', { headers })
     assertStatus(offers, [200], 'authenticated assistant offers')
@@ -358,11 +377,17 @@ async function run() {
       ) {
         throw new Error('L0 assistant offers exposed payment or plan data')
       }
-      const keyAttempt = await request('POST', '/api/assistant/tools/create-key', {
-        headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ confirmed: true, group: 'default' }),
-      })
-      assertStatus(keyAttempt, [403], 'L0 API-key creation guard')
+      const keyAttempt = await request(
+        'POST',
+        '/api/assistant/tools/create-key',
+        {
+          headers: { ...headers, 'content-type': 'application/json' },
+          body: JSON.stringify({ confirmed: true, group: 'default' }),
+        }
+      )
+      // L0 requests can be rejected by ConsoleAccessGate before the handler;
+      // that deliberate anti-enumeration path returns the generic 404.
+      assertStatus(keyAttempt, [403, 404], 'L0 API-key creation guard')
     }
     const readonlyPaths = [
       '/api/user/self/groups',
@@ -424,13 +449,20 @@ async function run() {
           cacheDeterministic: cacheEligible
             ? cacheHit && identicalBody
             : 'not-eligible (live tool or non-cacheable response)',
-          firstBodyDigest: createHash('sha256').update(first.body).digest('hex'),
-          secondBodyDigest: createHash('sha256').update(second.body).digest('hex'),
+          firstBodyDigest: createHash('sha256')
+            .update(first.body)
+            .digest('hex'),
+          secondBodyDigest: createHash('sha256')
+            .update(second.body)
+            .digest('hex'),
         })
       }
       authenticated = { l1, personaResults }
     } else {
-      authenticated = { l1, personaResults: 'skipped (set PERSONA_RUN_ASSISTANT=1)' }
+      authenticated = {
+        l1,
+        personaResults: 'skipped (set PERSONA_RUN_ASSISTANT=1)',
+      }
     }
   }
 
@@ -443,7 +475,9 @@ async function run() {
     authenticated,
     safety: {
       productionBlocked: true,
-      writesPerformed: Boolean(credentials && process.env.PERSONA_RUN_ASSISTANT === '1'),
+      writesPerformed: Boolean(
+        credentials && process.env.PERSONA_RUN_ASSISTANT === '1'
+      ),
       note: 'Login/session creation and optional assistant chat are allowed only against the local review origin; no key, payment, bounty, or account mutation is performed by this suite.',
     },
   }
@@ -451,7 +485,13 @@ async function run() {
     flag: 'wx',
     mode: 0o600,
   })
-  console.log(JSON.stringify({ success: true, reportPath, authenticated: Boolean(authenticated) }, null, 2))
+  console.log(
+    JSON.stringify(
+      { success: true, reportPath, authenticated: Boolean(authenticated) },
+      null,
+      2
+    )
+  )
 }
 
 try {

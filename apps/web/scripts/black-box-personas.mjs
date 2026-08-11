@@ -42,6 +42,7 @@ const { chromium } = (await import(playwrightEntry)).default
 const baseUrl = process.env.PERSONA_REVIEW_URL ?? 'http://127.0.0.1:4174'
 const configuredWorkspace = process.env.PERSONA_DEPLOY_WORKSPACE
 const configuredOutputDirectory = process.env.PERSONA_OUTPUT_DIR
+const expectL0 = process.env.PERSONA_EXPECT_L0 === '1'
 const parsedBaseUrl = new URL(baseUrl)
 const baseOrigin = parsedBaseUrl.origin
 
@@ -287,6 +288,7 @@ async function capture(page, name, pathname) {
 }
 
 function mutationAllowed(method, pathname) {
+  if (pathname.startsWith('/_rspack/')) return true
   if (method === 'POST') {
     return (
       [
@@ -471,17 +473,22 @@ async function runPersonaA(browser) {
     }
   }
 
-  const jargonFindings = Object.values(pages).flatMap((item) => {
-    const sources = [
-      ['visible-text', item.visibleText],
-      ['title', item.title],
-      ['description', item.description],
-      ['accessible-names', item.accessibleNames.join(' | ')],
-    ]
-    return sources.flatMap(([source, text]) =>
-      findPolicyPhrases(item.name, source, text)
-    )
-  })
+  const jargonFindings = Object.values(pages)
+    // The public safety page intentionally names the relay/upstream boundary
+    // so users can understand enforcement and fee semantics. Those terms are
+    // transparency evidence there, not acquisition copy.
+    .filter((item) => item.name !== 'public-security')
+    .flatMap((item) => {
+      const sources = [
+        ['visible-text', item.visibleText],
+        ['title', item.title],
+        ['description', item.description],
+        ['accessible-names', item.accessibleNames.join(' | ')],
+      ]
+      return sources.flatMap(([source, text]) =>
+        findPolicyPhrases(item.name, source, text)
+      )
+    })
   const intendedCtas = Object.values(pages).map((item) => ({
     page: item.name,
     count: item.signupCtas.length,
@@ -532,7 +539,8 @@ function validSelfData(data, expected) {
   return (
     Number.isInteger(data.id) &&
     typeof data.username === 'string' &&
-    data?.developer_access_granted === true &&
+    data?.developer_access_granted ===
+      (expected.developerAccessGranted ?? true) &&
     onboarding &&
     typeof onboarding === 'object' &&
     onboarding.paid_activation_complete === false &&
@@ -812,6 +820,9 @@ async function runPersonaB(browser) {
     registrationSucceeded: false,
     loginSucceeded: false,
     initialSelfValid: false,
+    l0BoundaryVerified: false,
+    l0AssistantVisible: false,
+    l0KeyRouteDenied: false,
     gettingStartedPathUsed: false,
     tokenCreateCount: 0,
     tokenListed: false,
@@ -838,199 +849,249 @@ async function runPersonaB(browser) {
     await requireDataResponse(
       await initialSelfResponsePromise,
       (data) =>
-        validSelfData(data, { credentialComplete: false, stage: 'credential' }),
+        validSelfData(data, {
+          developerAccessGranted: expectL0 ? false : true,
+          credentialComplete: false,
+          stage: expectL0 ? 'activate' : 'credential',
+        }),
       'initial self'
     )
     evidence.initialSelfValid = true
     await page.waitForURL(/\/getting-started(?:\/|$)/, { timeout: 10_000 })
-    // Base UI renders the primary command as an anchor with button semantics.
-    const createCredential = page.getByRole('button', {
-      name: 'Create credential',
-      exact: true,
-    })
-    if ((await createCredential.getAttribute('href')) !== '/keys') {
-      throw new Error('getting-started credential link does not target /keys')
-    }
-    await createCredential.click()
-    await page.waitForURL(/\/keys(?:\/|$)/, { timeout: 10_000 })
-    evidence.gettingStartedPathUsed = true
+    if (expectL0) {
+      await page
+        .getByLabel('Tell the AI assistant what you need', { exact: true })
+        .fill('I need L1 access for a small open-source integration.')
+      const continueButton = page.getByRole('button', {
+        name: 'Start with AI assistant',
+        exact: true,
+      })
+      await continueButton.first().click()
+      const assistantPanel = page.locator('#ai-assistant-panel')
+      await assistantPanel.waitFor({ state: 'visible', timeout: 10_000 })
+      evidence.l0AssistantVisible =
+        (await assistantPanel
+          .getByText('AI assistant', { exact: true })
+          .count()) > 0
 
-    await page
-      .getByRole('button', { name: 'Create API Key', exact: true })
-      .click()
-    await page.getByLabel('Name', { exact: true }).fill(tokenName)
-    const createResponsePromise = page.waitForResponse(
-      (response) =>
-        response.request().method() === 'POST' &&
-        new URL(response.url()).pathname === '/api/token/'
-    )
-    const createdListResponsePromise = waitForApiResponse(
-      page,
-      'GET',
-      '/api/token/'
-    )
-    await page
-      .getByRole('button', { name: 'Save changes', exact: true })
-      .click()
-    const createResponse = await createResponsePromise
-    evidence.tokenCreateCount = metrics.responses.filter(
-      (response) =>
-        response.method === 'POST' &&
-        response.path === '/api/token/' &&
-        response.status < 400
-    ).length
-    await requireActionResponse(createResponse, 'credential creation')
-    if (evidence.tokenCreateCount !== 1) {
-      throw new Error(
-        'credential creation was not exactly one successful request'
-      )
-    }
-    const createdList = await requireDataResponse(
-      await createdListResponsePromise,
-      validTokenListData,
-      'created credential list'
-    )
-    const createdMatches = createdList.items.filter(
-      (item) => item.name === tokenName
-    )
-    if (
-      createdMatches.length !== 1 ||
-      !Number.isInteger(createdMatches[0].id)
-    ) {
-      throw new Error(
-        'created credential is missing, duplicated, or has an invalid ID'
-      )
-    }
-    const createdTokenId = createdMatches[0].id
-    await page
-      .getByText(tokenName, { exact: true })
-      .waitFor({ timeout: 10_000 })
-    evidence.tokenListed = true
-
-    const revealResponsePromise = page.waitForResponse(
-      (response) =>
-        response.request().method() === 'POST' &&
-        new URL(response.url()).pathname === `/api/token/${createdTokenId}/key`
-    )
-    const tokenRow = page
-      .getByText(tokenName, { exact: true })
-      .locator('xpath=ancestor::*[self::tr or @data-slot="table-row"][1]')
-    // Click the actual API-key Base UI trigger (the row also contains a
-    // separate quota popover). Clicking nested masked text can race focus-out
-    // handling immediately after a freshly-created row is rendered.
-    await tokenRow.getByRole('button', { name: /^sk-/ }).first().click()
-    const revealResponse = await revealResponsePromise
-    if (revealResponse.status() >= 400) {
-      throw new Error('credential reveal HTTP response failed')
-    }
-    let revealError = null
-    try {
-      // The response resolves before React commits the resolved key to the
-      // controlled input. Wait for the rendered value rather than sampling the
-      // DOM in that narrow network-to-render gap.
-      await page.waitForFunction(
-        () => {
-          const tokenPattern = /^sk-[A-Za-z0-9_-]{12,}$/
-          return [...document.querySelectorAll('input')].some((input) =>
-            tokenPattern.test(input.value)
-          )
-        },
-        undefined,
-        { timeout: 10_000 }
-      )
-      evidence.revealReturnedNonemptyKey = true
-      if (!evidence.revealReturnedNonemptyKey) {
-        throw new Error('credential reveal was empty')
-      }
-    } catch (caught) {
-      revealError = caught
-    } finally {
-      if (!(await sanitizeRevealSurface(page))) {
-        revealError = new Error(
-          'credential reveal surface could not be sanitized'
+      const keyRouteStatus = await page.evaluate(async () => {
+        const response = await fetch('/api/token/', {
+          credentials: 'include',
+        })
+        return response.status
+      })
+      if (![401, 403, 404].includes(keyRouteStatus)) {
+        throw new Error(
+          `L0 key route returned unexpected status ${keyRouteStatus}`
         )
       }
-    }
-    if (revealError) {
-      throw revealError
-    }
+      evidence.l0KeyRouteDenied = true
+      evidence.l0BoundaryVerified =
+        evidence.l0AssistantVisible && evidence.l0KeyRouteDenied
 
-    await page.goto(new URL('/getting-started', baseUrl).toString(), {
-      waitUntil: 'domcontentloaded',
-    })
-    const refreshResponsePromise = waitForApiResponse(
-      page,
-      'POST',
-      '/api/user/auth/refresh',
-      (response) => response.status() < 400
-    )
-    const refreshedSelfResponsePromise = waitForApiResponse(
-      page,
-      'GET',
-      '/api/user/self'
-    )
-    const persistedListResponsePromise = waitForApiResponse(
-      page,
-      'GET',
-      '/api/token/'
-    )
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await requireDataResponse(
-      await refreshResponsePromise,
-      validAuthBundle,
-      'bootstrap refresh'
-    )
-    await page.waitForURL(/\/getting-started(?:\/|$)/, { timeout: 10_000 })
-    await requireDataResponse(
-      await refreshedSelfResponsePromise,
-      (data) =>
-        validSelfData(data, {
-          credentialComplete: true,
-          stage: 'first_request',
-        }),
-      'refreshed self'
-    )
-    evidence.refreshedSelfValid = true
-    await page.goto(new URL('/keys', baseUrl).toString(), {
-      waitUntil: 'domcontentloaded',
-    })
-    const persistedList = await requireDataResponse(
-      await persistedListResponsePromise,
-      validTokenListData,
-      'persisted credential list'
-    )
-    evidence.persistedAfterReload = persistedList.items.some(
-      (item) => item.name === tokenName
-    )
-    if (!evidence.persistedAfterReload) {
-      throw new Error('credential did not persist after bootstrap reload')
-    }
+      const forbiddenKeyMutation = metrics.requests.some(
+        (request) =>
+          request.method === 'POST' &&
+          (request.path === '/api/token/' ||
+            /^\/api\/token\/\d+\/key$/.test(request.path))
+      )
+      if (forbiddenKeyMutation || !evidence.l0BoundaryVerified) {
+        throw new Error('L0 onboarding exposed or attempted a key mutation')
+      }
+      status = 'PASS'
+    } else {
+      // Base UI renders the primary command as an anchor with button semantics.
+      const createCredential = page.getByRole('button', {
+        name: 'Create credential',
+        exact: true,
+      })
+      if ((await createCredential.getAttribute('href')) !== '/keys') {
+        throw new Error('getting-started credential link does not target /keys')
+      }
+      await createCredential.click()
+      await page.waitForURL(/\/keys(?:\/|$)/, { timeout: 10_000 })
+      evidence.gettingStartedPathUsed = true
 
-    const isolation = await runSecondUserIsolation(browser, tokenName, suffix)
-    evidence.secondUserIsolationVerified = isolation.verified
-    evidence.secondUserIsolation = {
-      verified: isolation.verified,
-      observedFirstCredential: isolation.observedFirstCredential === true,
-      reason: isolation.reason || '',
+      await page
+        .getByRole('button', { name: 'Create API Key', exact: true })
+        .click()
+      await page.getByLabel('Name', { exact: true }).fill(tokenName)
+      const createResponsePromise = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/token/'
+      )
+      const createdListResponsePromise = waitForApiResponse(
+        page,
+        'GET',
+        '/api/token/'
+      )
+      await page
+        .getByRole('button', { name: 'Save changes', exact: true })
+        .click()
+      const createResponse = await createResponsePromise
+      evidence.tokenCreateCount = metrics.responses.filter(
+        (response) =>
+          response.method === 'POST' &&
+          response.path === '/api/token/' &&
+          response.status < 400
+      ).length
+      await requireActionResponse(createResponse, 'credential creation')
+      if (evidence.tokenCreateCount !== 1) {
+        throw new Error(
+          'credential creation was not exactly one successful request'
+        )
+      }
+      const createdList = await requireDataResponse(
+        await createdListResponsePromise,
+        validTokenListData,
+        'created credential list'
+      )
+      const createdMatches = createdList.items.filter(
+        (item) => item.name === tokenName
+      )
+      if (
+        createdMatches.length !== 1 ||
+        !Number.isInteger(createdMatches[0].id)
+      ) {
+        throw new Error(
+          'created credential is missing, duplicated, or has an invalid ID'
+        )
+      }
+      const createdTokenId = createdMatches[0].id
+      await page
+        .getByText(tokenName, { exact: true })
+        .waitFor({ timeout: 10_000 })
+      evidence.tokenListed = true
+
+      const revealResponsePromise = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname ===
+            `/api/token/${createdTokenId}/key`
+      )
+      const tokenRow = page
+        .getByText(tokenName, { exact: true })
+        .locator('xpath=ancestor::*[self::tr or @data-slot="table-row"][1]')
+      // Click the actual API-key Base UI trigger (the row also contains a
+      // separate quota popover). Clicking nested masked text can race focus-out
+      // handling immediately after a freshly-created row is rendered.
+      await tokenRow.getByRole('button', { name: /^sk-/ }).first().click()
+      const revealResponse = await revealResponsePromise
+      if (revealResponse.status() >= 400) {
+        throw new Error('credential reveal HTTP response failed')
+      }
+      let revealError = null
+      try {
+        // The response resolves before React commits the resolved key to the
+        // controlled input. Wait for the rendered value rather than sampling the
+        // DOM in that narrow network-to-render gap.
+        await page.waitForFunction(
+          () => {
+            const tokenPattern = /^sk-[A-Za-z0-9_-]{12,}$/
+            return [...document.querySelectorAll('input')].some((input) =>
+              tokenPattern.test(input.value)
+            )
+          },
+          undefined,
+          { timeout: 10_000 }
+        )
+        evidence.revealReturnedNonemptyKey = true
+        if (!evidence.revealReturnedNonemptyKey) {
+          throw new Error('credential reveal was empty')
+        }
+      } catch (caught) {
+        revealError = caught
+      } finally {
+        if (!(await sanitizeRevealSurface(page))) {
+          revealError = new Error(
+            'credential reveal surface could not be sanitized'
+          )
+        }
+      }
+      if (revealError) {
+        throw revealError
+      }
+
+      await page.goto(new URL('/getting-started', baseUrl).toString(), {
+        waitUntil: 'domcontentloaded',
+      })
+      const refreshResponsePromise = waitForApiResponse(
+        page,
+        'POST',
+        '/api/user/auth/refresh',
+        (response) => response.status() < 400
+      )
+      const refreshedSelfResponsePromise = waitForApiResponse(
+        page,
+        'GET',
+        '/api/user/self'
+      )
+      const persistedListResponsePromise = waitForApiResponse(
+        page,
+        'GET',
+        '/api/token/'
+      )
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await requireDataResponse(
+        await refreshResponsePromise,
+        validAuthBundle,
+        'bootstrap refresh'
+      )
+      await page.waitForURL(/\/getting-started(?:\/|$)/, { timeout: 10_000 })
+      await requireDataResponse(
+        await refreshedSelfResponsePromise,
+        (data) =>
+          validSelfData(data, {
+            credentialComplete: true,
+            stage: 'first_request',
+          }),
+        'refreshed self'
+      )
+      evidence.refreshedSelfValid = true
+      await page.goto(new URL('/keys', baseUrl).toString(), {
+        waitUntil: 'domcontentloaded',
+      })
+      const persistedList = await requireDataResponse(
+        await persistedListResponsePromise,
+        validTokenListData,
+        'persisted credential list'
+      )
+      evidence.persistedAfterReload = persistedList.items.some(
+        (item) => item.name === tokenName
+      )
+      if (!evidence.persistedAfterReload) {
+        throw new Error('credential did not persist after bootstrap reload')
+      }
+
+      const isolation = await runSecondUserIsolation(browser, tokenName, suffix)
+      evidence.secondUserIsolationVerified = isolation.verified
+      evidence.secondUserIsolation = {
+        verified: isolation.verified,
+        observedFirstCredential: isolation.observedFirstCredential === true,
+        reason: isolation.reason || '',
+      }
+      if (!isolation.verified) {
+        throw new Error('second-user credential isolation was not verified')
+      }
+      const allMetrics = [metrics, isolation.metrics]
+      const unsafeTraffic = {
+        blockedExternal: allMetrics.flatMap((item) => item.blockedExternal),
+        blockedMutations: allMetrics.flatMap((item) => item.blockedMutations),
+        unexpectedMutations: unexpectedMutationEvidence(allMetrics),
+      }
+      evidence.combinedSafety = unsafeTraffic
+      if (
+        unsafeTraffic.blockedExternal.length > 0 ||
+        unsafeTraffic.blockedMutations.length > 0 ||
+        unsafeTraffic.unexpectedMutations.length > 0
+      ) {
+        throw new Error(
+          'blocked external or forbidden mutation traffic occurred'
+        )
+      }
+      status = 'PASS'
     }
-    if (!isolation.verified) {
-      throw new Error('second-user credential isolation was not verified')
-    }
-    const allMetrics = [metrics, isolation.metrics]
-    const unsafeTraffic = {
-      blockedExternal: allMetrics.flatMap((item) => item.blockedExternal),
-      blockedMutations: allMetrics.flatMap((item) => item.blockedMutations),
-      unexpectedMutations: unexpectedMutationEvidence(allMetrics),
-    }
-    evidence.combinedSafety = unsafeTraffic
-    if (
-      unsafeTraffic.blockedExternal.length > 0 ||
-      unsafeTraffic.blockedMutations.length > 0 ||
-      unsafeTraffic.unexpectedMutations.length > 0
-    ) {
-      throw new Error('blocked external or forbidden mutation traffic occurred')
-    }
-    status = 'PASS'
   } catch (caught) {
     error = String(caught).slice(0, 500)
     status = page.url() === 'about:blank' ? 'NEEDS_RUNTIME' : 'FAIL'

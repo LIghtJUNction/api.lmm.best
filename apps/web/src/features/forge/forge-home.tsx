@@ -85,12 +85,28 @@ export function ForgeHome() {
                     user ? (
                       <Link to={workspaceTarget} />
                     ) : (
-                      <Link to='/pricing' />
+                      <Link to='/sign-up' />
                     )
                   }
                 >
-                  {user ? t('Open workspace') : t('Explore access options')}
+                  {user ? t('Open workspace') : t('Create an account')}
                 </Button>
+                {!user ? (
+                  <Button
+                    size='lg'
+                    variant='ghost'
+                    className='rounded-sm'
+                    render={<Link to='/pricing' />}
+                  >
+                    {t('Explore access options')}
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      data-icon='inline-end'
+                      strokeWidth={2}
+                      aria-hidden='true'
+                    />
+                  </Button>
+                ) : null}
               </div>
             </div>
             <ForgeBountyHeroArt />
