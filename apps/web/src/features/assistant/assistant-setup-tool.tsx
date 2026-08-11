@@ -46,6 +46,7 @@ import {
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
   getClaudeSessionCommand,
+  getOpenAICompatibleClientJSON,
   type AssistantSetupPlatform,
 } from './setup-guide'
 
@@ -60,12 +61,21 @@ const CC_SWITCH_DESKTOP_DOCS =
   'https://github.com/farion1231/cc-switch/blob/main/docs/user-manual/en/2-providers/2.6-claude-desktop.md'
 const CHATGPT_DOWNLOAD = 'https://chatgpt.com/download/'
 const CHATGPT_WEB = 'https://chatgpt.com/'
+const CODEX_DOCS = 'https://developers.openai.com/codex/'
+const CURSOR_DOWNLOADS = 'https://www.cursor.com/en/downloads'
+const OPEN_WEBUI_GUIDE =
+  'https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/'
 const PLATFORM_LABELS: Record<AssistantSetupPlatform, string> = {
   windows: 'Windows',
   macos: 'macOS',
   linux: 'Linux',
 }
-type ClientTab = 'claude-code' | 'cc-switch' | 'claude-desktop' | 'chatgpt'
+type ClientTab =
+  | 'claude-code'
+  | 'cc-switch'
+  | 'claude-desktop'
+  | 'chatgpt'
+  | 'openai-compatible'
 
 type NavigatorWithUserAgentData = Navigator & {
   userAgentData?: { platform?: string }
@@ -164,6 +174,10 @@ export function AssistantSetupTool(props: {
   const sessionCommand = getClaudeSessionCommand(platform, props.rootUrl, model)
   const ccSwitchInstall = getCCSwitchInstallGuide(platform)
   const ccSwitchConfig = getCCSwitchClaudeProviderJSON(props.rootUrl, model)
+  const openAICompatibleConfig = getOpenAICompatibleClientJSON(
+    props.openAIBaseUrl,
+    model
+  )
   const chatGPTDesktopAvailable = platform !== 'linux'
 
   return (
@@ -215,11 +229,14 @@ export function AssistantSetupTool(props: {
           value={clientTab}
           onValueChange={(value) => setClientTab(value as ClientTab)}
         >
-          <TabsList className='grid h-auto w-full grid-cols-2'>
+          <TabsList className='flex h-auto w-full flex-wrap justify-start gap-1'>
             <TabsTrigger value='claude-code'>Claude Code</TabsTrigger>
             <TabsTrigger value='cc-switch'>CC Switch</TabsTrigger>
             <TabsTrigger value='claude-desktop'>Claude Desktop</TabsTrigger>
             <TabsTrigger value='chatgpt'>ChatGPT</TabsTrigger>
+            <TabsTrigger value='openai-compatible'>
+              {t('OpenAI-compatible clients')}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value='claude-code' className='mt-3 grid gap-3'>
@@ -549,6 +566,88 @@ export function AssistantSetupTool(props: {
                   data-icon='inline-end'
                   aria-hidden='true'
                 />
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value='openai-compatible' className='mt-3 grid gap-3'>
+            <Alert>
+              <AlertTitle>
+                {t('Codex, Cursor, Open WebUI, and more')}
+              </AlertTitle>
+              <AlertDescription>
+                {t(
+                  'These clients use an OpenAI-compatible provider. The field names may differ, but the three values below stay the same.'
+                )}
+              </AlertDescription>
+            </Alert>
+            <ol
+              className='grid gap-3'
+              aria-label={t('OpenAI-compatible client setup steps')}
+            >
+              <SetupStep
+                number={1}
+                title={t('Install the official client')}
+                description={t(
+                  'Use the official download or installation guide for Codex, Cursor, Open WebUI, or another compatible client.'
+                )}
+              />
+              <SetupStep
+                number={2}
+                title={t('Choose a custom provider')}
+                description={t(
+                  'Open the client provider, model, or API settings and select its custom OpenAI-compatible option.'
+                )}
+              />
+              <SetupStep
+                number={3}
+                title={t('Paste the three connection values')}
+                description={t(
+                  'Paste the Base URL, exact Model ID, and API key shown below. Keep the API key private.'
+                )}
+              />
+              <SetupStep
+                number={4}
+                title={t('Run a small test request')}
+                description={t(
+                  'Verify the connection with a short test before enabling automation, agents, or long-running tasks.'
+                )}
+              />
+            </ol>
+            <div className='rounded-lg border px-3'>
+              <ConnectionValue
+                label={t('OpenAI-compatible Base URL')}
+                value={props.openAIBaseUrl}
+              />
+              <ConnectionValue label={t('Model ID')} value={model} />
+              <ConnectionValue label={t('API key')} value='<YOUR_API_KEY>' />
+            </div>
+            <CodeSnippet
+              label={t('OpenAI-compatible connection JSON')}
+              value={openAICompatibleConfig}
+            />
+            <p className='text-muted-foreground text-xs leading-5'>
+              {t(
+                'If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.'
+              )}
+            </p>
+            <div className='flex flex-wrap gap-2'>
+              <OfficialLink href={CODEX_DOCS} label='Codex' />
+              <OfficialLink href={CURSOR_DOWNLOADS} label='Cursor' />
+              <OfficialLink href={OPEN_WEBUI_GUIDE} label='Open WebUI' />
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={props.onCreateKey}
+                disabled={!props.developerAccessGranted}
+              >
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
+                {t('Create API key')}
               </Button>
             </div>
           </TabsContent>

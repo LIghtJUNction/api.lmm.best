@@ -6274,6 +6274,20 @@
     "Which models and model IDs can I use?": "Tôi có thể dùng những model và model ID nào?",
     "Write a short explanation of what you want to build or why you need L1 access.": "Viết ngắn gọn điều bạn muốn xây dựng hoặc lý do cần quyền L1.",
     "You can return to this guided conversation at any time.": "Bạn có thể quay lại cuộc trò chuyện hướng dẫn này bất cứ lúc nào.",
-    "Your free unlock request is waiting for administrator review.": "Yêu cầu mở khóa miễn phí của bạn đang chờ quản trị viên xét duyệt."
+    "Your free unlock request is waiting for administrator review.": "Yêu cầu mở khóa miễn phí của bạn đang chờ quản trị viên xét duyệt.",
+    "OpenAI-compatible clients": "Ứng dụng tương thích OpenAI",
+    "Codex, Cursor, Open WebUI, and more": "Codex, Cursor, Open WebUI và nhiều ứng dụng khác",
+    "These clients use an OpenAI-compatible provider. The field names may differ, but the three values below stay the same.": "Các ứng dụng này dùng nhà cung cấp tương thích OpenAI. Tên trường có thể khác nhau nhưng ba giá trị bên dưới vẫn giống nhau.",
+    "OpenAI-compatible client setup steps": "Các bước thiết lập ứng dụng tương thích OpenAI",
+    "Install the official client": "Cài đặt ứng dụng chính thức",
+    "Use the official download or installation guide for Codex, Cursor, Open WebUI, or another compatible client.": "Dùng trang tải xuống hoặc hướng dẫn cài đặt chính thức của Codex, Cursor, Open WebUI hoặc ứng dụng tương thích khác.",
+    "Choose a custom provider": "Chọn nhà cung cấp tùy chỉnh",
+    "Open the client provider, model, or API settings and select its custom OpenAI-compatible option.": "Mở phần cài đặt nhà cung cấp, model hoặc API rồi chọn tùy chọn OpenAI tương thích tùy chỉnh.",
+    "Paste the three connection values": "Dán ba giá trị kết nối",
+    "Paste the Base URL, exact Model ID, and API key shown below. Keep the API key private.": "Dán Base URL, Model ID chính xác và API key hiển thị bên dưới. Giữ API key riêng tư.",
+    "Run a small test request": "Gửi một yêu cầu thử nhỏ",
+    "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "Kiểm tra kết nối bằng một yêu cầu ngắn trước khi bật tự động hóa, agent hoặc tác vụ dài.",
+    "OpenAI-compatible connection JSON": "JSON kết nối tương thích OpenAI",
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Nếu ứng dụng cần cấu hình riêng, hãy hỏi trợ lý AI về ứng dụng và nền tảng đó. Trợ lý sẽ dùng Base URL và Model ID hiện tại thay vì đoán."
   }
 }

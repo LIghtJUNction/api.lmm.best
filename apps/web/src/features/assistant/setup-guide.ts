@@ -127,3 +127,18 @@ export function getCCSwitchClaudeProviderJSON(
     2
   )
 }
+
+export function getOpenAICompatibleClientJSON(
+  baseUrl: string,
+  model: string
+): string {
+  return JSON.stringify(
+    {
+      base_url: baseUrl.replace(/\/+$/, ''),
+      model: model.trim() || '<MODEL_ID>',
+      api_key: '<YOUR_API_KEY>',
+    },
+    null,
+    2
+  )
+}

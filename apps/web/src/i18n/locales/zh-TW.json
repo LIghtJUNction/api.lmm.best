@@ -6274,6 +6274,20 @@
     "Which models and model IDs can I use?": "我可以使用哪些模型與模型 ID？",
     "Write a short explanation of what you want to build or why you need L1 access.": "簡要說明你想建立什麼，或為什麼需要 L1 權限。",
     "You can return to this guided conversation at any time.": "你可以隨時回到這段引導對話。",
-    "Your free unlock request is waiting for administrator review.": "你的免費解鎖申請正在等待管理員審核。"
+    "Your free unlock request is waiting for administrator review.": "你的免費解鎖申請正在等待管理員審核。",
+    "OpenAI-compatible clients": "OpenAI 相容用戶端",
+    "Codex, Cursor, Open WebUI, and more": "Codex、Cursor、Open WebUI 等",
+    "These clients use an OpenAI-compatible provider. The field names may differ, but the three values below stay the same.": "這些用戶端使用 OpenAI 相容提供者。欄位名稱可能不同，但以下三個值保持不變。",
+    "OpenAI-compatible client setup steps": "OpenAI 相容用戶端設定步驟",
+    "Install the official client": "安裝官方用戶端",
+    "Use the official download or installation guide for Codex, Cursor, Open WebUI, or another compatible client.": "使用 Codex、Cursor、Open WebUI 或其他相容用戶端的官方下載或安裝指南。",
+    "Choose a custom provider": "選擇自訂提供者",
+    "Open the client provider, model, or API settings and select its custom OpenAI-compatible option.": "開啟用戶端的提供者、模型或 API 設定，選擇自訂 OpenAI 相容選項。",
+    "Paste the three connection values": "貼上三個連線值",
+    "Paste the Base URL, exact Model ID, and API key shown below. Keep the API key private.": "貼上以下顯示的 Base URL、準確模型 ID 和 API 金鑰。請妥善保管 API 金鑰。",
+    "Run a small test request": "傳送小型測試請求",
+    "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "啟用自動化、Agent 或長時間任務前，先用簡短請求驗證連線。",
+    "OpenAI-compatible connection JSON": "OpenAI 相容連線 JSON",
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "如果用戶端需要專用設定，請向 AI 助手詢問對應用戶端與平台。助手會使用目前的 Base URL 和模型 ID，而不是猜測。"
   }
 }
