@@ -25,6 +25,7 @@ import {
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
   getClaudeSessionCommand,
+  getOpenAICompatibleClientJSON,
 } from './setup-guide'
 
 describe('assistant setup guide', () => {
@@ -118,6 +119,24 @@ describe('assistant setup guide', () => {
             ANTHROPIC_BASE_URL: 'https://api.lmm.best',
             ANTHROPIC_MODEL: 'deepseek-v4-flash',
           },
+        },
+        null,
+        2
+      )
+    )
+  })
+
+  test('builds a copyable OpenAI-compatible client configuration', () => {
+    assert.equal(
+      getOpenAICompatibleClientJSON(
+        'https://api.lmm.best/v1/',
+        'deepseek-v4-flash'
+      ),
+      JSON.stringify(
+        {
+          base_url: 'https://api.lmm.best/v1',
+          model: 'deepseek-v4-flash',
+          api_key: '<YOUR_API_KEY>',
         },
         null,
         2

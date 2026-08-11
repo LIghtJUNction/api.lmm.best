@@ -6274,6 +6274,20 @@
     "Which models and model IDs can I use?": "どのモデルとモデル ID を使えますか？",
     "Write a short explanation of what you want to build or why you need L1 access.": "作りたいもの、または L1 アクセスが必要な理由を短く説明してください。",
     "You can return to this guided conversation at any time.": "いつでもこの案内会話に戻れます。",
-    "Your free unlock request is waiting for administrator review.": "無料の解除申請は管理者の審査待ちです。"
+    "Your free unlock request is waiting for administrator review.": "無料の解除申請は管理者の審査待ちです。",
+    "OpenAI-compatible clients": "OpenAI互換クライアント",
+    "Codex, Cursor, Open WebUI, and more": "Codex、Cursor、Open WebUI など",
+    "These clients use an OpenAI-compatible provider. The field names may differ, but the three values below stay the same.": "これらのクライアントは OpenAI 互換プロバイダーを使用します。項目名は異なる場合がありますが、以下の3つの値は同じです。",
+    "OpenAI-compatible client setup steps": "OpenAI互換クライアントの設定手順",
+    "Install the official client": "公式クライアントをインストール",
+    "Use the official download or installation guide for Codex, Cursor, Open WebUI, or another compatible client.": "Codex、Cursor、Open WebUI、またはその他の互換クライアントの公式ダウンロード／インストールガイドを使用してください。",
+    "Choose a custom provider": "カスタムプロバイダーを選択",
+    "Open the client provider, model, or API settings and select its custom OpenAI-compatible option.": "クライアントのプロバイダー、モデル、または API 設定を開き、カスタム OpenAI 互換オプションを選択してください。",
+    "Paste the three connection values": "3つの接続情報を貼り付け",
+    "Paste the Base URL, exact Model ID, and API key shown below. Keep the API key private.": "以下に表示される Base URL、正確なモデル ID、API キーを貼り付けてください。API キーは秘密にしてください。",
+    "Run a small test request": "短いテストリクエストを送信",
+    "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "自動化、エージェント、長時間タスクを有効にする前に、短いテストで接続を確認してください。",
+    "OpenAI-compatible connection JSON": "OpenAI互換接続 JSON",
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "クライアント固有の設定が必要な場合は、そのクライアントとプラットフォームを AI アシスタントに尋ねてください。現在の Base URL とモデル ID を使用し、推測はしません。"
   }
 }
