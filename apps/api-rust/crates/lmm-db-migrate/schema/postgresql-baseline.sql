@@ -513,6 +513,7 @@ CREATE TABLE public.tokens (
     used_quota bigint DEFAULT 0,
     "group" text DEFAULT ''::text,
     cross_group_retry boolean,
+    auto_groups text,
     deleted_at timestamp with time zone
 );
 CREATE SEQUENCE public.tokens_id_seq

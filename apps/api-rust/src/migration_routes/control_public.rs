@@ -249,7 +249,7 @@ async fn uptime_status(State(state): State<ControlPublicHttpState>) -> Response 
     // This exact empty Vec (rather than `null`) is observable in the legacy
     // response when no group configuration exists or it is malformed.
     if groups.is_empty() {
-        return legacy_success_response(Vec::<UptimeGroupResult>::new());
+        return legacy_success(Vec::<UptimeGroupResult>::new());
     }
 
     let mut tasks = tokio::task::JoinSet::new();
@@ -275,7 +275,7 @@ async fn uptime_status(State(state): State<ControlPublicHttpState>) -> Response 
     {
         tasks.abort_all();
     }
-    legacy_success_response(results)
+    legacy_success(results)
 }
 
 async fn fetch_group(
@@ -385,16 +385,15 @@ struct LegacySuccess<T> {
     data: T,
 }
 
-fn legacy_success<T>(data: T) -> Json<LegacySuccess<T>> {
-    Json(LegacySuccess {
+fn legacy_success<T: Serialize>(data: T) -> Response {
+    let mut response = Json(LegacySuccess {
         success: true,
         message: "",
         data,
     })
-}
-
-fn legacy_success_response<T: Serialize>(data: T) -> Response {
-    let mut response = legacy_success(data).into_response();
+    .into_response();
+    // Gin's JSON writer includes the charset parameter on these public API
+    // envelopes; preserve that observable legacy wire contract.
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json; charset=utf-8"),
@@ -403,14 +402,19 @@ fn legacy_success_response<T: Serialize>(data: T) -> Response {
 }
 
 fn legacy_dependency_error() -> Response {
-    (
+    let mut response = (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(LegacyFailure {
             success: false,
             message: "public control-plane data is temporarily unavailable",
         }),
     )
-        .into_response()
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
 }
 
 #[derive(Serialize)]

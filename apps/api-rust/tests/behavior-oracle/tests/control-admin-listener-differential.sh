@@ -5,11 +5,21 @@
 # endpoints and never builds binaries itself.
 set -euo pipefail
 
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)
+
 go_port=${LMM_CONTROL_ADMIN_GO_PORT:-13016}
 rust_port=${LMM_CONTROL_ADMIN_RUST_PORT:-33046}
 go_valkey_port=${LMM_CONTROL_ADMIN_GO_VALKEY_PORT:-16396}
 rust_valkey_port=${LMM_CONTROL_ADMIN_RUST_VALKEY_PORT:-56396}
 runtime=$(mktemp -d /tmp/lmm-control-admin-listener.XXXXXX)
+result_dir=${LMM_CONTROL_ADMIN_RESULT_DIR:-}
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    printf 'LMM_CONTROL_ADMIN_RESULT_DIR must be an absolute path without ..\n' >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 go_valkey_secret=$(openssl rand -hex 32)
 rust_valkey_secret=$(openssl rand -hex 32)
 rust_session_secret="ControlAdmin-Session-${rust_valkey_secret}!"
@@ -211,6 +221,19 @@ assert_matrix_pair() {
   done
 }
 
+control_route_identity() {
+  local method=$1 path=$2
+  path=${path%%\?*}
+  case "$method $path" in
+    'GET /api/custom-oauth-provider/not-an-id') printf '%s\n' 'GET /api/custom-oauth-provider/:id' ;;
+    'PUT /api/custom-oauth-provider/not-an-id') printf '%s\n' 'PUT /api/custom-oauth-provider/:id' ;;
+    'DELETE /api/custom-oauth-provider/not-an-id') printf '%s\n' 'DELETE /api/custom-oauth-provider/:id' ;;
+    'GET /api/system-task/missing-task') printf '%s\n' 'GET /api/system-task/:task_id' ;;
+    'DELETE /api/system-info/instances/missing-node') printf '%s\n' 'DELETE /api/system-info/instances/:node_name' ;;
+    *) printf '%s %s\n' "$method" "$path" ;;
+  esac
+}
+
 seed_root_user() {
   local dsn=$1 schema=$2 sql_file=$3
   # Synthetic bcrypt fixture for the test-only password "password".
@@ -312,6 +335,35 @@ psql "$LMM_CONTROL_ADMIN_GO_DATABASE_URL" -v ON_ERROR_STOP=1 \
   -c "CREATE SCHEMA \"$LMM_CONTROL_ADMIN_GO_SCHEMA\"" >/dev/null
 psql "$LMM_CONTROL_ADMIN_RUST_DATABASE_URL" -v ON_ERROR_STOP=1 \
   -c "CREATE SCHEMA \"$LMM_CONTROL_ADMIN_RUST_SCHEMA\"" >/dev/null
+
+# The Go listener migrates its isolated schema on first boot. Rust is tested
+# against the immutable contract-1 PostgreSQL baseline plus the forward bounty
+# migration, so provision that same contract before starting the listener.
+sed "s/public\\./$LMM_CONTROL_ADMIN_RUST_SCHEMA./g" \
+  "$repo_root/apps/api-rust/crates/lmm-db-migrate/schema/postgresql-baseline.sql" \
+  >"$runtime/rust-baseline.sql"
+psql "$LMM_CONTROL_ADMIN_RUST_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f "$runtime/rust-baseline.sql" >/dev/null
+sed "s/__LMM_APP_SCHEMA__/$LMM_CONTROL_ADMIN_RUST_SCHEMA/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/rust-bounty-forward.sql"
+psql "$LMM_CONTROL_ADMIN_RUST_DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f "$runtime/rust-bounty-forward.sql" >/dev/null
+psql "$LMM_CONTROL_ADMIN_RUST_DATABASE_URL" -v ON_ERROR_STOP=1 <<SQL >/dev/null
+CREATE TABLE "$LMM_CONTROL_ADMIN_RUST_SCHEMA".lmm_schema_contract (
+  singleton BOOLEAN PRIMARY KEY,
+  min_reader_version BIGINT NOT NULL,
+  max_reader_version BIGINT NOT NULL
+);
+INSERT INTO "$LMM_CONTROL_ADMIN_RUST_SCHEMA".lmm_schema_contract
+  VALUES (TRUE, 1, 1);
+GRANT USAGE, CREATE ON SCHEMA "$LMM_CONTROL_ADMIN_RUST_SCHEMA"
+  TO CURRENT_USER;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "$LMM_CONTROL_ADMIN_RUST_SCHEMA"
+  TO CURRENT_USER;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "$LMM_CONTROL_ADMIN_RUST_SCHEMA"
+  TO CURRENT_USER;
+SQL
 go_database_url=$(dsn_with_schema "$LMM_CONTROL_ADMIN_GO_DATABASE_URL" \
   "$LMM_CONTROL_ADMIN_GO_SCHEMA")
 rust_database_url=$(dsn_with_schema "$LMM_CONTROL_ADMIN_RUST_DATABASE_URL" \
@@ -338,7 +390,9 @@ go_pid=$!
 DATABASE_URL="$rust_database_url" \
   VALKEY_URL="redis://:$rust_valkey_secret@127.0.0.1:$rust_valkey_port" \
   SESSION_SECRET="$rust_session_secret" PASSWORD_LOGIN_ENABLED=true \
-  LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
+  LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 \
+  LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port" \
+  LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
   "$LMM_CONTROL_ADMIN_RUST_BIN" >"$runtime/rust.log" 2>&1 &
 rust_pid=$!
 
@@ -349,6 +403,21 @@ wait_for_owned_http "$rust_pid" "http://127.0.0.1:$rust_port/readyz" rust
 assert_route_matrix_unauthorized go "http://127.0.0.1:$go_port"
 assert_route_matrix_unauthorized rust "http://127.0.0.1:$rust_port"
 assert_matrix_pair
+
+if [[ -n $result_dir ]]; then
+  index=0
+  for entry in "${route_matrix[@]}"; do
+    IFS='|' read -r method concrete_path body <<<"$entry"
+    route=$(control_route_identity "$method" "$concrete_path")
+    route_method=${route%% *}
+    route_path=${route#* }
+    index=$((index + 1))
+    jq -cn --arg method "$route_method" --arg path "$route_path" \
+      --argjson cases 1 --arg scope auth-matrix \
+      '{method:$method,path:$path,differential_verified:false,transport_boundary_verified:true,differential_scope:$scope,cases:$cases,approval_credit:false,differences:null,mismatch_names:[]}' \
+      >"$result_dir/control-admin-$index.json"
+  done
+fi
 
 # Seed equivalent root identities only after each isolated listener has created
 # its own schema. The seed and captured tokens remain inside the 0700 runtime.

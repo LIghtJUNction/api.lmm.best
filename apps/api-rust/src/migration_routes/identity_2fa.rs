@@ -7,7 +7,7 @@
 
 use crate::auth::{
     AuthErrorKind, DashboardAuth, PgValkeyDashboardAuth, RequestMetadata,
-    SecuritySessionRotationRequest, UserAuthPolicyError, enforce_user_auth, user_auth_message,
+    SecuritySessionRotationRequest, UserAuthPolicyError, enforce_user_auth,
 };
 use async_trait::async_trait;
 use axum::{
@@ -23,6 +23,7 @@ use bcrypt::{DEFAULT_COST, hash, verify};
 use rand::Rng;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::{PgPool, Row};
 use std::{
     sync::Arc,
@@ -39,7 +40,6 @@ const TOTP_MAX_ATTEMPTS: i64 = 5;
 const TOTP_LOCK_SECONDS: i64 = 5 * 60;
 const ROLE_ADMIN: i64 = 10;
 const ROLE_ROOT: i64 = 100;
-const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 const TWO_FACTOR_STATUS_PATH: &str = "/api/user/2fa/status";
 
 /// Identity established by the parent authenticated-user extractor.
@@ -168,6 +168,8 @@ pub struct Identity2FAState {
     valkey: redis::Client,
     rotator: Arc<dyn SecuritySessionRotator>,
     boundary: Arc<dyn TwoFactorBoundary>,
+    dashboard_auth: Option<Arc<dyn DashboardAuth>>,
+    cookie_secure: bool,
 }
 
 impl Identity2FAState {
@@ -182,6 +184,8 @@ impl Identity2FAState {
             valkey,
             rotator,
             boundary: Arc::new(SystemTwoFactorBoundary),
+            dashboard_auth: None,
+            cookie_secure: false,
         }
     }
 
@@ -191,14 +195,21 @@ impl Identity2FAState {
         self.boundary = boundary;
         self
     }
+
+    #[must_use]
+    pub fn with_dashboard_auth(mut self, auth: Arc<dyn DashboardAuth>) -> Self {
+        self.dashboard_auth = Some(auth);
+        self
+    }
+
+    #[must_use]
+    pub fn with_cookie_secure(mut self, secure: bool) -> Self {
+        self.cookie_secure = secure;
+        self
+    }
 }
 
 /// Dependencies for the normal-listener read-only 2FA status route.
-///
-/// The existing [`Identity2FAState`] intentionally models the mutation
-/// surface, whose actor/session extensions are supplied by its future owner.
-/// This state keeps the status read independently mountable while still
-/// delegating credential verification to the listener's shared auth service.
 #[derive(Clone)]
 pub struct Identity2FAReadState {
     pool: PgPool,
@@ -225,18 +236,118 @@ pub fn router(state: Identity2FAState) -> Router {
         .route("/api/user/2fa/stats", get(stats))
         .route("/api/user/{id}/2fa", delete(admin_disable))
         .merge(writes)
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, identity_2fa_guard))
         .layer(middleware::map_response(legacy_json_content_type))
 }
 
-/// Builds only the authenticated `GET /api/user/2fa/status` read for the
-/// normal listener.  Setup, enable/disable, backup-code rotation, and admin
-/// 2FA mutations remain on the isolated candidate router.
+/// Builds only the authenticated `GET /api/user/2fa/status` read. Mutation
+/// routes remain on the full candidate router until their listener ownership
+/// is independently promoted.
 pub fn status_read_router(state: Identity2FAReadState) -> Router {
     Router::new()
         .route(TWO_FACTOR_STATUS_PATH, get(status_read))
         .with_state(state)
         .layer(middleware::map_response(legacy_json_content_type))
+}
+
+async fn identity_2fa_guard(
+    State(state): State<Identity2FAState>,
+    mut request: Request,
+    next: middleware::Next,
+) -> Response {
+    let Some(auth) = state.dashboard_auth.as_ref() else {
+        return next.run(request).await;
+    };
+    let Some(token) = dashboard_token(request.headers()) else {
+        return auth_error(StatusCode::UNAUTHORIZED);
+    };
+    let session = match auth
+        .current_session(secrecy::SecretString::from(token))
+        .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            return match error.kind {
+                AuthErrorKind::UserDisabled => {
+                    user_auth_error(request.headers(), UserAuthPolicyError::UserDisabled)
+                }
+                AuthErrorKind::Internal => auth_error(StatusCode::INTERNAL_SERVER_ERROR),
+                _ => auth_error(StatusCode::UNAUTHORIZED),
+            };
+        }
+    };
+    if let Err(error) = enforce_user_auth(&session.user) {
+        return user_auth_error(request.headers(), error);
+    }
+    request.extensions_mut().insert(Identity2FAActor {
+        user_id: session.user.id,
+        role: session.user.role,
+    });
+    request.extensions_mut().insert(Identity2FASession {
+        session_id: session.session_id,
+        client_ip: session.client_ip,
+        user_agent: session.user_agent,
+        cookie_secure: state.cookie_secure,
+    });
+    next.run(request).await
+}
+
+fn dashboard_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let mut words = value.split_whitespace();
+    let first = words.next()?;
+    let second = words.next();
+    if words.next().is_some() {
+        return None;
+    }
+    match second {
+        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
+            Some(token.to_owned())
+        }
+        None if !first.is_empty() => Some(first.to_owned()),
+        _ => None,
+    }
+}
+
+fn auth_error(status: StatusCode) -> Response {
+    (
+        status,
+        Json(json!({
+            "success": false,
+            "code": "AUTH_UNAUTHORIZED",
+            "message": "Unauthorized, invalid access token"
+        })),
+    )
+        .into_response()
+}
+
+fn user_auth_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response {
+    let status = match error {
+        UserAuthPolicyError::InsufficientPrivilege => StatusCode::FORBIDDEN,
+        UserAuthPolicyError::UserDisabled | UserAuthPolicyError::InvalidUserInfo => {
+            StatusCode::UNAUTHORIZED
+        }
+    };
+    let code = match error {
+        UserAuthPolicyError::UserDisabled => "AUTH_USER_DISABLED",
+        UserAuthPolicyError::InsufficientPrivilege => "AUTH_INSUFFICIENT_PRIVILEGE",
+        UserAuthPolicyError::InvalidUserInfo => "AUTH_USER_INVALID",
+    };
+    (
+        status,
+        Json(json!({
+            "success": false,
+            "code": code,
+            "message": crate::auth::user_auth_message(
+                error,
+                headers
+                    .get(header::ACCEPT_LANGUAGE)
+                    .and_then(|value| value.to_str().ok()),
+            ),
+        })),
+    )
+        .into_response()
 }
 
 #[derive(Serialize)]
@@ -356,18 +467,76 @@ async fn status(
     let Some(actor) = require_actor(actor) else {
         return failure("未登录或用户已被封禁");
     };
-    two_factor_status(&state.pool, actor.user_id).await
+    let row = match sqlx::query(
+        "SELECT is_enabled, locked_until IS NOT NULL AND locked_until > NOW() AS locked FROM two_fas WHERE user_id = $1 AND deleted_at IS NULL LIMIT 1",
+    ).bind(actor.user_id).fetch_optional(&state.pool).await { Ok(row) => row, Err(_) => return internal() };
+    let Some(row) = row else {
+        return Json(Envelope {
+            success: true,
+            message: "",
+            data: Status {
+                enabled: false,
+                locked: false,
+                backup_codes_remaining: None,
+            },
+        })
+        .into_response();
+    };
+    let enabled: bool = match row.try_get("is_enabled") {
+        Ok(value) => value,
+        Err(_) => return internal(),
+    };
+    let locked: bool = match row.try_get("locked") {
+        Ok(value) => value,
+        Err(_) => return internal(),
+    };
+    let remaining = if enabled {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM two_fa_backup_codes WHERE user_id = $1 AND is_used = FALSE AND deleted_at IS NULL")
+            .bind(actor.user_id).fetch_one(&state.pool).await.ok()
+    } else {
+        None
+    };
+    Json(Envelope {
+        success: true,
+        message: "",
+        data: Status {
+            enabled,
+            locked,
+            backup_codes_remaining: remaining,
+        },
+    })
+    .into_response()
 }
 
 async fn status_read(State(state): State<Identity2FAReadState>, headers: HeaderMap) -> Response {
-    let user_id = match read_actor(&state, &headers).await {
-        Ok(user_id) => user_id,
-        Err(response) => return with_auth_version(response),
+    let Some(token) = dashboard_token(&headers) else {
+        return auth_error(StatusCode::UNAUTHORIZED);
     };
-    with_auth_version(two_factor_status(&state.pool, user_id).await)
+    let user = match state.auth.self_user(SecretString::from(token)).await {
+        Ok(user) => user,
+        Err(error) => {
+            return match error.kind {
+                AuthErrorKind::UserDisabled => {
+                    user_auth_error(&headers, UserAuthPolicyError::UserDisabled)
+                }
+                AuthErrorKind::Internal => auth_error(StatusCode::INTERNAL_SERVER_ERROR),
+                _ => auth_error(StatusCode::UNAUTHORIZED),
+            };
+        }
+    };
+    if let Err(error) = enforce_user_auth(&user) {
+        return user_auth_error(&headers, error);
+    }
+
+    let mut response = status_for_user(&state.pool, user.id).await;
+    response.headers_mut().insert(
+        "auth-version",
+        HeaderValue::from_static("864b7076dbcd0a3c01b5520316720ebf"),
+    );
+    response
 }
 
-async fn two_factor_status(pool: &PgPool, user_id: i64) -> Response {
+async fn status_for_user(pool: &PgPool, user_id: i64) -> Response {
     let row = match sqlx::query(
         "SELECT is_enabled, locked_until IS NOT NULL AND locked_until > NOW() AS locked FROM two_fas WHERE user_id = $1 AND deleted_at IS NULL LIMIT 1",
     )
@@ -399,8 +568,13 @@ async fn two_factor_status(pool: &PgPool, user_id: i64) -> Response {
         Err(_) => return internal(),
     };
     let remaining = if enabled {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM two_fa_backup_codes WHERE user_id = $1 AND is_used = FALSE AND deleted_at IS NULL")
-            .bind(user_id).fetch_one(pool).await.ok()
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM two_fa_backup_codes WHERE user_id = $1 AND is_used = FALSE AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .ok()
     } else {
         None
     };
@@ -414,87 +588,6 @@ async fn two_factor_status(pool: &PgPool, user_id: i64) -> Response {
         },
     })
     .into_response()
-}
-
-async fn read_actor(state: &Identity2FAReadState, headers: &HeaderMap) -> Result<i64, Response> {
-    let Some(token) = bearer(headers) else {
-        return Err(status_unauthorized());
-    };
-    let user = state
-        .auth
-        .self_user(SecretString::from(token))
-        .await
-        .map_err(|error| match error.kind {
-            AuthErrorKind::UserDisabled => {
-                status_user_auth_error(headers, UserAuthPolicyError::UserDisabled)
-            }
-            AuthErrorKind::Unauthorized
-            | AuthErrorKind::TokenExpired
-            | AuthErrorKind::SessionRevoked => status_unauthorized(),
-            _ => status_unauthorized(),
-        })?;
-    enforce_user_auth(&user).map_err(|error| status_user_auth_error(headers, error))?;
-    Ok(user.id)
-}
-
-fn status_unauthorized() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({
-            "success": false,
-            "code": "AUTH_UNAUTHORIZED",
-            "message": "Unauthorized, invalid access token"
-        })),
-    )
-        .into_response()
-}
-
-fn status_user_auth_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response {
-    let status = match error {
-        UserAuthPolicyError::InsufficientPrivilege => StatusCode::FORBIDDEN,
-        UserAuthPolicyError::UserDisabled | UserAuthPolicyError::InvalidUserInfo => {
-            StatusCode::UNAUTHORIZED
-        }
-    };
-    let code = match error {
-        UserAuthPolicyError::UserDisabled => "AUTH_USER_DISABLED",
-        UserAuthPolicyError::InsufficientPrivilege => "AUTH_INSUFFICIENT_PRIVILEGE",
-        UserAuthPolicyError::InvalidUserInfo => "AUTH_USER_INVALID",
-    };
-    (
-        status,
-        Json(serde_json::json!({
-            "success": false,
-            "code": code,
-            "message": user_auth_message(
-                error,
-                headers.get(header::ACCEPT_LANGUAGE).and_then(|value| value.to_str().ok()),
-            ),
-        })),
-    )
-        .into_response()
-}
-
-fn bearer(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let mut words = value.split_whitespace();
-    let first = words.next()?;
-    let second = words.next();
-    if let Some(token) = second {
-        (first.eq_ignore_ascii_case("bearer") && words.next().is_none() && !token.is_empty())
-            .then(|| token.to_owned())
-    } else if !first.is_empty() {
-        Some(first.to_owned())
-    } else {
-        None
-    }
-}
-
-fn with_auth_version(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
-    response
 }
 
 async fn setup(

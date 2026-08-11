@@ -237,23 +237,55 @@ func TestConsoleAccessGateAllowsL1OverrideToRestrictedRoutes(t *testing.T) {
 	levelOne := 1
 	user := &model.UserBase{Id: 18, Role: common.RoleCommonUser, TrustLevelOverride: &levelOne}
 
-	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
-			user:           user,
-			credentialKind: dashboardCredentialInternal,
+	for _, path := range []string{
+		"/api/channel",
+		"/api/custom-oauth-provider",
+		"/api/data/self",
+		"/api/deployments",
+		"/api/group",
+		"/api/log/self",
+		"/api/mj",
+		"/api/models",
+		"/api/open-source-bounties/mcp-token",
+		"/api/option",
+		"/api/performance/stats",
+		"/api/perf-metrics/summary",
+		"/api/prefill_group",
+		"/api/pricing",
+		"/api/rankings",
+		"/api/ratio_config",
+		"/api/ratio_sync/channels",
+		"/api/redemption",
+		"/api/status/test",
+		"/api/subscription/plans",
+		"/api/system-info/instances",
+		"/api/system-task/list",
+		"/api/task/self",
+		"/api/token/",
+		"/api/usage",
+		"/api/user/groups",
+		"/api/user/models",
+		"/api/user/self/groups",
+		"/api/vendors/search",
+	} {
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
+				user:           user,
+				credentialKind: dashboardCredentialInternal,
+			})
+			c.Next()
 		})
-		c.Next()
-	})
-	router.Use(ConsoleAccessGate())
-	router.GET("/api/token/", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"activated": ConsoleActivationGranted(c)})
-	})
+		router.Use(ConsoleAccessGate())
+		router.GET(path, func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"activated": ConsoleActivationGranted(c)})
+		})
 
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/token/", nil))
-	assert.Equal(t, http.StatusOK, response.Code)
-	assert.JSONEq(t, `{"activated":true}`, response.Body.String())
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.Equal(t, http.StatusOK, response.Code, path)
+		assert.JSONEq(t, `{"activated":true}`, response.Body.String(), path)
+	}
 }
 
 func TestConsoleAccessGateFailsClosedWhenTrustCalculationFails(t *testing.T) {

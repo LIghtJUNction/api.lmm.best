@@ -1,0 +1,108 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+
+import {
+  buildAssistantConversation,
+  parseAssistantIntent,
+  parseAssistantReply,
+  type AssistantChatMessage,
+} from './api'
+
+describe('assistant response parsing', () => {
+  test('extracts the first assistant message', () => {
+    assert.equal(
+      parseAssistantReply({
+        choices: [{ message: { content: '  Use /v1 as the Base URL.  ' } }],
+      }),
+      'Use /v1 as the Base URL.'
+    )
+  })
+
+  test('rejects empty or malformed upstream responses', () => {
+    assert.throws(
+      () => parseAssistantReply({ error: { message: 'model unavailable' } }),
+      /model unavailable/
+    )
+    assert.throws(
+      () => parseAssistantReply({ choices: [] }),
+      /Assistant returned no answer/
+    )
+  })
+
+  test('accepts only known assistant intent headers', () => {
+    assert.equal(parseAssistantIntent(' client_setup '), 'client_setup')
+    assert.equal(parseAssistantIntent('HUMAN_SUPPORT'), 'human_support')
+    assert.equal(parseAssistantIntent('unknown-intent'), undefined)
+    assert.equal(parseAssistantIntent(undefined), undefined)
+  })
+})
+
+describe('assistant conversation context', () => {
+  test('keeps recent multi-turn context and always starts with a user message', () => {
+    const history: AssistantChatMessage[] = [
+      { role: 'assistant', content: 'orphaned model reply' },
+      { role: 'user', content: 'How do I configure Claude Code?' },
+      { role: 'assistant', content: 'Choose your operating system.' },
+    ]
+
+    assert.deepEqual(
+      buildAssistantConversation(history, '  What about Windows?  '),
+      [
+        { role: 'user', content: 'How do I configure Claude Code?' },
+        { role: 'assistant', content: 'Choose your operating system.' },
+        { role: 'user', content: 'What about Windows?' },
+      ]
+    )
+  })
+
+  test('bounds context by message count without losing the latest question', () => {
+    const history: AssistantChatMessage[] = Array.from(
+      { length: 20 },
+      (_, index) => ({
+        role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+        content: `message-${index}`,
+      })
+    )
+
+    const conversation = buildAssistantConversation(history, 'latest')
+    assert.ok(conversation.length <= 12)
+    assert.equal(conversation[0]?.role, 'user')
+    assert.deepEqual(conversation.at(-1), {
+      role: 'user',
+      content: 'latest',
+    })
+    assert.equal(
+      conversation.some((message) => message.content === 'message-0'),
+      false
+    )
+    assert.equal(
+      conversation.some((message) => message.content === 'message-19'),
+      true
+    )
+  })
+
+  test('rejects an oversized latest message before making a request', () => {
+    assert.throws(
+      () => buildAssistantConversation([], '问'.repeat(4001)),
+      /between 1 and 4000 characters/
+    )
+  })
+})

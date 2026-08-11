@@ -1,11 +1,12 @@
 //! Frozen account-security and session route candidates.
 //!
-//! The module deliberately remains unmounted.  Its only security authority is
-//! the listener-supplied [`SecurityAuthorizer`], while mail, credential, and
-//! WebAuthn work stays behind [`SecurityProvider`].  In particular, the
-//! in-memory provider is a test fake and refuses security-sensitive operations
-//! by default rather than manufacturing a successful proof or credential.
-//! Zero routes in this module are approved for production ownership.
+//! The module's only security authority is the listener-supplied
+//! [`SecurityAuthorizer`], while mail, credential, and WebAuthn work stays
+//! behind [`SecurityProvider`]. In particular, the in-memory provider is a
+//! test fake and refuses security-sensitive operations by default rather than
+//! manufacturing a successful proof or credential. Normal-listener mounting
+//! is therefore a candidate-surface fact; it does not itself grant migration
+//! gate ownership credit.
 
 use std::{
     sync::{Arc, Mutex},
@@ -16,7 +17,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::to_bytes,
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -28,7 +29,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
-use crate::auth::{AuthError, AuthErrorKind, DashboardAuth, dashboard_token_candidate};
+use crate::{
+    ClientIpKey, RequestContext,
+    auth::{
+        AnonymousRequestSecurity, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth,
+        TurnstileCheckOutcome, dashboard_token_candidate, turnstile_failure_response,
+        turnstile_missing_response,
+    },
+    legacy_empty_response,
+};
 use secrecy::SecretString;
 
 const ADMIN_ROLE: i64 = 10;
@@ -173,28 +182,39 @@ impl DashboardSecurityAuthorizer {
     async fn actor(&self, headers: &HeaderMap) -> Result<SecurityActor, SecurityError> {
         let token = credential(headers).ok_or(SecurityError::Unauthorized)?;
         let session_candidate = dashboard_token_candidate(&token);
-        let map_auth_error = |error: AuthError| match error.kind {
-            AuthErrorKind::TokenExpired => SecurityError::TokenExpired,
-            AuthErrorKind::SessionRevoked => SecurityError::SessionRevoked,
-            AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials => {
-                SecurityError::Unauthorized
-            }
-            AuthErrorKind::UserDisabled => SecurityError::UserDisabled,
-            _ => SecurityError::InternalAuth,
-        };
         let (user, session_id) = if session_candidate {
-            let context = self
+            // Browser-session routes need the server-owned SID as well as the
+            // user projection. `self_user` deliberately omits that sensitive
+            // identity, so resolve it through the authoritative session
+            // adapter before constructing the actor passed to the provider.
+            let session = self
                 .auth
                 .current_session(SecretString::from(token))
                 .await
-                .map_err(map_auth_error)?;
-            (context.user, Some(context.session_id))
+                .map_err(|error| match error.kind {
+                    AuthErrorKind::TokenExpired => SecurityError::TokenExpired,
+                    AuthErrorKind::SessionRevoked => SecurityError::SessionRevoked,
+                    AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials => {
+                        SecurityError::Unauthorized
+                    }
+                    AuthErrorKind::UserDisabled => SecurityError::UserDisabled,
+                    _ => SecurityError::InternalAuth,
+                })?;
+            (session.user, Some(session.session_id))
         } else {
             let user = self
                 .auth
                 .self_user(SecretString::from(token))
                 .await
-                .map_err(map_auth_error)?;
+                .map_err(|error| match error.kind {
+                    AuthErrorKind::TokenExpired => SecurityError::TokenExpired,
+                    AuthErrorKind::SessionRevoked => SecurityError::SessionRevoked,
+                    AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials => {
+                        SecurityError::Unauthorized
+                    }
+                    AuthErrorKind::UserDisabled => SecurityError::UserDisabled,
+                    _ => SecurityError::InternalAuth,
+                })?;
             (user, None)
         };
         if user.id <= 0 || user.username.trim().is_empty() || !matches!(user.role, 0 | 1 | 10 | 100)
@@ -826,6 +846,10 @@ mod provider_tests {
 pub struct IdentitySecurityState {
     provider: Arc<dyn SecurityProvider>,
     authorizer: Arc<dyn SecurityAuthorizer>,
+    registration_security: Option<AnonymousRequestSecurity>,
+    /// Legacy `passkey.enabled` setting, when supplied by the listener.
+    /// `None` keeps the candidate router's provider-driven test behavior.
+    passkey_enabled: Option<bool>,
 }
 
 impl IdentitySecurityState {
@@ -838,7 +862,16 @@ impl IdentitySecurityState {
         Self {
             provider,
             authorizer,
+            registration_security: None,
+            passkey_enabled: None,
         }
+    }
+
+    /// Supplies the listener-owned legacy Passkey feature flag.
+    #[must_use]
+    pub fn with_passkey_enabled(mut self, enabled: bool) -> Self {
+        self.passkey_enabled = Some(enabled);
+        self
     }
 
     /// Creates a state which rejects every authenticated request until listener wiring exists.
@@ -853,11 +886,19 @@ impl IdentitySecurityState {
         self.authorizer = Arc::new(DashboardSecurityAuthorizer::new(auth));
         self
     }
+
+    /// Supplies the listener-owned protection required by the anonymous
+    /// password-registration endpoint. Without this explicit policy the
+    /// registration route fails closed instead of accepting an unprotected
+    /// account-creation request.
+    #[must_use]
+    pub fn with_registration_security(mut self, security: AnonymousRequestSecurity) -> Self {
+        self.registration_security = Some(security);
+        self
+    }
 }
 
-/// All frozen account-security route candidates.  Only the read-only passkey
-/// status and session inventory are separately mountable; mutations remain on
-/// the candidate router until their session/cache differentials are complete.
+/// All frozen account-security route candidates.
 pub fn router(state: IdentitySecurityState) -> Router {
     Router::new()
         .route(
@@ -902,27 +943,29 @@ pub fn router(state: IdentitySecurityState) -> Router {
 
 /// The password-registration route is the one anonymous identity surface that
 /// has a complete PostgreSQL implementation. Keep it separate from the
-/// remaining account-security candidates so the normal listener cannot
-/// accidentally claim ownership of passkey, mail, or session-mutation routes.
+/// remaining account-security candidates. The listener must supply the
+/// registration security policy explicitly before accepting account creation.
 pub fn registration_router(state: IdentitySecurityState) -> Router {
-    registration_route().with_state(state)
+    let body_limit_bytes = state
+        .registration_security
+        .as_ref()
+        .map_or(MAX_BODY_BYTES, AnonymousRequestSecurity::body_limit_bytes);
+    registration_route()
+        .layer(DefaultBodyLimit::max(body_limit_bytes))
+        .with_state(state)
 }
 
-/// Builds only the read-only dashboard session inventory route.
-///
-/// Session deletion and revoke-others remain on the candidate router until
-/// their Valkey deny-fence publication is listener-owned.  The inventory
-/// response itself is a PostgreSQL read and is explicitly marked no-store by
-/// the handler.
+/// Builds only the read-only dashboard session inventory route for the
+/// normal-listener compatibility tests. Session mutations remain isolated in
+/// the full candidate router.
 pub fn sessions_read_router(state: IdentitySecurityState) -> Router {
     Router::new()
         .route(SESSIONS_PATH, get(list_sessions))
         .with_state(state)
 }
 
-/// Builds only the authenticated passkey status read.  Passkey registration,
-/// verification, and deletion remain isolated because they rotate sessions
-/// and persist WebAuthn secrets.
+/// Builds only the authenticated passkey status read. Registration,
+/// verification, and deletion remain isolated in the full candidate router.
 pub fn passkey_read_router(state: IdentitySecurityState) -> Router {
     Router::new()
         .route(PASSKEY_PATH, get(passkey_status))
@@ -1101,20 +1144,37 @@ async fn authenticated_admin(
     Ok(actor)
 }
 
-async fn json_after_auth(request: Request, locale: LegacyLocale) -> Result<Value, Response> {
+async fn json_after_auth(request: Request, locale: LegacyLocale) -> Result<Value, Box<Response>> {
     let body = to_bytes(request.into_body(), MAX_BODY_BYTES)
         .await
-        .map_err(|_| SecurityError::Invalid("参数错误").response(locale))?;
+        .map_err(|_| Box::new(SecurityError::Invalid("参数错误").response(locale)))?;
+    json_from_body(body, locale)
+}
+
+async fn json_after_auth_with_limit(
+    request: Request,
+    locale: LegacyLocale,
+    max_body_bytes: usize,
+) -> Result<Value, Box<Response>> {
+    let body = to_bytes(request.into_body(), max_body_bytes)
+        .await
+        .map_err(|_| Box::new(legacy_empty_response(StatusCode::PAYLOAD_TOO_LARGE, None)))?;
+    json_from_body(body, locale)
+}
+
+fn json_from_body(body: axum::body::Bytes, locale: LegacyLocale) -> Result<Value, Box<Response>> {
     let value: Value = serde_json::from_slice(&body)
-        .map_err(|_| SecurityError::Invalid("参数错误").response(locale))?;
+        .map_err(|_| Box::new(SecurityError::Invalid("参数错误").response(locale)))?;
     if value.is_object() {
         Ok(value)
     } else {
-        Err(SecurityError::Invalid("参数错误").response(locale))
+        Err(Box::new(
+            SecurityError::Invalid("参数错误").response(locale),
+        ))
     }
 }
 
-fn query_after_auth(uri: &Uri, key: &str) -> Result<Value, SecurityError> {
+fn query_after_auth(uri: &Uri, key: &str, locale: LegacyLocale) -> Result<Value, SecurityError> {
     let value = uri
         .query()
         .and_then(|query| {
@@ -1127,7 +1187,7 @@ fn query_after_auth(uri: &Uri, key: &str) -> Result<Value, SecurityError> {
         .filter(|value| !value.is_empty() && value.len() <= 320);
     value
         .map(|value| json!({key: value}))
-        .ok_or(SecurityError::Invalid("参数错误"))
+        .ok_or(SecurityError::Invalid(locale.invalid_params()))
 }
 
 fn single_path_after_auth(uri: &Uri, prefix: &str, name: &str) -> Result<Value, SecurityError> {
@@ -1164,6 +1224,46 @@ async fn execute(
     locale: LegacyLocale,
 ) -> Response {
     let authenticated = actor.is_some();
+    // Gin binds `Verify2FARequest` before entering the legacy handler.  Its
+    // required `code` field therefore turns an empty object into the legacy
+    // HTTP-200 parameter-error envelope, even though the durable 2FA
+    // provider is unavailable in this candidate.  Preserve that observable
+    // validation boundary instead of leaking a provider 503 for malformed
+    // requests.
+    if operation == SecurityOperation::VerifyTwoFactorLogin
+        && input
+            .get("code")
+            .and_then(Value::as_str)
+            .is_none_or(|code| code.is_empty())
+    {
+        let response = SecurityError::Invalid("参数错误").response(locale);
+        return if authenticated {
+            with_auth_version(response)
+        } else {
+            response
+        };
+    }
+    // `ResetPassword` decodes the legacy request before checking the
+    // verification code.  Missing email/token fields therefore produce the
+    // HTTP-200 locale-specific invalid-parameters envelope rather than
+    // reaching the unavailable mail/credential boundary.
+    if operation == SecurityOperation::ResetPassword
+        && !(input
+            .get("email")
+            .and_then(Value::as_str)
+            .is_some_and(|email| !email.is_empty())
+            && input
+                .get("token")
+                .and_then(Value::as_str)
+                .is_some_and(|token| !token.is_empty()))
+    {
+        let response = SecurityError::Invalid(locale.invalid_params()).response(locale);
+        return if authenticated {
+            with_auth_version(response)
+        } else {
+            response
+        };
+    }
     let response = match state
         .provider
         .execute(SecurityCall {
@@ -1326,7 +1426,7 @@ async fn send_password_reset(
     request: Request,
 ) -> Response {
     let locale = LegacyLocale::from_headers(request.headers());
-    let input = match query_after_auth(request.uri(), "email") {
+    let input = match query_after_auth(request.uri(), "email", locale) {
         Ok(input) => input,
         Err(error) => return error.response(locale),
     };
@@ -1344,7 +1444,7 @@ async fn send_email_verification(
     request: Request,
 ) -> Response {
     let locale = LegacyLocale::from_headers(request.headers());
-    let input = match query_after_auth(request.uri(), "email") {
+    let input = match query_after_auth(request.uri(), "email", locale) {
         Ok(input) => input,
         Err(error) => return error.response(locale),
     };
@@ -1366,7 +1466,7 @@ async fn anonymous_json(
     let locale = LegacyLocale::from_headers(request.headers());
     let input = match json_after_auth(request, locale).await {
         Ok(input) => input,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     execute(&state, operation, None, input, locale).await
 }
@@ -1382,7 +1482,7 @@ async fn user_json(
     };
     let input = match json_after_auth(request, locale).await {
         Ok(input) => input,
-        Err(response) => return with_no_store(with_auth_version(response)),
+        Err(response) => return with_no_store(with_auth_version(*response)),
     };
     with_no_store(execute(&state, operation, Some(actor), input, locale).await)
 }
@@ -1394,13 +1494,56 @@ async fn verify_two_factor_login(
     with_no_store(anonymous_json(state, request, SecurityOperation::VerifyTwoFactorLogin).await)
 }
 async fn passkey_login_begin(state: State<IdentitySecurityState>, request: Request) -> Response {
+    if state.passkey_enabled == Some(false) {
+        let response = failure(StatusCode::OK, "管理员未启用 Passkey 登录", None);
+        return with_no_store(response);
+    }
     with_no_store(anonymous_json(state, request, SecurityOperation::PasskeyLoginBegin).await)
 }
 async fn passkey_login_finish(state: State<IdentitySecurityState>, request: Request) -> Response {
+    if state.passkey_enabled == Some(false) {
+        let response = failure(StatusCode::OK, "管理员未启用 Passkey 登录", None);
+        return with_no_store(response);
+    }
     with_no_store(anonymous_json(state, request, SecurityOperation::PasskeyLoginFinish).await)
 }
 async fn register(state: State<IdentitySecurityState>, request: Request) -> Response {
-    anonymous_json(state, request, SecurityOperation::Register).await
+    let locale = LegacyLocale::from_headers(request.headers());
+    let Some(security) = state.registration_security.as_ref() else {
+        return SecurityError::Unavailable.response(locale);
+    };
+    let client_ip = request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    match security.check_critical_rate_limit(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => {}
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => {
+            return legacy_empty_response(StatusCode::TOO_MANY_REQUESTS, Some(retry_after_seconds));
+        }
+        Err(_) => return legacy_empty_response(StatusCode::INTERNAL_SERVER_ERROR, None),
+    }
+    match security.check_turnstile(request.uri(), &client_ip).await {
+        TurnstileCheckOutcome::Disabled | TurnstileCheckOutcome::Allowed => {}
+        TurnstileCheckOutcome::MissingToken => return turnstile_missing_response(),
+        TurnstileCheckOutcome::Rejected => return turnstile_failure_response(),
+    }
+    let input = match json_after_auth_with_limit(request, locale, security.body_limit_bytes()).await
+    {
+        Ok(input) => input,
+        Err(response) => return *response,
+    };
+    execute(&state, SecurityOperation::Register, None, input, locale).await
 }
 async fn reset_password(state: State<IdentitySecurityState>, request: Request) -> Response {
     anonymous_json(state, request, SecurityOperation::ResetPassword).await
@@ -1439,4 +1582,25 @@ async fn revoke_other_sessions(state: State<IdentitySecurityState>, request: Req
 }
 async fn universal_verify(state: State<IdentitySecurityState>, request: Request) -> Response {
     user_json(state, request, SecurityOperation::UniversalVerify).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+
+    #[tokio::test]
+    async fn registration_json_limit_returns_413_before_json_parsing() {
+        let response = json_after_auth_with_limit(
+            Request::builder()
+                .body(Body::from("x".repeat(17)))
+                .expect("request"),
+            LegacyLocale::En,
+            16,
+        )
+        .await
+        .expect_err("oversized request must be rejected");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
 }

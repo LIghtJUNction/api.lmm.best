@@ -47,6 +47,10 @@ import {
 } from '@/components/page-transition'
 import { Button } from '@/components/ui/button'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
+import {
+  requestAssistantOpen,
+  type AssistantPresetId,
+} from '@/features/assistant/assistant-events'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
@@ -73,18 +77,22 @@ const SETUP_GUIDE_VISIBILITY_STORAGE_KEY =
 type DashboardActionPath =
   | '/keys'
   | '/wallet'
-  | '/playground'
   | '/channels'
   | '/usage-logs'
   | '/pricing'
 
-interface StartStep {
+type StartStepBase = {
   title: string
   description: string
-  to: DashboardActionPath
   icon: LucideIcon
   completed: boolean
 }
+
+type StartStep = StartStepBase &
+  (
+    | { to: DashboardActionPath; assistantPreset?: never }
+    | { to?: never; assistantPreset: AssistantPresetId }
+  )
 
 interface QuickAction {
   title: string
@@ -176,6 +184,32 @@ function StartStepItem(props: {
 }) {
   const Icon = props.step.icon
   const StatusIcon = props.step.completed ? Check : Circle
+  const actionClassName =
+    'bg-background/70 hover:bg-muted/50 focus-visible:ring-ring flex min-w-0 flex-1 items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left shadow-xs transition-colors outline-none focus-visible:ring-2'
+  const actionContent = (
+    <>
+      <span className='flex min-w-0 items-start gap-2.5'>
+        <span className='bg-muted mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg'>
+          <Icon className='size-3.5' aria-hidden='true' />
+        </span>
+        <span className='flex min-w-0 flex-col gap-0.5'>
+          <span className='flex items-center gap-2 text-sm font-medium'>
+            <span className='text-muted-foreground font-mono text-xs tabular-nums'>
+              {props.index + 1}.
+            </span>
+            <span className='truncate'>{props.step.title}</span>
+          </span>
+          <span className='text-muted-foreground line-clamp-1 text-xs'>
+            {props.step.description}
+          </span>
+        </span>
+      </span>
+      <ArrowRight
+        className='text-muted-foreground size-4 shrink-0'
+        aria-hidden='true'
+      />
+    </>
+  )
 
   return (
     <li className='relative flex gap-3 pb-2.5 last:pb-0'>
@@ -197,31 +231,19 @@ function StartStepItem(props: {
         />
       </span>
 
-      <Link
-        to={props.step.to}
-        className='bg-background/70 hover:bg-muted/50 focus-visible:ring-ring flex min-w-0 flex-1 items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left shadow-xs transition-colors outline-none focus-visible:ring-2'
-      >
-        <span className='flex min-w-0 items-start gap-2.5'>
-          <span className='bg-muted mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg'>
-            <Icon className='size-3.5' aria-hidden='true' />
-          </span>
-          <span className='flex min-w-0 flex-col gap-0.5'>
-            <span className='flex items-center gap-2 text-sm font-medium'>
-              <span className='text-muted-foreground font-mono text-xs tabular-nums'>
-                {props.index + 1}.
-              </span>
-              <span className='truncate'>{props.step.title}</span>
-            </span>
-            <span className='text-muted-foreground line-clamp-1 text-xs'>
-              {props.step.description}
-            </span>
-          </span>
-        </span>
-        <ArrowRight
-          className='text-muted-foreground size-4 shrink-0'
-          aria-hidden='true'
-        />
-      </Link>
+      {props.step.assistantPreset ? (
+        <button
+          type='button'
+          className={actionClassName}
+          onClick={() => requestAssistantOpen(props.step.assistantPreset)}
+        >
+          {actionContent}
+        </button>
+      ) : (
+        <Link to={props.step.to} className={actionClassName}>
+          {actionContent}
+        </Link>
+      )}
     </li>
   )
 }
@@ -462,8 +484,8 @@ export function OverviewDashboard() {
       },
       {
         title: t('Send a request'),
-        description: t('Verify routing with Playground or your client'),
-        to: '/playground',
+        description: t('Get setup help for your first request'),
+        assistantPreset: 'client-setup',
         icon: TerminalSquare,
         completed: requestCount > 0,
       },

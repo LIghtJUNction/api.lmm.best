@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::{Request, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -35,6 +35,7 @@ const OFFICIAL_PRESET_ID: i64 = -100;
 const MODELS_DEV_PRESET_ID: i64 = -101;
 const MAX_RATIO_RESPONSE_BYTES: usize = 10 << 20;
 const MAX_CONCURRENT_FETCHES: usize = 8;
+const CONSOLE_NOT_FOUND: &str = "__console_not_found__";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RatioSyncIdentity {
@@ -63,13 +64,15 @@ impl DashboardRatioSyncAuthorizer {
 #[async_trait]
 impl RatioSyncAuthorizer for DashboardRatioSyncAuthorizer {
     async fn authorize(&self, headers: &HeaderMap) -> Result<RatioSyncIdentity, &'static str> {
-        let credential =
-            dashboard_credential(headers).ok_or("Unauthorized, invalid access token")?;
+        let credential = dashboard_credential(headers).ok_or(CONSOLE_NOT_FOUND)?;
         let user = self
             .auth
-            .self_user(SecretString::from(credential.to_owned()))
+            .self_user_view_for_optional(SecretString::from(credential.to_owned()))
             .await
-            .map_err(|_| "Unauthorized, invalid access token")?;
+            .map_err(|_| CONSOLE_NOT_FOUND)?;
+        if !user.developer_access_granted {
+            return Err(CONSOLE_NOT_FOUND);
+        }
         Ok(RatioSyncIdentity { role: user.role })
     }
 }
@@ -527,6 +530,15 @@ fn legacy_error(message: impl Into<String>) -> Response {
 
 async fn root(state: &RatioSyncHttpState, headers: &HeaderMap) -> Result<(), Response> {
     match state.authorizer.authorize(headers).await {
+        Err(CONSOLE_NOT_FOUND) => {
+            let mut response =
+                (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            Err(response)
+        }
         Err(message) => Err((
             StatusCode::UNAUTHORIZED,
             Json(json!({"success":false,"message":message,"code":"AUTH_UNAUTHORIZED"})),

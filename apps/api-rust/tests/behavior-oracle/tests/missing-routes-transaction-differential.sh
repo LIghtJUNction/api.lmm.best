@@ -17,6 +17,7 @@ case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT mus
 pg_port=${LMM_TRANSACTION_PG_PORT:-55467}
 go_port=${LMM_TRANSACTION_GO_PORT:-13037}
 rust_port=${LMM_TRANSACTION_RUST_PORT:-33067}
+rust_test_instance=${LMM_TRANSACTION_RUST_TEST_INSTANCE:-1}
 # Default Valkey endpoint for the Rust test-instance is 6380, but the script
 # now falls back to a random free port if that port is occupied.
 valkey_port=${LMM_TRANSACTION_VALKEY_PORT:-6380}
@@ -24,6 +25,7 @@ runtime_base=${LMM_TRANSACTION_RUNTIME_BASE:-/tmp}
 [[ -d $runtime_base && -w $runtime_base ]] || { echo "transaction runtime base is not writable: $runtime_base" >&2; exit 1; }
 runtime=$(mktemp -d "$runtime_base/lmm-transaction-differential.XXXXXX")
 keep_runtime=${LMM_TRANSACTION_KEEP_RUNTIME:-0}
+result_dir=${LMM_TRANSACTION_RESULT_DIR:-}
 cargo_target=${LMM_TRANSACTION_CARGO_TARGET_DIR:-"$runtime/cargo-target"}
 rust_binary=${LMM_TRANSACTION_RUST_BINARY:-"$cargo_target/debug/lmm-api-rs"}
 go_build="$runtime/go-build"
@@ -34,17 +36,20 @@ rust_role=lmm_test_transaction_rust
 database=lmm_test_transaction
 passed=0
 route_filter=${LMM_TRANSACTION_ROUTE_FILTER:-}
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    echo "LMM_TRANSACTION_RESULT_DIR must be an absolute path without '..'" >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 [[ -n $route_filter ]] && expected_phase_total=4 || expected_phase_total=28
-go_pid=
-rust_pid=
-valkey_pid=
-go_pid_start=
-rust_pid_start=
-valkey_pid_start=
+# shellcheck disable=SC2034 # Read indirectly through the PID variable names.
+go_pid='' rust_pid='' valkey_pid='' go_pid_start='' rust_pid_start='' valkey_pid_start=''
 
 cleanup() {
   # The trap is installed before the helper definitions so that preflight
-  # failures still clean their exact runtime. Guard calls whose definitions
+  # failures still clean their exact runtime.  Guard calls whose definitions
   # may not have been reached yet.
   if declare -F stop_listeners >/dev/null 2>&1; then stop_listeners || true; fi
   if declare -F stop_owned_process >/dev/null 2>&1; then stop_owned_process valkey_pid || true; fi
@@ -393,11 +398,11 @@ for owner_pair in "$go_schema:$go_role" "$rust_schema:$rust_role"; do
     END LOOP;
   END \$\$; ALTER SCHEMA $schema OWNER TO $role;"
 done
-# Current Go's settlement model is additive to the frozen baseline. When the
+# Current Go's settlement model is additive to the frozen baseline.  When the
 # oracle is the current Go checkout, provision the same nullable-safe columns
 # in both disposable schemas so the transaction snapshot exercises the real
 # normalized credited-quota write rather than silently hiding it as an absent
-# legacy column. The default stays off for the immutable 5418 contract.
+# legacy column.  The default stays off for the immutable 5418 contract.
 if [[ ${LMM_TRANSACTION_TOPUP_SETTLEMENT_COLUMNS:-0} == 1 ]]; then
   for schema in "$go_schema" "$rust_schema"; do
     admin_schema_sql "$schema" "ALTER TABLE top_ups
@@ -438,6 +443,16 @@ while IFS=$'\t' read -r id; do
   [[ -n $id ]] || continue
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
+  if [[ -n $result_dir ]]; then
+    route_json=$(jq -c --arg id "$id" '.fixtures[] | select(.id == $id) | .route' "$fixtures")
+    method=$(jq -r '.method' <<<"$route_json")
+    path=$(jq -r '.path' <<<"$route_json")
+    path=${path%%\?*}
+    jq -cn --arg method "$method" --arg path "$path" --arg route "$id" \
+      --arg runtime "$runtime" \
+      '{method:$method,path:$path,differential_verified:true,differential_scope:"full-transaction",cases:28,route_fixture:$route,isolated_runtime:$runtime,approval_credit:false,differences:null,mismatch_names:[]}' \
+      >"$result_dir/$id.json"
+  fi
 done < <(jq -r '.fixtures[].id' "$fixtures")
 if [[ $route_filter == federation-bindings && ${LMM_TRANSACTION_RS_TEST_INSTANCE:-1} != 0 ]]; then
   echo 'federation-bindings requires LMM_TRANSACTION_RS_TEST_INSTANCE=0 because the test instance intentionally denies federation identities' >&2

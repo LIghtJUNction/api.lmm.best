@@ -23,7 +23,6 @@ import {
   Compass,
   CreditCard,
   FileText,
-  FlaskConical,
   Key,
   LayoutDashboard,
   LifeBuoy,
@@ -111,11 +110,6 @@ export function useSidebarData(): SidebarData {
         id: 'chat',
         title: t('Chat'),
         items: [
-          {
-            title: t('Playground'),
-            url: '/playground',
-            icon: FlaskConical,
-          },
           {
             title: t('Chat'),
             icon: MessageSquare,

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
-use crate::auth::DashboardAuth;
+use crate::auth::{DashboardAuth, UserAuthPolicyError, enforce_user_auth_view};
 
 const ADMIN_ROLE: i64 = 10;
 
@@ -60,12 +60,27 @@ impl DashboardAdminCatalogAuthorizer {
 #[async_trait]
 impl AdminCatalogAuthorizer for DashboardAdminCatalogAuthorizer {
     async fn authorize(&self, headers: &HeaderMap) -> Result<AdminCatalogActor, CatalogError> {
-        let token = dashboard_credential(headers).ok_or(CatalogError::Unauthorized)?;
+        // Go mounts this administrator catalogue below the API-wide
+        // ConsoleAccessGate.  Anonymous, malformed, expired, revoked, and
+        // pre-activation credentials are therefore concealed as a generic
+        // route miss before AdminAuth can emit a 401/403 envelope.
+        let token = dashboard_credential(headers).ok_or(CatalogError::ConsoleNotFound)?;
         let user = self
             .auth
-            .self_user(SecretString::from(token.to_owned()))
+            .self_user_view_for_optional(SecretString::from(token.to_owned()))
             .await
-            .map_err(|_| CatalogError::Unauthorized)?;
+            .map_err(|_| CatalogError::ConsoleNotFound)?;
+        if !user.developer_access_granted {
+            return Err(CatalogError::ConsoleNotFound);
+        }
+        if let Err(error) = enforce_user_auth_view(&user) {
+            return Err(match error {
+                UserAuthPolicyError::UserDisabled | UserAuthPolicyError::InvalidUserInfo => {
+                    CatalogError::Unauthorized
+                }
+                UserAuthPolicyError::InsufficientPrivilege => CatalogError::Forbidden,
+            });
+        }
         Ok(AdminCatalogActor {
             user_id: user.id,
             role: user.role,
@@ -138,6 +153,9 @@ pub struct CatalogCall {
 /// Errors translated to the legacy JSON envelope.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
+    /// The API-wide ConsoleAccessGate intentionally hides the discovery
+    /// surface until a dashboard account has active developer access.
+    ConsoleNotFound,
     /// No valid dashboard credential was supplied.
     Unauthorized,
     /// A valid identity lacks the administrator role.
@@ -155,6 +173,15 @@ pub enum CatalogError {
 impl CatalogError {
     fn response(self) -> Response {
         match self {
+            Self::ConsoleNotFound => {
+                let mut response =
+                    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+                response
+            }
             Self::Unauthorized => failure(
                 StatusCode::UNAUTHORIZED,
                 "Unauthorized, invalid access token",
@@ -414,7 +441,7 @@ impl PgCatalogProvider {
 #[async_trait]
 impl AdminCatalogProvider for PgCatalogProvider {
     async fn execute(&self, call: CatalogCall) -> Result<Value, CatalogError> {
-        match call.operation {
+        let result = match call.operation {
             CatalogOperation::ListModels => list_models_pg(&self.pg, &call.input, false).await,
             CatalogOperation::SearchModels => list_models_pg(&self.pg, &call.input, true).await,
             CatalogOperation::CreateModel => create_model_pg(&self.pg, &call.input).await,
@@ -473,7 +500,146 @@ impl AdminCatalogProvider for PgCatalogProvider {
             CatalogOperation::DeleteInvalidRedemptions => {
                 delete_invalid_redemptions_pg(&self.pg).await
             }
+        };
+        // Go's AdminAuth middleware records a type=3 operation audit for every
+        // authorized catalog write (including business failures).  The
+        // redemption create handler has one special success-only audit shape;
+        // all other writes use the middleware route/status envelope.  Keep this
+        // best-effort, just like Go's asynchronous audit writer: an observability
+        // failure must never change the catalog response.
+        self.record_audit(&call, &result).await;
+        result
+    }
+}
+
+fn catalog_audit_route(
+    operation: CatalogOperation,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    Some(match operation {
+        CatalogOperation::CreateModel => ("POST", "/api/models/", "model.create"),
+        CatalogOperation::UpdateModel => ("PUT", "/api/models/", "model.update"),
+        CatalogOperation::DeleteModel => ("DELETE", "/api/models/:id", "model.delete"),
+        CatalogOperation::SyncUpstream => {
+            ("POST", "/api/models/sync_upstream", "model.sync_upstream")
         }
+        CatalogOperation::CreateVendor => ("POST", "/api/vendors/", "vendor.create"),
+        CatalogOperation::UpdateVendor => ("PUT", "/api/vendors/", "vendor.update"),
+        CatalogOperation::DeleteVendor => ("DELETE", "/api/vendors/:id", "vendor.delete"),
+        CatalogOperation::CreatePrefillGroup => {
+            ("POST", "/api/prefill_group/", "prefill_group.create")
+        }
+        CatalogOperation::UpdatePrefillGroup => {
+            ("PUT", "/api/prefill_group/", "prefill_group.update")
+        }
+        CatalogOperation::DeletePrefillGroup => {
+            ("DELETE", "/api/prefill_group/:id", "prefill_group.delete")
+        }
+        CatalogOperation::CreateRedemption => ("POST", "/api/redemption/", "redemption.create"),
+        CatalogOperation::UpdateRedemption => ("PUT", "/api/redemption/", "redemption.update"),
+        CatalogOperation::DeleteRedemption => {
+            ("DELETE", "/api/redemption/:id", "redemption.delete")
+        }
+        CatalogOperation::DeleteInvalidRedemptions => (
+            "DELETE",
+            "/api/redemption/invalid",
+            "redemption.delete_invalid",
+        ),
+        _ => return None,
+    })
+}
+
+async fn catalog_log_quota(pg: &PgPool, quota: i64) -> String {
+    let quota_per_unit =
+        sqlx::query_scalar::<_, String>("SELECT value FROM options WHERE key = 'QuotaPerUnit'")
+            .fetch_optional(pg)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or(500_000.0);
+    format!("＄{:.6} 额度", quota as f64 / quota_per_unit)
+}
+
+impl PgCatalogProvider {
+    async fn record_audit(&self, call: &CatalogCall, result: &Result<Value, CatalogError>) {
+        let Some((method, route, action)) = catalog_audit_route(call.operation) else {
+            return;
+        };
+        let success = result.is_ok();
+        let resource_params = call
+            .resource_id
+            .map(|id| json!({"id": id.to_string()}))
+            .unwrap_or_else(|| json!({}));
+        let path = call.resource_id.map_or_else(
+            || route.to_owned(),
+            |id| {
+                format!(
+                    "{route_base}{id}",
+                    route_base = route.trim_end_matches(":id")
+                )
+            },
+        );
+
+        let (content, params, audit_info) =
+            if call.operation == CatalogOperation::CreateRedemption && success {
+                let name = text(&call.input, "name");
+                let count = integer(&call.input, "count", 0);
+                let quota = integer(&call.input, "quota", 100);
+                let quota_display = catalog_log_quota(&self.pg, quota).await;
+                (
+                    format!("Created {count} redemption codes named {name} ({quota_display} each)"),
+                    json!({"name": name, "count": count, "quota": quota_display}),
+                    None,
+                )
+            } else {
+                let mut audit_info = json!({
+                    "method": method,
+                    "route": route,
+                    "path": path,
+                    "status": 200,
+                    "success": success,
+                });
+                if let Some(params) = resource_params.as_object() {
+                    if !params.is_empty() {
+                        audit_info["params"] = Value::Object(params.clone());
+                    }
+                }
+                (
+                    format!("{method} {route}"),
+                    resource_params,
+                    Some(audit_info),
+                )
+            };
+
+        let username = sqlx::query_scalar::<_, String>("SELECT username FROM users WHERE id = $1")
+            .bind(call.actor.user_id)
+            .fetch_optional(&self.pg)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let mut other = json!({
+            "op": {"action": action, "params": params},
+            "admin_info": {
+                "admin_id": call.actor.user_id,
+                "admin_username": username,
+                "admin_role": call.actor.role,
+                "auth_method": "session",
+            },
+        });
+        if let Some(audit_info) = audit_info {
+            other["audit_info"] = audit_info;
+        }
+        let _ = sqlx::query(
+            "INSERT INTO logs (user_id, created_at, type, content, username, ip, other) VALUES ($1, EXTRACT(EPOCH FROM NOW())::BIGINT, 3, $2, $3, '', $4)",
+        )
+        .bind(call.actor.user_id)
+        .bind(content)
+        .bind(username)
+        .bind(other.to_string())
+        .execute(&self.pg)
+        .await;
     }
 }
 
@@ -949,6 +1115,17 @@ async fn create_model_pg(pg: &PgPool, input: &Value) -> Result<Value, CatalogErr
     if name.is_empty() {
         return Err(CatalogError::Rejected("模型名称不能为空".to_owned()));
     }
+    let duplicate = sqlx::query_scalar::<_, i64>(
+        "SELECT 1::bigint FROM models WHERE model_name=$1 AND deleted_at IS NULL LIMIT 1",
+    )
+    .bind(&name)
+    .fetch_optional(pg)
+    .await
+    .map_err(database_error)?
+    .is_some();
+    if duplicate {
+        return Err(CatalogError::Rejected("模型名称已存在".to_owned()));
+    }
     let now = unix_now()?;
     let row = sqlx::query(&format!("INSERT INTO models (model_name, description, icon, tags, vendor_id, endpoints, status, sync_official, created_time, updated_time, name_rule) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10) RETURNING {MODEL_COLUMNS}")).bind(name).bind(text(input,"description")).bind(text(input,"icon")).bind(text(input,"tags")).bind(integer(input,"vendor_id",0)).bind(text(input,"endpoints")).bind(integer(input,"status",1)).bind(integer(input,"sync_official",1)).bind(now).bind(integer(input,"name_rule",0)).fetch_one(pg).await.map_err(unique_error)?;
     serde_json::to_value(model_from_row(&row)?).map_err(|_| CatalogError::Unavailable)
@@ -960,6 +1137,22 @@ async fn update_model_pg(pg: &PgPool, input: &Value) -> Result<Value, CatalogErr
         return Err(CatalogError::Rejected("缺少模型 ID".to_owned()));
     }
     let status_only = text(input, "status_only") == "true";
+    if !status_only {
+        let name = text(input, "model_name");
+        if !name.is_empty()
+            && sqlx::query_scalar::<_, i64>(
+                "SELECT 1::bigint FROM models WHERE model_name=$1 AND id<>$2 AND deleted_at IS NULL LIMIT 1",
+            )
+            .bind(&name)
+            .bind(id)
+            .fetch_optional(pg)
+            .await
+            .map_err(database_error)?
+            .is_some()
+        {
+            return Err(CatalogError::Rejected("模型名称已存在".to_owned()));
+        }
+    }
     let now = unix_now()?;
     let row = if status_only {
         sqlx::query(&format!("UPDATE models SET status=$2, updated_time=$3 WHERE id=$1 AND deleted_at IS NULL RETURNING {MODEL_COLUMNS}")).bind(id).bind(integer(input,"status",0)).bind(now).fetch_optional(pg).await.map_err(unique_error)?
@@ -1048,6 +1241,17 @@ async fn create_vendor_pg(pg: &PgPool, input: &Value) -> Result<Value, CatalogEr
     if name.is_empty() {
         return Err(CatalogError::Rejected("供应商名称不能为空".to_owned()));
     }
+    if sqlx::query_scalar::<_, i64>(
+        "SELECT 1::bigint FROM vendors WHERE name=$1 AND deleted_at IS NULL LIMIT 1",
+    )
+    .bind(&name)
+    .fetch_optional(pg)
+    .await
+    .map_err(database_error)?
+    .is_some()
+    {
+        return Err(CatalogError::Rejected("供应商名称已存在".to_owned()));
+    }
     let now = unix_now()?;
     // GORM applies Vendor.Status's default tag when the JSON value is zero on
     // create. Preserve that legacy behaviour; updates still persist zero.
@@ -1065,6 +1269,20 @@ async fn update_vendor_pg(pg: &PgPool, input: &Value) -> Result<Value, CatalogEr
     let id = integer(input, "id", 0);
     if id <= 0 {
         return Err(CatalogError::Rejected("缺少供应商 ID".to_owned()));
+    }
+    let name = text(input, "name");
+    if !name.is_empty()
+        && sqlx::query_scalar::<_, i64>(
+            "SELECT 1::bigint FROM vendors WHERE name=$1 AND id<>$2 AND deleted_at IS NULL LIMIT 1",
+        )
+        .bind(&name)
+        .bind(id)
+        .fetch_optional(pg)
+        .await
+        .map_err(database_error)?
+        .is_some()
+    {
+        return Err(CatalogError::Rejected("供应商名称已存在".to_owned()));
     }
     let now = unix_now()?;
     let row=sqlx::query(&format!("UPDATE vendors SET name=$2,description=$3,icon=$4,status=$5,updated_time=$6 WHERE id=$1 AND deleted_at IS NULL RETURNING {VENDOR_COLUMNS}")).bind(id).bind(text(input,"name")).bind(text(input,"description")).bind(text(input,"icon")).bind(integer(input,"status",0)).bind(now).fetch_optional(pg).await.map_err(unique_error)?.ok_or(CatalogError::NotFound)?;
@@ -1087,6 +1305,17 @@ async fn create_prefill_group_pg(pg: &PgPool, input: &Value) -> Result<Value, Ca
     if name.is_empty() || kind.is_empty() {
         return Err(CatalogError::Rejected("组名称和类型不能为空".to_owned()));
     }
+    if sqlx::query_scalar::<_, i64>(
+        "SELECT 1::bigint FROM prefill_groups WHERE name=$1 AND deleted_at IS NULL LIMIT 1",
+    )
+    .bind(&name)
+    .fetch_optional(pg)
+    .await
+    .map_err(database_error)?
+    .is_some()
+    {
+        return Err(CatalogError::Rejected("组名称已存在".to_owned()));
+    }
     let now = unix_now()?;
     let items = input
         .get("items")
@@ -1100,6 +1329,20 @@ async fn update_prefill_group_pg(pg: &PgPool, input: &Value) -> Result<Value, Ca
     let id = integer(input, "id", 0);
     if id <= 0 {
         return Err(CatalogError::Rejected("缺少组 ID".to_owned()));
+    }
+    let name = text(input, "name");
+    if !name.is_empty()
+        && sqlx::query_scalar::<_, i64>(
+            "SELECT 1::bigint FROM prefill_groups WHERE name=$1 AND id<>$2 AND deleted_at IS NULL LIMIT 1",
+        )
+        .bind(&name)
+        .bind(id)
+        .fetch_optional(pg)
+        .await
+        .map_err(database_error)?
+        .is_some()
+    {
+        return Err(CatalogError::Rejected("组名称已存在".to_owned()));
     }
     let now = unix_now()?;
     let items = input
@@ -1555,6 +1798,20 @@ fn success(data: Value) -> Response {
     .into_response()
 }
 
+fn success_without_data() -> Response {
+    Json(Envelope::<Value> {
+        success: true,
+        message: String::new(),
+        data: None,
+        code: None,
+    })
+    .into_response()
+}
+
+fn success_data_only(data: Value) -> Response {
+    Json(json!({"success": true, "data": data})).into_response()
+}
+
 fn failure(status: StatusCode, message: impl Into<String>, code: Option<&'static str>) -> Response {
     (
         status,
@@ -1614,6 +1871,17 @@ async fn execute_authorized(
         })
         .await
     {
+        Ok(_) if operation == CatalogOperation::DeleteRedemption => success_without_data(),
+        Ok(data) if operation == CatalogOperation::MissingModels => {
+            // GetMissingModels uses a hand-written Go envelope: it omits the
+            // message key, and a nil slice serializes as JSON null when there
+            // are no enabled channel models missing metadata.
+            let data = match &data {
+                Value::Array(values) if values.is_empty() => Value::Null,
+                _ => data,
+            };
+            success_data_only(data)
+        }
         Ok(data) => success(data),
         Err(error) => error.response(),
     }

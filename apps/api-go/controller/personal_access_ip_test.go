@@ -1,9 +1,13 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoopbackPeerAcceptsOnlyLoopbackAddresses(t *testing.T) {
@@ -12,4 +16,66 @@ func TestLoopbackPeerAcceptsOnlyLoopbackAddresses(t *testing.T) {
 	assert.False(t, loopbackPeer("10.0.0.2:3000"))
 	assert.False(t, loopbackPeer("198.51.100.2:3000"))
 	assert.False(t, loopbackPeer("not-an-address"))
+}
+
+func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("anonymous CN request is marked denied", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
+		context.Request.RemoteAddr = "127.0.0.1:42000"
+		context.Request.Header.Set("X-LMM-CN-Source", "1")
+
+		CheckPersonalAccessIPPolicy(context)
+
+		assert.Equal(t, http.StatusUnauthorized, context.Writer.Status())
+		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
+	})
+
+	t.Run("non-CN request passes without denial marker", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
+		context.Request.RemoteAddr = "127.0.0.1:42000"
+
+		CheckPersonalAccessIPPolicy(context)
+
+		assert.Equal(t, http.StatusNoContent, context.Writer.Status())
+		assert.Empty(t, recorder.Header().Get(accessPolicyResultHeader))
+	})
+}
+
+func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	request := func(remoteAddr string, headers map[string]string) (int, *httptest.ResponseRecorder) {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/internal/errors/access-policy", nil)
+		context.Request.RemoteAddr = remoteAddr
+		for name, value := range headers {
+			context.Request.Header.Set(name, value)
+		}
+		GetAccessPolicyErrorPage(context)
+		return context.Writer.Status(), recorder
+	}
+
+	validHeaders := map[string]string{
+		"X-LMM-Internal-Error":   accessPolicyErrorHeader,
+		accessPolicyResultHeader: accessPolicyDenied,
+	}
+	status, response := request("127.0.0.1:42000", validHeaders)
+	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
+	assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
+	assert.Contains(t, response.Body.String(), "当前网络暂不支持直接访问")
+
+	status, _ = request("127.0.0.1:42000", map[string]string{
+		"X-LMM-Internal-Error": accessPolicyErrorHeader,
+	})
+	assert.Equal(t, http.StatusNotFound, status)
+
+	status, _ = request("198.51.100.2:42000", validHeaders)
+	assert.Equal(t, http.StatusNotFound, status)
 }

@@ -1,0 +1,237 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import assert from 'node:assert/strict'
+import { after, afterEach, describe, test } from 'node:test'
+
+import { Window } from 'happy-dom'
+
+const domWindow = new Window({ url: 'https://console.example.test/' })
+for (const key of [
+  'window',
+  'document',
+  'navigator',
+  'history',
+  'location',
+  'HTMLElement',
+  'HTMLButtonElement',
+  'HTMLTextAreaElement',
+  'SVGElement',
+  'Node',
+  'Element',
+  'Event',
+  'MouseEvent',
+  'PointerEvent',
+  'FocusEvent',
+  'CustomEvent',
+  'MutationObserver',
+  'ResizeObserver',
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'getComputedStyle',
+  'scrollTo',
+] as const) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    value: domWindow[key],
+  })
+}
+
+const { act } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { QueryClient, QueryClientProvider } =
+  await import('@tanstack/react-query')
+const { createInstance } = await import('i18next')
+const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { api } = await import('@/lib/api')
+const { AssistantHandoffTool } = await import('./assistant-handoff-tool')
+
+const originalGet = api.get
+const originalPost = api.post
+const reactTestGlobals = globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean
+}
+reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
+
+const i18n = createInstance()
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: { en: { translation: {} } },
+})
+
+const pendingHandoff = {
+  id: 4,
+  user_id: 1,
+  source: 'handoff',
+  intent: 'human_support',
+  message: 'The API key page failed at 10:30 UTC.',
+  status: 'pending',
+  admin_user_id: 0,
+  admin_note: '',
+  created_at: 1_786_400_000,
+  resolved_at: 0,
+}
+
+async function flushEffects() {
+  await new Promise((resolve) => setTimeout(resolve, 25))
+}
+
+async function renderTool() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssistantHandoffTool />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await flushEffects()
+  })
+  await act(flushEffects)
+  return { container, queryClient, root }
+}
+
+function findButton(text: string): HTMLButtonElement {
+  const button = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((candidate) => candidate.textContent?.includes(text))
+  assert.ok(button, `Could not find button containing ${text}`)
+  return button
+}
+
+async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )?.set
+  assert.ok(setValue)
+  await act(async () => {
+    setValue.call(textarea, value)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushEffects()
+  })
+}
+
+async function unmount(rendered: Awaited<ReturnType<typeof renderTool>>) {
+  await act(async () => rendered.root.unmount())
+  rendered.queryClient.clear()
+  rendered.container.remove()
+}
+
+afterEach(() => {
+  api.get = originalGet
+  api.post = originalPost
+  document.body.replaceChildren()
+})
+
+after(() => domWindow.close())
+
+describe('AssistantHandoffTool', () => {
+  test('hides the message form when a human-support request is already pending', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/handoffs/self')
+      return { data: { success: true, data: pendingHandoff } }
+    }) as typeof api.get
+
+    const rendered = await renderTool()
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Administrator follow-up requested/
+    )
+    assert.match(rendered.container.textContent ?? '', /Pending/)
+    assert.equal(
+      rendered.container.querySelector('#assistant-handoff-message'),
+      null
+    )
+
+    await unmount(rendered)
+  })
+
+  test('recovers the status check and requires confirmation before sending', async () => {
+    let getCalls = 0
+    let posted: { url: string; data: unknown } | undefined
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/handoffs/self')
+      getCalls += 1
+      if (getCalls === 1) throw new Error('status offline')
+      return { data: { success: true, data: null } }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      posted = { url, data }
+      return { data: { success: true, data: pendingHandoff } }
+    }) as typeof api.post
+
+    const rendered = await renderTool()
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Unable to check support request status/
+    )
+    assert.match(
+      rendered.container.textContent ?? '',
+      /server prevents duplicate pending requests/
+    )
+
+    await act(async () => {
+      findButton('Retry').click()
+      await flushEffects()
+    })
+    await act(flushEffects)
+    assert.equal(getCalls, 2)
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /Unable to check support request status/
+    )
+
+    const textarea = rendered.container.querySelector<HTMLTextAreaElement>(
+      '#assistant-handoff-message'
+    )
+    assert.ok(textarea)
+    await setTextareaValue(textarea, pendingHandoff.message)
+
+    await act(async () => {
+      findButton('Review message').click()
+      await flushEffects()
+    })
+    assert.equal(posted, undefined)
+    assert.match(document.body.textContent ?? '', /Send this message\?/)
+
+    await act(async () => {
+      findButton('Confirm and send').click()
+      await flushEffects()
+    })
+    await act(flushEffects)
+
+    assert.deepEqual(posted, {
+      url: '/api/assistant/handoffs',
+      data: { confirmed: true, message: pendingHandoff.message },
+    })
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Administrator follow-up requested/
+    )
+
+    await unmount(rendered)
+  })
+})

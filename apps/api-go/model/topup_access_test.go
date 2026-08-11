@@ -130,7 +130,7 @@ func TestSuccessfulExternalTopUpPredicateIsSharedWithTrustAggregation(t *testing
 	aggregate, err = getPaidTopUpAggregate(userID)
 	require.NoError(t, err)
 	assert.True(t, aggregate.ActivationComplete)
-	assert.InDelta(t, 0.01, aggregate.PaidAmount, 0.0001)
+	assert.InDelta(t, 1, aggregate.PaidAmount, 0.0001)
 }
 
 func TestFreshPaidTopUpAggregateNormalizesProviderWriterSemantics(t *testing.T) {
@@ -203,10 +203,10 @@ func TestFreshPaidTopUpAggregateUsesLegacyWriterFallbackAndCreateTimeAnchor(t *t
 	require.NoError(t, err)
 	assert.True(t, aggregate.ActivationComplete)
 	assert.Equal(t, createdAt, aggregate.LastPaidCompleteAt)
-	assert.InDelta(t, 0.01, aggregate.PaidAmount, 0.0001)
+	assert.InDelta(t, 100, aggregate.PaidAmount, 0.0001)
 }
 
-func TestFreshPaidTopUpAggregateUsesSettledMoneyInsteadOfMutableQuotaRatio(t *testing.T) {
+func TestFreshPaidTopUpAggregateUsesCreditedQuotaInsteadOfSettledMoney(t *testing.T) {
 	db := setupTopUpAccessTestDB(t)
 	previousQuotaPerUnit := common.QuotaPerUnit
 	common.QuotaPerUnit = 999_999
@@ -226,7 +226,61 @@ func TestFreshPaidTopUpAggregateUsesSettledMoneyInsteadOfMutableQuotaRatio(t *te
 	aggregate, err := getFreshPaidTopUpAggregate(topUp.UserId)
 	require.NoError(t, err)
 	assert.True(t, aggregate.ActivationComplete)
-	assert.InDelta(t, 12.34, aggregate.PaidAmount, 0.0001)
+	assert.InDelta(t, 123.456912, aggregate.PaidAmount, 0.000001)
+}
+
+func TestLinuxDOCreditDoesNotCountAsPaidTopUp(t *testing.T) {
+	db := setupTopUpAccessTestDB(t)
+	const ldcOnlyUserID = 122
+	const mixedUserID = 123
+	fixtures := []TopUp{
+		{
+			UserId:          ldcOnlyUserID,
+			TradeNo:         "linuxdo-credit-only",
+			Amount:          500,
+			CreditedQuota:   int64(common.QuotaPerUnit) * 500,
+			Money:           500,
+			Status:          common.TopUpStatusSuccess,
+			PaymentProvider: PaymentProviderEpay,
+			PaymentMethod:   "epay",
+		},
+		{
+			UserId:          mixedUserID,
+			TradeNo:         "linuxdo-credit-mixed",
+			Amount:          500,
+			CreditedQuota:   int64(common.QuotaPerUnit) * 500,
+			Money:           500,
+			Status:          common.TopUpStatusSuccess,
+			PaymentProvider: PaymentProviderEpay,
+			PaymentMethod:   "epay",
+		},
+		{
+			UserId:          mixedUserID,
+			TradeNo:         "real-money-mixed",
+			Amount:          10,
+			CreditedQuota:   int64(common.QuotaPerUnit) * 10,
+			Money:           10,
+			Status:          common.TopUpStatusSuccess,
+			PaymentProvider: PaymentProviderEpay,
+			PaymentMethod:   "alipay",
+		},
+	}
+	require.NoError(t, db.Create(&fixtures).Error)
+
+	granted, err := HasSuccessfulPaidTopUp(ldcOnlyUserID)
+	require.NoError(t, err)
+	assert.False(t, granted)
+	ldcAggregate, err := getFreshPaidTopUpAggregate(ldcOnlyUserID)
+	require.NoError(t, err)
+	assert.Zero(t, ldcAggregate.PaidAmount)
+	assert.False(t, ldcAggregate.ActivationComplete)
+
+	granted, err = HasSuccessfulPaidTopUp(mixedUserID)
+	require.NoError(t, err)
+	assert.True(t, granted)
+	mixedAggregate, err := getFreshPaidTopUpAggregate(mixedUserID)
+	require.NoError(t, err)
+	assert.InDelta(t, 10, mixedAggregate.PaidAmount, 0.0001)
 }
 
 func TestDeveloperAccessStateSeparatesPaidFactFromEffectiveGrant(t *testing.T) {
