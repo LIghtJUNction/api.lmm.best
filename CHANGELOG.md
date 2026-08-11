@@ -6,6 +6,9 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+- Extended the shell-only A–I persona suite to support isolated per-persona
+  login credentials, optional per-persona 2FA/Turnstile values, and redacted
+  L0/L1 boundary evidence without creating keys, payments or upstream calls.
 - Added an administrator-only assistant funding summary. The user-management
   panel now separates assistant requests from ordinary root-account traffic
   and shows the last 30 days' USD spend, token volume and remaining

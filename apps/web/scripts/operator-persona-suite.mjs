@@ -195,16 +195,19 @@ function assertNoServerError(result, label) {
   }
 }
 
-async function loadOptionalCredentials() {
-  const credentialPath = process.env.PERSONA_CREDENTIAL_FILE
+async function loadOptionalCredentials(personaId = '') {
+  const credentialVariable = personaId
+    ? `PERSONA_CREDENTIAL_FILE_${personaId}`
+    : 'PERSONA_CREDENTIAL_FILE'
+  const credentialPath = process.env[credentialVariable]
   if (!credentialPath) return null
   if (!path.isAbsolute(credentialPath)) {
-    throw new Error('PERSONA_CREDENTIAL_FILE must be absolute')
+    throw new Error(`${credentialVariable} must be absolute`)
   }
   const info = await lstat(credentialPath)
   if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0) {
     throw new Error(
-      'PERSONA_CREDENTIAL_FILE must be a regular 0600-or-stricter file'
+      `${credentialVariable} must be a regular 0600-or-stricter file`
     )
   }
   const credentials = JSON.parse(await readFile(credentialPath, 'utf8'))
@@ -219,8 +222,17 @@ async function loadOptionalCredentials() {
   return credentials
 }
 
-async function login(credentials) {
-  const turnstile = process.env.PERSONA_TURNSTILE_TOKEN || ''
+function personaEnvironment(name, personaId) {
+  if (personaId) {
+    return process.env[`${name}_${personaId}`] ?? process.env[name]
+  }
+  return process.env[name]
+}
+
+async function login(credentials, personaId = '') {
+  const identity = personaId ? `persona ${personaId}` : 'test account'
+  const turnstile =
+    personaEnvironment('PERSONA_TURNSTILE_TOKEN', personaId) || ''
   const result = await request(
     'POST',
     `/api/user/login?turnstile=${encodeURIComponent(turnstile)}`,
@@ -232,29 +244,65 @@ async function login(credentials) {
       }),
     }
   )
-  assertStatus(result, [200], 'test-account login')
+  assertStatus(result, [200], `${identity} login`)
   const data = result.json?.data
   if (data?.require_2fa) {
-    const code = process.env.PERSONA_2FA_CODE
+    const code = personaEnvironment('PERSONA_2FA_CODE', personaId)
     if (!code)
-      throw new Error('test account requires 2FA; set PERSONA_2FA_CODE')
+      throw new Error(
+        `${identity} requires 2FA; set the matching PERSONA_2FA_CODE variable`
+      )
     const second = await request('POST', '/api/user/login/2fa', {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code, flow_token: data.flow_token }),
     })
-    assertStatus(second, [200], 'test-account 2FA login')
+    assertStatus(second, [200], `${identity} 2FA login`)
     if (
       !second.json?.success ||
       typeof second.json?.data?.access_token !== 'string'
     ) {
-      throw new Error('test-account 2FA login did not return an auth bundle')
+      throw new Error(`${identity} 2FA login did not return an auth bundle`)
     }
     return second.json.data.access_token
   }
   if (!result.json?.success || typeof data?.access_token !== 'string') {
-    throw new Error('test-account login did not return an auth bundle')
+    throw new Error(`${identity} login did not return an auth bundle`)
   }
   return data.access_token
+}
+
+async function inspectAccountBoundary(headers, label) {
+  const self = await request('GET', '/api/user/self', { headers })
+  assertStatus(self, [200], `${label} self`)
+  const offers = await request('GET', '/api/assistant/offers', { headers })
+  assertStatus(offers, [200], `${label} assistant offers`)
+  const offerData = offers.json?.data
+  const l1 = offerData?.developer_access_granted === true
+  if (!l1) {
+    if (
+      offerData?.payment_hidden !== true ||
+      !Array.isArray(offerData?.plans) ||
+      offerData.plans.length !== 0 ||
+      !offerData?.topup_discounts ||
+      Object.keys(offerData.topup_discounts).length !== 0
+    ) {
+      throw new Error(
+        `${label} L0 assistant offers exposed payment or plan data`
+      )
+    }
+    const keyAttempt = await request(
+      'POST',
+      '/api/assistant/tools/create-key',
+      {
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ confirmed: true, group: 'default' }),
+      }
+    )
+    // L0 requests can be rejected by ConsoleAccessGate before the handler;
+    // that deliberate anti-enumeration path returns the generic 404.
+    assertStatus(keyAttempt, [403, 404], `${label} L0 API-key creation guard`)
+  }
+  return { l1 }
 }
 
 const anonymousChecks = [
@@ -382,42 +430,25 @@ async function run() {
   }
 
   const credentials = await loadOptionalCredentials()
+  const firstPersonaWithCredentials = selectedPersonas.find((persona) =>
+    Boolean(process.env[`PERSONA_CREDENTIAL_FILE_${persona.id}`])
+  )
+  const basePersonaId = credentials ? '' : firstPersonaWithCredentials?.id || ''
+  const authenticatedCredentials =
+    credentials || (await loadOptionalCredentials(basePersonaId))
   let authenticated = null
-  if (credentials) {
-    const accessToken = await login(credentials)
+  if (authenticatedCredentials) {
+    const accessToken = await login(authenticatedCredentials, basePersonaId)
     const headers = { authorization: `Bearer ${accessToken}` }
-    const self = await request('GET', '/api/user/self', { headers })
-    assertStatus(self, [200], 'authenticated self')
+    const accountBoundary = await inspectAccountBoundary(
+      headers,
+      basePersonaId ? `persona ${basePersonaId}` : 'authenticated account'
+    )
     const assistantStatus = await request('GET', '/api/assistant/status', {
       headers,
     })
     assertStatus(assistantStatus, [200], 'authenticated assistant status')
-    const offers = await request('GET', '/api/assistant/offers', { headers })
-    assertStatus(offers, [200], 'authenticated assistant offers')
-    const offerData = offers.json?.data
-    const l1 = offerData?.developer_access_granted === true
-    if (!l1) {
-      if (
-        offerData?.payment_hidden !== true ||
-        !Array.isArray(offerData?.plans) ||
-        offerData.plans.length !== 0 ||
-        !offerData?.topup_discounts ||
-        Object.keys(offerData.topup_discounts).length !== 0
-      ) {
-        throw new Error('L0 assistant offers exposed payment or plan data')
-      }
-      const keyAttempt = await request(
-        'POST',
-        '/api/assistant/tools/create-key',
-        {
-          headers: { ...headers, 'content-type': 'application/json' },
-          body: JSON.stringify({ confirmed: true, group: 'default' }),
-        }
-      )
-      // L0 requests can be rejected by ConsoleAccessGate before the handler;
-      // that deliberate anti-enumeration path returns the generic 404.
-      assertStatus(keyAttempt, [403, 404], 'L0 API-key creation guard')
-    }
+    const l1 = accountBoundary.l1
     const readonlyPaths = [
       '/api/user/self/groups',
       '/api/token/?p=1&size=1',
@@ -433,14 +464,30 @@ async function run() {
     if (process.env.PERSONA_RUN_ASSISTANT === '1') {
       const personaResults = []
       for (const persona of selectedPersonas) {
+        const personaCredentials = await loadOptionalCredentials(persona.id)
+        const isolatedAccount = Boolean(personaCredentials)
+        const personaAccessToken = isolatedAccount
+          ? basePersonaId === persona.id
+            ? accessToken
+            : await login(personaCredentials, persona.id)
+          : accessToken
+        const personaHeaders = {
+          authorization: `Bearer ${personaAccessToken}`,
+        }
+        const personaBoundary = isolatedAccount
+          ? await inspectAccountBoundary(
+              personaHeaders,
+              `persona ${persona.id}`
+            )
+          : { l1 }
         const first = await request('POST', '/api/assistant/chat', {
-          headers: { ...headers, 'content-type': 'application/json' },
+          headers: { ...personaHeaders, 'content-type': 'application/json' },
           body: JSON.stringify({ message: persona.message }),
         })
         assertNoServerError(first, `persona ${persona.id} first turn`)
         assertStatus(first, [200], `persona ${persona.id} first turn`)
         const second = await request('POST', '/api/assistant/chat', {
-          headers: { ...headers, 'content-type': 'application/json' },
+          headers: { ...personaHeaders, 'content-type': 'application/json' },
           body: JSON.stringify({ message: persona.message }),
         })
         assertNoServerError(second, `persona ${persona.id} repeated turn`)
@@ -478,6 +525,8 @@ async function run() {
           label: persona.label,
           policy: persona.policy || null,
           expectedIntent: persona.expectedIntent,
+          isolatedAccount,
+          l1: personaBoundary.l1,
           intentMatches,
           firstStatus: first.status,
           secondStatus: second.status,
@@ -519,7 +568,7 @@ async function run() {
     safety: {
       productionBlocked: true,
       writesPerformed: Boolean(
-        credentials && process.env.PERSONA_RUN_ASSISTANT === '1'
+        authenticatedCredentials && process.env.PERSONA_RUN_ASSISTANT === '1'
       ),
       note: 'Login/session creation and optional assistant chat are allowed only against the local review origin; no key, payment, bounty, or account mutation is performed by this suite.',
     },
