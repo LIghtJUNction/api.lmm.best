@@ -63,6 +63,7 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	require.Len(t, captured.Messages, 2)
 	assert.Equal(t, "system", captured.Messages[0].Role)
 	assert.Contains(t, captured.Messages[0].Content, "Never ask for or repeat passwords")
+	assert.Contains(t, captured.Messages[0].Content, "https://api.example.com\n")
 	assert.Contains(t, captured.Messages[0].Content, "https://api.example.com/v1")
 	assert.Contains(t, captured.Messages[0].Content, "server-owned-model")
 	assert.Contains(t, captured.Messages[0].Content, "Existing API keys are private")
@@ -396,6 +397,47 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	})
 	assert.Equal(t, "confirmation_required", handoff["status"])
 	assert.Equal(t, "human_support", handoff["action"])
+}
+
+func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {
+	originalServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://api.example.com/"
+	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
+	withAssistantSettings(t, true, "deepseek-v4-flash")
+
+	claudeCode := executeAssistantSetupTool(map[string]any{
+		"platform": "windows",
+		"topic":    "claude-code",
+	})
+	assert.Equal(t, true, claudeCode["ok"])
+	assert.Equal(t, "https://api.example.com", claudeCode["service_root"])
+	assert.Equal(t, "https://api.example.com/v1", claudeCode["openai_base_url"])
+	assert.Equal(t, "winget install Anthropic.ClaudeCode", claudeCode["install_command"])
+	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_BASE_URL=\"https://api.example.com\"")
+	assert.NotContains(t, claudeCode["configuration"], "api.example.com/v1")
+
+	codex := executeAssistantSetupTool(map[string]any{
+		"platform": "linux",
+		"topic":    "codex",
+	})
+	assert.Contains(t, codex["config_toml"], "base_url = \"https://api.example.com/v1\"")
+	assert.Contains(t, codex["config_toml"], "wire_api = \"responses\"")
+	assert.NotContains(t, codex["config_toml"], "<YOUR_API_KEY>")
+
+	chatGPT := executeAssistantSetupTool(map[string]any{
+		"platform": "macos",
+		"topic":    "chatgpt-client",
+	})
+	assert.Equal(t, false, chatGPT["supported"])
+	assert.Equal(t, false, chatGPT["direct_custom_gateway_supported"])
+	assert.Contains(t, chatGPT["limitation"], "does not accept")
+
+	claudeDesktopLinux := executeAssistantSetupTool(map[string]any{
+		"platform": "linux",
+		"topic":    "claude-desktop",
+	})
+	assert.Equal(t, false, claudeDesktopLinux["supported"])
+	assert.Contains(t, claudeDesktopLinux["limitation"], "use Claude Code on Linux")
 }
 
 func TestAssistantCostToolAndResponseContent(t *testing.T) {

@@ -33,6 +33,7 @@ Answer in the user's language and be concise, accurate, and practical.
 You may explain onboarding review, plans, pricing, discounts, API keys, Base URL and model IDs, cost calculations, open-source bounties and tips, and setup for Claude Code, CC Switch, ChatGPT-compatible clients, Windows, Linux, and macOS.
 
 Current service connection facts:
+- Anthropic-compatible service root: %s
 - OpenAI-compatible Base URL: %s
 - Default assistant model ID: %s
 - Existing API keys are private and unavailable to you. Direct the user to the connection details tool to create and copy a new key with explicit confirmation.`
@@ -61,13 +62,15 @@ type assistantOpenAIRequest struct {
 }
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings) string {
-	baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
-	if baseURL == "" {
+	rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
+	baseURL := rootURL
+	if rootURL == "" {
+		rootURL = "the service root shown in the current console"
 		baseURL = "the /v1 endpoint shown in the current console"
 	} else {
 		baseURL += "/v1"
 	}
-	prompt := fmt.Sprintf(assistantSystemPromptTemplate, baseURL, settings.Model)
+	prompt := fmt.Sprintf(assistantSystemPromptTemplate, rootURL, baseURL, settings.Model)
 	if persona := strings.TrimSpace(settings.Persona); persona != "" {
 		prompt += "\n\nAdministrator-configured personality:\n" + persona
 	}
@@ -83,6 +86,8 @@ Non-overridable safety and accuracy rules:
 - Never ask for or repeat passwords, API keys, session cookies, or other secrets.
 - Never claim that you created a key, changed an account, contacted an administrator, purchased a plan, or completed any other action unless a confirmed tool result says so.
 - Use live tools for account state, model availability, pricing, discounts, invitation rewards, usage statistics, and search results. If a tool is unavailable, say so instead of inventing a value.
+- Use the service root without /v1 for Anthropic-compatible clients such as Claude Code, and use the /v1 Base URL for OpenAI-compatible clients.
+- The official ChatGPT app does not accept a custom API Base URL or this service's API key. Recommend CC Switch or another compatible API client when the user wants to use this service.
 - Write actions require explicit confirmation in the UI. Explain the next step clearly and never hide a charge or a permission change.`
 	return prompt
 }
