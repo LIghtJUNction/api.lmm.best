@@ -1,0 +1,259 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import assert from 'node:assert/strict'
+import { after, afterEach, describe, test } from 'node:test'
+
+import { Window } from 'happy-dom'
+
+const domWindow = new Window({ url: 'https://console.example.test/' })
+for (const key of [
+  'window',
+  'document',
+  'navigator',
+  'history',
+  'location',
+  'HTMLElement',
+  'HTMLButtonElement',
+  'HTMLFormElement',
+  'HTMLInputElement',
+  'HTMLTextAreaElement',
+  'SVGElement',
+  'Node',
+  'Element',
+  'Event',
+  'MouseEvent',
+  'PointerEvent',
+  'FocusEvent',
+  'CustomEvent',
+  'FormData',
+  'File',
+  'FileReader',
+  'MutationObserver',
+  'ResizeObserver',
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'getComputedStyle',
+  'scrollTo',
+] as const) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    value: domWindow[key],
+  })
+}
+
+const { act } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { QueryClient, QueryClientProvider } =
+  await import('@tanstack/react-query')
+const {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} = await import('@tanstack/react-router')
+const { createInstance } = await import('i18next')
+const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { api } = await import('@/lib/api')
+const { AssistantPanel } = await import('./assistant-panel')
+
+const originalGet = api.get
+const originalPost = api.post
+const reactTestGlobals = globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean
+}
+reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
+
+const i18n = createInstance()
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: { en: { translation: {} } },
+})
+
+const assistantStatus = {
+  enabled: true,
+  model: 'deepseek-v4-flash',
+  developer_access_granted: true,
+  credit: {
+    weekly_credit_usd: 1,
+    limit_quota: 500_000,
+    used_quota: 0,
+    remaining_quota: 500_000,
+    week_start: 1_786_320_000,
+    resets_at: 1_786_924_800,
+  },
+}
+
+async function flushEffects() {
+  await new Promise((resolve) => setTimeout(resolve, 25))
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  failureMessage: string
+) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (condition()) return
+    await flushEffects()
+  }
+  throw new Error(`${failureMessage}: ${document.body.textContent}`)
+}
+
+async function renderPanel() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const rootRoute = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssistantPanel open onOpenChange={() => {}} />
+        </I18nextProvider>
+      </QueryClientProvider>
+    ),
+  })
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => null,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(<RouterProvider router={router} />)
+    await flushEffects()
+  })
+  await act(flushEffects)
+  return { container, queryClient, root }
+}
+
+function findButton(text: string): HTMLButtonElement {
+  const button = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((candidate) => candidate.textContent?.includes(text))
+  assert.ok(button, `Could not find button containing ${text}`)
+  return button
+}
+
+async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )?.set
+  assert.ok(setValue)
+  await act(async () => {
+    setValue.call(textarea, value)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushEffects()
+  })
+}
+
+afterEach(() => {
+  api.get = originalGet
+  api.post = originalPost
+  document.body.replaceChildren()
+})
+
+after(() => domWindow.close())
+
+describe('AssistantPanel', () => {
+  test('retries the exact failed conversation without duplicating the user message', async () => {
+    const posted: unknown[] = []
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/assistant/chat')
+      posted.push(data)
+      if (posted.length === 1) throw new Error('assistant offline')
+      return {
+        data: {
+          choices: [
+            { message: { content: 'Use the verified Windows guide.' } },
+          ],
+        },
+        headers: { 'x-lmm-assistant-intent': 'client_setup' },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    const textarea = document.querySelector<HTMLTextAreaElement>(
+      'textarea[placeholder="Ask about plans, setup, keys, or costs..."]'
+    )
+    assert.ok(textarea)
+    await setTextareaValue(textarea, 'How do I configure Claude Code?')
+    const submit = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Submit"]'
+    )
+    assert.ok(submit)
+
+    await act(async () => {
+      submit.click()
+      await flushEffects()
+    })
+    await act(async () =>
+      waitForCondition(
+        () => document.body.textContent?.includes('Contact support') === true,
+        'Assistant error actions did not render'
+      )
+    )
+    assert.match(
+      document.body.textContent ?? '',
+      /The AI assistant could not answer right now/
+    )
+    assert.equal(posted.length, 1)
+
+    await act(async () => {
+      findButton('Retry').click()
+      await flushEffects()
+    })
+    await act(async () =>
+      waitForCondition(
+        () =>
+          document.body.textContent?.includes(
+            'Use the verified Windows guide.'
+          ) === true,
+        'Retried assistant answer did not render'
+      )
+    )
+
+    assert.equal(posted.length, 2)
+    assert.deepEqual(posted[1], posted[0])
+    assert.doesNotMatch(
+      document.body.textContent ?? '',
+      /The AI assistant could not answer right now/
+    )
+    assert.equal(
+      (document.body.textContent ?? '').match(
+        /How do I configure Claude Code\?/g
+      )?.length,
+      1
+    )
+
+    await act(async () => rendered.root.unmount())
+    rendered.queryClient.clear()
+  })
+})
