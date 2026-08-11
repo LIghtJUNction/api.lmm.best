@@ -169,7 +169,7 @@ func (buildRuntime *buildDeployRuntime) build(ctx context.Context, options build
 		return buildDeployResult{}, err
 	}
 	defer os.Remove(temporaryBinaryPath)
-	goEnvironment := append(os.Environ(), "CGO_ENABLED=0", "GOPROXY=off")
+	goEnvironment := append(os.Environ(), "CGO_ENABLED=0")
 	linkerFlags := "-s -w -extldflags=-static -X github.com/QuantumNous/new-api/common.Version=" + version
 	if _, err := buildRuntime.runner.Run(ctx, productionCommand{
 		Name: "go",
@@ -224,6 +224,13 @@ func validateBuildRepository(repo string) error {
 		"packaging/local/lmm-api-go/PKGBUILD",
 		"packaging/common/lmm-api/lmm-api-go.service",
 		"packaging/common/lmm-api/lmm-api-go.env",
+		"packaging/common/lmm-api/geoip2-country-update.service",
+		"packaging/common/lmm-api/geoip2-country-update.timer",
+		"deploy/nginx/http-map.conf",
+		"deploy/nginx/lmm-api-locations.conf",
+		"deploy/nginx/mime.types",
+		"deploy/nginx/new-api.conf",
+		"deploy/nginx/lmm-api-region-policy.conf",
 	} {
 		path := filepath.Join(repo, filepath.FromSlash(relative))
 		info, err := os.Lstat(path)
@@ -362,6 +369,13 @@ func (buildRuntime *buildDeployRuntime) buildPackage(
 		{filepath.Join(options.Repo, "LICENSE"), filepath.Join(buildDir, "LICENSE"), 0o644},
 		{filepath.Join(options.Repo, "NOTICE"), filepath.Join(buildDir, "NOTICE"), 0o644},
 		{filepath.Join(options.Repo, "THIRD-PARTY-LICENSES.md"), filepath.Join(buildDir, "THIRD-PARTY-LICENSES.md"), 0o644},
+		{filepath.Join(options.Repo, "deploy/nginx/http-map.conf"), filepath.Join(buildDir, "nginx-http-map.conf"), 0o644},
+		{filepath.Join(options.Repo, "deploy/nginx/lmm-api-locations.conf"), filepath.Join(buildDir, "nginx-locations.conf"), 0o644},
+		{filepath.Join(options.Repo, "deploy/nginx/mime.types"), filepath.Join(buildDir, "nginx-mime.types"), 0o644},
+		{filepath.Join(options.Repo, "deploy/nginx/new-api.conf"), filepath.Join(buildDir, "nginx-new-api.conf"), 0o644},
+		{filepath.Join(options.Repo, "deploy/nginx/lmm-api-region-policy.conf"), filepath.Join(buildDir, "nginx-region-policy.conf"), 0o644},
+		{filepath.Join(options.Repo, "packaging/common/lmm-api/geoip2-country-update.service"), filepath.Join(buildDir, "geoip2-country-update.service"), 0o644},
+		{filepath.Join(options.Repo, "packaging/common/lmm-api/geoip2-country-update.timer"), filepath.Join(buildDir, "geoip2-country-update.timer"), 0o644},
 	}
 	for _, input := range inputs {
 		if err := copyRegularFile(input.source, input.destination, input.mode, true); err != nil {

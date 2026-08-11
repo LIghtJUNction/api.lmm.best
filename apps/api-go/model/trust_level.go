@@ -35,9 +35,11 @@ func LocalAcceptanceDeveloperAccessEnabled() bool {
 }
 
 type TrustLevelInfo struct {
-	Level                int      `json:"level"`
-	AutomaticLevel       int      `json:"automatic_level"`
-	OverrideLevel        *int     `json:"override_level"`
+	Level          int  `json:"level"`
+	AutomaticLevel int  `json:"automatic_level"`
+	OverrideLevel  *int `json:"override_level"`
+	// PaidAmount is the eligible API credit amount in USD. It intentionally
+	// does not represent the gateway's settlement amount.
 	PaidAmount           float64  `json:"paid_amount"`
 	DiscountRatio        float64  `json:"discount_ratio"`
 	DiscountPercent      float64  `json:"discount_percent"`
@@ -63,8 +65,8 @@ type TrustLevelTier struct {
 
 var trustLevelBenefits = [...][]string{
 	{"standard_access"},
-	{"developer_access"},
-	{"usage_discount", "personal_ip_allowlist"},
+	{"developer_access", "personal_ip_allowlist"},
+	{"usage_discount"},
 	{"usage_discount"},
 	{"usage_discount"},
 }
@@ -75,9 +77,11 @@ func trustLevelTier(level int) TrustLevelTier {
 	}
 	benefits := append([]string(nil), trustLevelBenefits[level]...)
 	return TrustLevelTier{
-		Level:                   level,
-		MinPaidAmount:           trustLevelThresholds[level],
-		RequiresSuccessfulTopUp: level == TrustLevelMinUser+1,
+		Level:         level,
+		MinPaidAmount: trustLevelThresholds[level],
+		// L1 can be reached through a successful top-up or an approved
+		// administrator unlock request, so payment is not a prerequisite.
+		RequiresSuccessfulTopUp: false,
 		DiscountPercent:         (1 - trustLevelDiscountRatios[level]) * 100,
 		Benefits:                benefits,
 		BenefitCount:            len(benefits),
@@ -114,6 +118,8 @@ func GetTrustLevelTierViews(viewerLevel int) []TrustLevelTier {
 }
 
 type paidTopUpAggregate struct {
+	// PaidAmountMicros stores eligible credited API balance in USD micros, not
+	// the amount charged by the external payment provider.
 	PaidAmountMicros   int64
 	PaidAmount         float64
 	LastPaidCompleteAt int64
@@ -158,8 +164,9 @@ func EvaluateTrustLevel(role int, overrideLevel *int, paidAmount float64, activi
 }
 
 // EvaluateTrustLevelWithActivation keeps the independent activation predicate
-// separate from cumulative credited platform amount. Only callers that have
-// established a real successful payment should set activationComplete.
+// separate from cumulative credited platform amount. A successful payment or
+// an approved non-payment activation may establish the L1 boundary; only the
+// paid amount contributes to later paid progression.
 func EvaluateTrustLevelWithActivation(role int, overrideLevel *int, paidAmount float64, activationComplete bool, activityAnchor int64, now int64) TrustLevelInfo {
 	if now <= 0 {
 		now = time.Now().Unix()
@@ -329,8 +336,7 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 
 	type paidTopUpSummary struct {
 		UserId                 int
-		SettledAmountMicros    int64
-		LegacyPaidAmount       float64
+		CreditedQuota          float64
 		LastPaidCompleteAt     int64
 		ActivationCompleteRows int64
 	}
@@ -338,12 +344,11 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 	activityExpression := "CASE WHEN complete_time > 0 THEN complete_time ELSE create_time END"
 	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
 	selectClause := "user_id, " +
-		"COALESCE(SUM(CASE WHEN settled_amount_micros > 0 THEN settled_amount_micros ELSE 0 END), 0) AS settled_amount_micros, " +
-		"COALESCE(SUM(CASE WHEN settled_amount_micros = 0 THEN money ELSE 0 END), 0) AS legacy_paid_amount, " +
+		"COALESCE(SUM(" + creditedQuotaExpression + "), 0) AS credited_quota, " +
 		"COALESCE(MAX(" + activityExpression + "), 0) AS last_paid_complete_at, " +
 		"COUNT(*) AS activation_complete_rows"
 	query := DB.Model(&TopUp{}).
-		Select(selectClause).
+		Select(selectClause, creditedQuotaArgs...).
 		Where("user_id IN ?", uniqueUserIDs).
 		Where("("+creditedQuotaExpression+") > 0", creditedQuotaArgs...).
 		Group("user_id")
@@ -351,9 +356,7 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 		return nil, err
 	}
 	for _, summary := range summaries {
-		legacyAmountMicros := decimal.NewFromFloat(summary.LegacyPaidAmount).
-			Mul(decimal.NewFromInt(1_000_000)).Round(0).IntPart()
-		paidAmountMicros := summary.SettledAmountMicros + legacyAmountMicros
+		paidAmountMicros := creditedQuotaToUSDMicros(summary.CreditedQuota)
 		result[summary.UserId] = paidTopUpAggregate{
 			PaidAmountMicros:   paidAmountMicros,
 			PaidAmount:         float64(paidAmountMicros) / 1_000_000,
@@ -362,6 +365,17 @@ func getFreshPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, err
 		}
 	}
 	return result, nil
+}
+
+func creditedQuotaToUSDMicros(creditedQuota float64) int64 {
+	if creditedQuota <= 0 || common.QuotaPerUnit <= 0 {
+		return 0
+	}
+	return decimal.NewFromFloat(creditedQuota).
+		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Mul(decimal.NewFromInt(1_000_000)).
+		Round(0).
+		IntPart()
 }
 
 func invalidatePaidTopUpAggregate(userID int) {
@@ -411,7 +425,7 @@ func GetTrustLevelInfoForUser(user *User) (TrustLevelInfo, error) {
 		return TrustLevelInfo{}, err
 	}
 	anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-	return EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix()), nil
+	return EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete || user.ConsoleActivatedAt > 0, anchor, time.Now().Unix()), nil
 }
 
 // GetFreshTrustLevelInfoForUser bypasses the bounded discount cache for
@@ -434,9 +448,9 @@ func explicitDeveloperAccessDecision(role int, overrideLevel *int) (DeveloperAcc
 	return DeveloperAccessState{Granted: *overrideLevel >= TrustLevelMinUser+1 && *overrideLevel <= TrustLevelMaxUser}, true
 }
 
-func ordinaryDeveloperAccessState(paidActivationComplete bool) DeveloperAccessState {
+func ordinaryDeveloperAccessState(paidActivationComplete bool, consoleActivated bool) DeveloperAccessState {
 	return DeveloperAccessState{
-		Granted:                paidActivationComplete || LocalAcceptanceDeveloperAccessEnabled(),
+		Granted:                paidActivationComplete || consoleActivated || LocalAcceptanceDeveloperAccessEnabled(),
 		PaidActivationComplete: paidActivationComplete,
 	}
 }
@@ -457,12 +471,13 @@ func GetFreshUserAccessSnapshot(user *User) (UserAccessSnapshot, error) {
 	if err != nil {
 		return UserAccessSnapshot{}, err
 	}
+	activationComplete := aggregate.ActivationComplete || user.ConsoleActivatedAt > 0
 	anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
 	return UserAccessSnapshot{
 		TrustLevel: EvaluateTrustLevelWithActivation(
-			user.Role, nil, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix(),
+			user.Role, nil, aggregate.PaidAmount, activationComplete, anchor, time.Now().Unix(),
 		),
-		DeveloperAccess:        ordinaryDeveloperAccessState(aggregate.ActivationComplete),
+		DeveloperAccess:        ordinaryDeveloperAccessState(aggregate.ActivationComplete, user.ConsoleActivatedAt > 0),
 		PaidAmountMicros:       aggregate.PaidAmountMicros,
 		LastPaidCompleteAt:     aggregate.LastPaidCompleteAt,
 		PaidActivationComplete: aggregate.ActivationComplete,
@@ -484,7 +499,7 @@ func GetTrustLevelInfoForUserBase(user *UserBase) (TrustLevelInfo, error) {
 		return TrustLevelInfo{}, err
 	}
 	anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-	return EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, time.Now().Unix()), nil
+	return EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete || user.ConsoleActivatedAt > 0, anchor, time.Now().Unix()), nil
 }
 
 func GetTrustLevelInfoByUserID(userID int) (TrustLevelInfo, error) {
@@ -495,7 +510,7 @@ func GetTrustLevelInfoByUserID(userID int) (TrustLevelInfo, error) {
 	return GetTrustLevelInfoForUserBase(user)
 }
 
-// DeveloperAccessState separates the durable paid-activation fact from the
+// DeveloperAccessState separates the durable activation facts from the
 // effective access decision, which may be granted or denied by role/override.
 type DeveloperAccessState struct {
 	Granted                bool `json:"granted"`
@@ -511,11 +526,14 @@ func GetDeveloperAccessStateForUserBase(user *UserBase) (DeveloperAccessState, e
 		// remains intentionally unknown/false on this bounded path.
 		return state, nil
 	}
+	if user.ConsoleActivatedAt > 0 {
+		return ordinaryDeveloperAccessState(false, true), nil
+	}
 	paid, err := HasSuccessfulPaidTopUp(user.Id)
 	if err != nil {
 		return DeveloperAccessState{}, err
 	}
-	return ordinaryDeveloperAccessState(paid), nil
+	return ordinaryDeveloperAccessState(paid, user.ConsoleActivatedAt > 0), nil
 }
 
 func GetDeveloperAccessStateForUser(user *User) (DeveloperAccessState, error) {
@@ -618,7 +636,14 @@ func EnrichUsersTrustLevels(users []*User) error {
 		} else {
 			aggregate := aggregates[user.Id]
 			anchor := trustActivityAnchor(user.CreatedAt, user.LastAPIActivityAt, aggregate.LastPaidCompleteAt)
-			info = EvaluateTrustLevelWithActivation(user.Role, user.TrustLevelOverride, aggregate.PaidAmount, aggregate.ActivationComplete, anchor, now)
+			info = EvaluateTrustLevelWithActivation(
+				user.Role,
+				user.TrustLevelOverride,
+				aggregate.PaidAmount,
+				aggregate.ActivationComplete || user.ConsoleActivatedAt > 0,
+				anchor,
+				now,
+			)
 		}
 		user.TrustLevelInfo = &info
 	}
@@ -632,8 +657,10 @@ func SetUserTrustLevelOverride(userID int, level *int) error {
 	if level != nil && (*level < TrustLevelMinUser || *level > TrustLevelMaxUser) {
 		return gorm.ErrInvalidData
 	}
+	// Trust levels are automatic. Keep this legacy management entry point
+	// idempotent for older clients, but never persist a manual freeze.
 	if err := DB.Model(&User{}).Where("id = ? AND role < ?", userID, common.RoleAdminUser).
-		Update("trust_level_override", level).Error; err != nil {
+		Update("trust_level_override", nil).Error; err != nil {
 		return err
 	}
 	return invalidateUserCache(userID)

@@ -57,6 +57,8 @@ type productionPaths struct {
 	SystemdUnitRoot  string
 	ConfigDir        string
 	DropInDir        string
+	NginxRoot        string
+	EdgeAssetRoot    string
 	InstalledBinary  string
 	PackagedFrontend string
 	MigrationWorkdir string
@@ -80,6 +82,8 @@ func defaultProductionPaths() productionPaths {
 		SystemdUnitRoot:  "/etc/systemd/system",
 		ConfigDir:        "/etc/lmm-api-go",
 		DropInDir:        defaultProductionDropInDir,
+		NginxRoot:        defaultNginxRoot,
+		EdgeAssetRoot:    defaultEdgeAssetRoot,
 		InstalledBinary:  "/usr/bin/lmm-api-go",
 		PackagedFrontend: "/usr/share/lmm-api-go/frontend-dist",
 		MigrationWorkdir: "/var/lib/lmm-api-go",
@@ -214,6 +218,7 @@ type productionManifest struct {
 	MemoryDropInExisted       bool      `json:"memory_dropin_existed"`
 	MemoryDropInRestoreSHA256 string    `json:"memory_dropin_restore_sha256,omitempty"`
 	EnvironmentRestoreSHA256  string    `json:"environment_restore_sha256"`
+	NginxEdgeRestoreSHA256    string    `json:"nginx_edge_restore_sha256,omitempty"`
 }
 
 type productionStatus struct {
@@ -424,6 +429,9 @@ func (runtime *productionRuntime) openWorkspace(root string) (productionWorkspac
 	info, err := os.Lstat(root)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return productionWorkspace{}, errors.New("workspace must be a real directory")
+	}
+	if err := requireRealDirectory(runtime.paths.WorkRoot); err != nil {
+		return productionWorkspace{}, errors.New("production work root must be a real directory")
 	}
 	// Arch systemd's DynamicUser layout exposes /var/lib/lmm-api-go as a
 	// managed symlink to /var/lib/private/lmm-api-go.  The workspace itself

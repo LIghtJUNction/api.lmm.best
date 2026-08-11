@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -288,6 +289,25 @@ func productionDatabaseURL(values map[string]string) (string, error) {
 	return value, nil
 }
 
+func productionDatabaseCommand(values map[string]string) (string, []string, error) {
+	databaseURL, err := productionDatabaseURL(values)
+	if err != nil {
+		return "", nil, err
+	}
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return "", nil, errors.New("production database URL is invalid")
+	}
+	overrides := make(map[string]string)
+	if parsed.User != nil {
+		if password, present := parsed.User.Password(); present {
+			overrides["PGPASSWORD"] = password
+			parsed.User = url.User(parsed.User.Username())
+		}
+	}
+	return parsed.String(), productionChildEnvironment(values, overrides), nil
+}
+
 func productionChildEnvironment(values map[string]string, overrides map[string]string) []string {
 	merged := make(map[string]string)
 	for _, assignment := range os.Environ() {
@@ -319,11 +339,10 @@ func (runtime *productionRuntime) captureDatabaseAccess(ctx context.Context, wor
 	if err != nil {
 		return "", fmt.Errorf("parse production environment: %w", err)
 	}
-	databaseURL, err := productionDatabaseURL(values)
+	databaseURL, childEnvironment, err := productionDatabaseCommand(values)
 	if err != nil {
 		return "", err
 	}
-	childEnvironment := productionChildEnvironment(values, nil)
 	schemaOutput, err := runtime.runner.Run(ctx, productionCommand{
 		Name: "psql",
 		Args: []string{"-X", "-v", "ON_ERROR_STOP=1", "--no-align", "--tuples-only", "--command", "SELECT pg_catalog.current_schema()", databaseURL},

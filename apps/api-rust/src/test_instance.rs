@@ -1911,7 +1911,7 @@ impl PgTestStatusProbe {
 #[async_trait]
 impl ControlTaskStatusProbe for PgTestStatusProbe {
     async fn test_status(&self) -> Result<Value, ControlTaskStatusError> {
-        sqlx::query_scalar::<_, i64>("SELECT 1")
+        sqlx::query_scalar::<_, i32>("SELECT 1")
             .fetch_one(&self.pg)
             .await
             .map_err(|_| ControlTaskStatusError::DatabaseUnavailable)?;
@@ -3237,7 +3237,10 @@ mod tests {
             )
             .await
             .expect("router is infallible");
-        assert_eq!(anonymous_post.status(), StatusCode::UNAUTHORIZED);
+        // The production Go compatibility boundary conceals missing relay
+        // credentials behind the generic public 404 response.  Keep the
+        // isolated candidate surface aligned with that contract.
+        assert_eq!(anonymous_post.status(), StatusCode::NOT_FOUND);
 
         let frozen_delete = app
             .oneshot(

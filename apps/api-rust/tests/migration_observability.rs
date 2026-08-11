@@ -105,6 +105,13 @@ async fn observability_read_router_mounts_the_storage_only_surface() {
         .await
         .expect("router response");
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
+    );
 }
 
 #[tokio::test]

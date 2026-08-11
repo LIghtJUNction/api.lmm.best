@@ -52,6 +52,8 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { subscribeToAssistantOpen } =
+  await import('@/features/assistant/assistant-events')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { GettingStarted } = await import('./getting-started')
 
@@ -103,18 +105,13 @@ function makeRouter() {
     path: '/getting-started',
     component: GettingStarted,
   })
-  const emptyRoutes = [
-    '/wallet',
-    '/support',
-    '/keys',
-    '/playground',
-    '/dashboard',
-  ].map((path) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path,
-      component: () => null,
-    })
+  const emptyRoutes = ['/wallet', '/support', '/keys', '/dashboard'].map(
+    (path) =>
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path,
+        component: () => null,
+      })
   )
   return createRouter({
     routeTree: rootRoute.addChildren([gettingStartedRoute, ...emptyRoutes]),
@@ -130,7 +127,8 @@ async function renderPage(
       success: true,
       data: { items: [], total: 0, page: 1, page_size: 50 },
     },
-  }
+  },
+  accessRequest: Record<string, unknown> | null = null
 ) {
   const gets: string[] = []
   const getConfigs: Array<ApiRequestConfig | undefined> = []
@@ -141,6 +139,9 @@ async function renderPage(
       return { data: { success: true, data: user } }
     }
     if (url === '/api/user/topup/info') return topupResponse
+    if (url === '/api/user/developer-access/request') {
+      return { data: { success: true, data: accessRequest } }
+    }
     if (url === '/api/status') {
       return {
         data: {
@@ -197,12 +198,47 @@ afterEach(() => {
   api.get = originalGet
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
+  window.sessionStorage.clear()
   document.body.replaceChildren()
 })
 
 after(() => domWindow.close())
 
 describe('getting started payment availability', () => {
+  test('opens onboarding guidance once while administrator review is pending', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((preset) =>
+      opened.push(preset)
+    )
+    const pendingRequest = {
+      id: 9901,
+      status: 'pending',
+      reason: '',
+      admin_note: '',
+      created_at: 1,
+      reviewed_at: 0,
+    }
+
+    const first = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      { data: { success: true, data: [] } },
+      pendingRequest
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(first)
+
+    const second = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      { data: { success: true, data: [] } },
+      pendingRequest
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(second)
+    unsubscribe()
+  })
+
   test('shows a non-actionable checking state while payment availability loads', async () => {
     const topup = deferred<{ data: Record<string, unknown> }>()
     const page = await renderPage(topup.promise)
@@ -218,17 +254,21 @@ describe('getting started payment availability', () => {
     await unmountPage(page)
   })
 
-  test('offers support only when availability fails or is confirmed empty', async () => {
+  test('offers the administrator request path when payment is unavailable', async () => {
     for (const response of [
       { data: { success: false, message: 'offline' } },
       { data: { success: true, data: emptyTopupInfo } },
     ]) {
       const page = await renderPage(Promise.resolve(response))
       const expected = response.data.success
-        ? 'Online payment is temporarily unavailable. Contact support before attempting to add funds.'
-        : 'Payment availability could not be verified. Contact support before attempting to add funds.'
+        ? 'Online payment is temporarily unavailable. You can submit an administrator unlock request instead.'
+        : 'Payment availability could not be verified. You can submit an administrator unlock request instead.'
       assert.equal(page.container.textContent?.includes(expected), true)
-      assert.ok(page.container.querySelector('a[href="/support"]'))
+      assert.equal(
+        page.container.textContent?.includes('Choose how to unlock access'),
+        true
+      )
+      assert.ok(page.container.querySelector('button'))
       assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
       await unmountPage(page)
     }
@@ -253,7 +293,7 @@ describe('getting started payment availability', () => {
     assert.ok(page.container.querySelector('a[href="/wallet"]'))
     assert.equal(
       page.container.textContent?.includes(
-        'Any successful external top-up activates access.'
+        'Choose either automatic activation after adding funds or an administrator unlock request.'
       ),
       true
     )

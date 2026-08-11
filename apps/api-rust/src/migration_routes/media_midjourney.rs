@@ -238,59 +238,29 @@ impl MidjourneyHttpState {
     }
 }
 
-/// Builds all dynamic `/:mode/mj` route forms listed in the migration plan.
+const STATIC_IMAGE_PATH: &str = "/mj/image/{id}";
+const STATIC_SWAP_PATH: &str = "/mj/insight-face/swap";
+const STATIC_ACTION_PATH: &str = "/mj/submit/action";
+const STATIC_BLEND_PATH: &str = "/mj/submit/blend";
+const STATIC_CHANGE_PATH: &str = "/mj/submit/change";
+const STATIC_DESCRIBE_PATH: &str = "/mj/submit/describe";
+const STATIC_EDITS_PATH: &str = "/mj/submit/edits";
+const STATIC_IMAGINE_PATH: &str = "/mj/submit/imagine";
+const STATIC_MODAL_PATH: &str = "/mj/submit/modal";
+const STATIC_SHORTEN_PATH: &str = "/mj/submit/shorten";
+const STATIC_SIMPLE_CHANGE_PATH: &str = "/mj/submit/simple-change";
+const STATIC_UPLOAD_PATH: &str = "/mj/submit/upload-discord-images";
+const STATIC_VIDEO_PATH: &str = "/mj/submit/video";
+const STATIC_FETCH_PATH: &str = "/mj/task/{id}/fetch";
+const STATIC_IMAGE_SEED_PATH: &str = "/mj/task/{id}/image-seed";
+const STATIC_LIST_PATH: &str = "/mj/task/list-by-condition";
+
+/// Builds the complete standalone Midjourney compatibility router, including
+/// the static `/mj` aliases used by callers that do not mount the neighbouring
+/// media-task slice.
 pub fn media_midjourney_router(state: MidjourneyHttpState) -> Router {
-    Router::new()
-        .route("/{mode}/mj/image/{id}", get(image))
-        .route("/mj/image/{id}", get(static_image))
-        .route("/{mode}/mj/insight-face/swap", post(submit_swap))
-        .route("/mj/insight-face/swap", post(static_submit_swap))
-        .route("/{mode}/mj/submit/action", post(submit_action))
-        .route("/mj/submit/action", post(static_submit_action))
-        .route("/{mode}/mj/submit/blend", post(submit_blend))
-        .route("/mj/submit/blend", post(static_submit_blend))
-        .route("/{mode}/mj/submit/change", post(submit_change))
-        .route("/mj/submit/change", post(static_submit_change))
-        .route("/{mode}/mj/submit/describe", post(submit_describe))
-        .route("/mj/submit/describe", post(static_submit_describe))
-        .route("/{mode}/mj/submit/edits", post(submit_edits))
-        .route("/mj/submit/edits", post(static_submit_edits))
-        .route("/{mode}/mj/submit/imagine", post(submit_imagine))
-        .route("/mj/submit/imagine", post(static_submit_imagine))
-        .route("/{mode}/mj/submit/modal", post(submit_modal))
-        .route("/mj/submit/modal", post(static_submit_modal))
-        .route("/{mode}/mj/submit/shorten", post(submit_shorten))
-        .route("/mj/submit/shorten", post(static_submit_shorten))
-        .route(
-            "/{mode}/mj/submit/simple-change",
-            post(submit_simple_change),
-        )
-        .route(
-            "/mj/submit/simple-change",
-            post(static_submit_simple_change),
-        )
-        .route(
-            "/{mode}/mj/submit/upload-discord-images",
-            post(submit_upload_discord_images),
-        )
-        .route(
-            "/mj/submit/upload-discord-images",
-            post(static_submit_upload_discord_images),
-        )
-        .route("/{mode}/mj/submit/video", post(submit_video))
-        .route("/mj/submit/video", post(static_submit_video))
-        .route("/{mode}/mj/task/{id}/fetch", get(task_fetch))
-        .route("/mj/task/{id}/fetch", get(static_task_fetch))
-        .route("/{mode}/mj/task/{id}/image-seed", get(task_image_seed))
-        .route("/mj/task/{id}/image-seed", get(static_task_image_seed))
-        .route(
-            "/{mode}/mj/task/list-by-condition",
-            post(task_list_by_condition),
-        )
-        .route(
-            "/mj/task/list-by-condition",
-            post(static_task_list_by_condition),
-        )
+    dynamic_routes()
+        .merge(static_routes())
         .with_state(state)
 }
 
@@ -302,6 +272,10 @@ pub fn media_midjourney_router(state: MidjourneyHttpState) -> Router {
 /// static `/mj` overlap while preserving the full router used by the normal
 /// listener.
 pub fn media_midjourney_dynamic_router(state: MidjourneyHttpState) -> Router {
+    dynamic_routes().with_state(state)
+}
+
+fn dynamic_routes() -> Router<MidjourneyHttpState> {
     Router::new()
         .route("/{mode}/mj/image/{id}", get(image))
         .route("/{mode}/mj/insight-face/swap", post(submit_swap))
@@ -328,7 +302,26 @@ pub fn media_midjourney_dynamic_router(state: MidjourneyHttpState) -> Router {
             "/{mode}/mj/task/list-by-condition",
             post(task_list_by_condition),
         )
-        .with_state(state)
+}
+
+fn static_routes() -> Router<MidjourneyHttpState> {
+    Router::new()
+        .route(STATIC_IMAGE_PATH, get(static_image))
+        .route(STATIC_SWAP_PATH, post(static_submit_swap))
+        .route(STATIC_ACTION_PATH, post(static_submit_action))
+        .route(STATIC_BLEND_PATH, post(static_submit_blend))
+        .route(STATIC_CHANGE_PATH, post(static_submit_change))
+        .route(STATIC_DESCRIBE_PATH, post(static_submit_describe))
+        .route(STATIC_EDITS_PATH, post(static_submit_edits))
+        .route(STATIC_IMAGINE_PATH, post(static_submit_imagine))
+        .route(STATIC_MODAL_PATH, post(static_submit_modal))
+        .route(STATIC_SHORTEN_PATH, post(static_submit_shorten))
+        .route(STATIC_SIMPLE_CHANGE_PATH, post(static_submit_simple_change))
+        .route(STATIC_UPLOAD_PATH, post(static_submit_upload_discord_images))
+        .route(STATIC_VIDEO_PATH, post(static_submit_video))
+        .route(STATIC_FETCH_PATH, get(static_task_fetch))
+        .route(STATIC_IMAGE_SEED_PATH, get(static_task_image_seed))
+        .route(STATIC_LIST_PATH, post(static_task_list_by_condition))
 }
 
 macro_rules! submit_handler {

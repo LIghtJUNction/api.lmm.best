@@ -191,15 +191,15 @@ describe('console activation boundary', () => {
     )
   })
 
-  test('allows only onboarding, wallet, profile, and support routes before activation', () => {
+  test('allows only onboarding, wallet, and open-source bounty routes before activation', () => {
     assert.equal(isContributorRoute('/getting-started'), true)
     assert.equal(isContributorRoute('/wallet'), true)
-    assert.equal(isContributorRoute('/profile/security'), true)
-    assert.equal(isContributorRoute('/support'), true)
+    assert.equal(isContributorRoute('/open-source-bounties'), true)
+    assert.equal(isContributorRoute('/profile/security'), false)
+    assert.equal(isContributorRoute('/support'), false)
     assert.equal(isContributorRoute('/workspace'), false)
     assert.equal(isContributorRoute('/challenges/42'), false)
     assert.equal(isContributorRoute('/models'), false)
-    assert.equal(isContributorRoute('/open-source-bounties'), false)
   })
 
   test('hides legacy public discovery surfaces before activation', () => {

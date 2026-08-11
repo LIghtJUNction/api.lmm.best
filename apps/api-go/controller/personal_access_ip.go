@@ -35,6 +35,11 @@ func personalAccessIPError(c *gin.Context, status int, code string, message stri
 	})
 }
 
+func personalAccessIPPolicyError(c *gin.Context, status int, code string, message string) {
+	c.Header(accessPolicyResultHeader, accessPolicyDenied)
+	personalAccessIPError(c, status, code, message)
+}
+
 func currentUserForPersonalAccessIP(c *gin.Context) (*model.User, error) {
 	userID := c.GetInt("id")
 	if userID <= 0 {
@@ -97,7 +102,7 @@ func SetPersonalAccessIP(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, model.ErrPersonalAccessIPNotEligible):
-			personalAccessIPError(c, http.StatusForbidden, "TRUST_LEVEL_REQUIRED", "personal IP allowlist requires trust level L2 or higher")
+			personalAccessIPError(c, http.StatusForbidden, "TRUST_LEVEL_REQUIRED", "personal IP allowlist requires trust level L1 or higher")
 		case errors.Is(err, model.ErrInvalidPersonalAccessIP):
 			personalAccessIPError(c, http.StatusUnprocessableEntity, "INVALID_IP", "IP address must be public and globally routable")
 		default:
@@ -135,7 +140,7 @@ func loopbackPeer(remoteAddr string) bool {
 // a header set by the local Nginx policy, never from an arbitrary public call.
 func CheckPersonalAccessIPPolicy(c *gin.Context) {
 	if !loopbackPeer(c.Request.RemoteAddr) {
-		personalAccessIPError(c, http.StatusForbidden, "INTERNAL_ONLY", "internal policy endpoint")
+		personalAccessIPPolicyError(c, http.StatusForbidden, "INTERNAL_ONLY", "internal policy endpoint")
 		return
 	}
 	// Non-CN requests are allowed without a dashboard session. This lets the
@@ -147,22 +152,22 @@ func CheckPersonalAccessIPPolicy(c *gin.Context) {
 	}
 	user, authenticated := middleware.AuthenticatedDashboardUser(c)
 	if !authenticated || user == nil {
-		personalAccessIPError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "a valid account session is required")
+		personalAccessIPPolicyError(c, http.StatusUnauthorized, "AUTH_REQUIRED", "a valid account session is required")
 		return
 	}
 	originalIP := strings.TrimSpace(c.GetHeader("X-Original-Client-IP"))
 	if originalIP == "" {
-		personalAccessIPError(c, http.StatusForbidden, "CLIENT_IP_REQUIRED", "original client IP is required")
+		personalAccessIPPolicyError(c, http.StatusForbidden, "CLIENT_IP_REQUIRED", "original client IP is required")
 		return
 	}
 	allowed, err := model.IsPersonalAccessIPAllowedForUser(user.Id, originalIP)
 	if err != nil {
 		common.SysError("personal access IP policy lookup failed: " + err.Error())
-		personalAccessIPError(c, http.StatusForbidden, "POLICY_UNAVAILABLE", "access policy unavailable")
+		personalAccessIPPolicyError(c, http.StatusForbidden, "POLICY_UNAVAILABLE", "access policy unavailable")
 		return
 	}
 	if !allowed {
-		personalAccessIPError(c, http.StatusForbidden, "CN_DIRECT_ACCESS_BLOCKED", "direct mainland-China access is not allowed for this account")
+		personalAccessIPPolicyError(c, http.StatusForbidden, "CN_DIRECT_ACCESS_BLOCKED", "direct access is not allowed for this account")
 		return
 	}
 	c.Status(http.StatusNoContent)

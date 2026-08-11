@@ -270,6 +270,85 @@ async fn identity_admin_crud_rejects_invalid_update_input_without_touching_postg
 }
 
 #[tokio::test]
+async fn identity_admin_authenticated_handler_errors_include_auth_version() {
+    let response = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("authorization", "Bearer dashboard-token")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"username":"target"}).to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["auth-version"],
+        "864b7076dbcd0a3c01b5520316720ebf"
+    );
+
+    let unauthenticated = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"username":"target"}).to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert!(!unauthenticated.headers().contains_key("auth-version"));
+}
+
+#[tokio::test]
+async fn identity_admin_authenticates_before_malformed_json_binding() {
+    let unauthenticated = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    assert!(!unauthenticated.headers().contains_key("auth-version"));
+
+    let non_administrator = app(1)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("authorization", "Bearer dashboard-token")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(non_administrator.status(), StatusCode::FORBIDDEN);
+    assert!(!non_administrator.headers().contains_key("auth-version"));
+
+    let authenticated = app(100)
+        .oneshot(
+            Request::post("/api/user/")
+                .header("authorization", "Bearer dashboard-token")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(authenticated.status(), StatusCode::OK);
+    assert_eq!(
+        authenticated.headers()["auth-version"],
+        "864b7076dbcd0a3c01b5520316720ebf"
+    );
+    let body = axum::body::to_bytes(authenticated.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let body: Value = serde_json::from_slice(&body).expect("JSON envelope");
+    assert_eq!(body["success"], false);
+}
+
+#[tokio::test]
 async fn identity_admin_crud_retains_legacy_method_contract() {
     let response = app(100)
         .oneshot(

@@ -534,7 +534,7 @@ export function AccountBindingsTab({
           <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3'>
             {customProviders.map((provider) => {
               const binding = customBindings.find(
-                (b) => b.provider_id === String(provider.id)
+                (b) => String(b.provider_id) === String(provider.id)
               )
               const isBound = !!binding
               return (
@@ -573,7 +573,7 @@ export function AccountBindingsTab({
                         setUnbindTarget({
                           kind: 'custom',
                           label: binding.provider_name,
-                          providerId: binding.provider_id,
+                          providerId: String(binding.provider_id),
                         })
                       }
                     >

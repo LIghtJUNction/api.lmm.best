@@ -28,6 +28,8 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodPost, "/api/open-source-bounties/challenges/9/rate-owner"},
 		{http.MethodPost, "/api/open-source-bounties/challenges/9/disputes"},
 		{http.MethodGet, "/api/user/topup/info"},
+		{http.MethodGet, "/api/user/developer-access/request"},
+		{http.MethodPost, "/api/user/developer-access/request"},
 		{http.MethodGet, "/api/user/checkin"},
 		{http.MethodPost, "/api/user/checkin"},
 		{http.MethodPost, "/api/user/stripe/pay"},
@@ -49,6 +51,7 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		path   string
 	}{
 		{http.MethodGet, "/api/token"},
+		{http.MethodGet, "/api/user/developer-access/unknown"},
 		{http.MethodGet, "/api/models"},
 		{http.MethodGet, "/api/channel"},
 		{http.MethodGet, "/api/pricing"},
@@ -187,7 +190,7 @@ func TestConsoleAccessGateReturnsTheGenericNotFoundForRestrictedRoutes(t *testin
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/models", nil))
 
-		if user.Role < common.RoleAdminUser {
+		if user.Role < common.RoleAdminUser && user.ConsoleActivatedAt == 0 {
 			assert.Equal(t, http.StatusNotFound, response.Code)
 			assert.JSONEq(t, `{"message":"Not Found"}`, response.Body.String())
 			continue
@@ -204,7 +207,7 @@ func TestConsoleAccessGateAnnotatesActivationForStatusSurfaces(t *testing.T) {
 		activated bool
 	}{
 		{name: "unactivated", user: &model.UserBase{Id: 7, Role: common.RoleCommonUser}},
-		{name: "legacy timestamp does not activate", user: &model.UserBase{Id: 8, Role: common.RoleCommonUser, ConsoleActivatedAt: 10}},
+		{name: "approved timestamp activates", user: &model.UserBase{Id: 8, Role: common.RoleCommonUser, ConsoleActivatedAt: 10}, activated: true},
 		{name: "administrator", user: &model.UserBase{Id: 9, Role: common.RoleAdminUser}, activated: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -230,6 +233,61 @@ func TestConsoleAccessGateAnnotatesActivationForStatusSurfaces(t *testing.T) {
 	}
 }
 
+func TestConsoleAccessGateAllowsL1OverrideToRestrictedRoutes(t *testing.T) {
+	levelOne := 1
+	user := &model.UserBase{Id: 18, Role: common.RoleCommonUser, TrustLevelOverride: &levelOne}
+
+	for _, path := range []string{
+		"/api/channel",
+		"/api/custom-oauth-provider",
+		"/api/data/self",
+		"/api/deployments",
+		"/api/group",
+		"/api/log/self",
+		"/api/mj",
+		"/api/models",
+		"/api/open-source-bounties/mcp-token",
+		"/api/option",
+		"/api/performance/stats",
+		"/api/perf-metrics/summary",
+		"/api/prefill_group",
+		"/api/pricing",
+		"/api/rankings",
+		"/api/ratio_config",
+		"/api/ratio_sync/channels",
+		"/api/redemption",
+		"/api/status/test",
+		"/api/subscription/plans",
+		"/api/system-info/instances",
+		"/api/system-task/list",
+		"/api/task/self",
+		"/api/token/",
+		"/api/usage",
+		"/api/user/groups",
+		"/api/user/models",
+		"/api/user/self/groups",
+		"/api/vendors/search",
+	} {
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
+				user:           user,
+				credentialKind: dashboardCredentialInternal,
+			})
+			c.Next()
+		})
+		router.Use(ConsoleAccessGate())
+		router.GET(path, func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"activated": ConsoleActivationGranted(c)})
+		})
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.Equal(t, http.StatusOK, response.Code, path)
+		assert.JSONEq(t, `{"activated":true}`, response.Body.String(), path)
+	}
+}
+
 func TestConsoleAccessGateFailsClosedWhenTrustCalculationFails(t *testing.T) {
 	previousDB := model.DB
 	model.DB = nil
@@ -239,7 +297,7 @@ func TestConsoleAccessGateFailsClosedWhenTrustCalculationFails(t *testing.T) {
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Set(dashboardCredentialContextKey, dashboardCredentialResult{
-			user:           &model.UserBase{Id: 17, Role: common.RoleCommonUser, ConsoleActivatedAt: 123},
+			user:           &model.UserBase{Id: 17, Role: common.RoleCommonUser},
 			credentialKind: dashboardCredentialInternal,
 		})
 		c.Next()

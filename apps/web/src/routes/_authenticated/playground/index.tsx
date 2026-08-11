@@ -18,23 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
-import { Main } from '@/components/layout'
-import { Playground } from '@/features/playground'
-import { isSidebarModuleEnabled } from '@/lib/nav-modules'
+import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 
 export const Route = createFileRoute('/_authenticated/playground/')({
   beforeLoad: () => {
-    if (!isSidebarModuleEnabled('chat', 'playground')) {
-      throw redirect({ to: '/dashboard' })
-    }
+    requestAssistantOpen('api-key')
+    throw redirect({
+      to: '/getting-started',
+      replace: true,
+    })
   },
-  component: PlaygroundPage,
 })
-
-function PlaygroundPage() {
-  return (
-    <Main className='p-0'>
-      <Playground />
-    </Main>
-  )
-}

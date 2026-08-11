@@ -21,7 +21,11 @@ import { useEffect, useRef } from 'react'
 declare global {
   interface Window {
     turnstile?: {
-      render: (element: HTMLElement, options: Record<string, unknown>) => void
+      render: (
+        element: HTMLElement,
+        options: Record<string, unknown>
+      ) => unknown
+      remove?: (widgetId: unknown) => void
     }
   }
 }
@@ -42,26 +46,80 @@ export function Turnstile({
   const ref = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    const render = () => {
-      if (!ref.current || !window.turnstile) return
+    let disposed = false
+    let rendered = false
+    let poller: number | undefined
+    let retryTimer: number | undefined
+    let widgetId: unknown
+    let renderAttempts = 0
+
+    const stopTimers = () => {
+      if (poller !== undefined) {
+        window.clearInterval(poller)
+        poller = undefined
+      }
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer)
+        retryTimer = undefined
+      }
+    }
+
+    const renderWidget = () => {
+      if (disposed || rendered || !ref.current || !window.turnstile) return
       try {
-        window.turnstile.render(ref.current, {
+        widgetId = window.turnstile.render(ref.current, {
           sitekey: siteKey,
           callback: (token: string) => onVerify(token),
           'error-callback': () => onExpire?.(),
           'expired-callback': () => onExpire?.(),
         })
+        rendered = true
+        stopTimers()
       } catch {
-        /* empty */
+        // The async Turnstile script can expose its API just before the
+        // widget runtime is ready. Retry briefly without calling turnstile.ready:
+        // Cloudflare rejects ready() when api.js is loaded async/defer.
+        renderAttempts += 1
+        if (!disposed && renderAttempts < 20 && retryTimer === undefined) {
+          retryTimer = window.setTimeout(() => {
+            retryTimer = undefined
+            renderWidget()
+          }, 100)
+        }
       }
+    }
+
+    const cleanup = () => {
+      disposed = true
+      stopTimers()
+      if (widgetId !== undefined) {
+        try {
+          window.turnstile?.remove?.(widgetId)
+        } catch {
+          // The widget may already have been removed by Turnstile.
+        }
+      }
+    }
+
+    const scriptId = 'cf-turnstile'
+    const existingScript = document.getElementById(scriptId)
+
+    // A different login form may have inserted the shared script already.
+    // Wait for its runtime instead of returning before this widget is rendered.
+    if (existingScript && !window.turnstile) {
+      poller = window.setInterval(renderWidget, 100)
+      existingScript.addEventListener('load', renderWidget, { once: true })
+      return cleanup
+    }
+
+    const render = () => {
+      renderWidget()
     }
 
     if (window.turnstile) {
       render()
-      return
+      return cleanup
     }
-    const scriptId = 'cf-turnstile'
-    if (document.querySelector(`#${scriptId}`)) return
     const s = document.createElement('script')
     s.id = scriptId
     s.src =
@@ -70,6 +128,8 @@ export function Turnstile({
     s.defer = true
     s.onload = () => render()
     document.head.appendChild(s)
+
+    return cleanup
   }, [siteKey, onVerify, onExpire])
 
   return <div ref={ref} className={className} />

@@ -13,7 +13,7 @@ use hmac::{Hmac, Mac};
 use lmm_api_rs::migration_routes::media_midjourney::{
     BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyChannel, MidjourneyFailure,
     MidjourneyHttpState, MidjourneyIdentity, PgMidjourneyBackend, StoredImage, SubmitReply,
-    TaskEffect, media_midjourney_router,
+    TaskEffect, media_midjourney_dynamic_router, media_midjourney_router,
 };
 use serde_json::json;
 use sha2::Sha256;
@@ -219,6 +219,12 @@ fn app(backend: Arc<TestMidjourneyBackend>) -> axum::Router {
     )
 }
 
+fn dynamic_app(backend: Arc<TestMidjourneyBackend>) -> axum::Router {
+    media_midjourney_dynamic_router(
+        MidjourneyHttpState::new(backend).with_image_signing_secret(IMAGE_SECRET),
+    )
+}
+
 fn signed_image_path(prefix: &str, user_id: i64, task_id: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(IMAGE_SECRET).expect("HMAC key");
     mac.update(format!("midjourney-image-v1:{user_id}:{task_id}").as_bytes());
@@ -249,6 +255,16 @@ fn submit(path: &str) -> Request<Body> {
             r#"{"prompt":"cat","accountFilter":"private","notifyHook":"https://private"}"#,
         ))
         .expect("valid request")
+}
+
+#[tokio::test]
+async fn dynamic_router_mounts_the_mode_prefixed_submit_surface() {
+    let backend = Arc::new(TestMidjourneyBackend::new(["test-token".to_owned()]));
+    let response = dynamic_app(backend)
+        .oneshot(submit("/proxy/mj/submit/imagine"))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

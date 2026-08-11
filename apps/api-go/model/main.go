@@ -120,6 +120,7 @@ func checkSetup() {
 			common.SysLog("system is not initialized, but root user exists")
 			// Create setup record
 			newSetup := Setup{
+				ID:            SetupSingletonID,
 				Version:       common.Version,
 				InitializedAt: time.Now().Unix(),
 			}
@@ -335,11 +336,13 @@ func mainMigrationModels() []interface{} {
 		&PasskeyCredential{}, &Option{}, &Redemption{}, &Ability{}, &Log{}, &Midjourney{},
 		&TopUp{}, &QuotaData{}, &Task{}, &Model{}, &Vendor{}, &PrefillGroup{}, &Setup{}, &TwoFA{},
 		&TwoFABackupCode{}, &Checkin{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
+		&DeveloperAccessRequest{},
 		&OpenSourceBountyLedger{}, &OpenSourceBountyDispute{}, &OpenSourceBountyMCPToken{},
 		&OpenSourceBountyMCPConfirmation{}, &OpenSourceBountyMCPOperation{}, &OpenSourceBountyRESTOperation{},
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
+		&AssistantWeeklyUsage{}, &AssistantLead{},
 	}
 }
 
@@ -363,6 +366,9 @@ func migrateDB() error {
 		return err
 	}
 	if err := InitializeLegacyConsoleActivations(backfillConsoleActivation); err != nil {
+		return err
+	}
+	if err := InitializeExistingUsersL1Backfill(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
@@ -413,6 +419,7 @@ func migrateDBFast() error {
 		{&Checkin{}, "Checkin"},
 		{&OpenSourceBountyProject{}, "OpenSourceBountyProject"},
 		{&OpenSourceBountyChallenge{}, "OpenSourceBountyChallenge"},
+		{&DeveloperAccessRequest{}, "DeveloperAccessRequest"},
 		{&OpenSourceBountyLedger{}, "OpenSourceBountyLedger"},
 		{&OpenSourceBountyDispute{}, "OpenSourceBountyDispute"},
 		{&OpenSourceBountyMCPToken{}, "OpenSourceBountyMCPToken"},
@@ -429,6 +436,8 @@ func migrateDBFast() error {
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
 		{&PersonalAccessIP{}, "PersonalAccessIP"},
+		{&AssistantWeeklyUsage{}, "AssistantWeeklyUsage"},
+		{&AssistantLead{}, "AssistantLead"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -460,6 +469,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := InitializeLegacyConsoleActivations(backfillConsoleActivation); err != nil {
+		return err
+	}
+	if err := InitializeExistingUsersL1Backfill(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {

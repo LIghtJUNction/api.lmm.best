@@ -105,6 +105,23 @@ function cachedStatus() {
   }
 }
 
+function customOAuthStatus() {
+  return {
+    ...cachedStatus(),
+    custom_oauth_providers: [
+      {
+        id: 42,
+        name: 'Acme SSO',
+        slug: 'acme-sso',
+        icon: 'link',
+        client_id: 'client-id',
+        authorization_endpoint: 'https://sso.example.test/authorize',
+        scopes: 'openid',
+      },
+    ],
+  }
+}
+
 const profile: UserProfile = {
   id: 7,
   username: 'compat-user',
@@ -249,6 +266,53 @@ describe('legacy Go account binding compatibility', () => {
       )
     })
     assert.deepEqual(deletes, ['/api/user/bindings/github'])
+
+    await act(async () => root.unmount())
+    queryClient.clear()
+  })
+
+  test('recognizes an already-bound custom provider when the API returns a numeric id', async () => {
+    const status = customOAuthStatus()
+    api.get = (async (url) => {
+      if (url === '/api/status') {
+        return { data: { success: true, data: status } }
+      }
+      if (url === '/api/user/oauth/bindings') {
+        return {
+          data: {
+            success: true,
+            data: [
+              {
+                provider_id: 42,
+                provider_name: 'Acme SSO',
+                external_id: 'acme-user-1',
+              },
+            ],
+          },
+        }
+      }
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    queryClient.setQueryData(['status', 'anonymous'], status)
+    const { root } = await renderBindings(queryClient)
+
+    await act(async () =>
+      waitForCondition(
+        () => document.body.textContent?.includes('Acme SSO') === true,
+        'custom provider did not render'
+      )
+    )
+    await act(async () =>
+      waitForCondition(
+        () => buttonsWithText('Unbind').length === 2,
+        'numeric custom provider binding was not recognized'
+      )
+    )
+    assert.equal(buttonsWithText('Bind').length, 0)
 
     await act(async () => root.unmount())
     queryClient.clear()

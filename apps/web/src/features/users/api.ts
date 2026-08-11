@@ -31,6 +31,43 @@ import type {
   ApiResponse,
 } from './types'
 
+export type DeveloperAccessRequestAdmin = {
+  id: number
+  user_id: number
+  status: 'pending' | 'approved' | 'rejected'
+  reason: string
+  admin_user_id: number
+  admin_note: string
+  created_at: number
+  reviewed_at: number
+  username: string
+  email: string
+}
+
+type DeveloperAccessRequestListResponse = ApiResponse<
+  DeveloperAccessRequestAdmin[]
+>
+
+export async function listDeveloperAccessRequests(
+  status: 'pending' | 'approved' | 'rejected' = 'pending'
+): Promise<DeveloperAccessRequestListResponse> {
+  const res = await api.get('/api/developer-access/requests', {
+    params: { status },
+  })
+  return res.data
+}
+
+export async function reviewDeveloperAccessRequest(
+  id: number,
+  action: 'approve' | 'reject',
+  note = ''
+): Promise<ApiResponse<DeveloperAccessRequestAdmin>> {
+  const res = await api.post(`/api/developer-access/requests/${id}/${action}`, {
+    note,
+  })
+  return res.data
+}
+
 // ============================================================================
 // User Management APIs
 // ============================================================================

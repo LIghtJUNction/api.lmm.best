@@ -86,6 +86,26 @@ func TestPendingUserAuthFenceRejectsStaleCacheWrite(t *testing.T) {
 	assert.False(t, server.Exists(getUserCacheKey(userID)))
 }
 
+func TestUserCachePreservesAuthorizationFields(t *testing.T) {
+	useUserCacheMiniRedis(t)
+	level := 1
+	require.NoError(t, writeUserCache(&UserBase{
+		Id:                 4203,
+		Group:              "default",
+		Username:           "activated",
+		Quota:              10,
+		AuthVersion:        1,
+		TrustLevelOverride: &level,
+		ConsoleActivatedAt: 123456,
+	}, true))
+
+	cached, err := cacheGetUserBase(4203)
+	require.NoError(t, err)
+	require.NotNil(t, cached.TrustLevelOverride)
+	assert.Equal(t, level, *cached.TrustLevelOverride)
+	assert.EqualValues(t, 123456, cached.ConsoleActivatedAt)
+}
+
 func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {
 	useUserCacheMiniRedis(t)
 	const userID = 4202

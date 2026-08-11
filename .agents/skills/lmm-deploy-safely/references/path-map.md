@@ -14,8 +14,8 @@ a second public CLI.
 | Frontend build | `apps/web/dist` |
 | Local split-package builder | `packaging/local/lmm-api-split/build-local-package.sh` |
 | Local package output | `packaging/local/lmm-api-split/out` by default |
-| Persistent controller work | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work` |
-| Required controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
+| Persistent controller work | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>` |
+| Durable controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
 
 The local split package installs frontend files at
 `/usr/share/lmm-api/frontend-dist`. Deployment publishes immutable frontend
@@ -70,7 +70,9 @@ guarded path before calling `deploy` phases.
 | Target activator | Immutable payload under the marker-owned deployment workspace |
 | Default SSH alias | `ArchDmit` |
 | Required static hostname | `arch-dmit` |
-| Target work root | `/var/lib/lmm-api/deploy-work` |
+| Target work root | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
+| Target backup root | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
+| Off-host backup root | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on `ArchCzy` |
 | Frontend release root | `/srv/lmm-api-frontend` |
 | Frontend releases | `/srv/lmm-api-frontend/releases/<version>` |
 | Active frontend | `/srv/lmm-api-frontend/current` |
@@ -125,11 +127,33 @@ a substitute for the next preflight.
 
 This mechanism owns internal probes only, not production business traffic.
 
+## Workspace and backup lifecycle
+
+The controller workspace is a transaction workspace, not durable backup
+storage. Keep its marker and terminal status for audit, but remove exact
+`staging`, `tmp`, and cache children after `CONFIRMED` or `ROLLED_BACK` and
+after the controller, target, and off-host copies have passed checksum and
+decryption verification. Production target workspaces follow the same rule;
+the target backup root and off-host root are durable and must not be removed
+by workspace cleanup. Private directories are `0700`, manifests/status and
+encrypted archives are `0600`, and no secret-bearing plaintext may leave the
+target. Never use `/tmp`, `/var/tmp`, an unresolved glob, or a broad root as a
+deployment or cleanup target.
+
+On the small production root filesystem, stop new builds at 80% used (90% is
+an emergency) and keep at least 4 GiB free before a package/backup
+transaction. A terminal workspace older than 24 hours may be pruned oldest
+first only after its durable copies and checksums are verified; retain the
+active release, latest-known-good snapshot, and any unconfirmed transaction.
+
 ## Other retained deployment state
 
 | Component | Backup or state root |
 | --- | --- |
 | nginx split installer | `/var/lib/lmm-api-nginx-deploy/backups` |
+| lmm-api-go edge-policy assets | `/usr/share/lmm-api-go/edge-policy` |
+| edge-policy transaction restore | `<deployment>/config-restore/nginx-edge` |
+| DB-IP country database | `/var/lib/geoip2/DBIP-Country-Lite.mmdb` |
 | fallback nginx installer | `/var/lib/lmm-api-rs-fallback-nginx/backups` |
 | dedicated Valkey installer | `/var/lib/valkey-lmm-api-deploy/backups` |
 | database cutover | `/var/lib/lmm-api-cutover`, `/var/log/lmm-api-cutover` |

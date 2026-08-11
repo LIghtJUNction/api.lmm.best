@@ -22,7 +22,9 @@ import { afterEach, describe, test } from 'node:test'
 import { api } from '@/lib/api'
 
 import {
+  archiveBounty,
   cancelChallenge,
+  listOwnedBounties,
   listCompatibleBountyNotifications,
   listBountyNotifications,
   listBounties,
@@ -33,6 +35,7 @@ import {
   openBountyDispute,
   thankBountyTip,
   tipChallenge,
+  unarchiveBounty,
 } from './api'
 
 const originalGet = api.get
@@ -55,6 +58,40 @@ describe('open-source bounty lists', () => {
     const result = await listBounties()
 
     assert.deepEqual(result, { items: [], total: 0 })
+  })
+
+  test('keeps active and archived owner lists separate', async () => {
+    const gets: string[] = []
+    api.get = (async (url) => {
+      gets.push(url)
+      return { data: { success: true, data: [] } }
+    }) as typeof api.get
+
+    await listOwnedBounties()
+    await listOwnedBounties(true)
+
+    assert.deepEqual(gets, [
+      '/api/open-source-bounties/mine?archived=false',
+      '/api/open-source-bounties/mine?archived=true',
+    ])
+  })
+})
+
+describe('open-source bounty archive actions', () => {
+  test('posts archive and restore actions to the selected project', async () => {
+    const posts: string[] = []
+    api.post = (async (url) => {
+      posts.push(url)
+      return { data: { success: true, data: { id: 42, archived_at: 1 } } }
+    }) as typeof api.post
+
+    await archiveBounty(42)
+    await unarchiveBounty(42)
+
+    assert.deepEqual(posts, [
+      '/api/open-source-bounties/projects/42/archive',
+      '/api/open-source-bounties/projects/42/unarchive',
+    ])
   })
 })
 

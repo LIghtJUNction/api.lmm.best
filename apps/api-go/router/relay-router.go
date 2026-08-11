@@ -66,6 +66,25 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	assistantRouter := router.Group("/api/assistant")
+	assistantRouter.Use(middleware.RouteTag("relay"))
+	assistantRouter.Use(middleware.SystemPerformanceCheck())
+	assistantRouter.Use(middleware.UserAuth())
+	{
+		assistantRouter.GET("/status", controller.GetAssistantStatus)
+		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
+		assistantRouter.GET("/handoffs/self", middleware.DisableCache(), controller.GetAssistantHandoff)
+		assistantRouter.POST("/handoffs", middleware.UserCriticalRateLimit("assistant-handoff"), middleware.DisableCache(), controller.SubmitAssistantHandoff)
+		assistantRouter.POST("/tools/create-key", middleware.ConsoleAccessGate(), middleware.UserCriticalRateLimit("assistant-create-key"), middleware.DisableCache(), controller.CreateAssistantDefaultKey)
+	}
+	assistantAdminRouter := router.Group("/api/assistant/admin")
+	assistantAdminRouter.Use(middleware.RouteTag("api"))
+	assistantAdminRouter.Use(middleware.AdminAuth())
+	{
+		assistantAdminRouter.GET("/handoffs", controller.AdminListAssistantHandoffs)
+		assistantAdminRouter.POST("/handoffs/:id/resolve", middleware.CriticalRateLimit(), controller.AdminResolveAssistantHandoff)
+		assistantAdminRouter.GET("/intents", controller.AdminGetAssistantIntentSummary)
+	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
