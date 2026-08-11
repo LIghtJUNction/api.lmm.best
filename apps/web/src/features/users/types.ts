@@ -94,6 +94,7 @@ export type UserSortOrder = 'asc' | 'desc'
 export interface GetUsersParams {
   p?: number
   page_size?: number
+  trust_level?: number
   sort_by?: UserSortBy
   sort_order?: UserSortOrder
 }
@@ -114,6 +115,7 @@ export interface SearchUsersParams {
   group?: string
   role?: string
   status?: string
+  trust_level?: number
   p?: number
   page_size?: number
   sort_by?: UserSortBy

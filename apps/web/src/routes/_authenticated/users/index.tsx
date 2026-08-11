@@ -23,7 +23,7 @@ import { Users } from '@/features/users'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
-const usersSearchSchema = z.object({
+export const usersSearchSchema = z.object({
   page: z.number().optional().catch(1),
   pageSize: z.number().optional().catch(undefined),
   filter: z.string().optional().catch(''),
@@ -36,6 +36,7 @@ const usersSearchSchema = z.object({
     .optional()
     .catch([]),
   group: z.string().optional().catch(''),
+  l0Only: z.boolean().default(true).catch(true),
 })
 
 export const Route = createFileRoute('/_authenticated/users/')({
