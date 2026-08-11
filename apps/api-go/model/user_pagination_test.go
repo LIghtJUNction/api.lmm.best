@@ -67,6 +67,14 @@ func TestSearchUsersSortsBeforePagination(t *testing.T) {
 
 func TestUserListsFilterL0BeforePagination(t *testing.T) {
 	truncateTables(t)
+	for userID := 1; userID <= 8; userID++ {
+		invalidatePaidTopUpAggregate(userID)
+	}
+	t.Cleanup(func() {
+		for userID := 1; userID <= 8; userID++ {
+			invalidatePaidTopUpAggregate(userID)
+		}
+	})
 	levelZero := TrustLevelMinUser
 	levelOne := TrustLevelMinUser + 1
 	invalidLevel := TrustLevelMaxUser + 1
