@@ -16,23 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import DOMPurify from 'dompurify'
+export function sanitizeWebPreviewUrl(rawUrl: string): string | undefined {
+  const candidate = rawUrl.trim()
+  if (!candidate) return undefined
 
-/**
- * Get plain text preview (strip HTML tags and Markdown formatting)
- */
-export function getPreviewText(
-  content: string,
-  maxLength: number = 60
-): string {
-  if (!content) return ''
-  const plainText = DOMPurify.sanitize(content, {
-    ALLOWED_TAGS: [],
-    ALLOWED_ATTR: [],
-  })
-    .replaceAll(/[#*_]/g, '') // Remove Markdown formatting symbols
-    .trim()
-  return plainText.length > maxLength
-    ? `${plainText.slice(0, maxLength)}...`
-    : plainText
+  try {
+    const parsed = new URL(candidate)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return undefined
+    }
+    return encodeURI(parsed.href)
+  } catch {
+    return undefined
+  }
 }

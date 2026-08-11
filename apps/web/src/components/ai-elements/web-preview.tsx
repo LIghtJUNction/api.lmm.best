@@ -45,6 +45,8 @@ import {
 import dayjs from '@/lib/dayjs'
 import { cn } from '@/lib/utils'
 
+import { sanitizeWebPreviewUrl } from './web-preview-url'
+
 export type WebPreviewContextValue = {
   url: string
   setUrl: (url: string) => void
@@ -211,11 +213,12 @@ export const WebPreviewBody = ({
   return (
     <div className='flex-1'>
       <iframe
-        className={cn('size-full', className)}
-        sandbox='allow-scripts allow-same-origin allow-forms allow-popups allow-presentation'
-        src={(src ?? url) || undefined}
-        title={t('Preview')}
         {...props}
+        className={cn('size-full', className)}
+        referrerPolicy='no-referrer'
+        sandbox='allow-scripts allow-forms allow-popups allow-presentation'
+        src={sanitizeWebPreviewUrl(src ?? url)}
+        title={t('Preview')}
       />
       {loading}
     </div>

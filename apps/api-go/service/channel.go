@@ -40,8 +40,15 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 			CloseActiveWebSocketsForChannel(channelError.ChannelId, ChannelDisabledCloseReason)
 		}
 		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
-		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
-		NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
+		content := "通道「{{value}}」（#{{value}}）已被禁用，原因：{{value}}"
+		NotifyRootUser(
+			formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled),
+			subject,
+			content,
+			channelError.ChannelName,
+			channelError.ChannelId,
+			reason,
+		)
 	}
 }
 
