@@ -6288,6 +6288,22 @@
     "Run a small test request": "短いテストリクエストを送信",
     "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "自動化、エージェント、長時間タスクを有効にする前に、短いテストで接続を確認してください。",
     "OpenAI-compatible connection JSON": "OpenAI互換接続 JSON",
-    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "クライアント固有の設定が必要な場合は、そのクライアントとプラットフォームを AI アシスタントに尋ねてください。現在の Base URL とモデル ID を使用し、推測はしません。"
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "クライアント固有の設定が必要な場合は、そのクライアントとプラットフォームを AI アシスタントに尋ねてください。現在の Base URL とモデル ID を使用し、推測はしません。",
+    "L1 access approved": "L1 アクセスが承認されました",
+    "Your developer access is active. Continue setup to create a key and connect your client.": "開発者アクセスが有効になりました。設定を続けてキーを作成し、クライアントを接続してください。",
+    "requests": "リクエスト",
+    "User usage leaderboard": "ユーザー利用ランキング",
+    "See the most active users by token usage. Each person controls whether their name is shown.": "トークン使用量の多いユーザーを確認できます。名前を表示するかどうかは各ユーザーが選択できます。",
+    "Updated from live usage data": "リアルタイムの利用データから更新",
+    "participants": "人の参加者",
+    "Anonymous users": "匿名ユーザー",
+    "User usage rankings are unavailable right now.": "現在、ユーザー利用ランキングを取得できません。",
+    "No public usage data yet.": "公開されている利用データはまだありません。",
+    "Usage leaderboard visibility": "利用ランキングの表示設定",
+    "Choose how your usage appears on the public leaderboard. Default is anonymous.": "公開ランキングでの利用状況の表示方法を選択します。デフォルトは匿名です。",
+    "Show my name": "名前を表示",
+    "Show anonymously": "匿名で表示",
+    "Do not show me": "表示しない",
+    "Your choice controls whether your usage is listed publicly.": "この設定で利用状況を公開ランキングに掲載するかどうかを決められます。"
   }
 }

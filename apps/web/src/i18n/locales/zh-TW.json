@@ -6288,6 +6288,22 @@
     "Run a small test request": "傳送小型測試請求",
     "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "啟用自動化、Agent 或長時間任務前，先用簡短請求驗證連線。",
     "OpenAI-compatible connection JSON": "OpenAI 相容連線 JSON",
-    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "如果用戶端需要專用設定，請向 AI 助手詢問對應用戶端與平台。助手會使用目前的 Base URL 和模型 ID，而不是猜測。"
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "如果用戶端需要專用設定，請向 AI 助手詢問對應用戶端與平台。助手會使用目前的 Base URL 和模型 ID，而不是猜測。",
+    "L1 access approved": "L1 權限已核准",
+    "Your developer access is active. Continue setup to create a key and connect your client.": "你的開發者權限已生效。繼續設定即可建立金鑰並連接用戶端。",
+    "requests": "請求",
+    "User usage leaderboard": "使用者用量排行榜",
+    "See the most active users by token usage. Each person controls whether their name is shown.": "依 Token 用量查看最活躍的使用者。每位使用者都能控制是否顯示自己的名稱。",
+    "Updated from live usage data": "根據即時使用資料更新",
+    "participants": "位參與者",
+    "Anonymous users": "匿名使用者",
+    "User usage rankings are unavailable right now.": "暫時無法取得使用者用量排行榜。",
+    "No public usage data yet.": "目前還沒有公開的使用資料。",
+    "Usage leaderboard visibility": "用量排行榜顯示方式",
+    "Choose how your usage appears on the public leaderboard. Default is anonymous.": "選擇你的用量在公開排行榜中的顯示方式，預設為匿名。",
+    "Show my name": "顯示我的名稱",
+    "Show anonymously": "匿名顯示",
+    "Do not show me": "不顯示我",
+    "Your choice controls whether your usage is listed publicly.": "此選擇決定你的用量是否列在公開排行榜中。"
   }
 }

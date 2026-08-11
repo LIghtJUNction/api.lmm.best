@@ -695,7 +695,9 @@ export function AssistantPanel(props: {
                   />
                 ) : null}
                 {activeTool === 'activation' && accountAccessConfirmed ? (
-                  <AssistantActivationTool />
+                  <AssistantActivationTool
+                    onContinueSetup={() => setActiveTool('setup')}
+                  />
                 ) : null}
                 {activeTool === 'cost' && accountAccessConfirmed ? (
                   <AssistantCostTool

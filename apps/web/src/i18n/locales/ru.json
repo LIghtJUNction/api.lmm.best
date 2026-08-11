@@ -6288,6 +6288,22 @@
     "Run a small test request": "Выполните небольшой тестовый запрос",
     "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "Проверьте соединение коротким тестом до включения автоматизации, агентов или длительных задач.",
     "OpenAI-compatible connection JSON": "JSON подключения, совместимого с OpenAI",
-    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Если клиенту нужна специальная конфигурация, попросите AI-ассистента настроить этот клиент и платформу. Он использует текущие Base URL и идентификатор модели, а не угадывает их."
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Если клиенту нужна специальная конфигурация, попросите AI-ассистента настроить этот клиент и платформу. Он использует текущие Base URL и идентификатор модели, а не угадывает их.",
+    "L1 access approved": "Доступ L1 одобрен",
+    "Your developer access is active. Continue setup to create a key and connect your client.": "Доступ разработчика активен. Продолжите настройку, чтобы создать ключ и подключить клиент.",
+    "requests": "запросов",
+    "User usage leaderboard": "Рейтинг использования пользователями",
+    "See the most active users by token usage. Each person controls whether their name is shown.": "Смотрите самых активных пользователей по расходу токенов. Каждый пользователь сам решает, показывать ли имя.",
+    "Updated from live usage data": "Обновлено по актуальным данным использования",
+    "participants": "участников",
+    "Anonymous users": "Анонимные пользователи",
+    "User usage rankings are unavailable right now.": "Рейтинг использования пользователей сейчас недоступен.",
+    "No public usage data yet.": "Публичных данных об использовании пока нет.",
+    "Usage leaderboard visibility": "Видимость рейтинга использования",
+    "Choose how your usage appears on the public leaderboard. Default is anonymous.": "Выберите, как показывать ваши данные в публичном рейтинге. По умолчанию используется анонимный режим.",
+    "Show my name": "Показывать моё имя",
+    "Show anonymously": "Показывать анонимно",
+    "Do not show me": "Не показывать меня",
+    "Your choice controls whether your usage is listed publicly.": "Этот выбор определяет, будут ли ваши данные отображаться в публичном рейтинге."
   }
 }

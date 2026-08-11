@@ -6288,6 +6288,22 @@
     "Run a small test request": "Envoyer une petite requête de test",
     "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "Vérifiez la connexion avec un court test avant d’activer l’automatisation, les agents ou les tâches longues.",
     "OpenAI-compatible connection JSON": "JSON de connexion compatible OpenAI",
-    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Si un client nécessite une configuration spécifique, demandez à l’assistant IA la configuration de ce client et de cette plateforme. Il utilisera l’URL de base et l’identifiant du modèle actuels au lieu de deviner."
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Si un client nécessite une configuration spécifique, demandez à l’assistant IA la configuration de ce client et de cette plateforme. Il utilisera l’URL de base et l’identifiant du modèle actuels au lieu de deviner.",
+    "L1 access approved": "Accès L1 approuvé",
+    "Your developer access is active. Continue setup to create a key and connect your client.": "Votre accès développeur est actif. Poursuivez la configuration pour créer une clé et connecter votre client.",
+    "requests": "requêtes",
+    "User usage leaderboard": "Classement d'utilisation des utilisateurs",
+    "See the most active users by token usage. Each person controls whether their name is shown.": "Découvrez les utilisateurs les plus actifs par nombre de tokens. Chacun contrôle l'affichage de son nom.",
+    "Updated from live usage data": "Mis à jour avec les données d'utilisation en direct",
+    "participants": "participants",
+    "Anonymous users": "Utilisateurs anonymes",
+    "User usage rankings are unavailable right now.": "Le classement d'utilisation est indisponible pour le moment.",
+    "No public usage data yet.": "Aucune donnée d'utilisation publique pour le moment.",
+    "Usage leaderboard visibility": "Visibilité du classement d'utilisation",
+    "Choose how your usage appears on the public leaderboard. Default is anonymous.": "Choisissez l'affichage de votre utilisation dans le classement public. L'anonymat est activé par défaut.",
+    "Show my name": "Afficher mon nom",
+    "Show anonymously": "Afficher anonymement",
+    "Do not show me": "Ne pas m’afficher",
+    "Your choice controls whether your usage is listed publicly.": "Votre choix détermine si votre utilisation apparaît dans le classement public."
   }
 }

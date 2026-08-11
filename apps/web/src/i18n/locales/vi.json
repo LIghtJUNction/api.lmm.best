@@ -6288,6 +6288,22 @@
     "Run a small test request": "Gửi một yêu cầu thử nhỏ",
     "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "Kiểm tra kết nối bằng một yêu cầu ngắn trước khi bật tự động hóa, agent hoặc tác vụ dài.",
     "OpenAI-compatible connection JSON": "JSON kết nối tương thích OpenAI",
-    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Nếu ứng dụng cần cấu hình riêng, hãy hỏi trợ lý AI về ứng dụng và nền tảng đó. Trợ lý sẽ dùng Base URL và Model ID hiện tại thay vì đoán."
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "Nếu ứng dụng cần cấu hình riêng, hãy hỏi trợ lý AI về ứng dụng và nền tảng đó. Trợ lý sẽ dùng Base URL và Model ID hiện tại thay vì đoán.",
+    "L1 access approved": "Quyền truy cập L1 đã được phê duyệt",
+    "Your developer access is active. Continue setup to create a key and connect your client.": "Quyền truy cập dành cho nhà phát triển đã hoạt động. Tiếp tục thiết lập để tạo khóa và kết nối ứng dụng.",
+    "requests": "lượt yêu cầu",
+    "User usage leaderboard": "Bảng xếp hạng mức sử dụng của người dùng",
+    "See the most active users by token usage. Each person controls whether their name is shown.": "Xem những người dùng tích cực nhất theo lượng token. Mỗi người có thể chọn hiển thị tên của mình hay không.",
+    "Updated from live usage data": "Được cập nhật từ dữ liệu sử dụng trực tiếp",
+    "participants": "người tham gia",
+    "Anonymous users": "Người dùng ẩn danh",
+    "User usage rankings are unavailable right now.": "Bảng xếp hạng mức sử dụng hiện không khả dụng.",
+    "No public usage data yet.": "Chưa có dữ liệu sử dụng công khai.",
+    "Usage leaderboard visibility": "Hiển thị bảng xếp hạng mức sử dụng",
+    "Choose how your usage appears on the public leaderboard. Default is anonymous.": "Chọn cách hiển thị mức sử dụng của bạn trên bảng xếp hạng công khai. Mặc định là ẩn danh.",
+    "Show my name": "Hiển thị tên của tôi",
+    "Show anonymously": "Hiển thị ẩn danh",
+    "Do not show me": "Không hiển thị tôi",
+    "Your choice controls whether your usage is listed publicly.": "Lựa chọn này quyết định mức sử dụng của bạn có xuất hiện công khai hay không."
   }
 }
