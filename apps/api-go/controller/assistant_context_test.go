@@ -54,6 +54,18 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			want:    assistantProfileGuided,
 			signal:  "guided_setup_language",
 		},
+		{
+			name:    "privacy conscious",
+			message: "我不想暴露多余个人信息，请说明数据保留和删除方式",
+			want:    assistantProfilePrivacy,
+			signal:  "privacy_conscious_language",
+		},
+		{
+			name:    "mobile accessibility",
+			message: "我主要用手机和屏幕阅读器，怎么操作更方便",
+			want:    assistantProfileAccessible,
+			signal:  "mobile_accessibility_language",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
