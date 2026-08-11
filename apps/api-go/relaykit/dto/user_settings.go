@@ -1,5 +1,7 @@
 package dto
 
+import "strings"
+
 type UserSetting struct {
 	NotifyType                       string  `json:"notify_type,omitempty"`                          // QuotaWarningType 额度预警类型
 	QuotaWarningThreshold            float64 `json:"quota_warning_threshold,omitempty"`              // QuotaWarningThreshold 额度预警阈值
@@ -16,6 +18,35 @@ type UserSetting struct {
 	SidebarModules                   string  `json:"sidebar_modules,omitempty"`                      // SidebarModules 左侧边栏模块配置
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
+	UsageLeaderboardVisibility       string  `json:"usage_leaderboard_visibility,omitempty"`         // 用户使用排行榜展示方式
+}
+
+const (
+	UsageLeaderboardVisibilityPublic    = "public"
+	UsageLeaderboardVisibilityAnonymous = "anonymous"
+	UsageLeaderboardVisibilityHidden    = "hidden"
+)
+
+// NormalizeUsageLeaderboardVisibility keeps legacy and malformed settings
+// private by default. A blank value is intentionally treated as anonymous.
+func NormalizeUsageLeaderboardVisibility(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case UsageLeaderboardVisibilityPublic:
+		return UsageLeaderboardVisibilityPublic
+	case UsageLeaderboardVisibilityHidden:
+		return UsageLeaderboardVisibilityHidden
+	default:
+		return UsageLeaderboardVisibilityAnonymous
+	}
+}
+
+func IsValidUsageLeaderboardVisibility(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case UsageLeaderboardVisibilityPublic, UsageLeaderboardVisibilityAnonymous, UsageLeaderboardVisibilityHidden:
+		return true
+	default:
+		return false
+	}
 }
 
 var (

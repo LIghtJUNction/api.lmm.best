@@ -16,7 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Bell, Loader2, Mail, Server, Webhook } from 'lucide-react'
+import {
+  Bell,
+  Eye,
+  EyeOff,
+  Loader2,
+  Mail,
+  Server,
+  UserRound,
+  Webhook,
+} from 'lucide-react'
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -35,7 +44,12 @@ import {
   NOTIFICATION_METHODS,
 } from '../../constants'
 import { parseUserSettings } from '../../lib'
-import type { UserProfile, UserSettings, NotifyType } from '../../types'
+import type {
+  UserProfile,
+  UserSettings,
+  NotifyType,
+  UsageLeaderboardVisibility,
+} from '../../types'
 
 const NOTIFICATION_ICONS: Record<NotifyType, typeof Mail> = {
   email: Mail,
@@ -48,11 +62,30 @@ const NOTIFICATION_VALUES = new Set<NotifyType>(
   NOTIFICATION_METHODS.map((method) => method.value)
 )
 
+const USAGE_LEADERBOARD_VISIBILITY_OPTIONS = [
+  { value: 'public', label: 'Show my name', icon: UserRound },
+  { value: 'anonymous', label: 'Show anonymously', icon: Eye },
+  { value: 'hidden', label: 'Do not show me', icon: EyeOff },
+] as const
+
+const USAGE_LEADERBOARD_VISIBILITY_VALUES = new Set<UsageLeaderboardVisibility>(
+  USAGE_LEADERBOARD_VISIBILITY_OPTIONS.map((option) => option.value)
+)
+
 function normalizeNotifyType(value: unknown): NotifyType {
   return typeof value === 'string' &&
     NOTIFICATION_VALUES.has(value as NotifyType)
     ? (value as NotifyType)
     : 'email'
+}
+
+function normalizeUsageLeaderboardVisibility(
+  value: unknown
+): UsageLeaderboardVisibility {
+  return typeof value === 'string' &&
+    USAGE_LEADERBOARD_VISIBILITY_VALUES.has(value as UsageLeaderboardVisibility)
+    ? (value as UsageLeaderboardVisibility)
+    : 'anonymous'
 }
 
 // ============================================================================
@@ -81,6 +114,7 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     accept_unset_model_ratio_model: false,
     record_ip_log: false,
     upstream_model_update_notify_enabled: false,
+    usage_leaderboard_visibility: 'anonymous',
   })
 
   // Update form field helper
@@ -110,6 +144,9 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
         record_ip_log: parsed.record_ip_log || false,
         upstream_model_update_notify_enabled:
           parsed.upstream_model_update_notify_enabled || false,
+        usage_leaderboard_visibility: normalizeUsageLeaderboardVisibility(
+          parsed.usage_leaderboard_visibility
+        ),
       })
     }
   }, [profile])
@@ -356,6 +393,62 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
             />
           </div>
         )}
+
+        {/* Public Usage Leaderboard */}
+        <div className='space-y-2.5 rounded-none border p-3 sm:p-4'>
+          <div>
+            <Label>{t('Usage leaderboard visibility')}</Label>
+            <p className='text-muted-foreground mt-1 text-xs sm:text-sm'>
+              {t(
+                'Choose how your usage appears on the public leaderboard. Default is anonymous.'
+              )}
+            </p>
+          </div>
+          <ToggleGroup
+            value={[
+              normalizeUsageLeaderboardVisibility(
+                settings.usage_leaderboard_visibility
+              ),
+            ]}
+            onValueChange={(value) => {
+              const nextValue = value.find(
+                (item) =>
+                  item !== settings.usage_leaderboard_visibility &&
+                  USAGE_LEADERBOARD_VISIBILITY_VALUES.has(
+                    item as UsageLeaderboardVisibility
+                  )
+              )
+              if (nextValue) {
+                updateField(
+                  'usage_leaderboard_visibility',
+                  normalizeUsageLeaderboardVisibility(nextValue)
+                )
+              }
+            }}
+            aria-label={t('Usage leaderboard visibility')}
+            variant='outline'
+            size='lg'
+            spacing={2}
+            className='grid w-full grid-cols-1 gap-2 sm:grid-cols-3'
+          >
+            {USAGE_LEADERBOARD_VISIBILITY_OPTIONS.map((option) => {
+              const Icon = option.icon
+              return (
+                <ToggleGroupItem
+                  key={option.value}
+                  value={option.value}
+                  className='h-auto min-h-14 w-full gap-2 px-3 py-3 text-xs font-medium sm:min-h-16 sm:text-sm'
+                >
+                  <Icon className='h-4 w-4 shrink-0' />
+                  <span className='truncate'>{t(option.label)}</span>
+                </ToggleGroupItem>
+              )
+            })}
+          </ToggleGroup>
+          <p className='text-muted-foreground text-xs'>
+            {t('Your choice controls whether your usage is listed publicly.')}
+          </p>
+        </div>
 
         {/* Accept Unset Model Price */}
         <div className='flex items-start justify-between gap-3 rounded-none border p-3 sm:items-center sm:p-4'>

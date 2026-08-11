@@ -1,5 +1,33 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+/*
+Copyright (C) 2026 LIghtJUNction
+*/
+import {
+  ArrowRight01Icon,
+  CheckmarkCircle02Icon,
+  ReloadIcon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -18,23 +46,41 @@ import {
   type DeveloperAccessRequest,
 } from '@/features/onboarding/api'
 
-export function AssistantActivationTool() {
+export function AssistantActivationTool(props: {
+  onContinueSetup?: () => void
+}) {
   const { t } = useTranslation()
-  const [request, setRequest] = useState<DeveloperAccessRequest | null>(null)
+  const queryClient = useQueryClient()
+  const [requestOverride, setRequestOverride] =
+    useState<DeveloperAccessRequest | null>(null)
   const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => {
-    void getDeveloperAccessRequest()
-      .then(setRequest)
-      .catch(() => undefined)
-  }, [])
+  const requestQuery = useQuery({
+    queryKey: ['assistant-developer-access-request'],
+    queryFn: getDeveloperAccessRequest,
+    staleTime: 0,
+    retry: false,
+  })
+  const request = requestOverride ?? requestQuery.data ?? null
+
+  const refreshStatus = async () => {
+    const result = await requestQuery.refetch()
+    if (result.error) {
+      toast.error(t('Refresh failed'))
+      return
+    }
+    setRequestOverride(result.data ?? null)
+    if (result.data?.status === 'approved') {
+      await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })
+    }
+  }
 
   const submit = async () => {
     if (loading || request?.status === 'pending') return
     setLoading(true)
     try {
-      setRequest(await submitDeveloperAccessRequest(reason.trim()))
+      setRequestOverride(await submitDeveloperAccessRequest(reason.trim()))
       setReason('')
       toast.success(t('Unlock request submitted'))
     } catch (error) {
@@ -46,6 +92,42 @@ export function AssistantActivationTool() {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (request?.status === 'approved') {
+    return (
+      <Card size='sm' className='border-success/40 bg-success/5'>
+        <CardHeader>
+          <CardTitle className='flex items-center gap-2'>
+            <HugeiconsIcon
+              icon={CheckmarkCircle02Icon}
+              className='text-success size-4'
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+            {t('L1 access approved')}
+          </CardTitle>
+          <CardDescription>
+            {t(
+              'Your developer access is active. Continue setup to create a key and connect your client.'
+            )}
+          </CardDescription>
+        </CardHeader>
+        {props.onContinueSetup ? (
+          <CardContent>
+            <Button type='button' onClick={props.onContinueSetup}>
+              {t('Continue setup')}
+              <HugeiconsIcon
+                icon={ArrowRight01Icon}
+                strokeWidth={2}
+                data-icon='inline-end'
+                aria-hidden='true'
+              />
+            </Button>
+          </CardContent>
+        ) : null}
+      </Card>
+    )
   }
 
   return (
@@ -63,9 +145,29 @@ export function AssistantActivationTool() {
           {t('Open recharge and plans')}
         </Button>
         {request?.status === 'pending' ? (
-          <p className='text-muted-foreground text-xs leading-5'>
-            {t('Your free unlock request is waiting for administrator review.')}
-          </p>
+          <div className='grid gap-3'>
+            <p className='text-muted-foreground text-xs leading-5'>
+              {t(
+                'Your free unlock request is waiting for administrator review.'
+              )}
+            </p>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void refreshStatus()}
+              disabled={requestQuery.isFetching}
+            >
+              <HugeiconsIcon
+                icon={ReloadIcon}
+                className={requestQuery.isFetching ? 'animate-spin' : undefined}
+                strokeWidth={2}
+                data-icon='inline-start'
+                aria-hidden='true'
+              />
+              {requestQuery.isFetching ? t('Refreshing...') : t('Refresh')}
+            </Button>
+          </div>
         ) : (
           <>
             <Textarea

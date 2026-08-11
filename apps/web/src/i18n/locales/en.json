@@ -6288,6 +6288,22 @@
     "Run a small test request": "Run a small test request",
     "Verify the connection with a short test before enabling automation, agents, or long-running tasks.": "Verify the connection with a short test before enabling automation, agents, or long-running tasks.",
     "OpenAI-compatible connection JSON": "OpenAI-compatible connection JSON",
-    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing."
+    "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.": "If a client needs a product-specific configuration, ask the AI assistant for that client and platform. It will use the current Base URL and Model ID instead of guessing.",
+    "L1 access approved": "L1 access approved",
+    "Your developer access is active. Continue setup to create a key and connect your client.": "Your developer access is active. Continue setup to create a key and connect your client.",
+    "requests": "requests",
+    "User usage leaderboard": "User usage leaderboard",
+    "See the most active users by token usage. Each person controls whether their name is shown.": "See the most active users by token usage. Each person controls whether their name is shown.",
+    "Updated from live usage data": "Updated from live usage data",
+    "participants": "participants",
+    "Anonymous users": "Anonymous users",
+    "User usage rankings are unavailable right now.": "User usage rankings are unavailable right now.",
+    "No public usage data yet.": "No public usage data yet.",
+    "Usage leaderboard visibility": "Usage leaderboard visibility",
+    "Choose how your usage appears on the public leaderboard. Default is anonymous.": "Choose how your usage appears on the public leaderboard. Default is anonymous.",
+    "Show my name": "Show my name",
+    "Show anonymously": "Show anonymously",
+    "Do not show me": "Do not show me",
+    "Your choice controls whether your usage is listed publicly.": "Your choice controls whether your usage is listed publicly."
   }
 }

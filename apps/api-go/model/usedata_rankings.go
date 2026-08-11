@@ -18,6 +18,12 @@ type RankingQuotaBucket struct {
 	Tokens    int64  `json:"tokens"`
 }
 
+type UserRankingTotal struct {
+	UserID      int   `json:"user_id"`
+	Requests    int64 `json:"requests"`
+	TotalTokens int64 `json:"total_tokens"`
+}
+
 func GetRankingQuotaTotals(startTime int64, endTime int64) ([]RankingQuotaTotal, error) {
 	var rows []RankingQuotaTotal
 	query := DB.Table("quota_data").
@@ -46,6 +52,30 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64) ([
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
 	err := query.Find(&rows).Error
 	return rows, err
+}
+
+func GetUserRankingTotals(startTime int64, endTime int64) ([]UserRankingTotal, error) {
+	var rows []UserRankingTotal
+	query := DB.Table("quota_data").
+		Select("user_id, COALESCE(SUM(count), 0) AS requests, COALESCE(SUM(token_used), 0) AS total_tokens").
+		Where("user_id > 0").
+		Group("user_id").
+		Having("COALESCE(SUM(count), 0) > 0 OR COALESCE(SUM(token_used), 0) > 0").
+		Order("total_tokens DESC, requests DESC")
+	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	return rows, query.Find(&rows).Error
+}
+
+func GetUsersForUsageRanking(userIDs []int) ([]*User, error) {
+	if len(userIDs) == 0 {
+		return []*User{}, nil
+	}
+
+	var users []*User
+	err := DB.Select("id, username, display_name, status, setting").
+		Where("id IN ?", userIDs).
+		Find(&users).Error
+	return users, err
 }
 
 func rankingBucketExpr(bucketSize int64) string {
