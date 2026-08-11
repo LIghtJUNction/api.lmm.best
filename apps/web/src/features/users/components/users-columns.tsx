@@ -106,6 +106,9 @@ export function useUsersColumns(): ColumnDef<User>[] {
             : null,
           linuxDOScoreReason,
           row.original.linux_do_id ? t('Uses LinuxDO OAuth') : null,
+          row.original.disposable_email
+            ? t('Disposable email promotion restriction')
+            : null,
         ].filter(Boolean) as string[]
 
         return (

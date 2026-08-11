@@ -31,6 +31,8 @@ authenticated users then see it once after their next login.
 - Known disposable-mail domains no longer receive new-account or invitation
   promotional credits; ordinary privacy-mail domains, account access, and
   administrator review remain unaffected.
+- Administrators now see a disposable-email risk marker in the user list;
+  the marker is excluded from ordinary user responses.
 - Added release-note delivery and acknowledgement so a published changelog is
   shown after the user's next login and not repeatedly during an active session.
 - Improved level, payment-visibility, administrator, mobile and chart-display

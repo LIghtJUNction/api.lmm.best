@@ -66,6 +66,7 @@ export const userSchema = z.object({
   trust_level_override: z.number().nullable().optional(),
   trust_level_info: z.any().optional(),
   payment_restriction_flags: z.number().optional(),
+  disposable_email: z.boolean().optional(),
   linux_do_gamification_score: z.number().optional(),
   linux_do_score_updated_at: z.number().optional(),
 })

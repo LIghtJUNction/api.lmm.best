@@ -115,6 +115,7 @@ type User struct {
 	TrustLevelInfo                *TrustLevelInfo            `json:"trust_level_info,omitempty" gorm:"-:all"`
 	PaymentRestrictionFlags       int                        `json:"-" gorm:"type:int;not null;default:0;column:payment_restriction_flags"`
 	AdminPaymentRestrictionFlags  int                        `json:"payment_restriction_flags,omitempty" gorm:"-:all"`
+	AdminDisposableEmail          bool                       `json:"disposable_email,omitempty" gorm:"-:all"`
 	AdminLinuxDOGamificationScore *float64                   `json:"linux_do_gamification_score,omitempty" gorm:"-:all"`
 	AdminLinuxDOScoreUpdatedAt    int64                      `json:"linux_do_score_updated_at,omitempty" gorm:"-:all"`
 	ConsoleActivatedAt            int64                      `json:"console_activated_at" gorm:"type:bigint;not null;default:0;column:console_activated_at"`
