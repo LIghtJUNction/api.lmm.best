@@ -830,7 +830,7 @@ async fn publish_bounty(
             return internal_failure();
         }
     };
-    let project_row = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+    let project_row = match sqlx::query(&format!("{RAW_PROJECT_SELECT} FOR UPDATE"))
         .bind(project_id)
         .fetch_optional(&mut *transaction)
         .await
@@ -1085,7 +1085,7 @@ async fn close_bounty(
             return internal_failure();
         }
     };
-    let row = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+    let row = match sqlx::query(&format!("{RAW_PROJECT_SELECT} FOR UPDATE"))
         .bind(project_id)
         .fetch_optional(&mut *transaction)
         .await
@@ -1294,7 +1294,7 @@ async fn accept_bounty(State(state): State<OpenSourceBountyState>, request: Requ
             return internal_failure();
         }
     };
-    let row = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+    let row = match sqlx::query(&format!("{RAW_PROJECT_SELECT} FOR UPDATE"))
         .bind(project_id)
         .fetch_optional(&mut *transaction)
         .await
@@ -1886,7 +1886,7 @@ async fn review_challenge(
             return internal_failure();
         }
     };
-    let project = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+    let project = match sqlx::query(&format!("{RAW_PROJECT_SELECT} FOR UPDATE"))
         .bind(project_id)
         .fetch_optional(&mut *transaction)
         .await
@@ -2697,7 +2697,7 @@ async fn open_dispute(State(state): State<OpenSourceBountyState>, request: Reque
             return internal_failure();
         }
     };
-    let project = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+    let project = match sqlx::query(&format!("{RAW_PROJECT_SELECT} FOR UPDATE"))
         .bind(project_id)
         .fetch_optional(&mut *transaction)
         .await
@@ -2945,7 +2945,7 @@ async fn resolve_dispute(State(state): State<OpenSourceBountyState>, request: Re
     };
     let project_id: i64 = reference.try_get("project_id").unwrap_or_default();
     let challenge_id: i64 = reference.try_get("challenge_id").unwrap_or_default();
-    let project = match sqlx::query(&format!("{} FOR UPDATE", RAW_PROJECT_SELECT))
+    let project = match sqlx::query(&format!("{RAW_PROJECT_SELECT} FOR UPDATE"))
         .bind(project_id)
         .fetch_one(&mut *transaction)
         .await
