@@ -9,6 +9,7 @@ License, or (at your option) any later version.
 import { Link } from '@tanstack/react-router'
 import {
   ArrowRight,
+  Check,
   KeyRound,
   LayoutDashboard,
   MessageCircleQuestion,
@@ -21,6 +22,7 @@ import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
@@ -100,6 +102,34 @@ export function GettingStarted() {
       ? t('Setup complete')
       : t('Continue setup')
     : t('L0 tutorial required')
+
+  const tutorialSteps = [
+    {
+      complete: onboarding.activationComplete,
+      title: t('Unlock L1 access'),
+      description: t(
+        'Add funds for automatic activation, or send a free explanation to an administrator for manual review.'
+      ),
+      preset: 'onboarding' as const,
+    },
+    {
+      complete: onboarding.credentialComplete,
+      title: t('Create API key'),
+      description: t('Create your first developer credential.'),
+      preset: 'api-key' as const,
+    },
+    {
+      complete: onboarding.firstRequestComplete,
+      title: t('Send first request'),
+      description: t('Send one request to complete setup.'),
+      preset: 'client-setup' as const,
+    },
+  ]
+  const completedTutorialSteps = tutorialSteps.filter(
+    (step) => step.complete
+  ).length
+  const currentTutorialStep = tutorialSteps.findIndex((step) => !step.complete)
+  const tutorialProgress = (completedTutorialSteps / tutorialSteps.length) * 100
 
   return (
     <SectionPageLayout>
@@ -193,6 +223,109 @@ export function GettingStarted() {
                 'Never paste a password, API key, session cookie, or other secret into the conversation.'
               )}
             </p>
+          </section>
+
+          <section
+            className='border px-5 py-6 sm:px-8'
+            aria-labelledby='getting-started-tutorial-title'
+          >
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+              <div>
+                <h3
+                  id='getting-started-tutorial-title'
+                  className='text-sm font-semibold'
+                >
+                  {t('Three steps to get started')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Complete these steps to finish the initial installation.'
+                  )}
+                </p>
+              </div>
+              <Badge
+                variant={
+                  onboarding.stage === 'complete' ? 'secondary' : 'outline'
+                }
+              >
+                {completedTutorialSteps}/{tutorialSteps.length}
+              </Badge>
+            </div>
+
+            <div className='mt-5 flex items-center gap-3'>
+              <Progress
+                value={tutorialProgress}
+                aria-label={t('Three steps to get started')}
+                className='flex-1'
+              />
+              <span className='text-muted-foreground shrink-0 text-xs tabular-nums'>
+                {Math.round(tutorialProgress)}%
+              </span>
+            </div>
+
+            <ol className='mt-6 grid gap-3 lg:grid-cols-3'>
+              {tutorialSteps.map((step, index) => {
+                const isCurrent = index === currentTutorialStep
+                let markerClass =
+                  'text-muted-foreground border-muted-foreground/40 flex size-7 shrink-0 items-center justify-center rounded-full border text-sm font-semibold'
+                let statusLabel = t('Pending')
+                if (isCurrent) {
+                  markerClass =
+                    'border-primary text-primary flex size-7 shrink-0 items-center justify-center rounded-full border text-sm font-semibold'
+                  statusLabel = t('Current step')
+                }
+                if (step.complete) {
+                  markerClass =
+                    'bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-full'
+                  statusLabel = t('Completed')
+                }
+                return (
+                  <li
+                    key={step.title}
+                    className={
+                      isCurrent
+                        ? 'border-primary/50 bg-primary/5 flex min-h-40 flex-col gap-4 border p-4'
+                        : 'bg-muted/20 flex min-h-40 flex-col gap-4 border p-4'
+                    }
+                  >
+                    <div className='flex items-start gap-3'>
+                      <span className={markerClass} aria-hidden='true'>
+                        {step.complete ? (
+                          <Check className='size-4' />
+                        ) : (
+                          index + 1
+                        )}
+                      </span>
+                      <div className='min-w-0 flex-1'>
+                        <p className='text-sm font-medium'>{step.title}</p>
+                        <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                          {step.description}
+                        </p>
+                      </div>
+                    </div>
+                    <div className='mt-auto flex items-center justify-between gap-2'>
+                      <Badge variant={step.complete ? 'secondary' : 'outline'}>
+                        {statusLabel}
+                      </Badge>
+                      {isCurrent ? (
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          onClick={() => requestAssistantOpen(step.preset)}
+                        >
+                          {isCurrent ? t('Continue') : t('Open')}
+                          <ArrowRight
+                            data-icon='inline-end'
+                            aria-hidden='true'
+                          />
+                        </Button>
+                      ) : null}
+                    </div>
+                  </li>
+                )
+              })}
+            </ol>
           </section>
 
           <section className='border px-5 py-5 sm:px-8'>

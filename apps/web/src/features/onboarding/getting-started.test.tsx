@@ -12,6 +12,7 @@ import { after, afterEach, describe, test } from 'node:test'
 import { Window } from 'happy-dom'
 
 import type { ApiRequestConfig } from '@/lib/api'
+import type { AuthUser } from '@/stores/auth-store'
 
 const domWindow = new Window({ url: 'https://console.example.test/' })
 for (const key of [
@@ -69,7 +70,7 @@ await i18n.use(initReactI18next).init({
   resources: { en: { translation: {} } },
 })
 
-const user = {
+const user: AuthUser = {
   id: 7,
   username: 'new-user',
   role: 1,
@@ -128,15 +129,17 @@ async function renderPage(
       data: { items: [], total: 0, page: 1, page_size: 50 },
     },
   },
-  accessRequest: Record<string, unknown> | null = null
+  accessRequest: Record<string, unknown> | null = null,
+  userOverride: Partial<AuthUser> = {}
 ) {
+  const currentUser = { ...user, ...userOverride }
   const gets: string[] = []
   const getConfigs: Array<ApiRequestConfig | undefined> = []
   api.get = (async (url, config) => {
     gets.push(url)
     getConfigs.push(config)
     if (url === '/api/user/self') {
-      return { data: { success: true, data: user } }
+      return { data: { success: true, data: currentUser } }
     }
     if (url === '/api/user/topup/info') return topupResponse
     if (url === '/api/user/developer-access/request') {
@@ -164,7 +167,7 @@ async function renderPage(
     }
     return { data: { success: true, data: [] } }
   }) as typeof api.get
-  useAuthStore.getState().auth.setUser(user)
+  useAuthStore.getState().auth.setUser(currentUser)
 
   const queryClient = new QueryClient({
     // Keep the test honest: ChallengeList must disable retries itself for a
@@ -205,6 +208,43 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('getting started payment availability', () => {
+  test('shows the mandatory three-step tutorial and derives progress from account state', async () => {
+    const l0Page = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } })
+    )
+    assert.equal(
+      l0Page.container.textContent?.includes('Three steps to get started'),
+      true
+    )
+    assert.equal(l0Page.container.textContent?.includes('0/3'), true)
+    assert.equal(
+      l0Page.container.textContent?.includes('L0 tutorial required'),
+      true
+    )
+    assert.equal(l0Page.container.textContent?.includes('Current step'), true)
+    await unmountPage(l0Page)
+
+    const l1Page = await renderPage(
+      Promise.resolve({ data: { success: true, data: emptyTopupInfo } }),
+      false,
+      undefined,
+      null,
+      {
+        developer_access_granted: true,
+        onboarding: {
+          activation_complete: true,
+          credential_complete: false,
+          first_request_complete: false,
+          stage: 'credential',
+        },
+      }
+    )
+    assert.equal(l1Page.container.textContent?.includes('1/3'), true)
+    assert.equal(l1Page.container.textContent?.includes('Create API key'), true)
+    assert.equal(l1Page.container.textContent?.includes('Continue setup'), true)
+    await unmountPage(l1Page)
+  })
+
   test('offers guided questions that keep the onboarding action in the assistant input', async () => {
     const opened: Array<string | undefined> = []
     const messages: Array<string | undefined> = []
