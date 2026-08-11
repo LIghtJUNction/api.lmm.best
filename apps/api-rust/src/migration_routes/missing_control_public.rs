@@ -72,6 +72,15 @@ pub trait MissingControlAuthorizer: Send + Sync {
     ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
         self.principal(headers).await
     }
+
+    /// Resolves a principal backed by a live browser session. Implementations
+    /// without session authority fail closed after validating the credential.
+    async fn browser_session_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+        self.principal(headers).await.map(|_| None)
+    }
 }
 
 /// Production adapter over the listener's shared dashboard authentication.
@@ -173,6 +182,32 @@ impl MissingControlAuthorizer for DashboardMissingControlAuthorizer {
             Err(error) if error.kind == AuthErrorKind::UserDisabled => Err(
                 MissingControlAuthError::UserAuth(UserAuthPolicyError::UserDisabled),
             ),
+            Err(_) => Err(MissingControlAuthError::Unavailable),
+        }
+    }
+
+    async fn browser_session_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+        let token = dashboard_credential(headers).ok_or(MissingControlAuthError::Unauthorized)?;
+        let principal = self.principal(headers).await?;
+        match self.auth.current_session(SecretString::from(token)).await {
+            Ok(_) => Ok(Some(principal)),
+            Err(error)
+                if matches!(
+                    error.kind,
+                    AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) if error.kind == AuthErrorKind::TokenExpired => {
+                Err(MissingControlAuthError::TokenExpired)
+            }
+            Err(error) if error.kind == AuthErrorKind::SessionRevoked => {
+                Err(MissingControlAuthError::SessionRevoked)
+            }
             Err(_) => Err(MissingControlAuthError::Unavailable),
         }
     }
@@ -544,6 +579,7 @@ pub fn ratio_config_router(state: RatioConfigState) -> Router {
 /// Mount point used by the migration root.
 pub fn missing_control_public_router(state: MissingControlPublicState) -> Router {
     Router::new()
+        .route("/api/assistant/pricing", get(assistant_pricing))
         .route("/api/group/", get(groups))
         .route("/api/models", get(models))
         .route("/api/pricing", get(pricing))
@@ -560,6 +596,17 @@ pub fn missing_control_public_router(state: MissingControlPublicState) -> Router
             get(token_usage_get).fallback(token_usage_method_fallback),
         )
         .with_state(state)
+}
+
+async fn assistant_pricing(
+    State(state): State<MissingControlPublicState>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = match require_assistant_dashboard(&state, &headers).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    with_auth_version(legacy_json(state.pricing(Some(principal)).await))
 }
 
 async fn groups(State(state): State<MissingControlPublicState>, headers: HeaderMap) -> Response {
@@ -1262,6 +1309,34 @@ async fn require_dashboard(
     }
 }
 
+async fn require_assistant_dashboard(
+    state: &MissingControlPublicState,
+    headers: &HeaderMap,
+) -> Result<MissingControlPrincipal, Response> {
+    match state.authorizer.browser_session_principal(headers).await {
+        Ok(Some(principal)) => Ok(principal),
+        Ok(None) => Err(assistant_session_required()),
+        Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
+            Err(with_auth_version(dashboard_unauthorized(headers)))
+        }
+        Err(MissingControlAuthError::TokenExpired) => Err(with_auth_version(
+            dashboard_auth_failure(headers, AuthErrorKind::TokenExpired),
+        )),
+        Err(MissingControlAuthError::SessionRevoked) => Err(with_auth_version(
+            dashboard_auth_failure(headers, AuthErrorKind::SessionRevoked),
+        )),
+        Err(MissingControlAuthError::Unavailable) => {
+            Err(with_auth_version(dashboard_internal_error(headers)))
+        }
+        Err(MissingControlAuthError::UserAuth(error)) => {
+            Err(with_auth_version(user_auth_error(headers, error)))
+        }
+        Err(MissingControlAuthError::PolicyInvalid { error, .. }) => {
+            Err(with_auth_version(user_auth_error(headers, error)))
+        }
+    }
+}
+
 fn user_auth_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response {
     let status = match error {
         UserAuthPolicyError::InsufficientPrivilege => StatusCode::FORBIDDEN,
@@ -1346,6 +1421,17 @@ fn dashboard_unauthorized(headers: &HeaderMap) -> Response {
             "message": auth_invalid_access_token(headers),
         }),
     )
+}
+
+fn assistant_session_required() -> Response {
+    with_auth_version(legacy_json_with_status(
+        StatusCode::FORBIDDEN,
+        json!({
+            "success": false,
+            "code": "ASSISTANT_SESSION_REQUIRED",
+            "message": "assistant tools require a browser login session",
+        }),
+    ))
 }
 
 fn dashboard_auth_failure(headers: &HeaderMap, kind: AuthErrorKind) -> Response {
@@ -1532,6 +1618,13 @@ mod tests {
             _: &HeaderMap,
         ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
             self.0.ok_or(MissingControlAuthError::Unauthorized)
+        }
+
+        async fn browser_session_principal(
+            &self,
+            headers: &HeaderMap,
+        ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+            self.principal(headers).await.map(Some)
         }
     }
 

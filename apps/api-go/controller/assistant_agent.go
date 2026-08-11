@@ -20,15 +20,25 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	assistantToolArgumentsMaxBytes = 16 * 1024
-	assistantToolCallsPerTurn      = 4
-	assistantAgentDefaultTimeout   = 45 * time.Second
+	assistantToolArgumentsMaxBytes        = 16 * 1024
+	assistantToolCallsPerTurn             = 4
+	assistantAgentDefaultTimeout          = 45 * time.Second
+	assistantRecommendationTTL            = 30 * time.Minute
+	minDeveloperAccessReasonRunes         = 5
+	minDeveloperAccessRecommendationRunes = 20
+	maxDeveloperAccessDraftRunes          = 2000
 )
+
+type assistantL1RecommendationDraft struct {
+	UserStatement  string `json:"user_statement"`
+	Recommendation string `json:"recommendation"`
+}
 
 type assistantOpenAIToolDefinition struct {
 	Type     string                      `json:"type"`
@@ -72,7 +82,7 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_service_facts",
-				Description: "Return the current public connection facts for this LMM console. Use this before explaining Base URL, the default model ID, or where to manage private API keys.",
+				Description: "Return the current public connection facts for this LMM console. Use this before explaining Base URL, compatible client endpoints, or where to manage private API keys.",
 				Parameters:  emptyObjectSchema(),
 			},
 		},
@@ -104,6 +114,17 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 				Name:        "get_available_models",
 				Description: "Return the model IDs and usable routing groups available to the signed-in user. Never invent a model ID.",
 				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_model_pricing",
+				Description: "Return the signed-in user's live per-group prices for one exact model ID. Call this before calculating cost; if the user has not chosen a model, ask them or call get_available_models first.",
+				Parameters: objectSchema(map[string]any{
+					"model_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
+					"group":    map[string]any{"type": "string", "maxLength": 64},
+				}, []string{"model_id"}),
 			},
 		},
 		{
@@ -160,6 +181,17 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "claude-desktop", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
 					"model_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
 				}, []string{"platform", "topic"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_l1_recommendation",
+				Description: "Prepare an administrator recommendation for a concrete L0 user after a substantive onboarding conversation. This does not submit or approve anything; the user must explicitly confirm the draft in the UI.",
+				Parameters: objectSchema(map[string]any{
+					"user_statement": map[string]any{"type": "string", "minLength": 5, "maxLength": 2000},
+					"recommendation": map[string]any{"type": "string", "minLength": 20, "maxLength": 2000},
+				}, []string{"user_statement", "recommendation"}),
 			},
 		},
 		{
@@ -459,10 +491,30 @@ func writeAssistantRawResponse(c *gin.Context, status int, body []byte, fallback
 		writeAssistantError(c, http.StatusBadGateway, fallbackCode, errors.New("assistant upstream returned an empty response"))
 		return
 	}
+	if action, exists := c.Get(assistantClientActionKey); exists {
+		var payload map[string]any
+		if json.Unmarshal(body, &payload) == nil {
+			payload["lmm_assistant_action"] = action
+			if enriched, err := json.Marshal(payload); err == nil {
+				body = enriched
+			}
+		}
+	}
 	c.Data(status, "application/json; charset=utf-8", body)
 }
 
+func assistantActorUserID(c *gin.Context) int {
+	if c == nil {
+		return 0
+	}
+	if userID := c.GetInt(assistantActorUserIDKey); userID > 0 {
+		return userID
+	}
+	return c.GetInt("id")
+}
+
 func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[string]any {
+	actorUserID := assistantActorUserID(c)
 	name := strings.TrimSpace(call.Function.Name)
 	arguments := strings.TrimSpace(call.Function.Arguments)
 	if arguments == "" {
@@ -498,26 +550,30 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "calculate_cost":
 		return executeAssistantCostTool(input)
 	case "get_account_access":
-		return executeAssistantAccountTool(c.GetInt("id"))
+		return executeAssistantAccountTool(actorUserID)
 	case "get_available_models":
-		return executeAssistantModelsTool(c.GetInt("id"))
+		return executeAssistantModelsTool(actorUserID)
+	case "get_model_pricing":
+		return executeAssistantModelPricingTool(actorUserID, input)
 	case "get_plan_offers":
-		return executeAssistantPlanOffersTool(c.GetInt("id"))
+		return executeAssistantPlanOffersTool(actorUserID)
 	case "get_invitation_rewards":
-		return executeAssistantInvitationTool(c.GetInt("id"))
+		return executeAssistantInvitationTool(actorUserID)
 	case "get_bounty_guide":
 		return executeAssistantBountyTool()
 	case "get_usage_summary":
-		return executeAssistantUsageTool(c.GetInt("id"), input)
+		return executeAssistantUsageTool(actorUserID, input)
 	case "search_web":
 		return executeAssistantSearchTool(c, input)
 	case "get_setup_guide":
 		return executeAssistantSetupTool(input)
+	case "prepare_l1_recommendation":
+		return executeAssistantL1RecommendationTool(c, actorUserID, input)
 	case "request_create_key":
 		if c == nil {
 			return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 		}
-		return executeAssistantCreateKeyRequestTool(c.GetInt("id"), input)
+		return executeAssistantCreateKeyRequestTool(actorUserID, input)
 	case "request_human_support":
 		return map[string]any{
 			"ok":            true,
@@ -529,6 +585,65 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
+	}
+}
+
+func executeAssistantL1RecommendationTool(c *gin.Context, userID int, input map[string]any) map[string]any {
+	if c == nil || userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "account access could not be loaded"}
+	}
+	access, err := model.GetDeveloperAccessStateForUserBase(user)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
+	}
+	if access.Granted {
+		return map[string]any{"ok": false, "status": "already_active", "error": "L1 access is already active"}
+	}
+	sessionID := strings.TrimSpace(c.GetString("session_id"))
+	if sessionID == "" {
+		return map[string]any{"ok": false, "error": "a browser login session is required to prepare an L1 recommendation"}
+	}
+	statement := strings.TrimSpace(inputString(input, "user_statement"))
+	recommendation := strings.TrimSpace(inputString(input, "recommendation"))
+	if len([]rune(statement)) < minDeveloperAccessReasonRunes || len([]rune(statement)) > maxDeveloperAccessDraftRunes {
+		return map[string]any{"ok": false, "status": "statement_invalid", "error": "user statement must contain 5 to 2000 characters"}
+	}
+	if len([]rune(recommendation)) < minDeveloperAccessRecommendationRunes || len([]rune(recommendation)) > maxDeveloperAccessDraftRunes {
+		return map[string]any{"ok": false, "status": "recommendation_invalid", "error": "AI recommendation must contain 20 to 2000 characters"}
+	}
+	payload, err := json.Marshal(assistantL1RecommendationDraft{
+		UserStatement:  statement,
+		Recommendation: recommendation,
+	})
+	if err != nil {
+		return map[string]any{"ok": false, "error": "AI recommendation could not be prepared"}
+	}
+	confirmationToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeAssistantL1,
+		UserId:    userID,
+		SessionId: sessionID,
+		Payload:   string(payload),
+		ExpiresAt: time.Now().Add(assistantRecommendationTTL),
+	})
+	if err != nil {
+		return map[string]any{"ok": false, "error": "AI recommendation confirmation could not be created"}
+	}
+	action := map[string]any{
+		"type":               "l1_recommendation",
+		"user_statement":     statement,
+		"recommendation":     recommendation,
+		"confirmation_token": confirmationToken,
+	}
+	c.Set(assistantClientActionKey, action)
+	return map[string]any{
+		"ok":      true,
+		"status":  "confirmation_required",
+		"action":  "l1_recommendation",
+		"message": "Explain that this recommendation is only a draft. Ask the user to review and explicitly confirm it in the UI; administrator approval is still required.",
 	}
 }
 
@@ -585,69 +700,176 @@ func executeAssistantModelsTool(userID int) map[string]any {
 	}
 }
 
+func executeAssistantModelPricingTool(userID int, input map[string]any) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	modelID := inputString(input, "model_id")
+	if modelID == "" {
+		return map[string]any{
+			"ok":        false,
+			"status":    "model_required",
+			"error":     "an exact model ID is required",
+			"next_step": "Ask the user to choose a model or call get_available_models first.",
+		}
+	}
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "account pricing access could not be loaded"}
+	}
+	usableGroups := service.GetUserUsableGroups(user.Group)
+	requestedGroup := inputString(input, "group")
+	if requestedGroup != "" {
+		if _, ok := usableGroups[requestedGroup]; !ok {
+			return map[string]any{"ok": false, "status": "invalid_group", "error": "the requested group is not available for this account"}
+		}
+	}
+
+	pricing := getPricingCache()
+	if pricing == nil {
+		return map[string]any{"ok": false, "error": "live pricing is temporarily unavailable"}
+	}
+	var selected *model.Pricing
+	for index := range pricing {
+		candidate := &pricing[index]
+		if candidate.ModelName != modelID {
+			continue
+		}
+		if len(filterPricingByUsableGroups([]model.Pricing{*candidate}, usableGroups)) == 0 {
+			continue
+		}
+		selected = candidate
+		break
+	}
+	if selected == nil {
+		return map[string]any{
+			"ok":        false,
+			"status":    "model_unavailable",
+			"error":     "the exact model ID is not available to this account",
+			"next_step": "Call get_available_models and ask the user to choose one of the returned IDs.",
+		}
+	}
+
+	groupIDs := make([]string, 0, len(usableGroups))
+	for groupID := range usableGroups {
+		if requestedGroup != "" && groupID != requestedGroup {
+			continue
+		}
+		if !common.StringsContains(selected.EnableGroup, "all") && !common.StringsContains(selected.EnableGroup, groupID) {
+			continue
+		}
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Strings(groupIDs)
+	configuredRatios := ratio_setting.GetGroupRatioCopy()
+	prices := make([]map[string]any, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		groupRatio, configured := configuredRatios[groupID]
+		if !configured {
+			groupRatio = 1
+		}
+		if override, ok := ratio_setting.GetGroupGroupRatio(user.Group, groupID); ok {
+			groupRatio = override
+		}
+		entry := map[string]any{
+			"group":             groupID,
+			"group_description": usableGroups[groupID],
+			"group_ratio":       groupRatio,
+		}
+		if selected.QuotaType == 0 && selected.BillingMode != "tiered_expr" {
+			inputRate := selected.ModelRatio * 2 * groupRatio
+			entry["input_usd_per_million"] = inputRate
+			entry["output_usd_per_million"] = inputRate * selected.CompletionRatio
+			if selected.CacheRatio != nil {
+				entry["cache_read_usd_per_million"] = inputRate * *selected.CacheRatio
+			}
+			if selected.CreateCacheRatio != nil {
+				entry["cache_write_usd_per_million"] = inputRate * *selected.CreateCacheRatio
+			}
+		} else if selected.QuotaType == 1 {
+			entry["request_usd"] = selected.ModelPrice * groupRatio
+		}
+		prices = append(prices, entry)
+	}
+	if len(prices) == 0 {
+		return map[string]any{"ok": false, "error": "no usable pricing group was found for this model"}
+	}
+
+	return map[string]any{
+		"ok":                       true,
+		"model_id":                 selected.ModelName,
+		"quota_type":               selected.QuotaType,
+		"billing_mode":             selected.BillingMode,
+		"billing_expression":       selected.BillingExpr,
+		"prices":                   prices,
+		"supported_endpoint_types": selected.SupportedEndpointTypes,
+		"calculation_instruction":  "The returned USD prices already include the group ratio. Pass group_ratio=1 to calculate_cost so the ratio is not applied twice.",
+	}
+}
+
 func executeAssistantPlanOffersTool(userID int) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 	}
-	user, err := model.GetUserCache(userID)
+	user, err := model.GetUserById(userID, false)
 	if err != nil {
 		return map[string]any{"ok": false, "error": "account access could not be loaded"}
 	}
-	access, err := model.GetDeveloperAccessStateForUserBase(user)
+	access, err := model.GetDeveloperAccessStateForUser(user)
 	if err != nil {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
-	result := map[string]any{
-		"ok":                           access.Granted,
-		"developer_access_granted":     access.Granted,
-		"plans":                        []any{},
-		"topup_discounts":              []any{},
-		"payment_compliance_confirmed": operation_setting.IsPaymentComplianceConfirmed(),
-	}
 	if !access.Granted {
-		result["error"] = "L1 access is required to view plans and top-up discounts"
-		result["next_step"] = "Ask the user to submit an administrator access request from the onboarding assistant."
-		return result
+		return map[string]any{
+			"ok":                           false,
+			"developer_access_granted":     false,
+			"read_only":                    false,
+			"checkout_available":           false,
+			"payment_hidden":               true,
+			"plans":                        []SubscriptionPlanDTO{},
+			"topup_discounts":              map[int]float64{},
+			"payment_compliance_confirmed": false,
+			"error":                        "L1 access is required to view plans and top-up discounts",
+			"next_step":                    "Ask the user to submit an administrator L1 access request from the onboarding assistant.",
+		}
 	}
-	if !operation_setting.IsPaymentComplianceConfirmed() {
+	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
+	paymentRestricted := model.IsPaymentRestricted(user)
+	result := map[string]any{
+		"ok":                           true,
+		"developer_access_granted":     true,
+		"read_only":                    false,
+		"checkout_available":           complianceConfirmed && !paymentRestricted,
+		"payment_hidden":               paymentRestricted,
+		"plans":                        []SubscriptionPlanDTO{},
+		"topup_discounts":              map[int]float64{},
+		"payment_compliance_confirmed": complianceConfirmed,
+	}
+	if paymentRestricted {
+		result["message"] = "Payment options are hidden for this account; do not direct the user to checkout."
+	}
+	if !complianceConfirmed {
 		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."
 		return result
 	}
-	if model.DB == nil || common.QuotaPerUnit <= 0 {
+	if model.DB == nil {
 		return map[string]any{"ok": false, "error": "subscription plans are temporarily unavailable"}
 	}
 	var plans []model.SubscriptionPlan
 	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		return map[string]any{"ok": false, "error": "subscription plans could not be loaded"}
 	}
-	planValues := make([]map[string]any, 0, len(plans))
+	planValues := make([]SubscriptionPlanDTO, 0, len(plans))
 	for _, plan := range plans {
 		plan.NormalizeDefaults()
-		planValues = append(planValues, map[string]any{
-			"id":                 plan.Id,
-			"title":              plan.Title,
-			"subtitle":           plan.Subtitle,
-			"price_amount":       plan.PriceAmount,
-			"currency":           plan.Currency,
-			"duration_unit":      plan.DurationUnit,
-			"duration_value":     plan.DurationValue,
-			"total_quota":        plan.TotalAmount,
-			"total_quota_usd":    float64(plan.TotalAmount) / common.QuotaPerUnit,
-			"quota_reset_period": plan.QuotaResetPeriod,
-			"upgrade_group":      plan.UpgradeGroup,
-		})
+		planValues = append(planValues, SubscriptionPlanDTO{Plan: plan})
 	}
-	discountValues := make([]map[string]any, 0, len(operation_setting.GetPaymentSetting().AmountDiscount))
-	for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
-		discountValues = append(discountValues, map[string]any{
-			"amount":          amount,
-			"multiplier":      multiplier,
-			"savings_percent": (1 - multiplier) * 100,
-		})
+	discountValues := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
+	if !paymentRestricted {
+		for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
+			discountValues[amount] = multiplier
+		}
 	}
-	sort.Slice(discountValues, func(i, j int) bool {
-		return discountValues[i]["amount"].(int) < discountValues[j]["amount"].(int)
-	})
 	result["plans"] = planValues
 	result["topup_discounts"] = discountValues
 	return result
@@ -698,7 +920,7 @@ func executeAssistantBountyTool() map[string]any {
 		},
 		"platform_fee_percent": fee.RatePercent,
 		"page":                 "/open-source-bounties",
-		"message":              "A bounty publisher may give a contributor a tip, but the exact charge and escrow are shown before confirmation.",
+		"message":              "The public platform fee helps fund AI customer-service token costs. A bounty publisher may also give a contributor a separate tip; exact charges and escrow are shown before confirmation.",
 	}
 }
 
@@ -790,14 +1012,36 @@ func executeAssistantAccountTool(userID int) map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "error": "trust level could not be loaded"}
 	}
-	return map[string]any{
+	result := map[string]any{
 		"ok":                       true,
 		"trust_level":              trust.Level,
 		"developer_access_granted": access.Granted,
 		"paid_activation_complete": access.PaidActivationComplete,
 		"console_activated":        user.ConsoleActivatedAt > 0,
-		"next_step":                "Use the profile and API key pages for account changes.",
 	}
+	request, requestErr := model.GetDeveloperAccessRequest(userID)
+	if requestErr != nil {
+		return map[string]any{"ok": false, "error": "L1 recommendation status could not be loaded"}
+	}
+	if request != nil {
+		result["l1_request"] = map[string]any{
+			"status":            request.Status,
+			"source":            request.Source,
+			"user_statement":    request.Reason,
+			"ai_recommendation": request.AIRecommendation,
+			"admin_note":        request.AdminNote,
+			"created_at":        request.CreatedAt,
+			"reviewed_at":       request.ReviewedAt,
+		}
+	}
+	if access.Granted {
+		result["next_step"] = "Continue setup through the assistant; API-key creation still requires explicit UI confirmation."
+	} else if request != nil && request.Status == model.DeveloperAccessRequestPending {
+		result["next_step"] = "Tell the user the recommendation is pending administrator review."
+	} else {
+		result["next_step"] = "Continue the onboarding conversation and prepare an L1 recommendation only after collecting a concrete use case."
+	}
+	return result
 }
 
 func executeAssistantSetupTool(input map[string]any) map[string]any {

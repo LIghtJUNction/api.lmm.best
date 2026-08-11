@@ -17,19 +17,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func withAssistantSettings(t *testing.T, enabled bool, model string) {
+func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 	t.Helper()
 	original := setting.GetAssistantSettings()
+	originalBillingLoader := loadAssistantBillingUser
 	setting.SetAssistantEnabled(enabled)
-	require.NoError(t, setting.UpdateAssistantModel(model))
+	require.NoError(t, setting.UpdateAssistantModel(modelID))
+	loadAssistantBillingUser = func() (*model.User, error) {
+		return &model.User{
+			Id:       987,
+			Username: "assistant-root",
+			Role:     common.RoleRootUser,
+			Status:   common.UserStatusEnabled,
+			Group:    "default",
+		}, nil
+	}
 	t.Cleanup(func() {
 		setting.SetAssistantEnabled(original.Enabled)
 		_ = setting.UpdateAssistantModel(original.Model)
+		loadAssistantBillingUser = originalBillingLoader
 	})
 }
 
 func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}))
 	withAssistantSettings(t, true, "server-owned-model")
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://api.example.com/"
@@ -38,13 +51,18 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	var captured assistantOpenAIRequest
 	var capturedPath string
 	var capturedGroup string
+	var capturedBillingUserID int
+	var capturedActorUserID int
 	engine.POST("/api/assistant/chat", func(c *gin.Context) {
+		c.Set("id", 42)
 		c.Set("group", "default")
 		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
 		PrepareAssistantRequest(c)
 	}, func(c *gin.Context) {
 		capturedPath = c.Request.URL.Path
 		capturedGroup = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+		capturedBillingUserID = c.GetInt("id")
+		capturedActorUserID = c.GetInt(assistantActorUserIDKey)
 		require.NoError(t, common.UnmarshalBodyReusable(c, &captured))
 		c.Status(http.StatusNoContent)
 	})
@@ -58,6 +76,8 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	assert.Equal(t, model.AssistantIntentAPIKey, response.Header().Get(assistantIntentHeader))
 	assert.Equal(t, "/v1/chat/completions", capturedPath)
 	assert.Equal(t, "default", capturedGroup)
+	assert.Equal(t, 987, capturedBillingUserID)
+	assert.Equal(t, 42, capturedActorUserID)
 	assert.Equal(t, "server-owned-model", captured.Model)
 	assert.False(t, captured.Stream)
 	require.Len(t, captured.Messages, 2)
@@ -342,15 +362,61 @@ func TestAssistantPlanOffersRejectL0WithoutLoadingBillingData(t *testing.T) {
 	result := executeAssistantPlanOffersTool(user.Id)
 	assert.Equal(t, false, result["ok"])
 	assert.Equal(t, false, result["developer_access_granted"])
-	assert.Contains(t, result["error"], "L1 access is required")
-	assert.Empty(t, result["plans"])
-	assert.Empty(t, result["topup_discounts"])
+	assert.Equal(t, false, result["read_only"])
+	assert.Equal(t, false, result["checkout_available"])
+	assert.Equal(t, true, result["payment_hidden"])
+	assert.Equal(t, false, result["payment_compliance_confirmed"])
+	assert.Contains(t, result["error"], "L1 access")
+	plans, ok := result["plans"].([]SubscriptionPlanDTO)
+	require.True(t, ok)
+	assert.Empty(t, plans)
+	discounts, ok := result["topup_discounts"].(map[int]float64)
+	require.True(t, ok)
+	assert.Empty(t, discounts)
+	assert.Contains(t, result["next_step"], "L1 access request")
+}
+
+func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	user := model.User{
+		Username: "assistant-pricing-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	originalGetPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{
+			ModelName:       "priced-model",
+			QuotaType:       0,
+			ModelRatio:      1.5,
+			CompletionRatio: 2,
+			EnableGroup:     []string{"default"},
+		}}
+	}
+	t.Cleanup(func() { getPricingCache = originalGetPricing })
+
+	result := executeAssistantModelPricingTool(user.Id, map[string]any{"model_id": "priced-model"})
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "priced-model", result["model_id"])
+	prices, ok := result["prices"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, prices, 1)
+	assert.Equal(t, "default", prices[0]["group"])
+	assert.Equal(t, 3.0, prices[0]["input_usd_per_million"])
+	assert.Equal(t, 6.0, prices[0]["output_usd_per_million"])
+
+	missing := executeAssistantModelPricingTool(user.Id, map[string]any{})
+	assert.Equal(t, "model_required", missing["status"])
 }
 
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 12)
+	require.Len(t, definitions, 14)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -359,12 +425,14 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["calculate_cost"])
 	assert.True(t, names["get_account_access"])
 	assert.True(t, names["get_available_models"])
+	assert.True(t, names["get_model_pricing"])
 	assert.True(t, names["get_plan_offers"])
 	assert.True(t, names["get_invitation_rewards"])
 	assert.True(t, names["get_bounty_guide"])
 	assert.True(t, names["get_usage_summary"])
 	assert.True(t, names["search_web"])
 	assert.True(t, names["get_setup_guide"])
+	assert.True(t, names["prepare_l1_recommendation"])
 	assert.True(t, names["request_create_key"])
 	assert.True(t, names["request_human_support"])
 
@@ -397,6 +465,48 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	})
 	assert.Equal(t, "confirmation_required", handoff["status"])
 	assert.Equal(t, "human_support", handoff["action"])
+}
+
+func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.AuthFlow{}))
+	user := model.User{
+		Username: "assistant-l0-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("id", 987)
+	c.Set(assistantActorUserIDKey, user.Id)
+	c.Set("session_id", "assistant-l0-session")
+
+	result := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name: "prepare_l1_recommendation",
+			Arguments: `{
+				"user_statement":"I want to connect Claude Code for an open-source Go project.",
+				"recommendation":"The user described a concrete development workflow and the intended compatible client."
+			}`,
+		},
+	})
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "confirmation_required", result["status"])
+	assert.Equal(t, "l1_recommendation", result["action"])
+
+	writeAssistantRawResponse(c, http.StatusOK, []byte(`{"choices":[{"message":{"content":"Please confirm."}}]}`), "ASSISTANT_UPSTREAM_FAILED")
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	action, ok := response["lmm_assistant_action"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "l1_recommendation", action["type"])
+	assert.Contains(t, action["recommendation"], "concrete development workflow")
+	assert.NotEmpty(t, action["confirmation_token"])
 }
 
 func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {

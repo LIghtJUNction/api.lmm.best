@@ -21,6 +21,7 @@ import { describe, test } from 'node:test'
 
 import {
   buildAssistantConversation,
+  parseAssistantAction,
   parseAssistantIntent,
   parseAssistantReply,
   type AssistantChatMessage,
@@ -52,6 +53,32 @@ describe('assistant response parsing', () => {
     assert.equal(parseAssistantIntent('HUMAN_SUPPORT'), 'human_support')
     assert.equal(parseAssistantIntent('unknown-intent'), undefined)
     assert.equal(parseAssistantIntent(undefined), undefined)
+  })
+
+  test('accepts only complete L1 recommendation actions', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'l1_recommendation',
+        user_statement: '  I am building an internal coding tool. ',
+        recommendation: ' Recommend L1 because the use case is concrete. ',
+        confirmation_token: ' confirmation-token ',
+      }),
+      {
+        type: 'l1_recommendation',
+        user_statement: 'I am building an internal coding tool.',
+        recommendation: 'Recommend L1 because the use case is concrete.',
+        confirmation_token: 'confirmation-token',
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'l1_recommendation',
+        user_statement: '',
+        recommendation: 'missing statement',
+      }),
+      undefined
+    )
+    assert.equal(parseAssistantAction({ type: 'open_wallet' }), undefined)
   })
 })
 

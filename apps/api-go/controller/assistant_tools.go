@@ -56,6 +56,20 @@ func requireAssistantConfirmation(c *gin.Context, confirmed bool) bool {
 	return true
 }
 
+func GetAssistantPricing(c *gin.Context) {
+	if !requireAssistantBrowserSession(c) {
+		return
+	}
+	GetPricing(c)
+}
+
+func GetAssistantPlanOffers(c *gin.Context) {
+	if !requireAssistantBrowserSession(c) {
+		return
+	}
+	common.ApiSuccess(c, executeAssistantPlanOffersTool(c.GetInt("id")))
+}
+
 func getAssistantDeveloperAccess(userID int) (*model.UserBase, bool, error) {
 	user, err := model.GetUserCache(userID)
 	if err != nil {

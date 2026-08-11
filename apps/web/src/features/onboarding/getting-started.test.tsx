@@ -267,6 +267,19 @@ describe('getting started access boundaries', () => {
 
     assert.deepEqual(opened, ['onboarding', 'plan'])
     assert.deepEqual(messages, [undefined, undefined])
+
+    const costQuestion = [...page.container.querySelectorAll('button')].find(
+      (button) =>
+        button.textContent?.includes('How is request cost calculated?')
+    )
+    assert.ok(costQuestion)
+    await act(async () => {
+      costQuestion.click()
+      await flushEffects()
+    })
+
+    assert.deepEqual(opened, ['onboarding', 'plan', 'cost'])
+    assert.deepEqual(messages, [undefined, undefined, undefined])
     assert.ok(
       [...page.container.querySelectorAll('button')].some((button) =>
         button.textContent?.includes(

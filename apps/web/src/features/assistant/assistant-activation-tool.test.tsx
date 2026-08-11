@@ -85,6 +85,8 @@ const pendingRequest = {
   id: 9,
   status: 'pending' as const,
   reason: 'Need access for a test integration.',
+  source: 'assistant_recommendation' as const,
+  ai_recommendation: 'Recommend L1 for a concrete test integration.',
   admin_note: '',
   created_at: 1_786_400_000,
   reviewed_at: 0,
@@ -95,12 +97,31 @@ const approvedRequest = {
   admin_note: 'Approved for testing.',
   reviewed_at: 1_786_500_000,
 }
+const rejectedRequest = {
+  ...pendingRequest,
+  status: 'rejected' as const,
+  admin_note: 'Please explain which client you will connect.',
+  reviewed_at: 1_786_500_000,
+}
+const recommendationDraft = {
+  type: 'l1_recommendation' as const,
+  user_statement: 'I need access for a private Claude Code integration.',
+  recommendation:
+    'Recommend L1 because the user provided a specific client and use case.',
+  confirmation_token: 'assistant-confirmation-token',
+}
 
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
 
-async function renderTool(onContinueSetup: () => void) {
+async function renderTool(
+  options: {
+    onContinueSetup?: () => void
+    onSubmitted?: () => void
+    recommendationDraft?: typeof recommendationDraft
+  } = {}
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -108,7 +129,11 @@ async function renderTool(onContinueSetup: () => void) {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantActivationTool onContinueSetup={onContinueSetup} />
+          <AssistantActivationTool
+            recommendationDraft={options.recommendationDraft}
+            onContinueSetup={options.onContinueSetup}
+            onSubmitted={options.onSubmitted}
+          />
         </I18nextProvider>
       </QueryClientProvider>
     ),
@@ -142,19 +167,6 @@ function findButton(text: string): HTMLButtonElement {
   return button
 }
 
-async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
-  const setValue = Object.getOwnPropertyDescriptor(
-    HTMLTextAreaElement.prototype,
-    'value'
-  )?.set
-  assert.ok(setValue)
-  await act(async () => {
-    setValue.call(textarea, value)
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-    await flushEffects()
-  })
-}
-
 async function waitForCondition(
   condition: () => boolean,
   failureMessage: string
@@ -181,59 +193,73 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantActivationTool', () => {
-  test('requires a trimmed five-character reason before submitting', async () => {
+  test('shows chat guidance without a direct request form', async () => {
     api.get = (async () => ({
       data: { success: true, data: null },
     })) as typeof api.get
-    let submittedReason: string | undefined
+
+    const rendered = await renderTool()
+    try {
+      assert.equal(document.querySelector('textarea'), null)
+      assert.equal(document.querySelector('a[href="/wallet"]'), null)
+      assert.match(
+        document.body.textContent ?? '',
+        /Continue chatting and explain your use case/
+      )
+      assert.throws(() => findButton('Confirm and send to administrator'))
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('submits the exact AI recommendation only after confirmation', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: null },
+    })) as typeof api.get
+    let submittedBody: unknown
     api.post = (async (url: string, data: unknown) => {
       assert.equal(url, '/api/user/developer-access/request')
-      submittedReason = (data as { reason: string }).reason
-      return {
-        data: {
-          success: true,
-          data: { ...pendingRequest, reason: submittedReason },
-        },
-      }
+      submittedBody = data
+      return { data: { success: true, data: pendingRequest } }
     }) as typeof api.post
 
-    const rendered = await renderTool(() => undefined)
+    let submittedCalls = 0
+    const rendered = await renderTool({
+      recommendationDraft,
+      onSubmitted: () => {
+        submittedCalls += 1
+      },
+    })
     try {
-      const textarea = document.querySelector('textarea')
-      assert.ok(textarea)
-      assert.equal(document.querySelector('a[href="/wallet"]'), null)
-      assert.equal(
-        document.body.textContent?.includes('Open recharge and plans'),
-        false
+      assert.equal(document.querySelector('textarea'), null)
+      assert.match(
+        document.body.textContent ?? '',
+        /I need access for a private Claude Code integration\./
       )
-      const submitButton = findButton('Send free review request')
-      assert.equal(submitButton.disabled, true)
-      assert.equal(
-        document.body.textContent?.includes('Application reason is required.'),
-        true
+      assert.match(
+        document.body.textContent ?? '',
+        /Recommend L1 because the user provided a specific client/
       )
-
-      await setTextareaValue(textarea, 'abcd')
-      assert.equal(submitButton.disabled, true)
-      assert.equal(
-        document.body.textContent?.includes(
-          'Application reason must contain at least 5 characters.'
-        ),
-        true
-      )
-
-      await setTextareaValue(textarea, '  abcde  ')
-      assert.equal(submitButton.disabled, false)
 
       await act(async () => {
-        submitButton.click()
+        findButton('Confirm and send to administrator').click()
         await flushEffects()
       })
       await waitForCondition(
-        () => submittedReason !== undefined,
-        'Valid request was not submitted'
+        () => submittedBody !== undefined,
+        'Recommendation was not submitted'
       )
-      assert.equal(submittedReason, 'abcde')
+      assert.deepEqual(submittedBody, {
+        reason: recommendationDraft.user_statement,
+        ai_recommendation: recommendationDraft.recommendation,
+        confirmation_token: recommendationDraft.confirmation_token,
+        confirmed: true,
+      })
+      assert.equal(submittedCalls, 1)
+      assert.match(
+        document.body.textContent ?? '',
+        /AI recommendation submitted/
+      )
     } finally {
       await unmount(rendered)
     }
@@ -253,14 +279,17 @@ describe('AssistantActivationTool', () => {
     }) as typeof api.get
 
     let continueCalls = 0
-    const rendered = await renderTool(() => {
-      continueCalls += 1
+    const rendered = await renderTool({
+      onContinueSetup: () => {
+        continueCalls += 1
+      },
     })
     try {
       await waitForCondition(
         () =>
-          document.body.textContent?.includes('waiting for administrator') ===
-          true,
+          document.body.textContent?.includes(
+            'waiting for an administrator'
+          ) === true,
         'Pending approval state did not render'
       )
       assert.equal(getCalls, 1)
@@ -276,12 +305,35 @@ describe('AssistantActivationTool', () => {
         'Approved state did not render after refresh'
       )
       assert.equal(getCalls, 2)
+      assert.match(document.body.textContent ?? '', /Approved for testing\./)
 
       await act(async () => {
         findButton('Continue setup').click()
         await flushEffects()
       })
       assert.equal(continueCalls, 1)
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('shows the administrator reply after rejection without a direct form', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: rejectedRequest },
+    })) as typeof api.get
+
+    const rendered = await renderTool()
+    try {
+      assert.equal(document.querySelector('textarea'), null)
+      assert.match(document.body.textContent ?? '', /Previous request rejected/)
+      assert.match(
+        document.body.textContent ?? '',
+        /Please explain which client you will connect\./
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /Continue the conversation and address the administrator feedback/
+      )
     } finally {
       await unmount(rendered)
     }

@@ -511,7 +511,7 @@ export function OpenSourceBounties({
     if (
       !window.confirm(
         t(
-          'Publish now? Your balance will be debited {{gross}} gross. The public {{rate}}% platform fee of {{fee}} is credited to the super administrator, leaving {{netReward}} per approved fix and {{escrow}} total escrow.',
+          'Publish now? Your balance will be debited {{gross}} gross. The public {{rate}}% platform fee of {{fee}} is credited to the super administrator and helps fund AI customer-service token costs, leaving {{netReward}} per approved fix and {{escrow}} total escrow.',
           {
             gross: formatQuota(charge.gross),
             rate: charge.feeRatePercent,
@@ -758,7 +758,7 @@ export function OpenSourceBounties({
                 <div className='flex flex-col gap-3'>
                   <p>
                     {t(
-                      'Publishing deducts the gross listing total from your balance. The public administrator-configured platform fee is credited to the super administrator account, and the remainder becomes contributor escrow. Publishers and contributors settle directly; administrators intervene only in disputes.'
+                      'Publishing deducts the gross listing total from your balance. The public administrator-configured platform fee is credited to the super administrator account and helps fund AI customer-service token costs; the remainder becomes contributor escrow. Publishers and contributors settle directly; administrators intervene only in disputes.'
                     )}
                   </p>
                   <div className='flex flex-wrap items-center gap-2'>
@@ -1977,7 +1977,7 @@ function DraftDialog(props: {
         <AlertTitle>{t('Publish charge')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Publish charge: {{total}} gross listing total. Of that amount, {{fee}} public platform fee ({{rate}}%) is credited to the super administrator, leaving {{netReward}} per approved fix and {{escrow}} total escrow. Current balance: {{balance}}.',
+            'Publish charge: {{total}} gross listing total. Of that amount, {{fee}} public platform fee ({{rate}}%) is credited to the super administrator and helps fund AI customer-service token costs, leaving {{netReward}} per approved fix and {{escrow}} total escrow. Current balance: {{balance}}.',
             {
               escrow: formatQuota(props.charge.escrow),
               fee: formatQuota(props.charge.platformFee),

@@ -10,33 +10,41 @@ import (
 )
 
 const (
-	DeveloperAccessRequestPending   = "pending"
-	DeveloperAccessRequestApproved  = "approved"
-	DeveloperAccessRequestRejected  = "rejected"
-	minDeveloperAccessRequestReason = 5
-	maxDeveloperAccessRequestNote   = 2000
+	DeveloperAccessRequestPending    = "pending"
+	DeveloperAccessRequestApproved   = "approved"
+	DeveloperAccessRequestRejected   = "rejected"
+	DeveloperAccessRequestSourceAI   = "assistant_recommendation"
+	DeveloperAccessRequestSourceOld  = "legacy"
+	minDeveloperAccessRequestReason  = 5
+	minDeveloperAccessReviewNote     = 2
+	minDeveloperAccessRecommendation = 20
+	maxDeveloperAccessRequestNote    = 2000
 )
 
 var (
-	ErrDeveloperAccessRequestNotFound       = errors.New("解锁申请不存在")
-	ErrDeveloperAccessRequestReviewed       = errors.New("解锁申请已经处理")
-	ErrDeveloperAccessRequestStatus         = errors.New("解锁申请状态无效")
-	ErrDeveloperAccessRequestReasonTooShort = errors.New("解锁申请说明至少需要 5 个字符")
-	ErrDeveloperAccessRequestNoteTooLong    = errors.New("解锁申请说明不能超过 2000 个字符")
+	ErrDeveloperAccessRequestNotFound        = errors.New("解锁申请不存在")
+	ErrDeveloperAccessRequestReviewed        = errors.New("解锁申请已经处理")
+	ErrDeveloperAccessRequestStatus          = errors.New("解锁申请状态无效")
+	ErrDeveloperAccessRequestReasonTooShort  = errors.New("解锁申请说明至少需要 5 个字符")
+	ErrDeveloperAccessRecommendationTooShort = errors.New("AI 推荐信至少需要 20 个字符")
+	ErrDeveloperAccessReviewNoteTooShort     = errors.New("管理员意见至少需要 2 个字符")
+	ErrDeveloperAccessRequestNoteTooLong     = errors.New("解锁申请说明不能超过 2000 个字符")
 )
 
 // DeveloperAccessRequest records the non-payment path to L1 access. The
 // request is deliberately separate from User.TrustLevelOverride: approving a
 // request unlocks L1 without freezing later paid progression at that level.
 type DeveloperAccessRequest struct {
-	Id          int    `json:"id" gorm:"primaryKey"`
-	UserId      int    `json:"user_id" gorm:"not null;index"`
-	Status      string `json:"status" gorm:"type:varchar(20);not null;index"`
-	Reason      string `json:"reason" gorm:"type:text"`
-	AdminUserId int    `json:"admin_user_id" gorm:"index"`
-	AdminNote   string `json:"admin_note" gorm:"type:text"`
-	CreatedAt   int64  `json:"created_at" gorm:"not null;index"`
-	ReviewedAt  int64  `json:"reviewed_at" gorm:"not null;default:0"`
+	Id               int    `json:"id" gorm:"primaryKey"`
+	UserId           int    `json:"user_id" gorm:"not null;index"`
+	Status           string `json:"status" gorm:"type:varchar(20);not null;index"`
+	Source           string `json:"source" gorm:"type:varchar(40);not null;default:legacy;index"`
+	Reason           string `json:"reason" gorm:"type:text"`
+	AIRecommendation string `json:"ai_recommendation" gorm:"type:text"`
+	AdminUserId      int    `json:"admin_user_id" gorm:"index"`
+	AdminNote        string `json:"admin_note" gorm:"type:text"`
+	CreatedAt        int64  `json:"created_at" gorm:"not null;index"`
+	ReviewedAt       int64  `json:"reviewed_at" gorm:"not null;default:0"`
 }
 
 func (DeveloperAccessRequest) TableName() string { return "developer_access_requests" }
@@ -66,6 +74,28 @@ func normalizeDeveloperAccessRequestReason(value string) (string, error) {
 	return value, nil
 }
 
+func normalizeDeveloperAccessRecommendation(value string) (string, error) {
+	value, err := normalizeDeveloperAccessRequestText(value)
+	if err != nil {
+		return "", err
+	}
+	if len([]rune(value)) < minDeveloperAccessRecommendation {
+		return "", ErrDeveloperAccessRecommendationTooShort
+	}
+	return redactAssistantHandoffMessage(value), nil
+}
+
+func normalizeDeveloperAccessReviewNote(value string) (string, error) {
+	value, err := normalizeDeveloperAccessRequestText(value)
+	if err != nil {
+		return "", err
+	}
+	if len([]rune(value)) < minDeveloperAccessReviewNote {
+		return "", ErrDeveloperAccessReviewNoteTooShort
+	}
+	return value, nil
+}
+
 func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
@@ -82,12 +112,27 @@ func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
 }
 
 func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld)
+}
+
+func SubmitAssistantDeveloperAccessRecommendation(userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI)
+}
+
+func submitDeveloperAccessRequest(userID int, reason string, recommendation string, source string) (*DeveloperAccessRequest, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
 	normalizedReason, err := normalizeDeveloperAccessRequestReason(reason)
 	if err != nil {
 		return nil, err
+	}
+	normalizedRecommendation := ""
+	if source == DeveloperAccessRequestSourceAI {
+		normalizedRecommendation, err = normalizeDeveloperAccessRecommendation(recommendation)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var request DeveloperAccessRequest
@@ -110,10 +155,12 @@ func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRe
 			return findErr
 		}
 		request = DeveloperAccessRequest{
-			UserId:    userID,
-			Status:    DeveloperAccessRequestPending,
-			Reason:    normalizedReason,
-			CreatedAt: common.GetTimestamp(),
+			UserId:           userID,
+			Status:           DeveloperAccessRequestPending,
+			Source:           source,
+			Reason:           redactAssistantHandoffMessage(normalizedReason),
+			AIRecommendation: normalizedRecommendation,
+			CreatedAt:        common.GetTimestamp(),
 		}
 		return tx.Create(&request).Error
 	})
@@ -148,7 +195,7 @@ func ReviewDeveloperAccessRequest(adminUserID int, requestID int, approve bool, 
 	if adminUserID <= 0 || requestID <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
-	normalizedNote, err := normalizeDeveloperAccessRequestText(note)
+	normalizedNote, err := normalizeDeveloperAccessReviewNote(note)
 	if err != nil {
 		return nil, err
 	}

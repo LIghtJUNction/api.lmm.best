@@ -180,6 +180,10 @@ export function GettingStarted() {
                       question: t('Which option is the best value?'),
                     },
                     {
+                      id: 'cost' as const,
+                      question: t('How is request cost calculated?'),
+                    },
+                    {
                       id: 'client-setup' as const,
                       question: t('How do I set up Claude Code or CC Switch?'),
                     },
@@ -210,7 +214,7 @@ export function GettingStarted() {
               {accessRequest?.status === 'pending' ? (
                 <p className='bg-background/70 mt-4 border px-3 py-2 text-xs leading-5'>
                   {t(
-                    'Your free unlock request is waiting for administrator review.'
+                    'Your AI recommendation is waiting for administrator review.'
                   )}
                 </p>
               ) : null}
@@ -262,7 +266,7 @@ export function GettingStarted() {
       complete: onboarding.activationComplete,
       title: t('Unlock L1 access'),
       description: t(
-        'Add funds for automatic activation, or send a free explanation to an administrator for manual review.'
+        'Discuss your use case with the AI assistant, confirm its recommendation, and wait for administrator approval.'
       ),
       preset: 'onboarding' as const,
     },

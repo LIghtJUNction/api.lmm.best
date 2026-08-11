@@ -119,9 +119,9 @@ func GetStatus(c *gin.Context) {
 			"responses_websocket":     true,
 		},
 		"assistant": gin.H{
-			"enabled":           assistantSettings.Enabled,
-			"model":             assistantSettings.Model,
-			"weekly_credit_usd": assistantSettings.WeeklyCreditUSD,
+			"enabled":      assistantSettings.Enabled,
+			"model":        assistantSettings.Model,
+			"funding_mode": "super_administrator",
 		},
 
 		"usd_exchange_rate": operation_setting.USDExchangeRate,

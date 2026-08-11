@@ -27,13 +27,8 @@ function status(developerAccessGranted: boolean): AssistantStatus {
     enabled: true,
     model: 'deepseek-v4-flash',
     developer_access_granted: developerAccessGranted,
-    credit: {
-      weekly_credit_usd: 1,
-      limit_quota: 500_000,
-      used_quota: 0,
-      remaining_quota: 500_000,
-      week_start: 1_786_000_000,
-      resets_at: 1_786_604_800,
+    funding: {
+      mode: 'super_administrator',
     },
   }
 }

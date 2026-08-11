@@ -52,9 +52,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getPricing } from '@/features/pricing/api'
 import { toIntlLocale } from '@/i18n/languages'
 
+import { getAssistantPricing } from './api'
 import { calculateAssistantTextCost } from './cost-calculator'
 
 function parseTokenCount(value: string): number {
@@ -69,9 +69,8 @@ export function AssistantCostTool(props: { developerAccessGranted: boolean }) {
   const [inputTokens, setInputTokens] = useState('100000')
   const [outputTokens, setOutputTokens] = useState('10000')
   const pricingQuery = useQuery({
-    queryKey: ['pricing'],
-    queryFn: getPricing,
-    enabled: props.developerAccessGranted,
+    queryKey: ['assistant-pricing'],
+    queryFn: getAssistantPricing,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -120,21 +119,6 @@ export function AssistantCostTool(props: { developerAccessGranted: boolean }) {
       }),
     [i18n.language]
   )
-
-  if (!props.developerAccessGranted) {
-    return (
-      <Card size='sm' className='border-dashed'>
-        <CardHeader>
-          <CardTitle>{t('Live cost calculation requires L1')}</CardTitle>
-          <CardDescription>
-            {t(
-              'Only L0 is restricted. After L1 approval, this calculator uses the live model and group prices from your account.'
-            )}
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    )
-  }
 
   let calculatorContent: ReactNode
   if (pricingQuery.isLoading) {
@@ -313,7 +297,24 @@ export function AssistantCostTool(props: { developerAccessGranted: boolean }) {
           )}
         </CardDescription>
       </CardHeader>
-      <CardContent className='grid gap-3'>{calculatorContent}</CardContent>
+      <CardContent className='grid gap-3'>
+        {!props.developerAccessGranted ? (
+          <Alert>
+            <HugeiconsIcon
+              icon={Alert02Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+            <AlertTitle>{t('Read-only')}</AlertTitle>
+            <AlertDescription>
+              {t(
+                'This live estimate is read-only while your L1 request is under review.'
+              )}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {calculatorContent}
+      </CardContent>
     </Card>
   )
 }

@@ -8,6 +8,7 @@
 
 pub mod admin_catalog;
 pub mod api_token;
+pub mod assistant;
 pub mod billing_payments;
 pub mod billing_subscriptions;
 pub mod channel_advanced;

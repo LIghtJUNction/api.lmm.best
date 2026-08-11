@@ -38,32 +38,37 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { Textarea } from '@/components/ui/textarea'
 import {
   getDeveloperAccessRequest,
   submitDeveloperAccessRequest,
   type DeveloperAccessRequest,
 } from '@/features/onboarding/api'
 
+import type { AssistantL1RecommendationAction } from './api'
+
+function AdministratorReply(props: { request: DeveloperAccessRequest }) {
+  const { t } = useTranslation()
+  if (!props.request.admin_note) return null
+  return (
+    <div className='border-border/70 bg-background/70 grid gap-1 border p-3'>
+      <p className='text-xs font-medium'>{t('Administrator reply')}</p>
+      <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
+        {props.request.admin_note}
+      </p>
+    </div>
+  )
+}
+
 export function AssistantActivationTool(props: {
+  recommendationDraft?: AssistantL1RecommendationAction | null
   onContinueSetup?: () => void
+  onSubmitted?: (request: DeveloperAccessRequest) => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [requestOverride, setRequestOverride] =
     useState<DeveloperAccessRequest | null>(null)
-  const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
-  const trimmedReason = reason.trim()
-  const reasonLength = [...trimmedReason].length
-  const reasonIsValid = reasonLength >= 5
-  const reasonHasError = reason.length > 0 && !reasonIsValid
-  let reasonHelpText = t('{{count}}/5 characters', { count: reasonLength })
-  if (reason.length === 0) {
-    reasonHelpText = t('Application reason is required.')
-  } else if (!reasonIsValid) {
-    reasonHelpText = t('Application reason must contain at least 5 characters.')
-  }
 
   const requestQuery = useQuery({
     queryKey: ['assistant-developer-access-request'],
@@ -86,11 +91,18 @@ export function AssistantActivationTool(props: {
   }
 
   const submit = async () => {
-    if (loading || request?.status === 'pending' || !reasonIsValid) return
+    const draft = props.recommendationDraft
+    if (loading || request?.status === 'pending' || !draft) return
     setLoading(true)
     try {
-      setRequestOverride(await submitDeveloperAccessRequest(trimmedReason))
-      setReason('')
+      const submitted = await submitDeveloperAccessRequest({
+        reason: draft.user_statement,
+        ai_recommendation: draft.recommendation,
+        confirmation_token: draft.confirmation_token,
+        confirmed: true,
+      })
+      setRequestOverride(submitted)
+      props.onSubmitted?.(submitted)
       toast.success(t('Unlock request submitted'))
     } catch (error) {
       toast.error(
@@ -122,8 +134,9 @@ export function AssistantActivationTool(props: {
             )}
           </CardDescription>
         </CardHeader>
-        {props.onContinueSetup ? (
-          <CardContent>
+        <CardContent className='grid gap-3'>
+          <AdministratorReply request={request} />
+          {props.onContinueSetup ? (
             <Button type='button' onClick={props.onContinueSetup}>
               {t('Continue setup')}
               <HugeiconsIcon
@@ -133,82 +146,119 @@ export function AssistantActivationTool(props: {
                 aria-hidden='true'
               />
             </Button>
-          </CardContent>
-        ) : null}
+          ) : null}
+        </CardContent>
       </Card>
     )
   }
 
+  if (request?.status === 'pending') {
+    return (
+      <Card size='sm' className='border-primary/30 bg-primary/5'>
+        <CardHeader>
+          <CardTitle>{t('AI recommendation submitted')}</CardTitle>
+          <CardDescription>
+            {t(
+              'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='grid gap-3'>
+          <div className='border-border/70 bg-background/70 grid gap-1 border p-3'>
+            <p className='text-xs font-medium'>{t('Your statement')}</p>
+            <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
+              {request.reason}
+            </p>
+          </div>
+          {request.ai_recommendation ? (
+            <div className='border-border/70 bg-background/70 grid gap-1 border p-3'>
+              <p className='text-xs font-medium'>{t('AI recommendation')}</p>
+              <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
+                {request.ai_recommendation}
+              </p>
+            </div>
+          ) : null}
+          <AdministratorReply request={request} />
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => void refreshStatus()}
+            disabled={requestQuery.isFetching}
+          >
+            <HugeiconsIcon
+              icon={ReloadIcon}
+              className={requestQuery.isFetching ? 'animate-spin' : undefined}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
+            {requestQuery.isFetching ? t('Refreshing...') : t('Refresh')}
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const draft = props.recommendationDraft
+
   return (
     <Card size='sm' className='border-primary/30 bg-primary/5'>
       <CardHeader>
-        <CardTitle>{t('Unlock L1 access')}</CardTitle>
+        <CardTitle>
+          {draft ? t('Confirm AI recommendation') : t('Unlock L1 with AI')}
+        </CardTitle>
         <CardDescription>
-          {t(
-            'Tell the administrator what you want to use the service for. The request is free and must contain at least 5 characters.'
-          )}
+          {draft
+            ? t(
+                'Review what the AI will send. Nothing is submitted until you explicitly confirm.'
+              )
+            : t(
+                'Continue chatting and explain your use case. When the AI has enough information, it will prepare a recommendation for your confirmation.'
+              )}
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-3'>
-        {request?.status === 'pending' ? (
-          <div className='grid gap-3'>
-            <p className='text-muted-foreground text-xs leading-5'>
-              {t(
-                'Your free unlock request is waiting for administrator review.'
-              )}
+        {request?.status === 'rejected' ? (
+          <div className='border-destructive/40 bg-destructive/5 grid gap-2 border p-3'>
+            <p className='text-sm font-medium'>
+              {t('Previous request rejected')}
             </p>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              onClick={() => void refreshStatus()}
-              disabled={requestQuery.isFetching}
-            >
-              <HugeiconsIcon
-                icon={ReloadIcon}
-                className={requestQuery.isFetching ? 'animate-spin' : undefined}
-                strokeWidth={2}
-                data-icon='inline-start'
-                aria-hidden='true'
-              />
-              {requestQuery.isFetching ? t('Refreshing...') : t('Refresh')}
-            </Button>
+            <AdministratorReply request={request} />
+            {!draft ? (
+              <p className='text-muted-foreground text-xs leading-5'>
+                {t(
+                  'Continue the conversation and address the administrator feedback before asking the AI to prepare another recommendation.'
+                )}
+              </p>
+            ) : null}
           </div>
-        ) : (
-          <>
-            <Textarea
-              id='assistant-activation-reason'
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              rows={4}
-              required
-              minLength={5}
-              maxLength={2000}
-              aria-invalid={reasonHasError}
-              aria-describedby='assistant-activation-reason-help'
-              placeholder={t(
-                'Write a short explanation of what you want to build or why you need L1 access.'
-              )}
-            />
-            <p
-              id='assistant-activation-reason-help'
-              className={
-                reasonHasError
-                  ? 'text-destructive text-xs'
-                  : 'text-muted-foreground text-xs'
-              }
-            >
-              {reasonHelpText}
-            </p>
+        ) : null}
+        {draft ? (
+          <div className='grid gap-3'>
+            <div className='border-border/70 bg-background/70 grid gap-1 border p-3'>
+              <p className='text-xs font-medium'>{t('Your statement')}</p>
+              <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
+                {draft.user_statement}
+              </p>
+            </div>
+            <div className='border-border/70 bg-background/70 grid gap-1 border p-3'>
+              <p className='text-xs font-medium'>{t('AI recommendation')}</p>
+              <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
+                {draft.recommendation}
+              </p>
+            </div>
             <Button
               type='button'
               onClick={() => void submit()}
-              disabled={loading || !reasonIsValid}
+              disabled={loading}
             >
-              {loading ? t('Submitting...') : t('Send free review request')}
+              {loading
+                ? t('Submitting...')
+                : t('Confirm and send to administrator')}
             </Button>
-          </>
-        )}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )

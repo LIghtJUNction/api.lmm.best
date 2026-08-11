@@ -126,7 +126,7 @@ export function AssistantSettingsSection(props: {
             )}
           />
 
-          <div className='grid gap-6 sm:grid-cols-2'>
+          <div className='grid gap-6'>
             <FormField
               control={form.control}
               name='AssistantModel'
@@ -142,32 +142,8 @@ export function AssistantSettingsSection(props: {
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Model ID used for assistant conversations.')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='AssistantWeeklyCreditUSD'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Weekly included credit (USD)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      max={1000}
-                      step={0.01}
-                      {...safeNumberFieldProps(field)}
-                      disabled={!enabled}
-                    />
-                  </FormControl>
-                  <FormDescription>
                     {t(
-                      'System-funded assistant credit available to each user every week before account balance is charged.'
+                      'Model ID used for assistant conversations. Token usage is charged to the enabled super administrator account.'
                     )}
                   </FormDescription>
                   <FormMessage />

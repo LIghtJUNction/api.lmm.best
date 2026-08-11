@@ -58,13 +58,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getPublicPlans } from '@/features/subscriptions/api'
 import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
-import { getTopupInfo } from '@/features/wallet/api'
 import { formatCreditBalance } from '@/features/wallet/lib/format'
 import { toIntlLocale } from '@/i18n/languages'
 import { getCurrencyDisplay } from '@/lib/currency'
 
+import { getAssistantPlanOffers } from './api'
 import {
   compareAssistantPlans,
   getAssistantTopupOffers,
@@ -106,19 +105,15 @@ function getRecommendationMessage(
   )
 }
 
-export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
+export function AssistantPlanTool(props: {
+  developerAccessGranted: boolean
+  onRequestAccess: () => void
+}) {
   const { t, i18n } = useTranslation()
   const [expectedCredit, setExpectedCredit] = useState('20')
-  const plansQuery = useQuery({
-    queryKey: ['subscription-plans'],
-    queryFn: getPublicPlans,
-    enabled: props.developerAccessGranted,
-    staleTime: 5 * 60 * 1000,
-    retry: false,
-  })
-  const topupQuery = useQuery({
-    queryKey: ['topup-info'],
-    queryFn: getTopupInfo,
+  const offersQuery = useQuery({
+    queryKey: ['assistant-plan-offers'],
+    queryFn: getAssistantPlanOffers,
     enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
@@ -130,15 +125,15 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   const comparisons = useMemo(
     () =>
       compareAssistantPlans(
-        plansQuery.data?.data ?? [],
+        offersQuery.data?.plans ?? [],
         expected,
         quotaPerUnit
       ),
-    [expected, plansQuery.data?.data, quotaPerUnit]
+    [expected, offersQuery.data?.plans, quotaPerUnit]
   )
   const offers = useMemo(
-    () => getAssistantTopupOffers(topupQuery.data?.data?.discount),
-    [topupQuery.data?.data?.discount]
+    () => getAssistantTopupOffers(offersQuery.data?.topup_discounts),
+    [offersQuery.data?.topup_discounts]
   )
 
   if (!props.developerAccessGranted) {
@@ -148,9 +143,24 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
         <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
         <AlertDescription>
           {t(
-            'Only L0 is restricted. Submit an access request and the assistant will compare current plans and discounts after approval.'
+            'L0 access is restricted. Explain your real use case to the assistant so it can prepare an L1 recommendation for administrator review.'
           )}
         </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={props.onRequestAccess}
+          >
+            {t('Unlock L1 access')}
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              data-icon='inline-end'
+              aria-hidden='true'
+            />
+          </Button>
+        </AlertAction>
       </Alert>
     )
   }
@@ -218,14 +228,14 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
       })}
     </div>
   )
-  if (plansQuery.isLoading) {
+  if (offersQuery.isLoading) {
     planContent = (
       <div className='grid gap-2' aria-label={t('Loading...')}>
         <Skeleton className='h-24 w-full' />
         <Skeleton className='h-20 w-full' />
       </div>
     )
-  } else if (plansQuery.isError) {
+  } else if (offersQuery.isError) {
     planContent = (
       <Alert variant='destructive'>
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
@@ -240,7 +250,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
             type='button'
             variant='outline'
             size='sm'
-            onClick={() => void plansQuery.refetch()}
+            onClick={() => void offersQuery.refetch()}
           >
             <HugeiconsIcon
               icon={ReloadIcon}
@@ -276,11 +286,11 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   }
 
   let topupContent: ReactNode
-  if (topupQuery.isLoading) {
+  if (offersQuery.isLoading) {
     topupContent = (
       <Skeleton className='h-14 w-full' aria-label={t('Loading...')} />
     )
-  } else if (topupQuery.isError) {
+  } else if (offersQuery.isError) {
     topupContent = (
       <Alert>
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
@@ -290,22 +300,6 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
             'Plan recommendations remain available, but discount details may be outdated.'
           )}
         </AlertDescription>
-        <AlertAction>
-          <Button
-            type='button'
-            variant='outline'
-            size='sm'
-            onClick={() => void topupQuery.refetch()}
-          >
-            <HugeiconsIcon
-              icon={ReloadIcon}
-              strokeWidth={2}
-              data-icon='inline-start'
-              aria-hidden='true'
-            />
-            {t('Retry')}
-          </Button>
-        </AlertAction>
       </Alert>
     )
   } else if (offers.length > 0) {
@@ -328,6 +322,31 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
       <p className='text-muted-foreground text-xs'>
         {t('No top-up discount is currently available.')}
       </p>
+    )
+  }
+
+  let checkoutContent: ReactNode
+  if (offersQuery.data?.checkout_available) {
+    checkoutContent = (
+      <Button variant='outline' render={<Link to='/wallet' />}>
+        {t('Review plans and exact checkout prices')}
+        <HugeiconsIcon
+          icon={ArrowRight01Icon}
+          strokeWidth={2}
+          data-icon='inline-end'
+          aria-hidden='true'
+        />
+      </Button>
+    )
+  } else {
+    checkoutContent = (
+      <Alert>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Payment unavailable')}</AlertTitle>
+        <AlertDescription>
+          {t('Payment is unavailable for this account.')}
+        </AlertDescription>
+      </Alert>
     )
   }
 
@@ -389,15 +408,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
             'Plan fit compares included credit only. Reset rules, model access, payment method, and group multipliers may change the final value; checkout remains authoritative.'
           )}
         </p>
-        <Button variant='outline' render={<Link to='/wallet' />}>
-          {t('Review plans and exact checkout prices')}
-          <HugeiconsIcon
-            icon={ArrowRight01Icon}
-            strokeWidth={2}
-            data-icon='inline-end'
-            aria-hidden='true'
-          />
-        </Button>
+        {checkoutContent}
       </CardContent>
     </Card>
   )

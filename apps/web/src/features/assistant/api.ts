@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { QuotaDataItem } from '@/features/dashboard/types'
+import type { PricingData } from '@/features/pricing/types'
+import type { PlanRecord } from '@/features/subscriptions/types'
 import { api } from '@/lib/api'
 
 type AssistantChatPayload = {
@@ -29,6 +31,7 @@ type AssistantChatPayload = {
     message?: string
   }
   message?: string
+  lmm_assistant_action?: unknown
 }
 
 export type AssistantChatMessage = {
@@ -40,20 +43,22 @@ const ASSISTANT_CONVERSATION_MAX_ITEMS = 12
 const ASSISTANT_CONVERSATION_MAX_RUNES = 12_000
 const ASSISTANT_MESSAGE_MAX_RUNES = 4_000
 
-export type AssistantCreditStatus = {
-  weekly_credit_usd: number
-  limit_quota: number
-  used_quota: number
-  remaining_quota: number
-  week_start: number
-  resets_at: number
+export type AssistantFundingStatus = {
+  mode: 'super_administrator'
 }
 
 export type AssistantStatus = {
   enabled: boolean
   model: string
-  credit: AssistantCreditStatus
+  funding: AssistantFundingStatus
   developer_access_granted: boolean
+}
+
+export type AssistantL1RecommendationAction = {
+  type: 'l1_recommendation'
+  user_statement: string
+  recommendation: string
+  confirmation_token: string
 }
 
 export type AssistantCreatedKey = {
@@ -100,6 +105,21 @@ export type AssistantIntentSummary = {
 export type AssistantReply = {
   content: string
   intent?: AssistantIntent
+  action?: AssistantL1RecommendationAction
+}
+
+export type AssistantPlanOffers = {
+  ok: boolean
+  developer_access_granted: boolean
+  read_only: boolean
+  checkout_available: boolean
+  payment_hidden: boolean
+  payment_compliance_confirmed: boolean
+  plans: PlanRecord[]
+  topup_discounts: Record<string, number>
+  message?: string
+  next_step?: string
+  error?: string
 }
 
 const ASSISTANT_INTENTS = new Set<AssistantIntent>([
@@ -146,6 +166,31 @@ export function parseAssistantIntent(
   if (typeof value !== 'string') return undefined
   const intent = value.trim().toLowerCase() as AssistantIntent
   return ASSISTANT_INTENTS.has(intent) ? intent : undefined
+}
+
+export function parseAssistantAction(
+  value: unknown
+): AssistantL1RecommendationAction | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const action = value as Record<string, unknown>
+  if (action.type !== 'l1_recommendation') return undefined
+  if (
+    typeof action.user_statement !== 'string' ||
+    typeof action.recommendation !== 'string' ||
+    typeof action.confirmation_token !== 'string'
+  ) {
+    return undefined
+  }
+  const userStatement = action.user_statement.trim()
+  const recommendation = action.recommendation.trim()
+  const confirmationToken = action.confirmation_token.trim()
+  if (!userStatement || !recommendation || !confirmationToken) return undefined
+  return {
+    type: 'l1_recommendation',
+    user_statement: userStatement,
+    recommendation,
+    confirmation_token: confirmationToken,
+  }
 }
 
 function normalizedAssistantHistoryMessage(
@@ -203,6 +248,7 @@ export async function sendAssistantMessage(
   return {
     content: parseAssistantReply(response.data),
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
+    action: parseAssistantAction(response.data.lmm_assistant_action),
   }
 }
 
@@ -227,6 +273,35 @@ export async function getAssistantAvailableModels(): Promise<string[]> {
     }
   )
   return requireAssistantData(response.data, 'Unable to load available models')
+}
+
+export async function getAssistantPricing(): Promise<PricingData> {
+  const response = await api.get<PricingData>('/api/assistant/pricing', {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  if (!response.data.success) {
+    throw new Error(response.data.message || 'Unable to load live pricing')
+  }
+  return response.data
+}
+
+export async function getAssistantPlanOffers(): Promise<AssistantPlanOffers> {
+  const response = await api.get<AssistantAPIResponse<AssistantPlanOffers>>(
+    '/api/assistant/offers',
+    {
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  const offers = requireAssistantData(
+    response.data,
+    'Unable to load live plan offers'
+  )
+  if (!offers.ok) {
+    throw new Error(offers.error || 'Unable to load live plan offers')
+  }
+  return offers
 }
 
 export async function getAssistantUsageData(

@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
@@ -25,6 +23,20 @@ const (
 )
 
 const assistantIntentHeader = "X-LMM-Assistant-Intent"
+const assistantActorUserIDKey = "assistant_actor_user_id"
+const assistantClientActionKey = "assistant_client_action"
+
+var loadAssistantBillingUser = func() (*model.User, error) {
+	var user model.User
+	err := model.DB.
+		Where("role = ? AND status = ? AND deleted_at IS NULL", common.RoleRootUser, common.UserStatusEnabled).
+		Order("id ASC").
+		First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
 
 var errAssistantConversationTooLong = errors.New("assistant conversation is too long")
 
@@ -86,6 +98,11 @@ Non-overridable safety and accuracy rules:
 - Never ask for or repeat passwords, API keys, session cookies, or other secrets.
 - Never claim that you created a key, changed an account, contacted an administrator, purchased a plan, or completed any other action unless a confirmed tool result says so.
 - Use live tools for account state, model availability, pricing, discounts, invitation rewards, usage statistics, and search results. If a tool is unavailable, say so instead of inventing a value.
+- Before estimating token cost, call get_model_pricing for the exact model and group, then pass its already-adjusted USD rates to calculate_cost with group_ratio=1.
+- L0 users can only browse public challenges and use this assistant. Do not expose payment, checkout, API-key creation, usage, or other console actions until an administrator grants L1.
+- For an L0 user asking for L1, first call get_account_access. Ask focused follow-up questions about their real use case, intended client, and what they plan to build. Do not prepare a recommendation from a greeting or a vague demand.
+- Once the L0 user has provided enough concrete information, call prepare_l1_recommendation. The user must explicitly confirm that draft in the UI before it is sent. Only an administrator can approve or reject it; never claim that the assistant granted L1.
+- When get_account_access reports a pending or reviewed L1 request, accurately relay its status and the administrator's note. A rejection is feedback for another conversation, not permission to activate the account.
 - Use the service root without /v1 for Anthropic-compatible clients such as Claude Code, and use the /v1 Base URL for OpenAI-compatible clients.
 - The official ChatGPT app does not accept a custom API Base URL or this service's API key. Recommend CC Switch or another compatible API client when the user wants to use this service.
 - Write actions require explicit confirmation in the UI. Explain the next step clearly and never hide a charge or a permission change.`
@@ -223,10 +240,16 @@ func PrepareAssistantRequest(c *gin.Context) {
 		return
 	}
 
-	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	if usingGroup == "" {
-		usingGroup = c.GetString("group")
+	actorUserID := c.GetInt("id")
+	billingUser, err := loadAssistantBillingUser()
+	if err != nil || billingUser == nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_BILLING_ACCOUNT_UNAVAILABLE", errors.New("AI assistant billing account is unavailable"))
+		return
 	}
+	c.Set(assistantActorUserIDKey, actorUserID)
+	c.Set("id", billingUser.Id)
+	billingUser.ToBaseUser().WriteContext(c)
+	usingGroup := billingUser.Group
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 	c.Next()
 }
@@ -263,11 +286,6 @@ func AssistantChat(c *gin.Context) {
 func GetAssistantStatus(c *gin.Context) {
 	settings := setting.GetAssistantSettings()
 	userID := c.GetInt("id")
-	credit, err := service.GetAssistantCreditStatus(userID, time.Now())
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	developerAccessGranted := false
 	if user, userErr := model.GetUserCache(userID); userErr == nil {
 		if access, accessErr := model.GetDeveloperAccessStateForUserBase(user); accessErr == nil {
@@ -275,9 +293,11 @@ func GetAssistantStatus(c *gin.Context) {
 		}
 	}
 	common.ApiSuccess(c, gin.H{
-		"enabled":                  settings.Enabled,
-		"model":                    settings.Model,
-		"credit":                   credit,
+		"enabled": settings.Enabled,
+		"model":   settings.Model,
+		"funding": gin.H{
+			"mode": "super_administrator",
+		},
 		"developer_access_granted": developerAccessGranted,
 		"agent": gin.H{
 			"enabled":           settings.AgentLoopEnabled,

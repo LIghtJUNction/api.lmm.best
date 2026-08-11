@@ -80,63 +80,59 @@ async function flushQueries() {
   await new Promise((resolve) => setTimeout(resolve, 20))
 }
 
-const topupFixture = {
+const assistantOffersFixture = {
   success: true,
   data: {
+    ok: true,
     developer_access_granted: true,
-    activation_required: false,
-    payment_available: true,
-    enable_online_topup: true,
-    enable_stripe_topup: false,
-    pay_methods: [{ name: 'Card', type: 'epay' }],
-    min_topup: 10,
-    stripe_min_topup: 10,
-    amount_options: [100],
-    discount: { 100: 0.8 },
+    read_only: false,
+    checkout_available: true,
+    payment_hidden: false,
+    payment_compliance_confirmed: true,
+    topup_discounts: { 100: 0.8 },
+    plans: [
+      {
+        plan: {
+          id: 1,
+          title: 'Starter',
+          price_amount: 8,
+          currency: 'USD',
+          duration_unit: 'month',
+          duration_value: 1,
+          quota_reset_period: 'monthly',
+          enabled: true,
+          sort_order: 1,
+          allow_balance_pay: true,
+          allow_wallet_overflow: true,
+          max_purchase_per_user: 0,
+          total_amount: 5_000_000,
+        },
+      },
+      {
+        plan: {
+          id: 2,
+          title: 'Pro',
+          price_amount: 15,
+          currency: 'USD',
+          duration_unit: 'month',
+          duration_value: 1,
+          quota_reset_period: 'monthly',
+          enabled: true,
+          sort_order: 2,
+          allow_balance_pay: true,
+          allow_wallet_overflow: true,
+          max_purchase_per_user: 0,
+          total_amount: 15_000_000,
+        },
+      },
+    ],
   },
 }
 
-const plansFixture = {
-  success: true,
-  data: [
-    {
-      plan: {
-        id: 1,
-        title: 'Starter',
-        price_amount: 8,
-        currency: 'USD',
-        duration_unit: 'month',
-        duration_value: 1,
-        quota_reset_period: 'monthly',
-        enabled: true,
-        sort_order: 1,
-        allow_balance_pay: true,
-        allow_wallet_overflow: true,
-        max_purchase_per_user: 0,
-        total_amount: 5_000_000,
-      },
-    },
-    {
-      plan: {
-        id: 2,
-        title: 'Pro',
-        price_amount: 15,
-        currency: 'USD',
-        duration_unit: 'month',
-        duration_value: 1,
-        quota_reset_period: 'monthly',
-        enabled: true,
-        sort_order: 2,
-        allow_balance_pay: true,
-        allow_wallet_overflow: true,
-        max_purchase_per_user: 0,
-        total_amount: 15_000_000,
-      },
-    },
-  ],
-}
-
-async function renderTool(developerAccessGranted: boolean) {
+async function renderTool(
+  developerAccessGranted: boolean,
+  onRequestAccess = () => {}
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -144,7 +140,10 @@ async function renderTool(developerAccessGranted: boolean) {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantPlanTool developerAccessGranted={developerAccessGranted} />
+          <AssistantPlanTool
+            developerAccessGranted={developerAccessGranted}
+            onRequestAccess={onRequestAccess}
+          />
         </I18nextProvider>
       </QueryClientProvider>
     ),
@@ -197,9 +196,8 @@ after(() => domWindow.close())
 describe('AssistantPlanTool', () => {
   test('formats plan prices and discounts with internal Chinese locale codes', async () => {
     api.get = (async (url: string) => {
-      if (url === '/api/subscription/plans') return { data: plansFixture }
-      if (url === '/api/user/topup/info') return { data: topupFixture }
-      throw new Error(`Unexpected GET ${url}`)
+      assert.equal(url, '/api/assistant/offers')
+      return { data: assistantOffersFixture }
     }) as typeof api.get
 
     await i18n.changeLanguage('zhTW')
@@ -213,43 +211,49 @@ describe('AssistantPlanTool', () => {
     }
   })
 
-  test('keeps plans and top-up discounts unavailable to L0', async () => {
-    let topupCalls = 0
-    let planCalls = 0
+  test('keeps L0 plan and discount data hidden and requests access', async () => {
+    let calls = 0
+    let accessRequests = 0
     api.get = (async (url: string) => {
-      if (url === '/api/user/topup/info') topupCalls += 1
-      if (url === '/api/subscription/plans') planCalls += 1
+      calls += 1
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
-    const rendered = await renderTool(false)
+    const rendered = await renderTool(false, () => {
+      accessRequests += 1
+    })
 
-    assert.equal(topupCalls, 0)
-    assert.equal(planCalls, 0)
-    assert.match(rendered.container.textContent ?? '', /Ask for L1 access/)
-    assert.doesNotMatch(
+    assert.equal(calls, 0)
+    assert.match(
       rendered.container.textContent ?? '',
-      /Best current top-up discounts/
+      /prepare an L1 recommendation for administrator review/
     )
+    assert.doesNotMatch(rendered.container.textContent ?? '', /Pro/)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /save 20%/)
     assert.equal(
       rendered.container.querySelector('#assistant-expected-credit'),
       null
     )
     assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
+    await act(async () => {
+      const button = [...rendered.container.querySelectorAll('button')].find(
+        (candidate) => candidate.textContent?.includes('Unlock L1 access')
+      )
+      assert.ok(button)
+      button.click()
+    })
+    assert.equal(accessRequests, 1)
 
     await unmount(rendered)
   })
 
-  test('keeps discounts visible while plan loading fails and explains the recovered recommendation', async () => {
-    let planCalls = 0
+  test('recovers live offers and explains the updated recommendation', async () => {
+    let calls = 0
     api.get = (async (url: string) => {
-      if (url === '/api/user/topup/info') return { data: topupFixture }
-      if (url === '/api/subscription/plans') {
-        planCalls += 1
-        if (planCalls === 1) throw new Error('plans offline')
-        return { data: plansFixture }
-      }
-      throw new Error(`Unexpected GET ${url}`)
+      assert.equal(url, '/api/assistant/offers')
+      calls += 1
+      if (calls === 1) throw new Error('offers offline')
+      return { data: assistantOffersFixture }
     }) as typeof api.get
 
     const rendered = await renderTool(true)
@@ -257,7 +261,6 @@ describe('AssistantPlanTool', () => {
       rendered.container.textContent ?? '',
       /Unable to load live subscription plans/
     )
-    assert.match(rendered.container.textContent ?? '', /save 20%/)
 
     await act(async () => {
       findRetryButton('Unable to load live subscription plans').click()
@@ -271,7 +274,8 @@ describe('AssistantPlanTool', () => {
       rendered.container.textContent ?? '',
       /smallest available capacity that covers your \$20 USD monthly estimate/
     )
-    assert.equal(planCalls, 2)
+    assert.match(rendered.container.textContent ?? '', /save 20%/)
+    assert.equal(calls, 2)
 
     const expectedInput = rendered.container.querySelector<HTMLInputElement>(
       '#assistant-expected-credit'
@@ -295,33 +299,27 @@ describe('AssistantPlanTool', () => {
     await unmount(rendered)
   })
 
-  test('keeps plan advice visible and recovers top-up discounts independently', async () => {
-    let topupCalls = 0
+  test('does not expose checkout when payment is hidden for an L1 account', async () => {
     api.get = (async (url: string) => {
-      if (url === '/api/subscription/plans') return { data: plansFixture }
-      if (url === '/api/user/topup/info') {
-        topupCalls += 1
-        if (topupCalls === 1) throw new Error('discounts offline')
-        return { data: topupFixture }
+      assert.equal(url, '/api/assistant/offers')
+      return {
+        data: {
+          ...assistantOffersFixture,
+          data: {
+            ...assistantOffersFixture.data,
+            checkout_available: false,
+            payment_hidden: true,
+            topup_discounts: {},
+          },
+        },
       }
-      throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
     const rendered = await renderTool(true)
     assert.match(rendered.container.textContent ?? '', /Closest fit/)
-    assert.match(
-      rendered.container.textContent ?? '',
-      /Unable to load current top-up discounts/
-    )
-
-    await act(async () => {
-      findRetryButton('Unable to load current top-up discounts').click()
-      await flushQueries()
-    })
-    await act(flushQueries)
-
-    assert.match(rendered.container.textContent ?? '', /save 20%/)
-    assert.equal(topupCalls, 2)
+    assert.match(rendered.container.textContent ?? '', /Payment unavailable/)
+    assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /save 20%/)
 
     await unmount(rendered)
   })
