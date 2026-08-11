@@ -297,3 +297,77 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, response.Code)
 	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_REQUIRED")
 }
+
+func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
+	definitions := assistantToolDefinitions()
+	require.Len(t, definitions, 6)
+	names := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		names[definition.Function.Name] = true
+	}
+	assert.True(t, names["get_service_facts"])
+	assert.True(t, names["calculate_cost"])
+	assert.True(t, names["get_account_access"])
+	assert.True(t, names["get_setup_guide"])
+	assert.True(t, names["request_create_key"])
+	assert.True(t, names["request_human_support"])
+
+	createKey := executeAssistantTool(nil, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "request_create_key",
+			Arguments: `{"name":"from assistant"}`,
+		},
+	})
+	assert.Equal(t, "confirmation_required", createKey["status"])
+	assert.Equal(t, "create_key", createKey["action"])
+
+	handoff := executeAssistantTool(nil, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "request_human_support",
+			Arguments: `{"message":"Please help me configure CC Switch."}`,
+		},
+	})
+	assert.Equal(t, "confirmation_required", handoff["status"])
+	assert.Equal(t, "human_support", handoff["action"])
+}
+
+func TestAssistantCostToolAndResponseContent(t *testing.T) {
+	result := executeAssistantTool(nil, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name: "calculate_cost",
+			Arguments: `{
+				"input_tokens":1000,
+				"output_tokens":500,
+				"input_usd_per_million":1,
+				"output_usd_per_million":2,
+				"group_ratio":1.5
+			}`,
+		},
+	})
+	assert.True(t, result["ok"].(bool))
+	assert.InDelta(t, 0.003, result["total_cost_usd"], 0.0000001)
+
+	content, err := json.Marshal([]map[string]string{{"type": "output_text", "text": "hello"}})
+	require.NoError(t, err)
+	assert.Equal(t, "hello", assistantResponseContent(content))
+}
+
+func TestAssistantCacheStoresOnlySuccessfulSingleTurnResponses(t *testing.T) {
+	settings := setting.GetAssistantSettings()
+	settings.CacheEnabled = true
+	settings.CacheTTLMinutes = 10
+	conversation := []assistantOpenAIMessage{{Role: "user", Content: "cache-key-test"}}
+	key := assistantCacheKey(settings, conversation)
+	require.NotEmpty(t, key)
+	storeAssistantCachedResponse(settings, key, http.StatusOK, []byte(`{"choices":[]}`))
+	cached, found := getAssistantCachedResponse(key)
+	require.True(t, found)
+	assert.Equal(t, http.StatusOK, cached.Status)
+	assert.JSONEq(t, `{"choices":[]}`, string(cached.Body))
+
+	assert.Empty(t, assistantCacheKey(settings, []assistantOpenAIMessage{
+		{Role: "user", Content: "first"},
+		{Role: "assistant", Content: "answer"},
+		{Role: "user", Content: "cache-key-test"},
+	}))
+}

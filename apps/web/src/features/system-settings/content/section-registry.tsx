@@ -103,6 +103,11 @@ const CONTENT_SECTIONS = [
           AssistantEnabled: settings.AssistantEnabled,
           AssistantModel: settings.AssistantModel,
           AssistantWeeklyCreditUSD: settings.AssistantWeeklyCreditUSD,
+          AssistantAgentLoopEnabled: settings.AssistantAgentLoopEnabled,
+          AssistantMaxSteps: settings.AssistantMaxSteps,
+          AssistantTimeoutSeconds: settings.AssistantTimeoutSeconds,
+          AssistantCacheEnabled: settings.AssistantCacheEnabled,
+          AssistantCacheTTLMinutes: settings.AssistantCacheTTLMinutes,
         }}
       />
     ),

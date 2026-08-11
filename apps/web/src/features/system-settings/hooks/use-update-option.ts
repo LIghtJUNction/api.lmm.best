@@ -40,6 +40,11 @@ const STATUS_RELATED_KEYS = new Set([
   'AssistantEnabled',
   'AssistantModel',
   'AssistantWeeklyCreditUSD',
+  'AssistantAgentLoopEnabled',
+  'AssistantMaxSteps',
+  'AssistantTimeoutSeconds',
+  'AssistantCacheEnabled',
+  'AssistantCacheTTLMinutes',
 ])
 
 export function useUpdateOption() {
