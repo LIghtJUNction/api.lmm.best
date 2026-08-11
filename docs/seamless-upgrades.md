@@ -1,8 +1,22 @@
 # Frontend and backend upgrades
 
-The installed package exposes one public operator CLI: `/usr/bin/lmm-api`.
-Serving and deployment are subcommands of that CLI; source-tree deployment
-helpers and a second public deploy command are not supported.
+The installed package exposes one public operator CLI. On the current
+production host (ArchDmit) its exact path is `/usr/bin/lmm-api-go`.
+Serving, health checks, HTTP requests, and deployment are subcommands of that
+CLI; source-tree deployment helpers and a second public deploy command are not
+supported.
+
+Use the native CLI for application-level server control:
+
+```bash
+ssh ArchDmit /usr/bin/lmm-api-go status
+ssh ArchDmit /usr/bin/lmm-api-go doctor
+ssh ArchDmit /usr/bin/lmm-api-go request --show-status /api/status
+```
+
+SSH is only the transport here. Host-level inspection (systemd, filesystem,
+memory, and journal reads) remains separate and read-only unless a guarded
+deployment transaction has been explicitly authorized.
 
 ## Current production boundary
 
@@ -25,7 +39,7 @@ required by the CLI; a frontend publication does not restart the backend
 service or nginx.
 
 ```bash
-sudo /usr/bin/lmm-api deploy production \
+sudo /usr/bin/lmm-api-go deploy production \
   --frontend-only \
   --host ArchDmit \
   --deployment-id <deployment-id> \
@@ -78,11 +92,12 @@ remain exact aliases to the legal HTML files.
 Systemd runs the installed launcher directly:
 
 ```ini
-ExecStart=/usr/bin/lmm-api serve
+ExecStart=/usr/bin/lmm-api-go serve
 ```
 
-Backend selection and status remain launcher subcommands (`lmm-api select` and
-`lmm-api status`); deployment phases are invoked as `lmm-api deploy ...`.
+Backend selection and status remain launcher subcommands (`lmm-api-go select`
+and `lmm-api-go status`); deployment phases are invoked as
+`lmm-api-go deploy ...`.
 Production backend changes are autonomous, locked transactions with offline
 backup verification, health validation, persistent audit output, a ten-minute
 rollback watchdog, and explicit confirmation before the transaction is
@@ -92,7 +107,7 @@ interruption. It is not a zero-downtime or blue/green deployment.
 
 Before invoking a subcommand on an existing target, verify that the installed
 core package actually provides this launcher protocol and that systemd uses
-`ExecStart=/usr/bin/lmm-api serve`. Legacy provider binaries may start the
+`ExecStart=/usr/bin/lmm-api-go serve`. Legacy provider binaries may start the
 backend when given an unknown command, so `status`, `deploy`, and `--help` are
 not safe inspection commands until the protocol is proven. Use systemd/package
 metadata, the running PID, sanitized process-environment scheme checks, and
