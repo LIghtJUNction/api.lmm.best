@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { AiChat02Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,7 @@ import { useStatus } from '@/hooks/use-status'
 
 import {
   consumeQueuedAssistantPreset,
+  consumeQueuedAssistantMessage,
   subscribeToAssistantOpen,
   type AssistantPresetId,
 } from './assistant-events'
@@ -43,18 +44,31 @@ export function AssistantLauncher() {
   const [open, setOpen] = useState(false)
   const [hasOpened, setHasOpened] = useState(false)
   const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
+  const [initialMessage, setInitialMessage] = useState<string>()
+  const [initialMessageRevision, setInitialMessageRevision] = useState(0)
 
-  const showAssistant = (preset?: AssistantPresetId) => {
-    setInitialPreset(preset)
-    setHasOpened(true)
-    setOpen(true)
-  }
+  const showAssistant = useCallback(
+    (preset?: AssistantPresetId, message?: string) => {
+      const nextMessage = message ?? consumeQueuedAssistantMessage()
+      setInitialPreset(preset)
+      setInitialMessage(nextMessage)
+      if (nextMessage?.trim()) {
+        setInitialMessageRevision((revision) => revision + 1)
+      }
+      setHasOpened(true)
+      setOpen(true)
+    },
+    []
+  )
 
   useEffect(() => {
     const queuedPreset = consumeQueuedAssistantPreset()
-    if (queuedPreset) showAssistant(queuedPreset)
+    const queuedMessage = consumeQueuedAssistantMessage()
+    if (queuedPreset || queuedMessage) {
+      showAssistant(queuedPreset, queuedMessage)
+    }
     return subscribeToAssistantOpen(showAssistant)
-  }, [])
+  }, [showAssistant])
 
   const preload = () => {
     void loadAssistantPanel()
@@ -84,6 +98,8 @@ export function AssistantLauncher() {
           <AssistantPanel
             open={open}
             initialPreset={initialPreset}
+            initialMessage={initialMessage}
+            initialMessageRevision={initialMessageRevision}
             onOpenChange={setOpen}
           />
         </Suspense>

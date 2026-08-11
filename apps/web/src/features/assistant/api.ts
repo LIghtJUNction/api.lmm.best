@@ -85,6 +85,9 @@ export type AssistantIntent =
   | 'client_setup'
   | 'cost'
   | 'bounty'
+  | 'usage'
+  | 'models'
+  | 'invitation'
   | 'human_support'
   | 'other'
 
@@ -105,6 +108,9 @@ const ASSISTANT_INTENTS = new Set<AssistantIntent>([
   'client_setup',
   'cost',
   'bounty',
+  'usage',
+  'models',
+  'invitation',
   'human_support',
   'other',
 ])
@@ -211,12 +217,24 @@ export async function getAssistantStatus(): Promise<AssistantStatus> {
   return requireAssistantData(response.data, 'Unable to load assistant status')
 }
 
+export async function getAssistantAvailableModels(): Promise<string[]> {
+  const response = await api.get<AssistantAPIResponse<string[]>>(
+    '/api/user/models',
+    {
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Unable to load available models')
+}
+
 export async function createAssistantDefaultKey(
-  name: string
+  name: string,
+  group: string
 ): Promise<AssistantCreatedKey> {
   const response = await api.post<AssistantAPIResponse<AssistantCreatedKey>>(
     '/api/assistant/tools/create-key',
-    { confirmed: true, name },
+    { confirmed: true, name, group },
     { skipBusinessError: true, skipErrorHandler: true }
   )
   return requireAssistantData(response.data, 'Unable to create API key')

@@ -23,12 +23,17 @@ export type AssistantPresetId =
   | 'client-setup'
   | 'bounty'
   | 'cost'
+  | 'usage'
+  | 'models'
+  | 'invitation'
   | 'human'
 
 const ASSISTANT_OPEN_EVENT = 'lmm:assistant:open'
 const ASSISTANT_QUEUE_KEY = 'lmm_assistant_queued_preset'
+const ASSISTANT_MESSAGE_QUEUE_KEY = 'lmm_assistant_queued_message'
 
 let memoryQueue: AssistantPresetId | null = null
+let memoryMessage: string | null = null
 
 function isAssistantPresetId(value: string): value is AssistantPresetId {
   return [
@@ -38,18 +43,30 @@ function isAssistantPresetId(value: string): value is AssistantPresetId {
     'client-setup',
     'bounty',
     'cost',
+    'usage',
+    'models',
+    'invitation',
     'human',
   ].includes(value)
 }
 
-export function requestAssistantOpen(preset?: AssistantPresetId): void {
+export function requestAssistantOpen(
+  preset?: AssistantPresetId,
+  message?: string
+): void {
   memoryQueue = preset ?? null
+  memoryMessage = message?.trim() || null
 
   if (typeof window === 'undefined') return
 
   try {
     if (preset) window.sessionStorage.setItem(ASSISTANT_QUEUE_KEY, preset)
     else window.sessionStorage.removeItem(ASSISTANT_QUEUE_KEY)
+    if (memoryMessage) {
+      window.sessionStorage.setItem(ASSISTANT_MESSAGE_QUEUE_KEY, memoryMessage)
+    } else {
+      window.sessionStorage.removeItem(ASSISTANT_MESSAGE_QUEUE_KEY)
+    }
   } catch {
     // The in-memory queue still covers restricted storage environments.
   }
@@ -76,6 +93,21 @@ export function consumeQueuedAssistantPreset(): AssistantPresetId | undefined {
   }
 
   return preset
+}
+
+export function consumeQueuedAssistantMessage(): string | undefined {
+  const message = memoryMessage ?? undefined
+  memoryMessage = null
+
+  if (typeof window === 'undefined') return message
+
+  try {
+    const stored = window.sessionStorage.getItem(ASSISTANT_MESSAGE_QUEUE_KEY)
+    window.sessionStorage.removeItem(ASSISTANT_MESSAGE_QUEUE_KEY)
+    return stored?.trim() || message
+  } catch {
+    return message
+  }
 }
 
 export function subscribeToAssistantOpen(

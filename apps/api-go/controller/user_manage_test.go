@@ -103,6 +103,40 @@ func TestManageUserTrustLevelRejectsAdministratorsAndPeerTargets(t *testing.T) {
 	assert.Contains(t, peerRecorder.Body.String(), `"success":false`)
 }
 
+func TestManageUserResetOnboardingToL0(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	now := time.Now().Unix()
+	user := model.User{
+		Username: "managed-reset-user", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", ConsoleActivatedAt: now - 3600,
+		AuthVersion: 4,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserSession{
+		SID: "managed-reset-session", UserID: user.Id, Version: 4, UserAuthVersion: 4,
+		Status: model.UserSessionStatusActive, RefreshHash: "reset-refresh-hash", LoginMethod: "password",
+		LastActiveAt: now, ExpiresAt: now + 3600,
+	}).Error)
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"reset_onboarding"}`, user.Id))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.Id).Error)
+	assert.EqualValues(t, 0, updated.ConsoleActivatedAt)
+	require.NotNil(t, updated.TrustLevelOverride)
+	assert.Equal(t, 0, *updated.TrustLevelOverride)
+	assert.EqualValues(t, 5, updated.AuthVersion)
+	access, err := model.GetDeveloperAccessStateForUser(&updated)
+	require.NoError(t, err)
+	assert.False(t, access.Granted)
+
+	var session model.UserSession
+	require.NoError(t, db.First(&session, "sid = ?", "managed-reset-session").Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+}
+
 func TestManageUserDisableAdvancesAuthVersionOnceAndRevokesSession(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	now := time.Now().Unix()

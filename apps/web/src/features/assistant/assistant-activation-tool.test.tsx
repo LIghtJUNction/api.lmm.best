@@ -30,7 +30,6 @@ for (const key of [
   'location',
   'HTMLElement',
   'HTMLButtonElement',
-  'HTMLInputElement',
   'SVGElement',
   'Node',
   'Element',
@@ -66,9 +65,9 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
-const { AssistantKeyTool } = await import('./assistant-key-tool')
+const { AssistantActivationTool } = await import('./assistant-activation-tool')
 
-const originalPost = api.post
+const originalGet = api.get
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -80,20 +79,26 @@ await i18n.use(initReactI18next).init({
   resources: { en: { translation: {} } },
 })
 
-type RenderedTool = {
-  container: HTMLDivElement
-  queryClient: InstanceType<typeof QueryClient>
-  root: ReturnType<typeof createRoot>
+const pendingRequest = {
+  id: 9,
+  status: 'pending' as const,
+  reason: 'Need access for a test integration.',
+  admin_note: '',
+  created_at: 1_786_400_000,
+  reviewed_at: 0,
+}
+const approvedRequest = {
+  ...pendingRequest,
+  status: 'approved' as const,
+  admin_note: 'Approved for testing.',
+  reviewed_at: 1_786_500_000,
 }
 
 async function flushEffects() {
-  await new Promise((resolve) => setTimeout(resolve, 20))
+  await new Promise((resolve) => setTimeout(resolve, 25))
 }
 
-async function renderTool(
-  developerAccessGranted: boolean,
-  onContinueSetup = () => {}
-): Promise<RenderedTool> {
+async function renderTool(onContinueSetup: () => void) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -101,12 +106,7 @@ async function renderTool(
     component: () => (
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantKeyTool
-            baseUrl='https://api.example.test/v1'
-            defaultModel='deepseek-v4-flash'
-            developerAccessGranted={developerAccessGranted}
-            onContinueSetup={onContinueSetup}
-          />
+          <AssistantActivationTool onContinueSetup={onContinueSetup} />
         </I18nextProvider>
       </QueryClientProvider>
     ),
@@ -116,8 +116,13 @@ async function renderTool(
     path: '/',
     component: () => null,
   })
+  const walletRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/wallet',
+    component: () => null,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, walletRoute]),
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   const container = document.createElement('div')
@@ -128,6 +133,7 @@ async function renderTool(
     root.render(<RouterProvider router={router} />)
     await flushEffects()
   })
+  await act(flushEffects)
   return { container, queryClient, root }
 }
 
@@ -139,98 +145,76 @@ function findButton(text: string): HTMLButtonElement {
   return button
 }
 
-async function unmount(rendered: RenderedTool) {
+async function waitForCondition(
+  condition: () => boolean,
+  failureMessage: string
+) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (condition()) return
+    await flushEffects()
+  }
+  throw new Error(`${failureMessage}: ${document.body.textContent}`)
+}
+
+async function unmount(rendered: Awaited<ReturnType<typeof renderTool>>) {
   await act(async () => rendered.root.unmount())
   rendered.queryClient.clear()
   rendered.container.remove()
 }
 
 afterEach(() => {
-  api.post = originalPost
+  api.get = originalGet
   document.body.replaceChildren()
 })
 
 after(() => domWindow.close())
 
-describe('AssistantKeyTool', () => {
-  test('explains and exposes connection values to L0 without a creation action', async () => {
-    const rendered = await renderTool(false)
-
-    assert.match(rendered.container.textContent ?? '', /Connection details/)
-    assert.match(
-      rendered.container.textContent ?? '',
-      /Base URL tells your client where to connect/
-    )
-    assert.match(
-      rendered.container.textContent ?? '',
-      /https:\/\/api\.example\.test\/v1/
-    )
-    assert.match(rendered.container.textContent ?? '', /deepseek-v4-flash/)
-    assert.match(
-      rendered.container.textContent ?? '',
-      /API key creation requires L1/
-    )
-    assert.equal(rendered.container.querySelector('#assistant-key-name'), null)
-    assert.equal(
-      [...rendered.container.querySelectorAll('button')].some((button) =>
-        button.textContent?.includes('Review key creation')
-      ),
-      false
-    )
-
-    await unmount(rendered)
-  })
-
-  test('keeps L1 key creation confirmation-gated and shows the new secret', async () => {
-    let posted: { url: string; data: unknown; config: unknown } | undefined
-    let continued = 0
-    api.post = (async (url: string, data: unknown, config: unknown) => {
-      posted = { url, data, config }
+describe('AssistantActivationTool', () => {
+  test('refreshes a pending request and opens setup after approval', async () => {
+    let getCalls = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      getCalls += 1
       return {
         data: {
           success: true,
-          data: {
-            id: 9,
-            name: 'AI assistant key',
-            key: 'sk-created-by-test',
-            group: 'auto',
-            expired_time: -1,
-          },
+          data: getCalls === 1 ? pendingRequest : approvedRequest,
         },
       }
-    }) as typeof api.post
-    const rendered = await renderTool(true, () => {
-      continued += 1
-    })
+    }) as typeof api.get
 
-    await act(async () => {
-      findButton('Review key creation').click()
-      await flushEffects()
+    let continueCalls = 0
+    const rendered = await renderTool(() => {
+      continueCalls += 1
     })
-    assert.match(document.body.textContent ?? '', /Create this API key\?/)
+    try {
+      await waitForCondition(
+        () =>
+          document.body.textContent?.includes('waiting for administrator') ===
+          true,
+        'Pending approval state did not render'
+      )
+      assert.equal(getCalls, 1)
+      assert.ok(findButton('Refresh'))
 
-    await act(async () => {
-      findButton('Confirm and create').click()
-      await flushEffects()
-    })
+      await act(async () => {
+        findButton('Refresh').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () =>
+          document.body.textContent?.includes('L1 access approved') === true,
+        'Approved state did not render after refresh'
+      )
+      assert.equal(getCalls, 2)
 
-    assert.deepEqual(posted?.url, '/api/assistant/tools/create-key')
-    assert.deepEqual(posted?.data, {
-      confirmed: true,
-      name: 'AI assistant key',
-      group: 'auto',
-    })
-    assert.match(rendered.container.textContent ?? '', /API key created/)
-    assert.match(rendered.container.textContent ?? '', /sk-created-by-test/)
-    assert.match(rendered.container.textContent ?? '', /deepseek-v4-flash/)
-    assert.equal(continued, 0)
-
-    await act(async () => {
-      findButton('I copied it — continue setup').click()
-      await flushEffects()
-    })
-    assert.equal(continued, 1)
-
-    await unmount(rendered)
+      await act(async () => {
+        findButton('Continue setup').click()
+        await flushEffects()
+      })
+      assert.equal(continueCalls, 1)
+    } finally {
+      await unmount(rendered)
+    }
   })
 })

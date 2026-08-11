@@ -99,6 +99,8 @@ export interface UserProfile {
  */
 export type NotifyType = 'email' | 'webhook' | 'bark' | 'gotify'
 
+export type UsageLeaderboardVisibility = 'public' | 'anonymous' | 'hidden'
+
 /**
  * Parsed user settings
  */
@@ -129,6 +131,8 @@ export interface UserSettings {
   upstream_model_update_notify_enabled?: boolean
   /** Preferred interface/API response language */
   language?: string
+  /** How this user's usage appears on the public leaderboard */
+  usage_leaderboard_visibility?: UsageLeaderboardVisibility
 }
 
 /**
@@ -156,6 +160,7 @@ export interface UpdateUserSettingsRequest {
   accept_unset_model_ratio_model?: boolean
   record_ip_log?: boolean
   upstream_model_update_notify_enabled?: boolean
+  usage_leaderboard_visibility?: UsageLeaderboardVisibility
 }
 
 /**
