@@ -15,40 +15,74 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
-export type SecurityMetricUnit = 'count' | 'percent'
-
-export type SecurityRiskMetric = {
-  key: string
-  label?: string
-  value: number
-  unit: SecurityMetricUnit
-}
-
-export type SecurityChargeAction = 'block' | 'review' | 'deduct' | 'suspend'
-
-export type SecurityChargeRule = {
+export type SecurityRiskCategory = {
   id: string
-  rule: string
-  action: SecurityChargeAction | string
-  amount?: number | null
-  currency?: string | null
-  scope?: string | null
+  name: string
+  layer: string
+  severity: string
+  description: string
+  source: string
 }
 
-/**
- * Public security data is deliberately optional. The initial frontend can
- * render the policy summary without inventing statistics or charge amounts;
- * the backend can fill these fields when the public overview endpoint exists.
- */
-export type SecurityOverview = {
-  generated_at?: string | number | null
-  period_label?: string | null
-  metrics?: SecurityRiskMetric[] | null
-  violation_charges?: SecurityChargeRule[] | null
+export type SecurityRuleSummary = {
+  id: string
+  name: string
+  category: string
+  layer: string
+  severity: string
+  source: string
+  version: string
+  description: string
 }
 
-export type SecurityOverviewResponse = {
+export type SecurityViolationFeeRule = {
+  code: string
+  provider: string
+  trigger: string
+  enabled: boolean
+  amount_usd: number
+  charge_unit: string
+  retryable: boolean
+  description: string
+  charging_notes: string
+  local_guardrail_fee: boolean
+}
+
+export type SecurityPolicy = {
+  policy_version: string
+  reference_effective_date: string
+  reference_url: string
+  alignment: string
+  risk_categories: SecurityRiskCategory[]
+  rules: SecurityRuleSummary[]
+  violation_fees: SecurityViolationFeeRule[]
+}
+
+export type SecurityStatsBucket = {
+  key: string
+  count: number
+}
+
+export type SecurityStats = {
+  start_timestamp: number
+  end_timestamp: number
+  total_matches: number
+  blocked_matches: number
+  audited_matches: number
+  affected_requests: number
+  affected_users: number
+  by_category: SecurityStatsBucket[]
+  by_rule?: SecurityStatsBucket[]
+}
+
+export type SecurityPolicyResponse = {
   success: boolean
   message?: string
-  data?: SecurityOverview
+  data?: SecurityPolicy
+}
+
+export type SecurityStatsResponse = {
+  success: boolean
+  message?: string
+  data?: SecurityStats
 }
