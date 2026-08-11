@@ -577,6 +577,7 @@ export function AssistantPanel(props: {
   return (
     <Sheet open={props.open} onOpenChange={handleOpenChange}>
       <SheetContent
+        id='ai-assistant-panel'
         className={sideDrawerContentClassName('max-w-none sm:!max-w-[480px]')}
       >
         <SheetHeader className={sideDrawerHeaderClassName('pr-12')}>

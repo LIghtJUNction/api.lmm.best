@@ -241,6 +241,9 @@ describe('AssistantPanel', () => {
         'button[aria-label="Open AI assistant"]'
       )
       assert.ok(launcherButton)
+      assert.equal(launcherButton.getAttribute('aria-haspopup'), 'dialog')
+      assert.equal(launcherButton.getAttribute('aria-expanded'), 'false')
+      assert.equal(launcherButton.hasAttribute('aria-controls'), false)
       await act(async () => {
         launcherButton.click()
         await flushEffects()
@@ -251,6 +254,12 @@ describe('AssistantPanel', () => {
           'Assistant panel did not open'
         )
       )
+      assert.equal(launcherButton.getAttribute('aria-expanded'), 'true')
+      assert.equal(
+        launcherButton.getAttribute('aria-controls'),
+        'ai-assistant-panel'
+      )
+      assert.ok(document.querySelector('#ai-assistant-panel'))
 
       await act(async () => {
         findButton('Which option is the best value?').click()
@@ -275,6 +284,7 @@ describe('AssistantPanel', () => {
           'Assistant panel did not close'
         )
       )
+      assert.equal(launcherButton.getAttribute('aria-expanded'), 'false')
 
       await act(async () => {
         launcherButton.click()
