@@ -105,10 +105,24 @@ describe('AssistantSetupTool', () => {
       await flushEffects()
     })
 
+    const platformButtons = ['Windows', 'macOS', 'Linux'].map(findButton)
+    assert.equal(
+      platformButtons.filter(
+        (button) => button.getAttribute('aria-pressed') === 'true'
+      ).length,
+      1
+    )
+
+    await act(async () => {
+      findButton('Windows').click()
+      await flushEffects()
+    })
     assert.match(
       container.textContent ?? '',
       /winget install Anthropic\.ClaudeCode/
     )
+    assert.equal(findButton('Windows').getAttribute('aria-pressed'), 'true')
+    assert.equal(findButton('Linux').getAttribute('aria-pressed'), 'false')
     const createKeyButton = findButton('Create API key')
     assert.equal(createKeyButton.disabled, true)
 
@@ -133,6 +147,8 @@ describe('AssistantSetupTool', () => {
       findButton('Linux').click()
       await flushEffects()
     })
+    assert.equal(findButton('Windows').getAttribute('aria-pressed'), 'false')
+    assert.equal(findButton('Linux').getAttribute('aria-pressed'), 'true')
     assert.match(
       container.textContent ?? '',
       /CC Switch Desktop provider setup is not available on Linux/

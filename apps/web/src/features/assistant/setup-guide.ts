@@ -23,6 +23,23 @@ export type CCSwitchInstallGuide = {
   command: string | null
 }
 
+export function detectAssistantSetupPlatform(
+  platformHint?: string,
+  userAgent?: string
+): AssistantSetupPlatform {
+  const platform = platformHint?.trim().toLowerCase() ?? ''
+  if (platform.includes('win')) return 'windows'
+  if (platform.includes('mac')) return 'macos'
+  if (platform.includes('linux')) return 'linux'
+
+  const agent = userAgent?.toLowerCase() ?? ''
+  if (/android|iphone|ipad|ipod/.test(agent)) return 'windows'
+  if (/windows|win32|win64/.test(agent)) return 'windows'
+  if (/macintosh|mac os x/.test(agent)) return 'macos'
+  if (/linux|x11/.test(agent)) return 'linux'
+  return 'windows'
+}
+
 function quotePOSIX(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`
 }
