@@ -179,6 +179,23 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantPanel', () => {
+  test('formats weekly credit with internal Chinese locale codes', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    await i18n.changeLanguage('zhCN')
+    const rendered = await renderPanel()
+    try {
+      assert.match(document.body.textContent ?? '', /月/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+      await i18n.changeLanguage('en')
+    }
+  })
+
   test('retries the exact failed conversation without duplicating the user message', async () => {
     const posted: unknown[] = []
     api.get = (async (url: string) => {
@@ -204,6 +221,11 @@ describe('AssistantPanel', () => {
       'textarea[placeholder="Ask about plans, setup, keys, or costs..."]'
     )
     assert.ok(textarea)
+    assert.match(document.body.textContent ?? '', /Resets /)
+    assert.match(
+      document.body.textContent ?? '',
+      /Weekly system credit is used first\. Your wallet is charged only after it runs out\./
+    )
     await setTextareaValue(textarea, 'How do I configure Claude Code?')
     const submit = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Submit"]'
