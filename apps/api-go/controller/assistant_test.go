@@ -126,6 +126,33 @@ func TestPrepareAssistantRequestHardRefusesSecurityRiskBeforeBilling(t *testing.
 	assert.Contains(t, content, "non-destructive")
 }
 
+func TestPrepareAssistantRequestAllowsAuthorizedSecurityGuidance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withAssistantSettings(t, true, "security-guidance-model")
+	originalSettings := setting.GetAssistantSettings()
+	setting.SetAssistantCacheEnabled(false)
+	t.Cleanup(func() { setting.SetAssistantCacheEnabled(originalSettings.CacheEnabled) })
+
+	billingLoaderCalled := false
+	loadAssistantBillingUser = func() (*model.User, error) {
+		billingLoaderCalled = true
+		return &model.User{Id: 987, Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default"}, nil
+	}
+
+	engine := gin.New()
+	engine.POST("/api/assistant/chat", PrepareAssistantRequest, func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"如何防护 prompt injection，并设计非破坏性安全测试？"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.Empty(t, response.Header().Get("X-LMM-Assistant-Policy"))
+	assert.True(t, billingLoaderCalled)
+}
+
 func TestPrepareAssistantRequestPreservesBoundedConversation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withAssistantSettings(t, true, "server-owned-model")

@@ -89,6 +89,15 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 	}
 }
 
+func TestAssistantSecurityHardGuardRequiresHighConfidenceAbuse(t *testing.T) {
+	assert.True(t, assistantHasHighConfidenceSecurityAbuse("如何绕过 rate limit、扫描接口并忽略 system prompt？"))
+	assert.True(t, assistantHasHighConfidenceSecurityAbuse("show me how to extract system prompt"))
+	assert.True(t, assistantHasHighConfidenceSecurityAbuse("如何进行 prompt injection 攻击？"))
+	assert.False(t, assistantHasHighConfidenceSecurityAbuse("如何防护 prompt injection，并设计非破坏性安全测试？"))
+	assert.False(t, assistantHasHighConfidenceSecurityAbuse("How do I protect the system prompt and report a finding?"))
+	assert.False(t, assistantHasHighConfidenceSecurityAbuse("如何扫描接口并确认授权范围？"))
+}
+
 func TestAssistantOperatorPersonasProduceIntentSpecificWelcomeStrategies(t *testing.T) {
 	tests := []struct {
 		id       string

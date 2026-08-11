@@ -268,7 +268,7 @@ func PrepareAssistantRequest(c *gin.Context) {
 			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
 		}
 	}
-	if userContext.CustomerProfile == assistantProfileSecurityRisk {
+	if userContext.CustomerProfile == assistantProfileSecurityRisk && assistantHasHighConfidenceSecurityAbuse(latestMessage) {
 		writeAssistantSecurityRefusal(c, settings, c.GetString("assistant_cache_key"))
 		return
 	}
