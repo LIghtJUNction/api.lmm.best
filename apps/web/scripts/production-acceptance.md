@@ -79,3 +79,27 @@ Run the offline contract tests with:
 ```sh
 node apps/web/scripts/production-acceptance.test.mjs
 ```
+
+## Local operator persona suite
+
+`operator-persona-suite.mjs` is a shell-only, read-mostly regression suite for
+the A–F user profiles used during iteration. It is intentionally local-only:
+the runner rejects every non-loopback URL, requires a marker-owned deployment
+workspace, bounds requests and response bodies, and writes a `0600` report
+without response text, cookies, tokens, balances, or API keys.
+
+Run it against a local preview or isolated deployment workspace, never against
+production:
+
+```sh
+PERSONA_REVIEW_URL=http://127.0.0.1:4174 \
+PERSONA_DEPLOY_WORKSPACE=/absolute/path/to/marker-owned-workspace \
+PERSONA_OUTPUT_DIR=/absolute/path/to/marker-owned-workspace/artifacts/personas \
+node apps/web/scripts/operator-persona-suite.mjs
+```
+
+For an authenticated L0/L1 check, provide a separate `0600` JSON credential
+file through `PERSONA_CREDENTIAL_FILE`. To exercise the deterministic
+assistant-cache and intent checks, additionally set `PERSONA_RUN_ASSISTANT=1`.
+The suite does not create keys, make payments, publish bounties, or call a
+provider; L0 key creation is tested only as a required authorization denial.
