@@ -56,11 +56,14 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { toast } = await import('sonner')
 const { api } = await import('@/lib/api')
 const { UserTrustLevelCell } = await import('./user-trust-level-cell')
-const { UsersProvider } = await import('./users-provider')
+const { UsersProvider, useUsers } = await import('./users-provider')
 
 const originalPost = api.post
+const originalToastSuccess = toast.success
+const originalToastError = toast.error
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -94,6 +97,11 @@ function createUser(level: number, role = 1): User {
   }
 }
 
+function RefreshCount() {
+  const { refreshTrigger } = useUsers()
+  return <output data-testid='refresh-count'>{refreshTrigger}</output>
+}
+
 async function renderCell(user: User) {
   const container = document.createElement('div')
   document.body.append(container)
@@ -103,11 +111,16 @@ async function renderCell(user: User) {
       <I18nextProvider i18n={i18n}>
         <UsersProvider>
           <UserTrustLevelCell user={user} />
+          <RefreshCount />
         </UsersProvider>
       </I18nextProvider>
     )
   })
   return { container, root }
+}
+
+async function flush() {
+  await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 function levelButton(container: HTMLElement, label: string) {
@@ -120,6 +133,8 @@ function levelButton(container: HTMLElement, label: string) {
 
 afterEach(() => {
   api.post = originalPost
+  toast.success = originalToastSuccess
+  toast.error = originalToastError
   document.body.replaceChildren()
 })
 
@@ -134,17 +149,29 @@ describe('UserTrustLevelCell', () => {
     await act(async () => root.unmount())
   })
 
-  test('updates an ordinary user by exactly one level', async () => {
+  test('updates by one level, blocks duplicate requests, and refreshes', async () => {
     const requests: unknown[] = []
+    const successMessages: string[] = []
+    let resolveRequest: ((value: unknown) => void) | undefined
+    const request = new Promise((resolve) => {
+      resolveRequest = resolve
+    })
     api.post = (async (url: string, payload: unknown) => {
       requests.push({ url, payload })
-      return { data: { success: true } }
+      return request
     }) as typeof api.post
+    toast.success = ((message: unknown) => {
+      successMessages.push(String(message))
+      return 1
+    }) as typeof toast.success
 
     const { container, root } = await renderCell(createUser(2))
+    const decrease = levelButton(container, 'Decrease trust level')
+    const increase = levelButton(container, 'Increase trust level')
     await act(async () => {
-      levelButton(container, 'Increase trust level').click()
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      increase.click()
+      increase.click()
+      await flush()
     })
 
     assert.deepEqual(requests, [
@@ -153,30 +180,68 @@ describe('UserTrustLevelCell', () => {
         payload: { id: 7, action: 'set_trust_level', value: 3 },
       },
     ])
+    assert.equal(decrease.disabled, true)
+    assert.equal(increase.disabled, true)
+
+    await act(async () => {
+      resolveRequest?.({ data: { success: true } })
+      await flush()
+    })
+
+    assert.deepEqual(successMessages, ['Trust level updated successfully'])
+    assert.equal(
+      container.querySelector('[data-testid="refresh-count"]')?.textContent,
+      '1'
+    )
+    await act(async () => root.unmount())
+  })
+
+  test('shows a failed request and re-enables both controls', async () => {
+    const errorMessages: string[] = []
+    api.post = (async () => ({
+      data: { success: false, message: 'backend refused' },
+    })) as typeof api.post
+    toast.error = ((message: unknown) => {
+      errorMessages.push(String(message))
+      return 1
+    }) as typeof toast.error
+
+    const { container, root } = await renderCell(createUser(2))
+    const decrease = levelButton(container, 'Decrease trust level')
+    const increase = levelButton(container, 'Increase trust level')
+    await act(async () => {
+      decrease.click()
+      await flush()
+    })
+
+    assert.deepEqual(errorMessages, ['backend refused'])
+    assert.equal(decrease.disabled, false)
+    assert.equal(increase.disabled, false)
+    assert.equal(
+      container.querySelector('[data-testid="refresh-count"]')?.textContent,
+      '0'
+    )
     await act(async () => root.unmount())
   })
 
   test('disables unavailable boundaries and administrator controls', async () => {
-    const l0 = await renderCell(createUser(0))
-    assert.equal(
-      levelButton(l0.container, 'Decrease trust level').disabled,
-      true
-    )
-    assert.equal(
-      levelButton(l0.container, 'Increase trust level').disabled,
-      false
-    )
-    await act(async () => l0.root.unmount())
-
-    const administrator = await renderCell(createUser(5, 10))
-    assert.equal(
-      levelButton(administrator.container, 'Decrease trust level').disabled,
-      true
-    )
-    assert.equal(
-      levelButton(administrator.container, 'Increase trust level').disabled,
-      true
-    )
-    await act(async () => administrator.root.unmount())
+    for (const fixture of [
+      { user: createUser(0), decrease: true, increase: false },
+      { user: createUser(4), decrease: false, increase: true },
+      { user: createUser(5, 10), decrease: true, increase: true },
+      { user: createUser(6, 100), decrease: true, increase: true },
+    ]) {
+      const rendered = await renderCell(fixture.user)
+      assert.equal(
+        levelButton(rendered.container, 'Decrease trust level').disabled,
+        fixture.decrease
+      )
+      assert.equal(
+        levelButton(rendered.container, 'Increase trust level').disabled,
+        fixture.increase
+      )
+      await act(async () => rendered.root.unmount())
+      rendered.container.remove()
+    }
   })
 })
