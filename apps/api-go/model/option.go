@@ -125,7 +125,7 @@ func InitOptionMap() {
 	assistantSettings := setting.GetAssistantSettings()
 	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
 	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
-	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = strconv.FormatFloat(assistantSettings.WeeklyCreditUSD, 'f', -1, 64)
+	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = "0"
 	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
 	common.OptionMap[setting.AssistantMaxStepsOptionKey] = strconv.Itoa(assistantSettings.MaxSteps)
 	common.OptionMap[setting.AssistantTimeoutSecondsOptionKey] = strconv.Itoa(assistantSettings.TimeoutSeconds)
@@ -313,6 +313,15 @@ func updateOptionMap(key string, value string) (err error) {
 		common.OptionMapRWMutex.Unlock()
 		return nil
 	}
+	if key == setting.AssistantWeeklyCreditUSDOptionKey {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if common.OptionMap == nil {
+			common.OptionMap = make(map[string]string)
+		}
+		common.OptionMap[key] = "0"
+		return nil
+	}
 	common.OptionMapRWMutex.Lock()
 	defer common.OptionMapRWMutex.Unlock()
 	common.OptionMap[key] = value
@@ -461,8 +470,6 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateChatsByJsonString(value)
 	case setting.AssistantModelOptionKey:
 		err = setting.UpdateAssistantModel(value)
-	case setting.AssistantWeeklyCreditUSDOptionKey:
-		err = setting.UpdateAssistantWeeklyCreditUSD(value)
 	case setting.AssistantMaxStepsOptionKey:
 		err = setting.UpdateAssistantMaxSteps(value)
 	case setting.AssistantTimeoutSecondsOptionKey:

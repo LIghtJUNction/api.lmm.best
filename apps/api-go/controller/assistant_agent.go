@@ -819,36 +819,28 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
-	if !access.Granted {
-		return map[string]any{
-			"ok":                           false,
-			"developer_access_granted":     false,
-			"read_only":                    false,
-			"checkout_available":           false,
-			"payment_hidden":               true,
-			"plans":                        []SubscriptionPlanDTO{},
-			"topup_discounts":              map[int]float64{},
-			"payment_compliance_confirmed": false,
-			"error":                        "L1 access is required to view plans and top-up discounts",
-			"next_step":                    "Ask the user to submit an administrator L1 access request from the onboarding assistant.",
-		}
-	}
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
 	paymentRestricted := model.IsPaymentRestricted(user)
 	result := map[string]any{
 		"ok":                           true,
-		"developer_access_granted":     true,
-		"read_only":                    false,
-		"checkout_available":           complianceConfirmed && !paymentRestricted,
-		"payment_hidden":               paymentRestricted,
+		"developer_access_granted":     access.Granted,
+		"read_only":                    !access.Granted,
+		"checkout_available":           access.Granted && complianceConfirmed && !paymentRestricted,
+		"payment_hidden":               !access.Granted || paymentRestricted,
 		"plans":                        []SubscriptionPlanDTO{},
 		"topup_discounts":              map[int]float64{},
 		"payment_compliance_confirmed": complianceConfirmed,
 	}
-	if paymentRestricted {
-		result["message"] = "Payment options are hidden for this account; do not direct the user to checkout."
+	if !access.Granted {
+		result["message"] = "Live plans and discounts are available for read-only AI recommendations. Checkout remains unavailable until an administrator grants L1; do not direct the user to payment."
+		result["next_step"] = "Recommend a suitable plan if asked, then help the user submit an administrator L1 access request."
 	}
-	if !complianceConfirmed {
+	if paymentRestricted {
+		if access.Granted {
+			result["message"] = "Payment options are hidden for this account; do not direct the user to checkout."
+		}
+	}
+	if access.Granted && !complianceConfirmed {
 		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."
 		return result
 	}
@@ -865,7 +857,7 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 		planValues = append(planValues, SubscriptionPlanDTO{Plan: plan})
 	}
 	discountValues := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
-	if !paymentRestricted {
+	if !access.Granted || !paymentRestricted {
 		for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
 			discountValues[amount] = multiplier
 		}

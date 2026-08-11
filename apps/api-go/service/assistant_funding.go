@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"gorm.io/gorm"
 )
 
 var ErrAssistantBalanceInsufficient = errors.New("super administrator balance is insufficient for AI assistant service")
+var ErrAssistantBillingAccountUnavailable = errors.New("enabled super administrator billing account is unavailable")
 
 // AssistantFunding charges every customer-service model call to the enabled
 // super administrator selected by the controller.
@@ -34,17 +37,34 @@ func (a *AssistantFunding) reserve(amount int, enforceWalletBalance bool) error 
 	if amount <= 0 {
 		return nil
 	}
+	if model.DB == nil || a.userId <= 0 {
+		return ErrAssistantBillingAccountUnavailable
+	}
+
+	query := model.DB.Model(&model.User{}).
+		Where("id = ? AND role = ? AND status = ? AND deleted_at IS NULL", a.userId, common.RoleRootUser, common.UserStatusEnabled)
 	if enforceWalletBalance {
-		quota, err := model.GetUserQuota(a.userId, true)
+		query = query.Where("quota >= ?", amount)
+	}
+	result := query.UpdateColumn("quota", gorm.Expr("quota - ?", amount))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		var billingUser model.User
+		err := model.DB.Select("id", "quota").
+			Where("id = ? AND role = ? AND status = ? AND deleted_at IS NULL", a.userId, common.RoleRootUser, common.UserStatusEnabled).
+			First(&billingUser).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrAssistantBillingAccountUnavailable
+		}
 		if err != nil {
 			return err
 		}
-		if quota < amount {
-			return fmt.Errorf("%w: remaining=%d required=%d", ErrAssistantBalanceInsufficient, quota, amount)
-		}
+		return fmt.Errorf("%w: remaining=%d required=%d", ErrAssistantBalanceInsufficient, billingUser.Quota, amount)
 	}
-	if err := model.DecreaseUserQuota(a.userId, amount, true); err != nil {
-		return err
+	if err := model.InvalidateUserCache(a.userId); err != nil {
+		common.SysLog("failed to invalidate assistant billing account cache: " + err.Error())
 	}
 	a.consumed += amount
 	return nil
@@ -79,8 +99,20 @@ func (a *AssistantFunding) release(amount int) error {
 	if amount > a.consumed {
 		return fmt.Errorf("assistant funding refund exceeds consumption: refund=%d consumed=%d", amount, a.consumed)
 	}
-	if err := model.IncreaseUserQuota(a.userId, amount, true); err != nil {
-		return err
+	if model.DB == nil || a.userId <= 0 {
+		return ErrAssistantBillingAccountUnavailable
+	}
+	result := model.DB.Unscoped().Model(&model.User{}).
+		Where("id = ?", a.userId).
+		UpdateColumn("quota", gorm.Expr("quota + ?", amount))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrAssistantBillingAccountUnavailable
+	}
+	if err := model.InvalidateUserCache(a.userId); err != nil {
+		common.SysLog("failed to invalidate assistant billing account cache after refund: " + err.Error())
 	}
 	a.consumed -= amount
 	return nil

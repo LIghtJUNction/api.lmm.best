@@ -2,7 +2,6 @@ package setting
 
 import (
 	"errors"
-	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,8 +9,10 @@ import (
 )
 
 const (
-	AssistantEnabledOptionKey          = "AssistantEnabled"
-	AssistantModelOptionKey            = "AssistantModel"
+	AssistantEnabledOptionKey = "AssistantEnabled"
+	AssistantModelOptionKey   = "AssistantModel"
+	// AssistantWeeklyCreditUSDOptionKey is retained only so older consoles can
+	// read and submit their retired field without affecting runtime funding.
 	AssistantWeeklyCreditUSDOptionKey  = "AssistantWeeklyCreditUSD"
 	AssistantAgentLoopEnabledOptionKey = "AssistantAgentLoopEnabled"
 	AssistantMaxStepsOptionKey         = "AssistantMaxSteps"
@@ -29,7 +30,6 @@ const (
 type AssistantSettings struct {
 	Enabled          bool
 	Model            string
-	WeeklyCreditUSD  float64
 	AgentLoopEnabled bool
 	MaxSteps         int
 	TimeoutSeconds   int
@@ -47,7 +47,6 @@ var (
 	assistantSettings      = AssistantSettings{
 		Enabled:          true,
 		Model:            DefaultAssistantModel,
-		WeeklyCreditUSD:  1,
 		AgentLoopEnabled: true,
 		MaxSteps:         6,
 		TimeoutSeconds:   45,
@@ -85,18 +84,6 @@ func UpdateAssistantModel(value string) error {
 	assistantSettingsMutex.Lock()
 	defer assistantSettingsMutex.Unlock()
 	assistantSettings.Model = model
-	return nil
-}
-
-func UpdateAssistantWeeklyCreditUSD(value string) error {
-	credit, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil || math.IsNaN(credit) || math.IsInf(credit, 0) || credit < 0 || credit > 1000 {
-		return errors.New("assistant weekly credit must be between 0 and 1000 USD")
-	}
-
-	assistantSettingsMutex.Lock()
-	defer assistantSettingsMutex.Unlock()
-	assistantSettings.WeeklyCreditUSD = credit
 	return nil
 }
 
@@ -195,11 +182,6 @@ func ValidateAssistantOption(key string, value string) error {
 		}
 		if len(model) > 128 {
 			return errors.New("assistant model must be at most 128 characters")
-		}
-	case AssistantWeeklyCreditUSDOptionKey:
-		credit, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		if err != nil || math.IsNaN(credit) || math.IsInf(credit, 0) || credit < 0 || credit > 1000 {
-			return errors.New("assistant weekly credit must be between 0 and 1000 USD")
 		}
 	case AssistantMaxStepsOptionKey:
 		steps, err := strconv.Atoi(strings.TrimSpace(value))
