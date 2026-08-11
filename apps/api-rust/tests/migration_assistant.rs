@@ -11,7 +11,9 @@ use lmm_api_rs::{
         DashboardSessionContext, DashboardUser, LoginOutcome, LoginRequest, LogoutRequest,
         LogoutResult, RequestMetadata, TwoFactorLoginRequest,
     },
-    migration_routes::assistant::{AssistantReadState, assistant_read_router},
+    migration_routes::assistant::{
+        AssistantRateLimitConfig, AssistantReadState, assistant_read_router,
+    },
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -115,7 +117,18 @@ fn smoke_router() -> axum::Router {
     let pg = PgPoolOptions::new()
         .connect_lazy("postgres://postgres@127.0.0.1:1/assistant")
         .expect("valid lazy PostgreSQL URL");
-    assistant_read_router(AssistantReadState::new(pg, Arc::new(PersonalTokenAuth)))
+    let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid Valkey URL");
+    assistant_read_router(AssistantReadState::new(
+        pg,
+        valkey,
+        Arc::new(PersonalTokenAuth),
+        AssistantRateLimitConfig {
+            enabled: false,
+            max_requests: 1,
+            window: std::time::Duration::from_secs(1),
+            dependency_timeout: std::time::Duration::from_secs(1),
+        },
+    ))
 }
 
 #[tokio::test]

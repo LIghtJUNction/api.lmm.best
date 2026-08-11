@@ -15,7 +15,7 @@ use lmm_api_rs::{
             router as admin_catalog_router,
         },
         api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
-        assistant::{AssistantReadState, assistant_read_router},
+        assistant::{AssistantRateLimitConfig, AssistantReadState, assistant_read_router},
         billing_subscriptions::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
             spawn_maintenance as spawn_subscription_maintenance,
@@ -449,8 +449,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let _subscription_maintenance =
             spawn_subscription_maintenance(pg.clone(), Some(valkey.clone()));
-        let assistant_reads =
-            assistant_read_router(AssistantReadState::new(pg.clone(), Arc::clone(&auth)));
+        let assistant_reads = assistant_read_router(AssistantReadState::new(
+            pg.clone(),
+            valkey.clone(),
+            Arc::clone(&auth),
+            AssistantRateLimitConfig {
+                enabled: config.auth_critical_rate_limit_enabled,
+                max_requests: config.auth_critical_rate_limit,
+                window: config.auth_critical_rate_limit_window,
+                dependency_timeout: config.dependency_timeout,
+            },
+        ));
         let billing_dashboard = billing_dashboard_router(BillingDashboardState::new(
             Arc::new(PgBillingDashboardStore::new(pg.clone())),
             Arc::new(PgBillingDashboardAuthorizer::new(pg.clone())),

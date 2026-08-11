@@ -2,6 +2,7 @@
 GET	/api/assistant/admin/handoffs	lmm_api_rs::migration_routes::assistant::assistant_read_router
 POST	/api/assistant/admin/handoffs/:id/resolve	lmm_api_rs::migration_routes::assistant::assistant_read_router
 GET	/api/assistant/admin/intents	lmm_api_rs::migration_routes::assistant::assistant_read_router
+POST	/api/assistant/handoffs	lmm_api_rs::migration_routes::assistant::assistant_read_router
 GET	/api/assistant/handoffs/self	lmm_api_rs::migration_routes::assistant::assistant_read_router
 GET	/api/assistant/offers	lmm_api_rs::migration_routes::assistant::assistant_read_router
 GET	/api/assistant/pricing	lmm_api_rs::migration_routes::missing_control_public::missing_control_public_router

@@ -95,11 +95,7 @@ pub struct AssistantRateLimitConfig {
 
 #[async_trait]
 trait AssistantUserRateLimiter: Send + Sync {
-    async fn check(
-        &self,
-        scope: &str,
-        user_id: i64,
-    ) -> Result<CriticalRateLimitOutcome, ()>;
+    async fn check(&self, scope: &str, user_id: i64) -> Result<CriticalRateLimitOutcome, ()>;
 }
 
 #[derive(Clone)]
@@ -110,11 +106,7 @@ struct ValkeyAssistantUserRateLimiter {
 
 #[async_trait]
 impl AssistantUserRateLimiter for ValkeyAssistantUserRateLimiter {
-    async fn check(
-        &self,
-        scope: &str,
-        user_id: i64,
-    ) -> Result<CriticalRateLimitOutcome, ()> {
+    async fn check(&self, scope: &str, user_id: i64) -> Result<CriticalRateLimitOutcome, ()> {
         if !self.config.enabled {
             return Ok(CriticalRateLimitOutcome::Allowed);
         }
@@ -125,7 +117,7 @@ impl AssistantUserRateLimiter for ValkeyAssistantUserRateLimiter {
         .await
         .map_err(|_| ())?
         .map_err(|_| ())?;
-        let key = format!("rateLimit:v2:user:UC:{scope}:{user_id}");
+        let key = assistant_user_rate_limit_key(scope, user_id);
         let script = redis::Script::new(
             r#"
 local count = redis.call('INCR', KEYS[1])
@@ -162,6 +154,10 @@ return {1, count, ttl}
             })
         }
     }
+}
+
+fn assistant_user_rate_limit_key(scope: &str, user_id: i64) -> String {
+    format!("rateLimit:v2:user:UC:{scope}:{user_id}")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -391,7 +387,7 @@ impl AssistantReadStore for PgAssistantReadStore {
         message: &str,
     ) -> Result<AssistantLead, String> {
         let mut transaction = self.pg.begin().await.map_err(|error| error.to_string())?;
-        sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        sqlx::query("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
             .bind(user_id)
             .fetch_one(&mut *transaction)
             .await
@@ -585,18 +581,39 @@ pub struct AssistantReadState {
     pg: PgPool,
     auth: Arc<dyn DashboardAuth>,
     store: Arc<dyn AssistantReadStore>,
+    user_rate_limiter: Arc<dyn AssistantUserRateLimiter>,
 }
 
 impl AssistantReadState {
     #[must_use]
-    pub fn new(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Self {
+    pub fn new(
+        pg: PgPool,
+        valkey: redis::Client,
+        auth: Arc<dyn DashboardAuth>,
+        rate_limit_config: AssistantRateLimitConfig,
+    ) -> Self {
         let store = Arc::new(PgAssistantReadStore { pg: pg.clone() });
-        Self { pg, auth, store }
+        let user_rate_limiter = Arc::new(ValkeyAssistantUserRateLimiter {
+            valkey,
+            config: rate_limit_config,
+        });
+        Self {
+            pg,
+            auth,
+            store,
+            user_rate_limiter,
+        }
     }
 
     #[cfg(test)]
     fn with_store(mut self, store: Arc<dyn AssistantReadStore>) -> Self {
         self.store = store;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_user_rate_limiter(mut self, limiter: Arc<dyn AssistantUserRateLimiter>) -> Self {
+        self.user_rate_limiter = limiter;
         self
     }
 }
@@ -612,6 +629,7 @@ pub fn assistant_read_router(state: AssistantReadState) -> Router {
     Router::new()
         .route("/api/assistant/status", get(assistant_status))
         .route("/api/assistant/offers", get(offers))
+        .route("/api/assistant/handoffs", post(submit_handoff))
         .route("/api/assistant/handoffs/self", get(self_handoff))
         .route("/api/assistant/admin/handoffs", get(admin_handoffs))
         .route(
@@ -662,6 +680,285 @@ async fn self_handoff(State(state): State<AssistantReadState>, headers: HeaderMa
         Ok(lead) => success(json!(lead)),
         Err(error) => api_error(error),
     })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AssistantHandoffInput {
+    #[serde(default, deserialize_with = "deserialize_nullable_bool")]
+    confirmed: bool,
+    #[serde(default, deserialize_with = "deserialize_nullable_string")]
+    message: String,
+}
+
+async fn submit_handoff(
+    State(state): State<AssistantReadState>,
+    request: axum::extract::Request,
+) -> Response {
+    let principal = match authenticated_user(&state, request.headers()).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    match state
+        .user_rate_limiter
+        .check("assistant-handoff", principal.user.id)
+        .await
+    {
+        Ok(CriticalRateLimitOutcome::Allowed) => {}
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => {
+            return with_auth_version(legacy_empty_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some(retry_after_seconds),
+            ));
+        }
+        Err(()) => {
+            return with_auth_version(legacy_empty_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
+    }
+    if state
+        .auth
+        .current_session(SecretString::from(principal.credential))
+        .await
+        .is_err()
+    {
+        return with_no_store(assistant_session_required());
+    }
+    let input = match assistant_handoff_input(request).await {
+        Ok(input) => input,
+        Err(response) => return with_no_store(response),
+    };
+    if !input.confirmed {
+        return with_no_store(assistant_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ASSISTANT_CONFIRMATION_REQUIRED",
+            "explicit confirmation is required",
+        ));
+    }
+    let message = input.message.trim();
+    if message.is_empty() {
+        return with_no_store(assistant_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ASSISTANT_HANDOFF_INVALID_MESSAGE",
+            "support message is required",
+        ));
+    }
+    if message.chars().count() > ASSISTANT_HANDOFF_MESSAGE_MAX_CHARS {
+        return with_no_store(assistant_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "ASSISTANT_HANDOFF_INVALID_MESSAGE",
+            "support message must be at most 2000 characters",
+        ));
+    }
+    let message = redact_assistant_handoff_message(message);
+    with_no_store(
+        match state
+            .store
+            .submit_handoff(principal.user.id, &principal.user.username, &message)
+            .await
+        {
+            Ok(lead) => success(json!(lead)),
+            Err(error) => api_error(error),
+        },
+    )
+}
+
+async fn assistant_handoff_input(
+    request: axum::extract::Request,
+) -> Result<AssistantHandoffInput, Response> {
+    let body = to_bytes(request.into_body(), ASSISTANT_BODY_LIMIT_BYTES)
+        .await
+        .map_err(|_| invalid_assistant_handoff_request())?;
+    if body.is_empty() {
+        return Err(invalid_assistant_handoff_request());
+    }
+    let value: Value =
+        serde_json::from_slice(&body).map_err(|_| invalid_assistant_handoff_request())?;
+    if value.is_null() {
+        return Ok(AssistantHandoffInput::default());
+    }
+    serde_json::from_value(value).map_err(|_| invalid_assistant_handoff_request())
+}
+
+fn invalid_assistant_handoff_request() -> Response {
+    assistant_error(
+        StatusCode::BAD_REQUEST,
+        "ASSISTANT_INVALID_REQUEST",
+        "invalid support request",
+    )
+}
+
+fn deserialize_nullable_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<bool>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
+fn redact_assistant_handoff_message(message: &str) -> String {
+    let message = redact_api_keys(message);
+    let message = redact_bearer_tokens(&message);
+    redact_named_secrets(&message)
+}
+
+fn redact_api_keys(message: &str) -> String {
+    let characters = message.chars().collect::<Vec<_>>();
+    let mut redacted = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < characters.len() {
+        let starts_key = starts_ascii_case_insensitive(&characters, index, "sk-")
+            && (index == 0 || !is_ascii_word(characters[index - 1]));
+        if starts_key {
+            let token_start = index + 3;
+            let mut token_end = token_start;
+            while token_end < characters.len() && is_api_key_character(characters[token_end]) {
+                token_end += 1;
+            }
+            let boundary_end = (token_start..token_end)
+                .rev()
+                .find(|candidate| is_ascii_word(characters[*candidate]));
+            if let Some(boundary_end) = boundary_end
+                && boundary_end + 1 - token_start >= 6
+            {
+                redacted.push_str("[REDACTED_API_KEY]");
+                index = boundary_end + 1;
+                continue;
+            }
+        }
+        redacted.push(characters[index]);
+        index += 1;
+    }
+    redacted
+}
+
+fn redact_bearer_tokens(message: &str) -> String {
+    let characters = message.chars().collect::<Vec<_>>();
+    let mut redacted = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < characters.len() {
+        let starts_bearer = starts_ascii_case_insensitive(&characters, index, "bearer")
+            && (index == 0 || !is_ascii_word(characters[index - 1]));
+        if starts_bearer {
+            let mut token_start = index + "bearer".len();
+            let whitespace_start = token_start;
+            while token_start < characters.len() && is_go_regexp_space(characters[token_start]) {
+                token_start += 1;
+            }
+            if token_start > whitespace_start {
+                let mut token_end = token_start;
+                while token_end < characters.len()
+                    && is_bearer_token_character(characters[token_end])
+                {
+                    token_end += 1;
+                }
+                if token_end - token_start >= 6 {
+                    while token_end < characters.len() && characters[token_end] == '=' {
+                        token_end += 1;
+                    }
+                    redacted.push_str("Bearer [REDACTED_TOKEN]");
+                    index = token_end;
+                    continue;
+                }
+            }
+        }
+        redacted.push(characters[index]);
+        index += 1;
+    }
+    redacted
+}
+
+fn redact_named_secrets(message: &str) -> String {
+    let characters = message.chars().collect::<Vec<_>>();
+    let mut redacted = String::with_capacity(message.len());
+    let mut index = 0;
+    while index < characters.len() {
+        if let Some(keyword_end) = secret_keyword_end(&characters, index) {
+            let mut separator = keyword_end;
+            while separator < characters.len() && is_go_regexp_space(characters[separator]) {
+                separator += 1;
+            }
+            if separator < characters.len() && matches!(characters[separator], ':' | '=' | '：') {
+                let mut value_start = separator + 1;
+                while value_start < characters.len() && is_go_regexp_space(characters[value_start])
+                {
+                    value_start += 1;
+                }
+                let mut value_end = value_start;
+                while value_end < characters.len() && !is_go_regexp_space(characters[value_end]) {
+                    value_end += 1;
+                }
+                if value_end > value_start {
+                    redacted.extend(&characters[index..keyword_end]);
+                    redacted.push_str(": [REDACTED]");
+                    index = value_end;
+                    continue;
+                }
+            }
+        }
+        redacted.push(characters[index]);
+        index += 1;
+    }
+    redacted
+}
+
+fn secret_keyword_end(characters: &[char], index: usize) -> Option<usize> {
+    for keyword in ["password", "passwd"] {
+        if starts_ascii_case_insensitive(characters, index, keyword) {
+            return Some(index + keyword.len());
+        }
+    }
+    if starts_ascii_case_insensitive(characters, index, "api") {
+        let mut suffix = index + "api".len();
+        if suffix < characters.len() && matches!(characters[suffix], ' ' | '_' | '-') {
+            suffix += 1;
+        }
+        if starts_ascii_case_insensitive(characters, suffix, "key") {
+            return Some(suffix + "key".len());
+        }
+    }
+    if starts_ascii_case_insensitive(characters, index, "access") {
+        let mut suffix = index + "access".len();
+        if suffix < characters.len() && matches!(characters[suffix], ' ' | '_' | '-') {
+            suffix += 1;
+        }
+        if starts_ascii_case_insensitive(characters, suffix, "token") {
+            return Some(suffix + "token".len());
+        }
+    }
+    for keyword in ["密码", "密钥", "令牌"] {
+        let keyword = keyword.chars().collect::<Vec<_>>();
+        if characters.get(index..index + keyword.len()) == Some(keyword.as_slice()) {
+            return Some(index + keyword.len());
+        }
+    }
+    None
+}
+
+fn starts_ascii_case_insensitive(characters: &[char], index: usize, expected: &str) -> bool {
+    expected.chars().enumerate().all(|(offset, expected)| {
+        characters
+            .get(index + offset)
+            .is_some_and(|actual| actual.is_ascii() && actual.eq_ignore_ascii_case(&expected))
+    })
+}
+
+fn is_ascii_word(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
+}
+
+fn is_api_key_character(character: char) -> bool {
+    is_ascii_word(character) || matches!(character, '.' | '-')
+}
+
+fn is_bearer_token_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '~' | '+' | '/' | '-')
+}
+
+fn is_go_regexp_space(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000c}')
 }
 
 async fn admin_handoffs(
@@ -878,7 +1175,7 @@ async fn admin_resolve_handoff(
 async fn assistant_resolve_input(
     request: axum::extract::Request,
 ) -> Result<AssistantResolveHandoffInput, Response> {
-    let body = to_bytes(request.into_body(), ASSISTANT_RESOLVE_BODY_LIMIT_BYTES)
+    let body = to_bytes(request.into_body(), ASSISTANT_BODY_LIMIT_BYTES)
         .await
         .map_err(|_| invalid_assistant_resolve_request())?;
     if body.is_empty() {
@@ -1317,10 +1614,9 @@ fn with_no_store(mut response: Response) -> Response {
         header::PRAGMA,
         axum::http::HeaderValue::from_static("no-cache"),
     );
-    response.headers_mut().insert(
-        header::EXPIRES,
-        axum::http::HeaderValue::from_static("0"),
-    );
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, axum::http::HeaderValue::from_static("0"));
     response
 }
 
@@ -1356,6 +1652,13 @@ mod tests {
         note: String,
     }
 
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct FixtureSubmitCall {
+        user_id: i64,
+        username: String,
+        message: String,
+    }
+
     #[derive(Clone)]
     struct FixtureStore {
         settings: AssistantSettingsView,
@@ -1363,6 +1666,8 @@ mod tests {
         handoffs: Vec<AssistantLeadView>,
         expected_handoff_status: &'static str,
         summary: Vec<AssistantIntentSummary>,
+        submit_result: Option<Result<AssistantLead, String>>,
+        submit_calls: Arc<Mutex<Vec<FixtureSubmitCall>>>,
         resolve_result: Option<Result<AssistantLead, ResolveHandoffError>>,
         resolve_calls: Arc<Mutex<Vec<FixtureResolveCall>>>,
         audits: Arc<Mutex<Vec<AssistantAdminAudit>>>,
@@ -1376,6 +1681,8 @@ mod tests {
                 handoffs: Vec::new(),
                 expected_handoff_status: ASSISTANT_HANDOFF_PENDING,
                 summary: Vec::new(),
+                submit_result: None,
+                submit_calls: Arc::new(Mutex::new(Vec::new())),
                 resolve_result: None,
                 resolve_calls: Arc::new(Mutex::new(Vec::new())),
                 audits: Arc::new(Mutex::new(Vec::new())),
@@ -1409,6 +1716,25 @@ mod tests {
                 return Err("invalid intent cutoff".to_owned());
             }
             Ok(self.summary.clone())
+        }
+
+        async fn submit_handoff(
+            &self,
+            user_id: i64,
+            username: &str,
+            message: &str,
+        ) -> Result<AssistantLead, String> {
+            self.submit_calls
+                .lock()
+                .expect("submit call lock")
+                .push(FixtureSubmitCall {
+                    user_id,
+                    username: username.to_owned(),
+                    message: message.to_owned(),
+                });
+            self.submit_result
+                .clone()
+                .unwrap_or_else(|| Err("unexpected submit call".to_owned()))
         }
 
         async fn resolve_handoff(
@@ -1456,6 +1782,22 @@ mod tests {
             Self {
                 rate_limit: FixtureRateLimit::Allowed,
             }
+        }
+    }
+
+    struct FixtureUserRateLimiter {
+        outcome: Result<CriticalRateLimitOutcome, ()>,
+        calls: Arc<Mutex<Vec<(String, i64)>>>,
+    }
+
+    #[async_trait]
+    impl AssistantUserRateLimiter for FixtureUserRateLimiter {
+        async fn check(&self, scope: &str, user_id: i64) -> Result<CriticalRateLimitOutcome, ()> {
+            self.calls
+                .lock()
+                .expect("user rate limit call lock")
+                .push((scope.to_owned(), user_id));
+            self.outcome
         }
     }
 
@@ -1596,12 +1938,41 @@ mod tests {
     }
 
     fn fixture_router_with_auth(store: FixtureStore, auth: FixtureAuth) -> Router {
+        fixture_router_with_dependencies(store, auth, None)
+    }
+
+    fn fixture_router_with_user_rate_limiter(
+        store: FixtureStore,
+        limiter: Arc<dyn AssistantUserRateLimiter>,
+    ) -> Router {
+        fixture_router_with_dependencies(store, FixtureAuth::default(), Some(limiter))
+    }
+
+    fn fixture_router_with_dependencies(
+        store: FixtureStore,
+        auth: FixtureAuth,
+        limiter: Option<Arc<dyn AssistantUserRateLimiter>>,
+    ) -> Router {
         let pg = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://postgres@127.0.0.1:1/assistant")
             .expect("valid lazy PostgreSQL URL");
-        assistant_read_router(
-            AssistantReadState::new(pg, Arc::new(auth)).with_store(Arc::new(store)),
+        let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid Valkey URL");
+        let mut state = AssistantReadState::new(
+            pg,
+            valkey,
+            Arc::new(auth),
+            AssistantRateLimitConfig {
+                enabled: false,
+                max_requests: 1,
+                window: Duration::from_secs(1),
+                dependency_timeout: Duration::from_secs(1),
+            },
         )
+        .with_store(Arc::new(store));
+        if let Some(limiter) = limiter {
+            state = state.with_user_rate_limiter(limiter);
+        }
+        assistant_read_router(state)
     }
 
     async fn response_json(response: Response) -> Value {
@@ -1691,10 +2062,7 @@ mod tests {
             pragma,
             Some(axum::http::HeaderValue::from_static("no-cache"))
         );
-        assert_eq!(
-            expires,
-            Some(axum::http::HeaderValue::from_static("0"))
-        );
+        assert_eq!(expires, Some(axum::http::HeaderValue::from_static("0")));
     }
 
     #[tokio::test]
@@ -1749,6 +2117,142 @@ mod tests {
                 }),
             )
         );
+    }
+
+    #[tokio::test]
+    async fn submit_handoff_should_rate_limit_redact_persist_and_disable_cache() {
+        let raw_message = "password: hunter2 api_key=sk-secret-token-123 Bearer abcdefgh==";
+        let redacted_message = redact_assistant_handoff_message(raw_message);
+        let mut lead = fixture_lead();
+        lead.message = redacted_message.clone();
+        let store = FixtureStore {
+            submit_result: Some(Ok(lead.clone())),
+            ..FixtureStore::default()
+        };
+        let submit_calls = Arc::clone(&store.submit_calls);
+        let rate_limit_calls = Arc::new(Mutex::new(Vec::new()));
+        let limiter = Arc::new(FixtureUserRateLimiter {
+            outcome: Ok(CriticalRateLimitOutcome::Allowed),
+            calls: Arc::clone(&rate_limit_calls),
+        });
+        let response = fixture_router_with_user_rate_limiter(store, limiter)
+            .oneshot(
+                Request::post("/api/assistant/handoffs")
+                    .header(header::AUTHORIZATION, "Bearer browser-session")
+                    .body(Body::from(
+                        json!({"confirmed": true, "message": raw_message}).to_string(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let cache_control = response.headers().get(header::CACHE_CONTROL).cloned();
+        let body = response_json(response).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"], json!(lead));
+        assert_eq!(
+            *rate_limit_calls.lock().expect("rate limit call lock"),
+            vec![("assistant-handoff".to_owned(), 7)]
+        );
+        assert_eq!(
+            *submit_calls.lock().expect("submit call lock"),
+            vec![FixtureSubmitCall {
+                user_id: 7,
+                username: "assistant-user".to_owned(),
+                message: redacted_message,
+            }]
+        );
+        assert_eq!(
+            cache_control,
+            Some(axum::http::HeaderValue::from_static(
+                "no-store, no-cache, must-revalidate, private, max-age=0"
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_handoff_should_consume_user_limit_before_rejecting_personal_token() {
+        let store = FixtureStore::default();
+        let submit_calls = Arc::clone(&store.submit_calls);
+        let rate_limit_calls = Arc::new(Mutex::new(Vec::new()));
+        let limiter = Arc::new(FixtureUserRateLimiter {
+            outcome: Ok(CriticalRateLimitOutcome::Allowed),
+            calls: Arc::clone(&rate_limit_calls),
+        });
+        let response = fixture_router_with_user_rate_limiter(store, limiter)
+            .oneshot(
+                Request::post("/api/assistant/handoffs")
+                    .header(header::AUTHORIZATION, "Bearer user-token")
+                    .body(Body::from("not-json"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let cache_control = response.headers().get(header::CACHE_CONTROL).cloned();
+        let body = response_json(response).await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["code"], "ASSISTANT_SESSION_REQUIRED");
+        assert_eq!(
+            *rate_limit_calls.lock().expect("rate limit call lock"),
+            vec![("assistant-handoff".to_owned(), 7)]
+        );
+        assert!(submit_calls.lock().expect("submit call lock").is_empty());
+        assert!(cache_control.is_some());
+    }
+
+    #[tokio::test]
+    async fn submit_handoff_rate_limit_should_precede_session_body_and_no_store_middleware() {
+        let store = FixtureStore::default();
+        let submit_calls = Arc::clone(&store.submit_calls);
+        let limiter = Arc::new(FixtureUserRateLimiter {
+            outcome: Ok(CriticalRateLimitOutcome::Rejected {
+                retry_after_seconds: 23,
+            }),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        });
+        let response = fixture_router_with_user_rate_limiter(store, limiter)
+            .oneshot(
+                Request::post("/api/assistant/handoffs")
+                    .header(header::AUTHORIZATION, "Bearer user-token")
+                    .body(Body::from("not-json"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&axum::http::HeaderValue::from_static("23"))
+        );
+        assert!(!response.headers().contains_key(header::CACHE_CONTROL));
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        assert!(bytes.is_empty());
+        assert!(submit_calls.lock().expect("submit call lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_handoff_null_json_should_require_confirmation_like_go() {
+        let response = fixture_router(FixtureStore::default())
+            .oneshot(
+                Request::post("/api/assistant/handoffs")
+                    .header(header::AUTHORIZATION, "Bearer browser-session")
+                    .body(Body::from("null"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = response_json(response).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["code"], "ASSISTANT_CONFIRMATION_REQUIRED");
     }
 
     #[tokio::test]
@@ -1978,6 +2482,41 @@ mod tests {
                 enabled: false,
                 ..AssistantSettingsView::default()
             }
+        );
+    }
+
+    #[test]
+    fn assistant_handoff_redaction_should_match_go_patterns_and_be_idempotent() {
+        let message = "登录失败 password: hunter2 token sk-secret-token-123; api-key=plainsecret Bearer abcdefgh== 密钥：中文秘密";
+        let redacted = redact_assistant_handoff_message(message);
+
+        assert!(!redacted.contains("hunter2"));
+        assert!(!redacted.contains("sk-secret-token-123"));
+        assert!(!redacted.contains("abcdefgh"));
+        assert!(!redacted.contains("中文秘密"));
+        assert!(redacted.contains("[REDACTED_API_KEY]"));
+        assert!(redacted.contains("Bearer [REDACTED_TOKEN]"));
+        assert!(redacted.contains("password: [REDACTED]"));
+        assert_eq!(redact_assistant_handoff_message(&redacted), redacted);
+    }
+
+    #[test]
+    fn assistant_handoff_api_key_boundary_should_leave_trailing_punctuation() {
+        assert_eq!(
+            redact_assistant_handoff_message("sk-abcdef--"),
+            "[REDACTED_API_KEY]--"
+        );
+        assert_eq!(
+            redact_assistant_handoff_message("prefixsk-abcdef"),
+            "prefixsk-abcdef"
+        );
+    }
+
+    #[test]
+    fn assistant_user_rate_limit_key_should_match_go_fixed_window_namespace() {
+        assert_eq!(
+            assistant_user_rate_limit_key("assistant-handoff", 7),
+            "rateLimit:v2:user:UC:assistant-handoff:7"
         );
     }
 
