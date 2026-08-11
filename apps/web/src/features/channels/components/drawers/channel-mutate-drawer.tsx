@@ -1387,7 +1387,7 @@ export function ChannelMutateDrawer({
         preferredMethod: 'passkey',
         title: t('Verify to view channel key'),
         description: t(
-          'Use Passkey or 2FA to confirm your identity before revealing this channel key.'
+          'Use email verification, or Passkey if no email is bound, before revealing this channel key.'
         ),
       })
     } catch (error) {

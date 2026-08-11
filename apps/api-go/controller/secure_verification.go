@@ -97,6 +97,15 @@ func UniversalVerify(c *gin.Context) {
 		common.ApiError(c, errors.New("不支持的安全验证范围"))
 		return
 	}
+	preferredMethods, err := middleware.PreferredSecurityProofMethods(identity.UserID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !containsSecurityProofMethod(preferredMethods, request.Method) {
+		common.ApiError(c, errors.New("请绑定邮箱后使用邮箱验证；未绑定邮箱时请使用 Passkey 验证"))
+		return
+	}
 
 	switch request.Method {
 	case secureVerificationMethod2FA:
@@ -169,4 +178,13 @@ func isAllowedSecurityProofScope(scope string) bool {
 	default:
 		return false
 	}
+}
+
+func containsSecurityProofMethod(methods []string, target string) bool {
+	for _, method := range methods {
+		if method == target {
+			return true
+		}
+	}
+	return false
 }

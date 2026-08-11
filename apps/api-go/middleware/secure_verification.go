@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +30,15 @@ func RequireSecurityProof(c *gin.Context, requiredScope string, allowedMethods [
 		securityProofError(c, "SECURITY_PROOF_INVALID", "安全验证状态无效")
 		return false
 	}
+	preferredMethods, err := PreferredSecurityProofMethods(identity.UserID)
+	if err != nil {
+		securityProofError(c, "SECURITY_PROOF_INVALID", "安全验证状态无效")
+		return false
+	}
+	// The configured list remains part of the call contract, but the account
+	// policy is authoritative: a bound email must use email verification; an
+	// account without one may use only its existing Passkey.
+	allowedMethods = preferredMethods
 	raw := strings.TrimSpace(c.GetHeader("X-Security-Proof"))
 	if raw == "" {
 		securityProofError(c, "SECURITY_PROOF_REQUIRED", "需要安全验证")
@@ -48,6 +58,20 @@ func RequireSecurityProof(c *gin.Context, requiredScope string, allowedMethods [
 		return false
 	}
 	return true
+}
+
+// PreferredSecurityProofMethods returns the only proof method accepted for
+// sensitive dashboard actions. Email is the primary path when bound; Passkey
+// remains the compatibility fallback for accounts without a bound email.
+func PreferredSecurityProofMethods(userID int) ([]string, error) {
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		return nil, err
+	}
+	if model.NormalizeEmail(user.Email) != "" {
+		return []string{"email"}, nil
+	}
+	return []string{"passkey"}, nil
 }
 
 func securityProofError(c *gin.Context, code, message string) {
