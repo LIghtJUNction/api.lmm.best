@@ -231,7 +231,7 @@ describe('getting started access boundaries', () => {
     await unmountPage(l1Page)
   })
 
-  test('offers one administrator access preset for L0', async () => {
+  test('offers the access request and safe learning presets to L0', async () => {
     const opened: Array<string | undefined> = []
     const messages: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((preset) => {
@@ -254,6 +254,26 @@ describe('getting started access boundaries', () => {
 
     assert.deepEqual(opened, ['onboarding'])
     assert.deepEqual(messages, [undefined])
+
+    const planQuestion = [...page.container.querySelectorAll('button')].find(
+      (button) =>
+        button.textContent?.includes('Which option is the best value?')
+    )
+    assert.ok(planQuestion)
+    await act(async () => {
+      planQuestion.click()
+      await flushEffects()
+    })
+
+    assert.deepEqual(opened, ['onboarding', 'plan'])
+    assert.deepEqual(messages, [undefined, undefined])
+    assert.ok(
+      [...page.container.querySelectorAll('button')].some((button) =>
+        button.textContent?.includes(
+          'What can I do while access is under review?'
+        )
+      )
+    )
     await unmountPage(page)
     unsubscribe()
   })

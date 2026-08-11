@@ -158,6 +158,55 @@ export function GettingStarted() {
                 />
               </Button>
 
+              <div className='mt-5 border-t pt-4'>
+                <p className='text-sm font-medium'>
+                  {t('What the assistant can do')}
+                </p>
+                <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                  {t(
+                    'Choose a common question or ask anything about using LMM.'
+                  )}
+                </p>
+                <div className='mt-3 grid gap-2 sm:grid-cols-2'>
+                  {[
+                    {
+                      id: 'service' as const,
+                      question: t(
+                        'What can I do while access is under review?'
+                      ),
+                    },
+                    {
+                      id: 'plan' as const,
+                      question: t('Which option is the best value?'),
+                    },
+                    {
+                      id: 'client-setup' as const,
+                      question: t('How do I set up Claude Code or CC Switch?'),
+                    },
+                    {
+                      id: 'bounty' as const,
+                      question: t('How do open-source bounties and tips work?'),
+                    },
+                  ].map((item) => (
+                    <Button
+                      key={item.id}
+                      type='button'
+                      variant='outline'
+                      className='bg-background h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
+                      onClick={() => requestAssistantOpen(item.id)}
+                    >
+                      <span>{item.question}</span>
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        className='shrink-0'
+                        strokeWidth={2}
+                        aria-hidden='true'
+                      />
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
               {accessRequest?.status === 'pending' ? (
                 <p className='bg-background/70 mt-4 border px-3 py-2 text-xs leading-5'>
                   {t(
