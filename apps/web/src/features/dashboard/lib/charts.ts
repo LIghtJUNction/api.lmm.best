@@ -16,8 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { dataScheme as vchartDefaultDataScheme } from '@visactor/vchart/esm/theme/color-scheme/builtin/default'
-
 import { MAX_CHART_TREND_POINTS } from '@/features/dashboard/constants'
 import type {
   QuotaDataItem,
@@ -39,40 +37,156 @@ type TooltipLineItem = {
   shapeSize?: number
 }
 
+const DASHBOARD_CHART_COLOR_TOKENS = Array.from(
+  { length: 24 },
+  (_, index) => `--forge-model-${index + 1}`
+)
+
+/**
+ * Safe fallbacks for environments where the dashboard theme is not mounted
+ * yet (SSR, tests, or a chart rendered outside the dashboard surface).
+ *
+ * The light palette is at least 3:1 against the dashboard card (#f0eee6),
+ * while the dark palette is at least 5.9:1 against the dark card (#24231f).
+ * Both palettes are intentionally longer than the largest model-series
+ * domain used by the dashboard, so `Other` does not reuse the first color.
+ */
+export const DASHBOARD_CHART_LIGHT_PALETTE = [
+  '#0b7285',
+  '#b24a30',
+  '#2f5fae',
+  '#916c00',
+  '#6d409c',
+  '#2d7b4b',
+  '#a43e68',
+  '#1d718b',
+  '#8a572a',
+  '#52658f',
+  '#783d9e',
+  '#a9531e',
+  '#1e785d',
+  '#466aa3',
+  '#607d2d',
+  '#9b4c59',
+  '#8e7400',
+  '#7050a0',
+  '#277d91',
+  '#96554a',
+  '#267594',
+  '#984e8b',
+  '#4e7d3c',
+  '#9a6a3a',
+] as const
+
+export const DASHBOARD_CHART_DARK_PALETTE = [
+  '#53d7c1',
+  '#f18b70',
+  '#80a8ff',
+  '#f0c35a',
+  '#c5a2ff',
+  '#81d399',
+  '#ec99bf',
+  '#75d9ec',
+  '#e4aa72',
+  '#aeb9ed',
+  '#d786b9',
+  '#ef9b5e',
+  '#62d5ad',
+  '#9abfff',
+  '#b7d88e',
+  '#e59da5',
+  '#edd480',
+  '#cfb3ee',
+  '#8ed3e3',
+  '#e8b0a0',
+  '#68cbe8',
+  '#e7a7d7',
+  '#9fd58f',
+  '#e9c096',
+] as const
+
+const CSS_COLOR_VALUE =
+  /^(?:#[\da-f]{3,8}|(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color)\([^)]*\))$/i
+
+function isUsableChartColor(value: string): boolean {
+  return CSS_COLOR_VALUE.test(value.trim())
+}
+
+function repeatPalette(
+  palette: readonly string[],
+  domainLength: number
+): string[] {
+  if (palette.length === 0) return []
+  const length = Number.isFinite(domainLength)
+    ? Math.max(1, Math.floor(domainLength))
+    : 1
+  return Array.from(
+    { length },
+    (_, index) => palette[index % palette.length] ?? palette[0]
+  )
+}
+
+function isDarkDashboard(scope: HTMLElement | null): boolean {
+  return Boolean(
+    scope?.closest('.dark') ||
+    (typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('dark'))
+  )
+}
+
 export function getDashboardChartColors(domainLength: number): string[] {
-  if (typeof document !== 'undefined') {
+  const count = Math.max(1, Math.floor(domainLength))
+
+  if (
+    typeof document !== 'undefined' &&
+    typeof getComputedStyle === 'function'
+  ) {
     const scope = document.querySelector<HTMLElement>(
       '.dashboard-editorial, .forge-surface'
     )
     if (scope) {
       const computed = getComputedStyle(scope)
-      const themed = [
-        '--forge-model-1',
-        '--forge-model-2',
-        '--forge-model-3',
-        '--forge-model-4',
-        '--forge-model-5',
-      ]
-        .map((token) => computed.getPropertyValue(token).trim())
-        .filter(Boolean)
+      const themed = DASHBOARD_CHART_COLOR_TOKENS.map((token) =>
+        computed.getPropertyValue(token).trim()
+      )
 
-      if (themed.length > 0) {
-        return Array.from(
-          { length: Math.max(domainLength, 1) },
-          (_, index) => themed[index % themed.length] ?? themed[0]
-        )
+      if (
+        themed.length === DASHBOARD_CHART_COLOR_TOKENS.length &&
+        themed.every(isUsableChartColor)
+      ) {
+        return repeatPalette(themed, count)
       }
+
+      return repeatPalette(
+        isDarkDashboard(scope)
+          ? DASHBOARD_CHART_DARK_PALETTE
+          : DASHBOARD_CHART_LIGHT_PALETTE,
+        count
+      )
     }
   }
 
-  const scheme =
-    vchartDefaultDataScheme.find(
-      (item) => !item.maxDomainLength || domainLength <= item.maxDomainLength
-    ) ?? vchartDefaultDataScheme.at(-1)
+  return repeatPalette(DASHBOARD_CHART_DARK_PALETTE, count)
+}
 
-  return (scheme?.scheme ?? []).filter(
-    (color): color is string => typeof color === 'string'
-  )
+export function getDashboardChartHoverColor(): string {
+  if (
+    typeof document !== 'undefined' &&
+    typeof getComputedStyle === 'function'
+  ) {
+    const scope = document.querySelector<HTMLElement>(
+      '.dashboard-editorial, .forge-surface'
+    )
+    if (scope) {
+      const themed = getComputedStyle(scope)
+        .getPropertyValue('--forge-chart-hover')
+        .trim()
+      if (isUsableChartColor(themed)) return themed
+      return isDarkDashboard(scope) ? '#faf9f5' : '#141413'
+    }
+  }
+
+  return '#faf9f5'
 }
 
 function renderQuotaCompat(rawQuota: number, digits = 4): string {
@@ -288,6 +402,7 @@ export function processChartData(
   const sortedModels = [...allModels].sort()
   const modelColorDomain = [...new Set([...sortedModels, otherLabel])]
   const modelColorRange = getDashboardChartColors(modelColorDomain.length)
+  const chartHoverColor = getDashboardChartHoverColor()
   const otherColor = modelColorRange[modelColorDomain.indexOf(otherLabel)]
   const otherTooltipColor =
     typeof otherColor === 'string' ? otherColor : 'var(--overview-accent-2)'
@@ -490,13 +605,13 @@ export function processChartData(
         state: {
           hover: {
             outerRadius: 0.85,
-            stroke: 'var(--forge-chart-text)',
-            lineWidth: 1,
+            stroke: chartHoverColor,
+            lineWidth: 1.5,
           },
           selected: {
             outerRadius: 0.85,
-            stroke: 'var(--forge-chart-text)',
-            lineWidth: 1,
+            stroke: chartHoverColor,
+            lineWidth: 1.5,
           },
         },
       },
@@ -532,7 +647,7 @@ export function processChartData(
       color: modelColor,
       bar: {
         state: {
-          hover: { stroke: 'var(--forge-chart-text)', lineWidth: 1 },
+          hover: { stroke: chartHoverColor, lineWidth: 1.5 },
         },
       },
       tooltip: {
@@ -593,7 +708,7 @@ export function processChartData(
       },
       area: {
         style: {
-          fillOpacity: 0.08,
+          fillOpacity: 0.14,
           curveType: 'monotone',
         },
       },
@@ -671,7 +786,7 @@ export function processChartData(
       },
       area: {
         style: {
-          fillOpacity: 0.08,
+          fillOpacity: 0.14,
           curveType: 'monotone',
         },
       },
@@ -699,7 +814,7 @@ export function processChartData(
       },
       bar: {
         state: {
-          hover: { stroke: 'var(--forge-chart-text)', lineWidth: 1 },
+          hover: { stroke: chartHoverColor, lineWidth: 1.5 },
         },
       },
       tooltip: {
@@ -733,6 +848,7 @@ export function processUserChartData(
 
   const formatVal = (raw: number) => renderQuotaCompat(raw, 2)
   const userColors = getDashboardChartColors(10)
+  const chartHoverColor = getDashboardChartHoverColor()
 
   const emptyResult: ProcessedUserChartData = {
     spec_user_rank: {
@@ -847,7 +963,7 @@ export function processUserChartData(
       legends: { visible: false },
       bar: {
         state: {
-          hover: { stroke: 'var(--forge-chart-text)', lineWidth: 1 },
+          hover: { stroke: chartHoverColor, lineWidth: 1.5 },
         },
       },
       label: {
