@@ -28,6 +28,7 @@ import {
   ShieldAlert,
   Link2,
   CreditCard,
+  RotateCcw,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -72,6 +73,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const [resetOnboardingOpen, setResetOnboardingOpen] = useState(false)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -250,6 +252,19 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuShortcut>
         </DropdownMenuItem>
 
+        <DropdownMenuItem
+          onSelect={(event) => {
+            event.preventDefault()
+            setResetOnboardingOpen(true)
+          }}
+          disabled={isRoot || isAdmin}
+        >
+          {t('Reset onboarding to L0')}
+          <DropdownMenuShortcut>
+            <RotateCcw size={16} />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+
         <DropdownMenuSeparator />
 
         <DropdownMenuItem
@@ -286,6 +301,22 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         )}
         confirmText={t('Reset 2FA')}
         handleConfirm={handleResetTwoFA}
+      />
+
+      <ConfirmDialog
+        open={resetOnboardingOpen}
+        onOpenChange={setResetOnboardingOpen}
+        title={t('Reset onboarding to L0')}
+        desc={t(
+          'Reset {{username}} to L0? This clears effective activation, forces the tutorial on next login, revokes sessions, and preserves the account history for audit and later re-activation.',
+          { username: user.username }
+        )}
+        confirmText={t('Reset to L0')}
+        handleConfirm={() => {
+          void handleManage('reset_onboarding').finally(() =>
+            setResetOnboardingOpen(false)
+          )
+        }}
       />
 
       <UserBindingDialog

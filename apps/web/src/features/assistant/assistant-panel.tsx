@@ -26,7 +26,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { nanoid } from 'nanoid'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -38,10 +38,12 @@ import { Loader } from '@/components/ai-elements/loader'
 import { Message, MessageContent } from '@/components/ai-elements/message'
 import {
   PromptInput,
+  PromptInputProvider,
   PromptInputBody,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
+  usePromptInputController,
 } from '@/components/ai-elements/prompt-input'
 import {
   sideDrawerContentClassName,
@@ -77,6 +79,7 @@ import {
   getAssistantAccountAccessState,
   type AssistantAccountAccessState,
 } from './assistant-access'
+import { AssistantActivationTool } from './assistant-activation-tool'
 import { AssistantCostTool } from './assistant-cost-tool'
 import {
   subscribeToAssistantOpen,
@@ -85,12 +88,15 @@ import {
 import { AssistantHandoffTool } from './assistant-handoff-tool'
 import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
+import { AssistantModelsTool } from './assistant-models-tool'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { AssistantSetupTool } from './assistant-setup-tool'
 
 type AssistantActionPath =
   | '/getting-started'
   | '/pricing'
+  | '/wallet'
+  | '/usage-logs'
   | '/keys'
   | '/open-source-bounties'
   | '/support'
@@ -101,7 +107,14 @@ type AssistantAction =
   | {
       kind: 'tool'
       label: string
-      tool: 'key' | 'cost' | 'handoff' | 'plan' | 'setup'
+      tool:
+        | 'activation'
+        | 'key'
+        | 'cost'
+        | 'handoff'
+        | 'models'
+        | 'plan'
+        | 'setup'
     }
 
 type AssistantPreset = {
@@ -130,7 +143,16 @@ function getBaseUrl(): string {
 
 function PresetAction(props: {
   action: AssistantAction
-  onToolOpen: (tool: 'key' | 'cost' | 'handoff' | 'plan' | 'setup') => void
+  onToolOpen: (
+    tool:
+      | 'activation'
+      | 'key'
+      | 'cost'
+      | 'handoff'
+      | 'models'
+      | 'plan'
+      | 'setup'
+  ) => void
 }) {
   const { action } = props
   if (action.kind === 'tool') {
@@ -234,9 +256,42 @@ function AssistantAccountStatusNotice(props: {
   )
 }
 
+function AssistantPromptInputSync(props: {
+  initialMessage?: string
+  initialMessageRevision?: number
+}) {
+  const {
+    textInput: { setInput },
+  } = usePromptInputController()
+  const initialMessage = props.initialMessage?.trim() ?? ''
+  const lastRequest = useRef<{
+    message: string
+    revision?: number
+  } | null>(null)
+
+  useEffect(() => {
+    if (
+      lastRequest.current?.message === initialMessage &&
+      lastRequest.current?.revision === props.initialMessageRevision
+    ) {
+      return
+    }
+
+    lastRequest.current = {
+      message: initialMessage,
+      revision: props.initialMessageRevision,
+    }
+    if (initialMessage) setInput(initialMessage)
+  }, [initialMessage, props.initialMessageRevision, setInput])
+
+  return null
+}
+
 export function AssistantPanel(props: {
   open: boolean
   initialPreset?: AssistantPresetId
+  initialMessage?: string
+  initialMessageRevision?: number
   onOpenChange: (open: boolean) => void
 }) {
   const { t, i18n } = useTranslation()
@@ -251,9 +306,9 @@ export function AssistantPanel(props: {
           'You can review pricing, add funds, and explore open-source bounties while an administrator reviews your request. Approval unlocks L1 access; no payment is required for manual approval.'
         ),
         action: {
-          kind: 'route',
-          label: t('View onboarding status'),
-          to: '/getting-started',
+          kind: 'tool',
+          label: t('Choose an activation path'),
+          tool: 'activation',
         },
       },
       {
@@ -318,6 +373,42 @@ export function AssistantPanel(props: {
         },
       },
       {
+        id: 'usage',
+        question: t('Can you analyze my historical calls and usage?'),
+        answer: t(
+          'I can summarize your recent requests, tokens, cost, models, and groups. Ask for a time range such as the last 7 or 30 days, or open the detailed usage logs.'
+        ),
+        action: {
+          kind: 'route',
+          label: t('Open usage statistics'),
+          to: '/usage-logs',
+        },
+      },
+      {
+        id: 'models',
+        question: t('Which models and model IDs can I use?'),
+        answer: t(
+          'Ask me for the current model IDs and routing groups. I will read the account-specific list instead of guessing from a public model name.'
+        ),
+        action: {
+          kind: 'tool',
+          label: t('View all currently available models'),
+          tool: 'models',
+        },
+      },
+      {
+        id: 'invitation',
+        question: t('How do invitation rewards work?'),
+        answer: t(
+          'I can show your invitation code, link, invited count, and configured reward amounts. Rewards are calculated from the current account configuration.'
+        ),
+        action: {
+          kind: 'route',
+          label: t('Open wallet and invitations'),
+          to: '/wallet',
+        },
+      },
+      {
         id: 'human',
         question: t('I need human support'),
         answer: t(
@@ -348,7 +439,14 @@ export function AssistantPanel(props: {
   })
   const [sending, setSending] = useState(false)
   const [activeTool, setActiveTool] = useState<
-    'key' | 'cost' | 'handoff' | 'plan' | 'setup' | null
+    | 'activation'
+    | 'key'
+    | 'cost'
+    | 'handoff'
+    | 'models'
+    | 'plan'
+    | 'setup'
+    | null
   >(null)
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
@@ -596,6 +694,11 @@ export function AssistantPanel(props: {
                     onContinueSetup={() => setActiveTool('setup')}
                   />
                 ) : null}
+                {activeTool === 'activation' && accountAccessConfirmed ? (
+                  <AssistantActivationTool
+                    onContinueSetup={() => setActiveTool('setup')}
+                  />
+                ) : null}
                 {activeTool === 'cost' && accountAccessConfirmed ? (
                   <AssistantCostTool
                     defaultModel={statusQuery.data?.model ?? ''}
@@ -603,6 +706,11 @@ export function AssistantPanel(props: {
                   />
                 ) : null}
                 {activeTool === 'handoff' ? <AssistantHandoffTool /> : null}
+                {activeTool === 'models' && accountAccessConfirmed ? (
+                  <AssistantModelsTool
+                    defaultModel={statusQuery.data?.model ?? ''}
+                  />
+                ) : null}
                 {activeTool === 'plan' && accountAccessConfirmed ? (
                   <AssistantPlanTool
                     developerAccessGranted={developerAccessGranted}
@@ -647,36 +755,42 @@ export function AssistantPanel(props: {
         <div className='bg-background'>
           <Separator className='bg-border/70' />
           <div className='px-3 py-3 sm:px-4'>
-            <PromptInput
-              onSubmit={submitMessage}
-              groupClassName='rounded-xl'
-              aria-label={t('Ask AI assistant')}
-            >
-              <PromptInputBody>
-                <PromptInputTextarea
-                  placeholder={t('Ask about plans, setup, keys, or costs...')}
-                  maxLength={4000}
-                  disabled={sending}
-                  className='min-h-14'
-                />
-              </PromptInputBody>
-              <PromptInputFooter>
-                <span className='text-muted-foreground truncate text-xs'>
-                  {statusQuery.data
-                    ? t('Weekly included credit remaining: {{amount}}', {
-                        amount: creditLabel,
-                      })
-                    : t('Weekly included AI credit applies first.')}
-                  {creditResetLabel
-                    ? ` · ${t('Resets {{date}}', { date: creditResetLabel })}`
-                    : null}
-                </span>
-                <PromptInputSubmit
-                  status={sending ? 'submitted' : 'ready'}
-                  disabled={sending}
-                />
-              </PromptInputFooter>
-            </PromptInput>
+            <PromptInputProvider initialInput={props.initialMessage}>
+              <AssistantPromptInputSync
+                initialMessage={props.initialMessage}
+                initialMessageRevision={props.initialMessageRevision}
+              />
+              <PromptInput
+                onSubmit={submitMessage}
+                groupClassName='rounded-xl'
+                aria-label={t('Ask AI assistant')}
+              >
+                <PromptInputBody>
+                  <PromptInputTextarea
+                    placeholder={t('Ask about plans, setup, keys, or costs...')}
+                    maxLength={4000}
+                    disabled={sending}
+                    className='min-h-14'
+                  />
+                </PromptInputBody>
+                <PromptInputFooter>
+                  <span className='text-muted-foreground truncate text-xs'>
+                    {statusQuery.data
+                      ? t('Weekly included credit remaining: {{amount}}', {
+                          amount: creditLabel,
+                        })
+                      : t('Weekly included AI credit applies first.')}
+                    {creditResetLabel
+                      ? ` · ${t('Resets {{date}}', { date: creditResetLabel })}`
+                      : null}
+                  </span>
+                  <PromptInputSubmit
+                    status={sending ? 'submitted' : 'ready'}
+                    disabled={sending}
+                  />
+                </PromptInputFooter>
+              </PromptInput>
+            </PromptInputProvider>
             <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
               {t(
                 'Weekly system credit is used first. Your wallet is charged only after it runs out.'

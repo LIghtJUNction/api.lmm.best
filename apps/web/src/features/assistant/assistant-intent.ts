@@ -26,6 +26,9 @@ const INTENT_PRESET: Partial<Record<AssistantIntent, AssistantPresetId>> = {
   client_setup: 'client-setup',
   cost: 'cost',
   bounty: 'bounty',
+  usage: 'usage',
+  models: 'models',
+  invitation: 'invitation',
   human_support: 'human',
 }
 

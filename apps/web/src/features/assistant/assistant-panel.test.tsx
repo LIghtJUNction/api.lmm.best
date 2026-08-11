@@ -117,7 +117,7 @@ async function waitForCondition(
   throw new Error(`${failureMessage}: ${document.body.textContent}`)
 }
 
-async function renderPanel(initialPreset?: 'api-key' | 'plan') {
+async function renderPanel(initialPreset?: 'api-key' | 'models' | 'plan') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -301,6 +301,59 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('syncs queued questions into an already-open assistant input', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/status') {
+        return {
+          data: {
+            success: true,
+            data: { assistant: { enabled: true } },
+          },
+        }
+      }
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderLauncher()
+    try {
+      const launcherButton = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Open AI assistant"]'
+      )
+      assert.ok(launcherButton)
+      await act(async () => {
+        launcherButton.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => document.querySelector('textarea') !== null,
+          'Assistant input did not render'
+        )
+      )
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      const question = 'How do I set up Claude Code or CC Switch?'
+
+      await act(async () => {
+        requestAssistantOpen(undefined, question)
+        await flushEffects()
+      })
+      assert.equal(textarea.value, question)
+
+      await setTextareaValue(textarea, 'draft that should be replaced')
+      await act(async () => {
+        requestAssistantOpen(undefined, question)
+        await flushEffects()
+      })
+      assert.equal(textarea.value, question)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('appends guided presets without replacing the current conversation', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
@@ -327,6 +380,47 @@ describe('AssistantPanel', () => {
         document.body.textContent ?? '',
         /Which option is the best value\?/
       )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('shows the signed-in model IDs inside the assistant', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      if (url === '/api/user/models') {
+        return {
+          data: {
+            success: true,
+            data: ['claude-3-7-sonnet', 'deepseek-v4-flash'],
+          },
+        }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+
+    const rendered = await renderPanel('models')
+    try {
+      await act(async () => {
+        findButton('View all currently available models').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('claude-3-7-sonnet') === true,
+          'Assistant model IDs did not render'
+        )
+      )
+      assert.match(document.body.textContent ?? '', /deepseek-v4-flash/)
+      assert.match(
+        document.body.textContent ?? '',
+        /Default assistant modeldeepseek-v4-flash/
+      )
+      assert.ok(document.querySelector('button[aria-label="Copy model names"]'))
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

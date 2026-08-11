@@ -1,0 +1,139 @@
+package model
+
+import (
+	"errors"
+	"sort"
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
+)
+
+type AssistantUsageBreakdown struct {
+	Name             string  `json:"name"`
+	Requests         int64   `json:"requests"`
+	PromptTokens     int64   `json:"prompt_tokens"`
+	CompletionTokens int64   `json:"completion_tokens"`
+	TotalTokens      int64   `json:"total_tokens"`
+	Quota            int64   `json:"quota"`
+	CostUSD          float64 `json:"cost_usd"`
+}
+
+type AssistantUsageSummary struct {
+	StartTimestamp   int64                     `json:"start_timestamp"`
+	EndTimestamp     int64                     `json:"end_timestamp"`
+	Requests         int64                     `json:"requests"`
+	PromptTokens     int64                     `json:"prompt_tokens"`
+	CompletionTokens int64                     `json:"completion_tokens"`
+	TotalTokens      int64                     `json:"total_tokens"`
+	Quota            int64                     `json:"quota"`
+	CostUSD          float64                   `json:"cost_usd"`
+	Models           []AssistantUsageBreakdown `json:"models"`
+	Groups           []AssistantUsageBreakdown `json:"groups"`
+}
+
+type assistantUsageAggregate struct {
+	Requests         int64 `gorm:"column:requests"`
+	PromptTokens     int64 `gorm:"column:prompt_tokens"`
+	CompletionTokens int64 `gorm:"column:completion_tokens"`
+	Quota            int64 `gorm:"column:quota"`
+}
+
+func usageCostUSD(quota int64) float64 {
+	if common.QuotaPerUnit <= 0 {
+		return 0
+	}
+	return float64(quota) / common.QuotaPerUnit
+}
+
+func usageBreakdownRows(userID int, startTimestamp int64, endTimestamp int64, limit int, column string) ([]AssistantUsageBreakdown, error) {
+	if LOG_DB == nil {
+		return nil, errors.New("usage log database is unavailable")
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+
+	var rows []struct {
+		Name             string `gorm:"column:name"`
+		Requests         int64  `gorm:"column:requests"`
+		PromptTokens     int64  `gorm:"column:prompt_tokens"`
+		CompletionTokens int64  `gorm:"column:completion_tokens"`
+		Quota            int64  `gorm:"column:quota"`
+	}
+	selectColumn := column
+	if column == "group" {
+		selectColumn = logGroupCol
+	}
+	query := LOG_DB.Model(&Log{}).
+		Select(selectColumn+" AS name, COUNT(*) AS requests, COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(completion_tokens), 0) AS completion_tokens, COALESCE(SUM(quota), 0) AS quota").
+		Where("user_id = ? AND type = ? AND created_at >= ? AND created_at <= ?", userID, LogTypeConsume, startTimestamp, endTimestamp).
+		Group(column).
+		Order("requests DESC").
+		Limit(limit)
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	result := make([]AssistantUsageBreakdown, 0, len(rows))
+	for _, row := range rows {
+		name := strings.TrimSpace(row.Name)
+		if name == "" {
+			name = "(unknown)"
+		}
+		totalTokens := row.PromptTokens + row.CompletionTokens
+		result = append(result, AssistantUsageBreakdown{
+			Name:             name,
+			Requests:         row.Requests,
+			PromptTokens:     row.PromptTokens,
+			CompletionTokens: row.CompletionTokens,
+			TotalTokens:      totalTokens,
+			Quota:            row.Quota,
+			CostUSD:          usageCostUSD(row.Quota),
+		})
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Requests == result[j].Requests {
+			return result[i].Name < result[j].Name
+		}
+		return result[i].Requests > result[j].Requests
+	})
+	return result, nil
+}
+
+func GetAssistantUsageSummary(userID int, startTimestamp int64, endTimestamp int64, limit int) (AssistantUsageSummary, error) {
+	if userID <= 0 || endTimestamp < startTimestamp {
+		return AssistantUsageSummary{}, errors.New("invalid usage summary range")
+	}
+	if LOG_DB == nil {
+		return AssistantUsageSummary{}, errors.New("usage log database is unavailable")
+	}
+	var aggregate assistantUsageAggregate
+	if err := LOG_DB.Model(&Log{}).
+		Select("COUNT(*) AS requests, COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(completion_tokens), 0) AS completion_tokens, COALESCE(SUM(quota), 0) AS quota").
+		Where("user_id = ? AND type = ? AND created_at >= ? AND created_at <= ?", userID, LogTypeConsume, startTimestamp, endTimestamp).
+		Scan(&aggregate).Error; err != nil {
+		return AssistantUsageSummary{}, err
+	}
+
+	models, err := usageBreakdownRows(userID, startTimestamp, endTimestamp, limit, "model_name")
+	if err != nil {
+		return AssistantUsageSummary{}, err
+	}
+	groups, err := usageBreakdownRows(userID, startTimestamp, endTimestamp, limit, "group")
+	if err != nil {
+		return AssistantUsageSummary{}, err
+	}
+	totalTokens := aggregate.PromptTokens + aggregate.CompletionTokens
+	return AssistantUsageSummary{
+		StartTimestamp:   startTimestamp,
+		EndTimestamp:     endTimestamp,
+		Requests:         aggregate.Requests,
+		PromptTokens:     aggregate.PromptTokens,
+		CompletionTokens: aggregate.CompletionTokens,
+		TotalTokens:      totalTokens,
+		Quota:            aggregate.Quota,
+		CostUSD:          usageCostUSD(aggregate.Quota),
+		Models:           models,
+		Groups:           groups,
+	}, nil
+}

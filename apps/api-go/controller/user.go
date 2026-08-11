@@ -1287,6 +1287,29 @@ func ManageUser(c *gin.Context) {
 		})
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return
+	case "reset_onboarding":
+		if user.Role >= common.RoleAdminUser {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		if err := model.ResetUserToL0(user.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if err := model.PublishUserAuthCache(user.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if _, err := model.RevokeAllUserSessions(user.Id, "admin_reset_onboarding"); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordManageAuditFor(c, user.Id, "user.reset_onboarding", map[string]interface{}{
+			"username": user.Username,
+			"level":    0,
+		})
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
 	case "add_quota":
 		switch req.Mode {
 		case "add":
@@ -1525,6 +1548,7 @@ type UpdateUserSettingRequest struct {
 	UpstreamModelUpdateNotifyEnabled *bool   `json:"upstream_model_update_notify_enabled,omitempty"`
 	AcceptUnsetModelRatioModel       bool    `json:"accept_unset_model_ratio_model"`
 	RecordIpLog                      bool    `json:"record_ip_log"`
+	UsageLeaderboardVisibility       string  `json:"usage_leaderboard_visibility,omitempty"`
 }
 
 func UpdateUserSetting(c *gin.Context) {
@@ -1543,6 +1567,10 @@ func UpdateUserSetting(c *gin.Context) {
 	// 验证预警阈值
 	if req.QuotaWarningThreshold <= 0 {
 		common.ApiErrorI18n(c, i18n.MsgQuotaThresholdGtZero)
+		return
+	}
+	if req.UsageLeaderboardVisibility != "" && !dto.IsValidUsageLeaderboardVisibility(req.UsageLeaderboardVisibility) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 
@@ -1619,6 +1647,10 @@ func UpdateUserSetting(c *gin.Context) {
 	if user.Role >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
+	usageLeaderboardVisibility := dto.NormalizeUsageLeaderboardVisibility(existingSettings.UsageLeaderboardVisibility)
+	if req.UsageLeaderboardVisibility != "" {
+		usageLeaderboardVisibility = dto.NormalizeUsageLeaderboardVisibility(req.UsageLeaderboardVisibility)
+	}
 
 	// 构建设置
 	settings := dto.UserSetting{
@@ -1627,6 +1659,7 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+		UsageLeaderboardVisibility:       usageLeaderboardVisibility,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

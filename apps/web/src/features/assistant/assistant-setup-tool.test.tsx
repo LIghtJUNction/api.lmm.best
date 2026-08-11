@@ -174,6 +174,26 @@ describe('AssistantSetupTool', () => {
       )?.textContent,
       'Open ChatGPT in browser'
     )
+
+    await act(async () => {
+      findButton('OpenAI-compatible clients').click()
+      await flushEffects()
+    })
+    assert.match(
+      container.textContent ?? '',
+      /Codex, Cursor, Open WebUI, and more/
+    )
+    assert.match(
+      container.textContent ?? '',
+      /https:\/\/api\.example\.test\/v1/
+    )
+    assert.match(container.textContent ?? '', /"api_key": "<YOUR_API_KEY>"/)
+    assert.equal(
+      container.querySelector<HTMLAnchorElement>(
+        'a[href="https://developers.openai.com/codex/"]'
+      )?.textContent,
+      'Codex'
+    )
     assert.equal(createKeyCalls, 0)
 
     await act(async () => root.unmount())

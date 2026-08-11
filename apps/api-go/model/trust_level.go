@@ -665,3 +665,27 @@ func SetUserTrustLevelOverride(userID int, level *int) error {
 	}
 	return invalidateUserCache(userID)
 }
+
+// ResetUserToL0 is the explicit administrator-only test/support reset. The
+// zero override is intentional: it temporarily blocks both paid and manual
+// activation until an administrator clears the override or approves a new
+// access request.
+func ResetUserToL0(userID int) error {
+	if userID <= 0 {
+		return gorm.ErrInvalidData
+	}
+	result := DB.Model(&User{}).
+		Where("id = ? AND role < ?", userID, common.RoleAdminUser).
+		Updates(map[string]interface{}{
+			"console_activated_at": 0,
+			"trust_level_override": 0,
+			"auth_version":         gorm.Expr("auth_version + 1"),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return invalidateUserCache(userID)
+}

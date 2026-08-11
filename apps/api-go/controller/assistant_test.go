@@ -300,7 +300,7 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 6)
+	require.Len(t, definitions, 12)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -308,6 +308,12 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["get_service_facts"])
 	assert.True(t, names["calculate_cost"])
 	assert.True(t, names["get_account_access"])
+	assert.True(t, names["get_available_models"])
+	assert.True(t, names["get_plan_offers"])
+	assert.True(t, names["get_invitation_rewards"])
+	assert.True(t, names["get_bounty_guide"])
+	assert.True(t, names["get_usage_summary"])
+	assert.True(t, names["search_web"])
 	assert.True(t, names["get_setup_guide"])
 	assert.True(t, names["request_create_key"])
 	assert.True(t, names["request_human_support"])

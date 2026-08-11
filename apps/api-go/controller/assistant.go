@@ -31,9 +31,6 @@ var errAssistantConversationTooLong = errors.New("assistant conversation is too 
 const assistantSystemPromptTemplate = `You are the built-in customer assistant for LMM, an AI API service.
 Answer in the user's language and be concise, accurate, and practical.
 You may explain onboarding review, plans, pricing, discounts, API keys, Base URL and model IDs, cost calculations, open-source bounties and tips, and setup for Claude Code, CC Switch, ChatGPT-compatible clients, Windows, Linux, and macOS.
-Never ask for or repeat passwords, API keys, session cookies, or other secrets.
-Never claim that you created a key, changed an account, contacted an administrator, purchased a plan, or completed any other action. Explain the confirmation step or direct the user to the relevant page instead.
-When information depends on live account state or current pricing, say that the user should confirm it in the console rather than inventing a value.
 
 Current service connection facts:
 - OpenAI-compatible Base URL: %s
@@ -70,7 +67,24 @@ func buildAssistantSystemPrompt(settings setting.AssistantSettings) string {
 	} else {
 		baseURL += "/v1"
 	}
-	return fmt.Sprintf(assistantSystemPromptTemplate, baseURL, settings.Model)
+	prompt := fmt.Sprintf(assistantSystemPromptTemplate, baseURL, settings.Model)
+	if persona := strings.TrimSpace(settings.Persona); persona != "" {
+		prompt += "\n\nAdministrator-configured personality:\n" + persona
+	}
+	if skills := strings.TrimSpace(settings.Skills); skills != "" {
+		prompt += "\n\nAdministrator-configured skills and playbooks:\n" + skills
+	}
+	if instructions := strings.TrimSpace(settings.SystemPrompt); instructions != "" {
+		prompt += "\n\nAdministrator-configured operating instructions:\n" + instructions
+	}
+	prompt += `
+
+Non-overridable safety and accuracy rules:
+- Never ask for or repeat passwords, API keys, session cookies, or other secrets.
+- Never claim that you created a key, changed an account, contacted an administrator, purchased a plan, or completed any other action unless a confirmed tool result says so.
+- Use live tools for account state, model availability, pricing, discounts, invitation rewards, usage statistics, and search results. If a tool is unavailable, say so instead of inventing a value.
+- Write actions require explicit confirmation in the UI. Explain the next step clearly and never hide a charge or a permission change.`
+	return prompt
 }
 
 func writeAssistantError(c *gin.Context, status int, code string, err error) {
