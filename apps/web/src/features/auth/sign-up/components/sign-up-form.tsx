@@ -412,6 +412,7 @@ export function SignUpForm({
         {!localPreview && oauthRegisterEnabled && (
           <OAuthProviders
             status={status}
+            acceptedLegal={agreedToLegal}
             disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
             onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
             isWeChatLoading={isWeChatSubmitting}

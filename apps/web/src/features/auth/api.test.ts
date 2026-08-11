@@ -19,10 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import type { RefreshOutcome } from '@/lib/api'
+import { api, type RefreshOutcome } from '@/lib/api'
 import type { AuthBundle } from '@/stores/auth-store'
 
-import { executeLogout } from './api'
+import { createOAuthFlow, executeLogout } from './api'
 
 const bundle: AuthBundle = {
   access_token: 'access-token',
@@ -116,5 +116,61 @@ describe('logout coordination', () => {
       }),
       (error) => error === originalError
     )
+  })
+})
+
+describe('OAuth flow initialization', () => {
+  test('sends legal consent for login flows', async () => {
+    const originalPost = api.post
+    let requestBody: unknown
+    api.post = (async (url: string, body: unknown) => {
+      assert.equal(url, '/api/oauth/state')
+      requestBody = body
+      return {
+        data: {
+          success: true,
+          data: { flow_token: 'oauth-flow-token' },
+        },
+      }
+    }) as typeof api.post
+
+    try {
+      const token = await createOAuthFlow('linuxdo', 'login', true)
+      assert.equal(token, 'oauth-flow-token')
+      assert.deepEqual(requestBody, {
+        provider: 'linuxdo',
+        intent: 'login',
+        aff: undefined,
+        accepted_legal: true,
+      })
+    } finally {
+      api.post = originalPost
+    }
+  })
+
+  test('does not attach registration consent to binding flows', async () => {
+    const originalPost = api.post
+    let requestBody: unknown
+    api.post = (async (_url: string, body: unknown) => {
+      requestBody = body
+      return {
+        data: {
+          success: true,
+          data: { flow_token: 'oauth-bind-token' },
+        },
+      }
+    }) as typeof api.post
+
+    try {
+      await createOAuthFlow('github', 'bind', true)
+      assert.deepEqual(requestBody, {
+        provider: 'github',
+        intent: 'bind',
+        aff: undefined,
+        accepted_legal: undefined,
+      })
+    } finally {
+      api.post = originalPost
+    }
   })
 })
