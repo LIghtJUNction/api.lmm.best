@@ -385,6 +385,14 @@ async function run() {
         })
         assertNoServerError(second, `persona ${persona.id} repeated turn`)
         assertStatus(second, [200], `persona ${persona.id} repeated turn`)
+        const cacheEligible = first.cache === 'STORE'
+        const cacheHit = second.cache === 'HIT'
+        const identicalBody = first.body === second.body
+        if (cacheEligible && (!cacheHit || !identicalBody)) {
+          throw new Error(
+            `persona ${persona.id} did not return the exact cached first answer`
+          )
+        }
         personaResults.push({
           id: persona.id,
           label: persona.label,
@@ -394,6 +402,9 @@ async function run() {
           secondIntent: second.intent,
           firstCache: first.cache,
           secondCache: second.cache,
+          cacheDeterministic: cacheEligible
+            ? cacheHit && identicalBody
+            : 'not-eligible (live tool or non-cacheable response)',
           firstBodyDigest: createHash('sha256').update(first.body).digest('hex'),
           secondBodyDigest: createHash('sha256').update(second.body).digest('hex'),
         })
