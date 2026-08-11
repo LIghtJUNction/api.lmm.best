@@ -20,6 +20,7 @@ import { useEffect } from 'react'
 
 import { PublicLayout } from '@/components/layout'
 import { LmmBrandMark } from '@/components/lmm-brand-mark'
+import { useTopNavLinks } from '@/hooks/use-top-nav-links'
 
 import './forge-public-shell.css'
 
@@ -28,6 +29,10 @@ type ForgePublicShellProps = {
 }
 
 export function ForgePublicShell(props: ForgePublicShellProps) {
+  const securityLink = useTopNavLinks().find(
+    (link) => link.href === '/security'
+  )
+
   useEffect(() => {
     const previousTitle = document.title
     document.title = 'LMM Forge'
@@ -45,6 +50,7 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
         { title: 'Challenges', href: '/challenges' },
         { title: 'Pricing', href: '/pricing' },
         { title: 'How it works', href: '/#workflow' },
+        ...(securityLink ? [securityLink] : []),
       ]}
       showNotifications={false}
       headerProps={{
