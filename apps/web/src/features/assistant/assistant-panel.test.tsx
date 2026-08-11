@@ -21,6 +21,8 @@ import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 
+import type { AuthUser } from '@/stores/auth-store'
+
 const domWindow = new Window({ url: 'https://console.example.test/' })
 for (const key of [
   'window',
@@ -71,6 +73,7 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { useAuthStore } = await import('@/stores/auth-store')
 const { requestAssistantOpen } = await import('./assistant-events')
 const { AssistantLauncher } = await import('./assistant-launcher')
 const { AssistantPanel } = await import('./assistant-panel')
@@ -152,7 +155,8 @@ async function renderPanel(
   return { container, queryClient, root }
 }
 
-async function renderLauncher() {
+async function renderLauncher(user: AuthUser | null = null) {
+  useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -210,6 +214,7 @@ async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
 afterEach(() => {
   api.get = originalGet
   api.post = originalPost
+  useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
   window.sessionStorage.clear()
   document.body.replaceChildren()
@@ -218,6 +223,56 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantPanel', () => {
+  test('uses an L1 unlock label only for L0 users', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/status')
+      return {
+        data: {
+          success: true,
+          data: { assistant: { enabled: true } },
+        },
+      }
+    }) as typeof api.get
+
+    const l0User: AuthUser = {
+      id: 7,
+      username: 'l0-user',
+      role: 1,
+      developer_access_granted: false,
+    }
+    const rendered = await renderLauncher(l0User)
+    try {
+      const launcherButton = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-launcher"]'
+      )
+      assert.ok(launcherButton)
+      assert.equal(launcherButton.textContent?.trim(), 'Unlock L1 with AI')
+      assert.equal(
+        launcherButton.getAttribute('aria-label'),
+        'Unlock L1 with AI'
+      )
+      assert.equal(launcherButton.getAttribute('title'), 'Unlock L1 with AI')
+
+      await act(async () => {
+        useAuthStore.getState().auth.setUser({
+          ...l0User,
+          developer_access_granted: true,
+        })
+        await flushEffects()
+      })
+
+      assert.equal(launcherButton.textContent?.trim(), 'AI assistant')
+      assert.equal(
+        launcherButton.getAttribute('aria-label'),
+        'Open AI assistant'
+      )
+      assert.equal(launcherButton.getAttribute('title'), 'Open AI assistant')
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('keeps the conversation when the floating assistant is closed and reopened', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/status') {

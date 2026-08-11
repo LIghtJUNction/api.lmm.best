@@ -23,6 +23,8 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { useStatus } from '@/hooks/use-status'
+import { isConsoleActivated } from '@/lib/console-activation'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   consumeQueuedAssistantPreset,
@@ -41,6 +43,7 @@ const AssistantPanel = lazy(() =>
 export function AssistantLauncher() {
   const { t } = useTranslation()
   const { status } = useStatus()
+  const user = useAuthStore((state) => state.auth.user)
   const [open, setOpen] = useState(false)
   const [hasOpened, setHasOpened] = useState(false)
   const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
@@ -76,14 +79,22 @@ export function AssistantLauncher() {
 
   if (status?.assistant?.enabled === false) return null
 
+  const needsL1Unlock = user !== null && !isConsoleActivated(user)
+  const visibleLabel = needsL1Unlock
+    ? t('Unlock L1 with AI')
+    : t('AI assistant')
+  const accessibleLabel = needsL1Unlock
+    ? t('Unlock L1 with AI')
+    : t('Open AI assistant')
+
   return (
     <>
       <Button
         type='button'
         size='default'
-        className='fixed right-4 bottom-20 z-50 h-11 gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-20'
-        aria-label={t('Open AI assistant')}
-        title={t('Open AI assistant')}
+        className='fixed right-4 bottom-20 z-50 h-11 max-w-[calc(100vw-2rem)] gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-20'
+        aria-label={accessibleLabel}
+        title={accessibleLabel}
         aria-haspopup='dialog'
         aria-expanded={open}
         aria-controls={hasOpened ? 'ai-assistant-panel' : undefined}
@@ -92,8 +103,12 @@ export function AssistantLauncher() {
         onMouseEnter={preload}
         onFocus={preload}
       >
-        <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} />
-        <span className='text-sm font-medium'>{t('AI assistant')}</span>
+        <HugeiconsIcon
+          icon={AiChat02Icon}
+          strokeWidth={2}
+          data-icon='inline-start'
+        />
+        <span className='truncate text-sm font-medium'>{visibleLabel}</span>
       </Button>
 
       {hasOpened ? (
