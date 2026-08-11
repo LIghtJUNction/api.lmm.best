@@ -42,13 +42,10 @@ export function AssistantLauncher() {
   const { status } = useStatus()
   const [open, setOpen] = useState(false)
   const [hasOpened, setHasOpened] = useState(false)
-  const [request, setRequest] = useState<{
-    id: number
-    preset?: AssistantPresetId
-  }>({ id: 0 })
+  const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
 
   const showAssistant = (preset?: AssistantPresetId) => {
-    setRequest((current) => ({ id: current.id + 1, preset }))
+    setInitialPreset(preset)
     setHasOpened(true)
     setOpen(true)
   }
@@ -83,9 +80,8 @@ export function AssistantLauncher() {
       {hasOpened ? (
         <Suspense fallback={null}>
           <AssistantPanel
-            key={request.id}
             open={open}
-            initialPreset={request.preset}
+            initialPreset={initialPreset}
             onOpenChange={setOpen}
           />
         </Suspense>
