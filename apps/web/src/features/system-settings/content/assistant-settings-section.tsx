@@ -48,7 +48,6 @@ import { safeNumberFieldProps } from '../utils/numeric-field'
 const assistantSettingsSchema = z.object({
   AssistantEnabled: z.boolean(),
   AssistantModel: z.string().trim().min(1).max(128),
-  AssistantWeeklyCreditUSD: z.number().min(0).max(1000),
   AssistantAgentLoopEnabled: z.boolean(),
   AssistantMaxSteps: z.number().int().min(1).max(12),
   AssistantTimeoutSeconds: z.number().int().min(5).max(120),

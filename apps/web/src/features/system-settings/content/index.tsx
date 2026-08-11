@@ -39,7 +39,6 @@ const defaultContentSettings: ContentSettings = {
   Chats: '[]',
   AssistantEnabled: true,
   AssistantModel: 'deepseek-v4-flash',
-  AssistantWeeklyCreditUSD: 1,
   AssistantAgentLoopEnabled: true,
   AssistantMaxSteps: 6,
   AssistantTimeoutSeconds: 45,

@@ -39,7 +39,6 @@ const STATUS_RELATED_KEYS = new Set([
   'oidc.display_name',
   'AssistantEnabled',
   'AssistantModel',
-  'AssistantWeeklyCreditUSD',
   'AssistantAgentLoopEnabled',
   'AssistantMaxSteps',
   'AssistantTimeoutSeconds',

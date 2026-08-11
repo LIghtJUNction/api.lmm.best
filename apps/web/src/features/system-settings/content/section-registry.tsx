@@ -108,7 +108,6 @@ const CONTENT_SECTIONS = [
         defaultValues={{
           AssistantEnabled: settings.AssistantEnabled,
           AssistantModel: settings.AssistantModel,
-          AssistantWeeklyCreditUSD: settings.AssistantWeeklyCreditUSD,
           AssistantAgentLoopEnabled: settings.AssistantAgentLoopEnabled,
           AssistantMaxSteps: settings.AssistantMaxSteps,
           AssistantTimeoutSeconds: settings.AssistantTimeoutSeconds,
