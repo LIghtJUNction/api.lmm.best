@@ -16,18 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  Alert02Icon,
+  ArrowRight01Icon,
+  CircleDollarSignIcon,
+  PackageSearchIcon,
+  ReloadIcon,
+  SparklesIcon,
+  Tag01Icon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import type { TFunction } from 'i18next'
-import {
-  ArrowRight,
-  CircleAlert,
-  CircleDollarSign,
-  PackageSearch,
-  RefreshCcw,
-  Sparkles,
-  Tag,
-} from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -61,6 +62,7 @@ import { getPublicPlans } from '@/features/subscriptions/api'
 import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
 import { getTopupInfo } from '@/features/wallet/api'
 import { formatCreditBalance } from '@/features/wallet/lib/format'
+import { toIntlLocale } from '@/i18n/languages'
 import { getCurrencyDisplay } from '@/lib/currency'
 
 import {
@@ -68,7 +70,7 @@ import {
   getAssistantTopupOffers,
 } from './plan-recommender'
 
-function formatPlanPrice(amount: number, currency: string, locale: string) {
+function formatPlanPrice(amount: number, currency: string, locale?: string) {
   try {
     return new Intl.NumberFormat(locale, {
       style: 'currency',
@@ -160,7 +162,11 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
               </div>
               {comparison.recommended ? (
                 <Badge className='shrink-0' variant='secondary'>
-                  <Sparkles aria-hidden='true' />
+                  <HugeiconsIcon
+                    icon={SparklesIcon}
+                    strokeWidth={2}
+                    aria-hidden='true'
+                  />
                   {t('Closest fit')}
                 </Badge>
               ) : null}
@@ -178,7 +184,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
                 {formatPlanPrice(
                   Number(plan.price_amount || 0),
                   plan.currency,
-                  i18n.language
+                  toIntlLocale(i18n.language)
                 )}
               </strong>
             </div>
@@ -215,7 +221,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   } else if (plansQuery.isError) {
     planContent = (
       <Alert variant='destructive'>
-        <CircleAlert aria-hidden='true' />
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
         <AlertTitle>{t('Unable to load live subscription plans')}</AlertTitle>
         <AlertDescription>
           {t(
@@ -229,7 +235,12 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
             size='sm'
             onClick={() => void plansQuery.refetch()}
           >
-            <RefreshCcw data-icon='inline-start' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={ReloadIcon}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
             {t('Retry')}
           </Button>
         </AlertAction>
@@ -240,7 +251,11 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
       <Empty className='min-h-36 border'>
         <EmptyHeader>
           <EmptyMedia variant='icon'>
-            <PackageSearch aria-hidden='true' />
+            <HugeiconsIcon
+              icon={PackageSearchIcon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
           </EmptyMedia>
           <EmptyTitle>
             {t('No subscription plans are currently available.')}
@@ -261,7 +276,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
   } else if (topupQuery.isError) {
     topupContent = (
       <Alert>
-        <CircleAlert aria-hidden='true' />
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
         <AlertTitle>{t('Unable to load current top-up discounts')}</AlertTitle>
         <AlertDescription>
           {t(
@@ -275,7 +290,12 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
             size='sm'
             onClick={() => void topupQuery.refetch()}
           >
-            <RefreshCcw data-icon='inline-start' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={ReloadIcon}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
             {t('Retry')}
           </Button>
         </AlertAction>
@@ -288,7 +308,7 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
           <Badge key={offer.amount} variant='outline'>
             {formatCreditBalance(offer.amount)} ·{' '}
             {t('save {{percent}}%', {
-              percent: new Intl.NumberFormat(i18n.language, {
+              percent: new Intl.NumberFormat(toIntlLocale(i18n.language), {
                 maximumFractionDigits: 1,
               }).format(offer.savingsPercent),
             })}
@@ -308,7 +328,12 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
     <Card size='sm'>
       <CardHeader>
         <CardTitle className='flex items-center gap-2'>
-          <CircleDollarSign className='size-4' aria-hidden='true' />
+          <HugeiconsIcon
+            icon={CircleDollarSignIcon}
+            className='size-4'
+            strokeWidth={2}
+            aria-hidden='true'
+          />
           {t('Live plan and discount advisor')}
         </CardTitle>
         <CardDescription>
@@ -343,7 +368,12 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
             id='assistant-topup-title'
             className='flex items-center gap-2 text-sm font-medium'
           >
-            <Tag className='size-4' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={Tag01Icon}
+              className='size-4'
+              strokeWidth={2}
+              aria-hidden='true'
+            />
             {t('Best current top-up discounts')}
           </div>
           {topupContent}
@@ -358,7 +388,12 @@ export function AssistantPlanTool(props: { developerAccessGranted: boolean }) {
           {props.developerAccessGranted
             ? t('Review plans and exact checkout prices')
             : t('Add funds')}
-          <ArrowRight data-icon='inline-end' aria-hidden='true' />
+          <HugeiconsIcon
+            icon={ArrowRight01Icon}
+            strokeWidth={2}
+            data-icon='inline-end'
+            aria-hidden='true'
+          />
         </Button>
       </CardContent>
     </Card>

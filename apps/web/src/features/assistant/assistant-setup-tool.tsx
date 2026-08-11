@@ -17,12 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
-  ArrowRight,
-  ExternalLink,
-  KeyRound,
-  Laptop,
-  Terminal,
-} from 'lucide-react'
+  ArrowRight01Icon,
+  ComputerTerminal01Icon,
+  ExternalLinkIcon,
+  Key01Icon,
+  LaptopIcon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -99,7 +100,12 @@ function OfficialLink(props: { href: string; label: string }) {
       render={<a href={props.href} target='_blank' rel='noopener noreferrer' />}
     >
       {props.label}
-      <ExternalLink data-icon='inline-end' aria-hidden='true' />
+      <HugeiconsIcon
+        icon={ExternalLinkIcon}
+        strokeWidth={2}
+        data-icon='inline-end'
+        aria-hidden='true'
+      />
     </Button>
   )
 }
@@ -148,7 +154,12 @@ export function AssistantSetupTool(props: {
     <Card size='sm'>
       <CardHeader>
         <CardTitle className='flex items-center gap-2'>
-          <Laptop className='size-4' aria-hidden='true' />
+          <HugeiconsIcon
+            icon={LaptopIcon}
+            className='size-4'
+            strokeWidth={2}
+            aria-hidden='true'
+          />
           {t('Client setup guide')}
         </CardTitle>
         <CardDescription>
@@ -224,7 +235,12 @@ export function AssistantSetupTool(props: {
                 onClick={props.onCreateKey}
                 disabled={!props.developerAccessGranted}
               >
-                <KeyRound data-icon='inline-start' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
                 {t('Create API key')}
               </Button>
             </div>
@@ -315,7 +331,12 @@ export function AssistantSetupTool(props: {
                 onClick={props.onCreateKey}
                 disabled={!props.developerAccessGranted}
               >
-                <KeyRound data-icon='inline-start' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
                 {t('Create API key')}
               </Button>
             </div>
@@ -414,7 +435,12 @@ export function AssistantSetupTool(props: {
                 onClick={props.onCreateKey}
                 disabled={!props.developerAccessGranted}
               >
-                <KeyRound data-icon='inline-start' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
                 {t('Create API key')}
               </Button>
             </div>
@@ -437,7 +463,12 @@ export function AssistantSetupTool(props: {
             ) : null}
             <div className='bg-muted/40 rounded-lg border p-3'>
               <div className='flex items-center gap-2 text-sm font-medium'>
-                <Terminal className='size-4' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={ComputerTerminal01Icon}
+                  className='size-4'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
                 {t('Official ChatGPT desktop uses OpenAI sign-in')}
               </div>
               <p className='text-muted-foreground mt-1 text-xs leading-5'>
@@ -495,7 +526,12 @@ export function AssistantSetupTool(props: {
                 onClick={() => setClientTab('cc-switch')}
               >
                 {t('Use CC Switch instead')}
-                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-end'
+                  aria-hidden='true'
+                />
               </Button>
             </div>
           </TabsContent>

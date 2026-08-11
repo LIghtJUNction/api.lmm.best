@@ -144,6 +144,22 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantCostTool', () => {
+  test('formats live costs with internal Chinese locale codes', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/pricing')
+      return { data: pricingFixture }
+    }) as typeof api.get
+
+    await i18n.changeLanguage('zhCN')
+    const rendered = await renderTool(true)
+    try {
+      assert.match(rendered.container.textContent ?? '', /US\$0\.3600/)
+    } finally {
+      await unmount(rendered)
+      await i18n.changeLanguage('en')
+    }
+  })
+
   test('keeps L0 restricted without requesting pricing', async () => {
     let calls = 0
     api.get = (async () => {
