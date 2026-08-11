@@ -342,7 +342,7 @@ func mainMigrationModels() []interface{} {
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
-		&AssistantWeeklyUsage{}, &AssistantLead{}, &AdvancedSecurityEvent{},
+		&AssistantLead{}, &AdvancedSecurityEvent{},
 		&ReleaseNote{}, &ReleaseNoteRead{},
 	}
 }
@@ -439,7 +439,6 @@ func migrateDBFast() error {
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
 		{&PersonalAccessIP{}, "PersonalAccessIP"},
-		{&AssistantWeeklyUsage{}, "AssistantWeeklyUsage"},
 		{&AssistantLead{}, "AssistantLead"},
 		{&AdvancedSecurityEvent{}, "AdvancedSecurityEvent"},
 		{&ReleaseNote{}, "ReleaseNote"},

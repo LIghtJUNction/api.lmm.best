@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -347,9 +348,9 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_REQUIRED")
 }
 
-func TestAssistantPlanOffersRejectL0WithoutLoadingBillingData(t *testing.T) {
+func TestAssistantPlanOffersAllowL0ReadOnlyLiveRecommendations(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionPlan{}))
 	user := model.User{
 		Username: "assistant-plan-l0-user",
 		Password: "password",
@@ -358,22 +359,80 @@ func TestAssistantPlanOffersRejectL0WithoutLoadingBillingData(t *testing.T) {
 		Group:    "default",
 	}
 	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.SubscriptionPlan{Title: "L0 visible", Enabled: true, SortOrder: 2, PriceAmount: 9.99}).Error)
+	disabledPlan := model.SubscriptionPlan{Title: "disabled", Enabled: true, SortOrder: 3, PriceAmount: 99}
+	require.NoError(t, db.Create(&disabledPlan).Error)
+	require.NoError(t, db.Model(&disabledPlan).Update("enabled", false).Error)
+	paymentSetting := operation_setting.GetPaymentSetting()
+	originalDiscounts := paymentSetting.AmountDiscount
+	originalCompliance := paymentSetting.ComplianceConfirmed
+	originalTermsVersion := paymentSetting.ComplianceTermsVersion
+	paymentSetting.AmountDiscount = map[int]float64{50: 0.9}
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = ""
+	t.Cleanup(func() {
+		paymentSetting.AmountDiscount = originalDiscounts
+		paymentSetting.ComplianceConfirmed = originalCompliance
+		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+	})
 
 	result := executeAssistantPlanOffersTool(user.Id)
-	assert.Equal(t, false, result["ok"])
+	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, false, result["developer_access_granted"])
-	assert.Equal(t, false, result["read_only"])
+	assert.Equal(t, true, result["read_only"])
 	assert.Equal(t, false, result["checkout_available"])
 	assert.Equal(t, true, result["payment_hidden"])
 	assert.Equal(t, false, result["payment_compliance_confirmed"])
-	assert.Contains(t, result["error"], "L1 access")
 	plans, ok := result["plans"].([]SubscriptionPlanDTO)
 	require.True(t, ok)
-	assert.Empty(t, plans)
+	require.Len(t, plans, 1)
+	assert.Equal(t, "L0 visible", plans[0].Plan.Title)
+	discounts, ok := result["topup_discounts"].(map[int]float64)
+	require.True(t, ok)
+	assert.Equal(t, map[int]float64{50: 0.9}, discounts)
+	assert.Contains(t, result["message"], "read-only")
+	assert.Contains(t, result["next_step"], "L1 access request")
+}
+
+func TestAssistantPlanOffersKeepLinuxDOPaymentHiddenForL1(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionPlan{}))
+	user := model.User{
+		Username:           "assistant-plan-linuxdo-l1",
+		Password:           "password",
+		Email:              "member@linux.do",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		ConsoleActivatedAt: 1,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.SubscriptionPlan{Title: "L1 visible", Enabled: true, PriceAmount: 19.99}).Error)
+	paymentSetting := operation_setting.GetPaymentSetting()
+	originalDiscounts := paymentSetting.AmountDiscount
+	originalCompliance := paymentSetting.ComplianceConfirmed
+	originalTermsVersion := paymentSetting.ComplianceTermsVersion
+	paymentSetting.AmountDiscount = map[int]float64{100: 0.8}
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		paymentSetting.AmountDiscount = originalDiscounts
+		paymentSetting.ComplianceConfirmed = originalCompliance
+		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+	})
+
+	result := executeAssistantPlanOffersTool(user.Id)
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, true, result["developer_access_granted"])
+	assert.Equal(t, false, result["read_only"])
+	assert.Equal(t, false, result["checkout_available"])
+	assert.Equal(t, true, result["payment_hidden"])
+	plans, ok := result["plans"].([]SubscriptionPlanDTO)
+	require.True(t, ok)
+	require.Len(t, plans, 1)
 	discounts, ok := result["topup_discounts"].(map[int]float64)
 	require.True(t, ok)
 	assert.Empty(t, discounts)
-	assert.Contains(t, result["next_step"], "L1 access request")
 }
 
 func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {

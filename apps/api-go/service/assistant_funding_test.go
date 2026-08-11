@@ -26,7 +26,7 @@ func setupAssistantFundingTestDB(t *testing.T, quota int) (*gorm.DB, int) {
 	require.NoError(t, err)
 	model.DB = db
 	require.NoError(t, db.AutoMigrate(&model.User{}))
-	user := model.User{Username: "assistant-root", Password: "password", Quota: quota, Role: common.RoleRootUser}
+	user := model.User{Username: "assistant-root", Password: "password", Quota: quota, Role: common.RoleRootUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&user).Error)
 	t.Cleanup(func() {
 		model.DB = previousDB
@@ -84,6 +84,35 @@ func TestAssistantFundingRefundsSuperAdministratorWallet(t *testing.T) {
 	_, userId := setupAssistantFundingTestDB(t, 100)
 	funding := NewAssistantFunding(userId)
 	require.NoError(t, funding.PreConsume(80))
+	require.NoError(t, funding.Refund())
+
+	quota, err := model.GetUserQuota(userId, true)
+	require.NoError(t, err)
+	assert.Equal(t, 100, quota)
+}
+
+func TestAssistantFundingRejectsNonRootOrDisabledAccount(t *testing.T) {
+	db, userId := setupAssistantFundingTestDB(t, 100)
+	funding := NewAssistantFunding(userId)
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", userId).Update("status", common.UserStatusDisabled).Error)
+	assert.ErrorIs(t, funding.PreConsume(10), ErrAssistantBillingAccountUnavailable)
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", userId).Updates(map[string]any{
+		"status": common.UserStatusEnabled,
+		"role":   common.RoleCommonUser,
+	}).Error)
+	assert.ErrorIs(t, funding.PreConsume(10), ErrAssistantBillingAccountUnavailable)
+	quota, err := model.GetUserQuota(userId, true)
+	require.NoError(t, err)
+	assert.Equal(t, 100, quota)
+}
+
+func TestAssistantFundingRefundsOriginalAccountAfterItIsDisabled(t *testing.T) {
+	db, userId := setupAssistantFundingTestDB(t, 100)
+	funding := NewAssistantFunding(userId)
+	require.NoError(t, funding.PreConsume(40))
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", userId).Update("status", common.UserStatusDisabled).Error)
 	require.NoError(t, funding.Refund())
 
 	quota, err := model.GetUserQuota(userId, true)
