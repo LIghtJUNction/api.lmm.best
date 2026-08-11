@@ -109,10 +109,7 @@ export function TrustLevelPanel({
   const progress = info?.next_level
     ? Math.min(
         100,
-        Math.max(
-          0,
-          ((creditedAmountUSD - previousAmount) / amountRange) * 100
-        )
+        Math.max(0, ((creditedAmountUSD - previousAmount) / amountRange) * 100)
       )
     : 100
   const roleAssigned = currentLevel >= 5

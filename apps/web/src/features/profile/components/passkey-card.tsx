@@ -119,7 +119,9 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
       return
     }
 
-    const requiredMethod: VerificationMethod = methods.hasEmail ? 'email' : '2fa'
+    const requiredMethod: VerificationMethod = methods.hasEmail
+      ? 'email'
+      : '2fa'
     setRestrictedMethod(requiredMethod)
     await startVerification(register, {
       scope: 'passkey.register',
