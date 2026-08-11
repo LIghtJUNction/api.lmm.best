@@ -169,11 +169,7 @@ func classifyAssistantEmail(email string) string {
 	if domain == "linux.do" {
 		return "linuxdo"
 	}
-	if assistantEmailDomainIn(domain, []string{
-		"10minutemail.com", "disposablemail.com", "emailondeck.com", "fakeinbox.com",
-		"getnada.com", "guerrillamail.com", "maildrop.cc", "mailinator.com",
-		"sharklasers.com", "tempmail.com", "temp-mail.org", "yopmail.com",
-	}) {
+	if model.IsDisposableEmail(email) {
 		return "disposable"
 	}
 	if assistantEmailDomainIn(domain, []string{

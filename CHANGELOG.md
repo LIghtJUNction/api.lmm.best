@@ -28,6 +28,9 @@ authenticated users then see it once after their next login.
 - Tightened administrator handoffs so the request is required and contains at
   least five characters at the AI tool, browser form and API validation layers;
   security-risk signals now take precedence over promotion-seeking signals.
+- Known disposable-mail domains no longer receive new-account or invitation
+  promotional credits; ordinary privacy-mail domains, account access, and
+  administrator review remain unaffected.
 - Added release-note delivery and acknowledgement so a published changelog is
   shown after the user's next login and not repeatedly during an active session.
 - Improved level, payment-visibility, administrator, mobile and chart-display
