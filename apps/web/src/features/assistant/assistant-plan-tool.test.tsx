@@ -211,29 +211,39 @@ describe('AssistantPlanTool', () => {
     }
   })
 
-  test('keeps L0 plan and discount data hidden and requests access', async () => {
+  test('gives L0 users live read-only plan and discount advice without checkout', async () => {
     let calls = 0
     let accessRequests = 0
     api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/offers')
       calls += 1
-      throw new Error(`Unexpected GET ${url}`)
+      return {
+        data: {
+          ...assistantOffersFixture,
+          data: {
+            ...assistantOffersFixture.data,
+            developer_access_granted: false,
+            read_only: true,
+            checkout_available: true,
+          },
+        },
+      }
     }) as typeof api.get
 
     const rendered = await renderTool(false, () => {
       accessRequests += 1
     })
 
-    assert.equal(calls, 0)
+    assert.equal(calls, 1)
+    assert.match(rendered.container.textContent ?? '', /Pro/)
+    assert.match(rendered.container.textContent ?? '', /save 20%/)
+    assert.match(rendered.container.textContent ?? '', /Read-only plan advice/)
     assert.match(
       rendered.container.textContent ?? '',
-      /prepare an L1 recommendation for administrator review/
+      /Estimated discounted base amount\$80 USD/
     )
-    assert.doesNotMatch(rendered.container.textContent ?? '', /Pro/)
-    assert.doesNotMatch(rendered.container.textContent ?? '', /save 20%/)
-    assert.equal(
-      rendered.container.querySelector('#assistant-expected-credit'),
-      null
-    )
+    assert.ok(rendered.container.querySelector('#assistant-expected-credit'))
+    assert.ok(rendered.container.querySelector('#assistant-topup-credit'))
     assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
     await act(async () => {
       const button = [...rendered.container.querySelectorAll('button')].find(
