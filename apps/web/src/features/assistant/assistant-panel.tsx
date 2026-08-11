@@ -65,6 +65,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { toIntlLocale } from '@/i18n/languages'
 
 import {
   getAssistantStatus,
@@ -177,6 +178,22 @@ function remainingCreditUSD(status: AssistantStatus | undefined): number {
   return (
     credit.weekly_credit_usd * (credit.remaining_quota / credit.limit_quota)
   )
+}
+
+function assistantCreditResetLabel(
+  status: AssistantStatus | undefined,
+  language: string
+): string | null {
+  const resetsAt = status?.credit.resets_at
+  if (!Number.isFinite(resetsAt) || !resetsAt || resetsAt <= 0) return null
+  const resetDate = new Date(resetsAt * 1000)
+  if (Number.isNaN(resetDate.getTime())) return null
+  return new Intl.DateTimeFormat(toIntlLocale(language), {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(resetDate)
 }
 
 function AssistantAccountStatusNotice(props: {
@@ -348,11 +365,15 @@ export function AssistantPanel(props: {
 
   const creditLabel = useMemo(
     () =>
-      new Intl.NumberFormat(i18n.language, {
+      new Intl.NumberFormat(toIntlLocale(i18n.language), {
         style: 'currency',
         currency: 'USD',
         maximumFractionDigits: 2,
       }).format(remainingCreditUSD(statusQuery.data)),
+    [i18n.language, statusQuery.data]
+  )
+  const creditResetLabel = useMemo(
+    () => assistantCreditResetLabel(statusQuery.data, i18n.language),
     [i18n.language, statusQuery.data]
   )
 
@@ -632,6 +653,9 @@ export function AssistantPanel(props: {
                         amount: creditLabel,
                       })
                     : t('Weekly included AI credit applies first.')}
+                  {creditResetLabel
+                    ? ` · ${t('Resets {{date}}', { date: creditResetLabel })}`
+                    : null}
                 </span>
                 <PromptInputSubmit
                   status={sending ? 'submitted' : 'ready'}
@@ -640,6 +664,11 @@ export function AssistantPanel(props: {
               </PromptInputFooter>
             </PromptInput>
             <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
+              {t(
+                'Weekly system credit is used first. Your wallet is charged only after it runs out.'
+              )}
+            </p>
+            <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
               {t(
                 'AI answers may be inaccurate. Never send passwords or API keys.'
               )}
