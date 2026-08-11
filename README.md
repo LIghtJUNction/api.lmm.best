@@ -37,14 +37,15 @@ Review [`.env.example`](./.env.example), replace all example credentials, and th
 ```bash
 git clone https://github.com/LIghtJUNction/api.lmm.best.git
 cd api.lmm.best
-docker compose up -d
+just setup
 ```
 
 Open <http://localhost:3000> and complete the setup flow. Common development commands are:
 
 ```bash
 just setup
-just dev
+just infra-up   # if docker-compose.dev.yml is available in your branch
+just dev        # or run just dev-go and just dev-web separately
 just test
 just build
 ```
@@ -65,10 +66,10 @@ Application copy is not a substitute for geographic enforcement. Operators are r
 
 ## Technical foundation
 
-LMM Forge is the product layer maintained in this repository. Its service foundation is derived from [QuantumNous/New API](https://github.com/QuantumNous/new-api), which builds on [One API](https://github.com/songquanpeng/one-api). The inherited New API compatibility layer, identifiers, copyright notices, and attribution remain intact.
+LMM Forge is the product layer maintained by LIghtJUNction in this repository. Its service foundation is derived from [QuantumNous/New API](https://github.com/QuantumNous/new-api), which builds on [One API](https://github.com/songquanpeng/one-api). The inherited New API compatibility layer, identifiers, copyright notices, and attribution remain intact.
 
 For deployment and authentication details, see [`docs/authentication.md`](./docs/authentication.md), [`NOTICE`](./NOTICE), and [`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md).
 
 ## License and attribution
 
-This repository is licensed under the [GNU Affero General Public License v3.0](./LICENSE). Preserve the required QuantumNous/New API and One API notices, the visible upstream attribution, and all applicable third-party terms when redistributing a modified build.
+This repository is licensed under the [GNU Affero General Public License v3.0](./LICENSE). Fork-specific modifications are Copyright (C) 2026 LIghtJUNction. Preserve the required QuantumNous/New API and One API notices, the visible upstream attribution, and all applicable third-party terms when redistributing a modified build.

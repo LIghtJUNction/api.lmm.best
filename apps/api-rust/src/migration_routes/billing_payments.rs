@@ -1276,7 +1276,7 @@ impl PgBillingRepository {
             .await
             .map_err(|_| BillingError::Storage)?;
         let trade_no = format!("SUBBALUSR{user_id}NO{}", Uuid::new_v4().simple());
-        sqlx::query("INSERT INTO subscription_orders (user_id, plan_id, money, trade_no, payment_method, payment_provider, status, create_time, complete_time, provider_payload) VALUES ($1,$2,$3,$4,'balance','balance','success',$5,$5,$6)")
+        sqlx::query("INSERT INTO subscription_orders (user_id, plan_id, money, trade_no, payment_method, payment_provider, status, create_time, complete_time, provider_payload) VALUES ($1,$2,CAST($3 AS NUMERIC),$4,'balance','balance','success',$5,$5,$6)")
             .bind(user_id)
             .bind(plan_id)
             .bind(&money)
@@ -1341,7 +1341,7 @@ impl BillingRepository for PgBillingRepository {
         }
         let trade_no = format!("sub_{}", Uuid::new_v4().simple());
         let now = epoch_seconds()?;
-        sqlx::query("INSERT INTO subscription_orders (user_id, plan_id, money, trade_no, payment_method, payment_provider, status, create_time) VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)").bind(input.user_id).bind(input.plan_id).bind(&money).bind(&trade_no).bind(&input.payment_method).bind(input.provider).bind(now).execute(&mut *tx).await.map_err(|_| BillingError::Storage)?;
+        sqlx::query("INSERT INTO subscription_orders (user_id, plan_id, money, trade_no, payment_method, payment_provider, status, create_time) VALUES ($1,$2,CAST($3 AS NUMERIC),$4,$5,$6,'pending',$7)").bind(input.user_id).bind(input.plan_id).bind(&money).bind(&trade_no).bind(&input.payment_method).bind(input.provider).bind(now).execute(&mut *tx).await.map_err(|_| BillingError::Storage)?;
         tx.commit().await.map_err(|_| BillingError::Storage)?;
         Ok(PendingOrder {
             trade_no,
@@ -1500,7 +1500,7 @@ impl BillingRepository for PgBillingRepository {
             .map_err(|_| BillingError::Storage)?
             .rows_affected();
         if updated == 0 {
-            sqlx::query("INSERT INTO top_ups (user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status) VALUES ($1,0,$2,$3,$4,$5,$6,$6,'success')").bind(user_id).bind(row.try_get::<String,_>("money").map_err(|_| BillingError::Storage)?).bind(trade_no).bind(method.unwrap_or_default()).bind(provider).bind(now).execute(&mut *tx).await.map_err(|_| BillingError::Storage)?;
+            sqlx::query("INSERT INTO top_ups (user_id,amount,money,trade_no,payment_method,payment_provider,create_time,complete_time,status) VALUES ($1,0,CAST($2 AS NUMERIC),$3,$4,$5,$6,$6,'success')").bind(user_id).bind(row.try_get::<String,_>("money").map_err(|_| BillingError::Storage)?).bind(trade_no).bind(method.unwrap_or_default()).bind(provider).bind(now).execute(&mut *tx).await.map_err(|_| BillingError::Storage)?;
         }
         tx.commit().await.map_err(|_| BillingError::Storage)?;
         Ok(Completion::Completed {

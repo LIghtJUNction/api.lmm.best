@@ -7,7 +7,7 @@ trap 'rm -rf -- "$work"' EXIT
 
 make_build() {
   local name=$1 asset=$2 body=$3
-  mkdir -p -- "$work/$name/static/js"
+  mkdir -p "$work/$name/static/js"
   printf '<script src="/static/js/%s"></script>\n' "$asset" >"$work/$name/index.html"
   printf '%s\n' "$body" >"$work/$name/static/js/$asset"
 }
@@ -27,7 +27,6 @@ make_build second new.222.js new
 [[ $(<"$work/root/assets/js/old.111.js") == old ]]
 [[ $(<"$work/root/assets/js/new.222.js") == new ]]
 
-# A browser holding the old index can still lazy-load its old hashed chunk.
 grep -Fq '/static/js/old.111.js' "$work/root/releases/first/index.html"
 
 "$repo/deploy/frontend-release.sh" rollback --root "$work/root" --release first --keep 2
@@ -46,7 +45,6 @@ grep -Fq 'immutable asset collision with different content' "$work/err"
 after_collision=$(snapshot_store | sort)
 [[ $before_collision == "$after_collision" ]]
 
-# A failure after one successful asset installation rolls back the whole batch.
 make_build injected injected.333.js injected
 mkdir -p "$work/injected/static/lazy/deep"
 printf 'another\n' >"$work/injected/static/lazy/deep/another.444.js"

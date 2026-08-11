@@ -25,12 +25,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import type {
-  SecureVerificationState,
-  VerificationMethod,
-  VerificationMethods,
+import {
+  getPreferredVerificationMethods,
+  type SecureVerificationState,
+  type VerificationMethod,
+  type VerificationMethods,
 } from '../types'
-import { getPreferredVerificationMethods } from '../types'
 
 interface SecureVerificationDialogProps {
   open: boolean

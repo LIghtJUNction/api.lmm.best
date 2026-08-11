@@ -4,7 +4,11 @@
 //! the remaining candidates stay behind migration/test boundaries until their
 //! frozen Go behavior has been independently verified and approved.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -16,7 +20,7 @@ use axum::{
 };
 use secrecy::SecretString;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
@@ -26,6 +30,33 @@ const ADMIN_ROLE: i64 = 10;
 const ROOT_ROLE: i64 = 100;
 const MAX_SELF_RANGE_SECONDS: i64 = 30 * 24 * 60 * 60;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+// Go's log queries apply each timestamp predicate only when that query value
+// is non-zero.  Keeping this separate from the bounded data/stat queries
+// prevents a no-parameter log read from becoming `created_at <= 0`.
+#[cfg(test)]
+const OPTIONAL_LOG_TIME_RANGE: &str =
+    "($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3)";
+#[cfg(test)]
+const MAX_RECENT_LOGS: i64 = 1000;
+#[cfg(test)]
+const LOG_JSON: &str = r#"jsonb_strip_nulls(jsonb_build_object('id', id, 'user_id', COALESCE(user_id, 0), 'created_at', COALESCE(created_at, 0), 'type', COALESCE(type, 0), 'content', COALESCE(content, ''), 'username', COALESCE(username, ''), 'token_name', COALESCE(token_name, ''), 'model_name', COALESCE(model_name, ''), 'quota', COALESCE(quota, 0), 'prompt_tokens', COALESCE(prompt_tokens, 0), 'completion_tokens', COALESCE(completion_tokens, 0), 'use_time', COALESCE(use_time, 0), 'is_stream', COALESCE(is_stream, false), 'channel', COALESCE(channel_id, 0), 'channel_name', COALESCE(channel_name, ''), 'token_id', COALESCE(token_id, 0), 'group', COALESCE("group", ''), 'ip', COALESCE(ip, ''), 'request_id', NULLIF(COALESCE(request_id, ''), ''), 'upstream_request_id', NULLIF(COALESCE(upstream_request_id, ''), ''), 'other', COALESCE(other, '')))"#;
+
+#[cfg(test)]
+fn log_query(operation: ObservabilityOperation) -> String {
+    match operation {
+        ObservabilityOperation::SelfLogs => format!(
+            "SELECT {LOG_JSON} FROM logs WHERE user_id = $1 AND {OPTIONAL_LOG_TIME_RANGE} ORDER BY id DESC LIMIT {MAX_RECENT_LOGS}"
+        ),
+        // Go's token-log handler ignores the optional query string and returns
+        // the most recent 1,000 rows in the legacy success/data envelope.
+        ObservabilityOperation::LogsByToken => format!(
+            "SELECT {LOG_JSON} FROM logs WHERE token_id = $1 ORDER BY id DESC LIMIT {MAX_RECENT_LOGS}"
+        ),
+        _ => format!(
+            "SELECT {LOG_JSON} FROM logs WHERE ($1 = 0 OR created_at >= $1) AND ($2 = 0 OR created_at <= $2) ORDER BY id DESC LIMIT {MAX_RECENT_LOGS}"
+        ),
+    }
+}
 
 /// The legacy authentication boundary required by a route family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -480,6 +511,492 @@ impl ObservabilityMetrics for ValkeyObservabilityMetrics {
         object.insert("key_fp".to_owned(), Value::String(key_fp.to_owned()));
         Ok(data)
     }
+}
+
+const PERF_SERIES_SCHEMA: &str = "dbcd0a3c01b55203";
+const DEFAULT_PERF_BUCKET_SECONDS: i64 = 60 * 60;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PerfCounters {
+    request_count: i64,
+    success_count: i64,
+    total_latency_ms: i64,
+    ttft_sum_ms: i64,
+    ttft_count: i64,
+    output_tokens: i64,
+    generation_ms: i64,
+}
+
+impl PerfCounters {
+    fn add_assign(&mut self, other: Self) {
+        self.request_count += other.request_count;
+        self.success_count += other.success_count;
+        self.total_latency_ms += other.total_latency_ms;
+        self.ttft_sum_ms += other.ttft_sum_ms;
+        self.ttft_count += other.ttft_count;
+        self.output_tokens += other.output_tokens;
+        self.generation_ms += other.generation_ms;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PerfRow {
+    model_name: String,
+    group: String,
+    bucket_ts: i64,
+    counters: PerfCounters,
+}
+
+/// PostgreSQL-backed performance metrics reader for the two public metrics
+/// endpoints.  The Go implementation also merges process-local hot buckets;
+/// Rust has no second in-memory collector, so this adapter reads the durable
+/// buckets and the compatible Valkey active bucket when one is configured.
+#[derive(Clone)]
+pub struct PostgresObservabilityMetrics {
+    pg: PgPool,
+    valkey: Option<redis::Client>,
+}
+
+impl PostgresObservabilityMetrics {
+    /// Creates a reader using only the durable `perf_metrics` table.
+    #[must_use]
+    pub fn new(pg: PgPool) -> Self {
+        Self { pg, valkey: None }
+    }
+
+    /// Adds the legacy `perf:<model>:<group>:<bucket>` active-bucket reader.
+    #[must_use]
+    pub fn with_valkey(mut self, valkey: redis::Client) -> Self {
+        self.valkey = Some(valkey);
+        self
+    }
+
+    async fn query_model(
+        &self,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let model = non_empty_query(query, "model").ok_or(ObservabilityStoreError::Unavailable)?;
+        let (start_ts, end_ts) = perf_time_range(query)?;
+        let group = non_empty_query(query, "group");
+        let rows = self
+            .fetch_rows(Some(model), group, start_ts, end_ts)
+            .await?;
+        let mut merged = BTreeMap::<(String, i64), PerfCounters>::new();
+        for row in rows {
+            merged
+                .entry((row.group, row.bucket_ts))
+                .or_default()
+                .add_assign(row.counters);
+        }
+
+        // Go only consults the Redis active bucket for a group-scoped query;
+        // preserve that boundary and ignore cache failures just as Go does.
+        if let Some(group) = group {
+            self.merge_valkey_active_bucket(&mut merged, model, group, start_ts, end_ts)
+                .await;
+        }
+
+        let active_groups = self.active_group_keys(false).await?;
+        let mut groups = Vec::new();
+        let mut current_group: Option<String> = None;
+        let mut current_buckets = Vec::<(i64, PerfCounters)>::new();
+        for ((group_name, bucket_ts), counters) in merged {
+            if current_group.as_deref() != Some(group_name.as_str()) {
+                if let Some(previous) = current_group.take() {
+                    if active_groups.contains(&previous) {
+                        groups.push(perf_group_value(&previous, &current_buckets));
+                    }
+                }
+                current_group = Some(group_name);
+                current_buckets.clear();
+            }
+            current_buckets.push((bucket_ts, counters));
+        }
+        if let Some(previous) = current_group {
+            if active_groups.contains(&previous) {
+                groups.push(perf_group_value(&previous, &current_buckets));
+            }
+        }
+
+        Ok(json!({
+            "model_name": model,
+            "series_schema": PERF_SERIES_SCHEMA,
+            "groups": groups,
+        }))
+    }
+
+    async fn query_summary(
+        &self,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        let (start_ts, end_ts) = perf_time_range(query)?;
+        let active_groups = self.active_group_keys(true).await?;
+        let rows = self.fetch_rows(None, None, start_ts, end_ts).await?;
+        let mut totals = BTreeMap::<String, PerfCounters>::new();
+        let mut buckets = BTreeMap::<String, BTreeMap<i64, PerfCounters>>::new();
+        for row in rows {
+            if !active_groups.contains(&row.group) || row.counters.request_count == 0 {
+                continue;
+            }
+            totals
+                .entry(row.model_name.clone())
+                .or_default()
+                .add_assign(row.counters);
+            buckets
+                .entry(row.model_name)
+                .or_default()
+                .entry(row.bucket_ts)
+                .or_default()
+                .add_assign(row.counters);
+        }
+
+        let mut models = totals
+            .into_iter()
+            .map(|(model_name, counters)| {
+                let recent = buckets
+                    .get(&model_name)
+                    .map_or_else(Vec::new, |model_buckets| {
+                        let start = model_buckets.len().saturating_sub(3);
+                        model_buckets
+                            .iter()
+                            .skip(start)
+                            .map(|(_, value)| go_number(round_two(success_rate(*value))))
+                            .collect::<Vec<_>>()
+                    });
+                let mut object = Map::from_iter([
+                    ("model_name".to_owned(), Value::String(model_name)),
+                    (
+                        "avg_latency_ms".to_owned(),
+                        Value::from(avg(counters.total_latency_ms, counters.request_count)),
+                    ),
+                    (
+                        "success_rate".to_owned(),
+                        go_number(round_two(success_rate(counters))),
+                    ),
+                    (
+                        "avg_tps".to_owned(),
+                        go_number(round_two(avg_tps(counters))),
+                    ),
+                ]);
+                if !recent.is_empty() {
+                    object.insert("recent_success_rates".to_owned(), json!(recent));
+                }
+                (counters.request_count, Value::Object(object))
+            })
+            .collect::<Vec<_>>();
+        // Go orders by request count descending.  The model-name tie-breaker
+        // keeps Rust output deterministic when Go's map iteration ties.
+        models.sort_by(|(left_count, left), (right_count, right)| {
+            right_count.cmp(left_count).then_with(|| {
+                left.get("model_name")
+                    .and_then(Value::as_str)
+                    .cmp(&right.get("model_name").and_then(Value::as_str))
+            })
+        });
+
+        Ok(json!({
+            "models": models.into_iter().map(|(_, value)| value).collect::<Vec<_>>(),
+        }))
+    }
+
+    async fn fetch_rows(
+        &self,
+        model: Option<&str>,
+        group: Option<&str>,
+        start_ts: i64,
+        end_ts: i64,
+    ) -> Result<Vec<PerfRow>, ObservabilityStoreError> {
+        let rows = match (model, group) {
+            (Some(model), Some(group)) => sqlx::query(
+                "SELECT model_name, \"group\", bucket_ts, request_count, success_count, total_latency_ms, ttft_sum_ms, ttft_count, output_tokens, generation_ms FROM perf_metrics WHERE model_name = $1 AND bucket_ts >= $2 AND bucket_ts <= $3 AND \"group\" = $4",
+            )
+            .bind(model)
+            .bind(start_ts)
+            .bind(end_ts)
+            .bind(group)
+            .fetch_all(&self.pg)
+            .await,
+            (Some(model), None) => sqlx::query(
+                "SELECT model_name, \"group\", bucket_ts, request_count, success_count, total_latency_ms, ttft_sum_ms, ttft_count, output_tokens, generation_ms FROM perf_metrics WHERE model_name = $1 AND bucket_ts >= $2 AND bucket_ts <= $3",
+            )
+            .bind(model)
+            .bind(start_ts)
+            .bind(end_ts)
+            .fetch_all(&self.pg)
+            .await,
+            (None, _) => sqlx::query(
+                "SELECT model_name, \"group\", bucket_ts, request_count, success_count, total_latency_ms, ttft_sum_ms, ttft_count, output_tokens, generation_ms FROM perf_metrics WHERE bucket_ts >= $1 AND bucket_ts <= $2",
+            )
+            .bind(start_ts)
+            .bind(end_ts)
+            .fetch_all(&self.pg)
+            .await,
+        }
+        .map_err(|_| ObservabilityStoreError::Unavailable)?;
+
+        rows.into_iter()
+            .map(|row| {
+                let optional_i64 = |name: &str| {
+                    row.try_get::<Option<i64>, _>(name)
+                        .map(|value| value.unwrap_or_default())
+                        .map_err(|_| ObservabilityStoreError::Unavailable)
+                };
+                Ok(PerfRow {
+                    model_name: row
+                        .try_get::<Option<String>, _>("model_name")
+                        .map_err(|_| ObservabilityStoreError::Unavailable)?
+                        .unwrap_or_default(),
+                    group: row
+                        .try_get::<Option<String>, _>("group")
+                        .map_err(|_| ObservabilityStoreError::Unavailable)?
+                        .unwrap_or_default(),
+                    bucket_ts: optional_i64("bucket_ts")?,
+                    counters: PerfCounters {
+                        request_count: optional_i64("request_count")?,
+                        success_count: optional_i64("success_count")?,
+                        total_latency_ms: optional_i64("total_latency_ms")?,
+                        ttft_sum_ms: optional_i64("ttft_sum_ms")?,
+                        ttft_count: optional_i64("ttft_count")?,
+                        output_tokens: optional_i64("output_tokens")?,
+                        generation_ms: optional_i64("generation_ms")?,
+                    },
+                })
+            })
+            .collect()
+    }
+
+    async fn active_group_keys(
+        &self,
+        include_auto: bool,
+    ) -> Result<BTreeSet<String>, ObservabilityStoreError> {
+        let raw = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT value FROM options WHERE key = 'GroupRatio'",
+        )
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| ObservabilityStoreError::Unavailable)?
+        .flatten();
+        let mut groups =
+            BTreeSet::from(["default".to_owned(), "vip".to_owned(), "svip".to_owned()]);
+        if let Some(raw) = raw {
+            if let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&raw) {
+                groups.clear();
+                groups.extend(object.keys().cloned());
+            }
+        }
+        if include_auto {
+            groups.insert("auto".to_owned());
+        }
+        Ok(groups)
+    }
+
+    async fn merge_valkey_active_bucket(
+        &self,
+        merged: &mut BTreeMap<(String, i64), PerfCounters>,
+        model: &str,
+        group: &str,
+        start_ts: i64,
+        end_ts: i64,
+    ) {
+        let Some(valkey) = &self.valkey else {
+            return;
+        };
+        let bucket_seconds = self
+            .bucket_seconds()
+            .await
+            .unwrap_or(DEFAULT_PERF_BUCKET_SECONDS);
+        let Ok(now) = unix_seconds() else {
+            return;
+        };
+        let bucket_ts = bucket_start(now, bucket_seconds);
+        if bucket_ts < start_ts || bucket_ts > end_ts {
+            return;
+        }
+        let Ok(mut connection) = valkey.get_multiplexed_async_connection().await else {
+            return;
+        };
+        let key = format!("perf:{model}:{group}:{bucket_ts}");
+        let fields: Result<HashMap<String, String>, _> = redis::cmd("HGETALL")
+            .arg(key)
+            .query_async(&mut connection)
+            .await;
+        let Ok(fields) = fields else {
+            return;
+        };
+        if fields.is_empty() {
+            return;
+        }
+        let counters = PerfCounters {
+            request_count: redis_i64(&fields, "req"),
+            success_count: redis_i64(&fields, "ok"),
+            total_latency_ms: redis_i64(&fields, "lat"),
+            ttft_sum_ms: redis_i64(&fields, "ttft"),
+            ttft_count: redis_i64(&fields, "ttft_n"),
+            output_tokens: redis_i64(&fields, "out"),
+            generation_ms: redis_i64(&fields, "gen_ms"),
+        };
+        merged
+            .entry((group.to_owned(), bucket_ts))
+            .or_default()
+            .add_assign(counters);
+    }
+
+    async fn bucket_seconds(&self) -> Result<i64, ObservabilityStoreError> {
+        let raw = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT value FROM options WHERE key = 'perf_metrics_setting'",
+        )
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| ObservabilityStoreError::Unavailable)?
+        .flatten();
+        let Some(raw) = raw else {
+            return Ok(DEFAULT_PERF_BUCKET_SECONDS);
+        };
+        let bucket_time = serde_json::from_str::<Value>(&raw).ok().and_then(|value| {
+            value
+                .get("bucket_time")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+        Ok(match bucket_time.as_deref() {
+            Some("minute") => 60,
+            Some("5min") => 300,
+            _ => DEFAULT_PERF_BUCKET_SECONDS,
+        })
+    }
+}
+
+#[async_trait]
+impl ObservabilityMetrics for PostgresObservabilityMetrics {
+    async fn query(
+        &self,
+        operation: ObservabilityOperation,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        match operation {
+            ObservabilityOperation::PerfMetrics => self.query_model(query).await,
+            ObservabilityOperation::PerfMetricsSummary => self.query_summary(query).await,
+            ObservabilityOperation::ChannelAffinityUsageCacheStats => {
+                let Some(valkey) = &self.valkey else {
+                    return Err(ObservabilityStoreError::Unavailable);
+                };
+                ValkeyObservabilityMetrics::new(valkey.clone())
+                    .query(operation, query)
+                    .await
+            }
+            _ => Err(ObservabilityStoreError::Unavailable),
+        }
+    }
+}
+
+fn non_empty_query<'a>(query: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    query
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn perf_time_range(
+    query: &BTreeMap<String, String>,
+) -> Result<(i64, i64), ObservabilityStoreError> {
+    let parsed_hours = query
+        .get("hours")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(24);
+    let hours = if parsed_hours <= 0 {
+        24
+    } else {
+        parsed_hours.min(24 * 30)
+    };
+    let end = unix_seconds()?;
+    Ok((end.saturating_sub(hours.saturating_mul(60 * 60)), end))
+}
+
+fn unix_seconds() -> Result<i64, ObservabilityStoreError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| ObservabilityStoreError::Unavailable)
+        .and_then(|duration| {
+            i64::try_from(duration.as_secs()).map_err(|_| ObservabilityStoreError::Unavailable)
+        })
+}
+
+fn bucket_start(timestamp: i64, bucket_seconds: i64) -> i64 {
+    if bucket_seconds <= 0 {
+        return timestamp;
+    }
+    timestamp - timestamp.rem_euclid(bucket_seconds)
+}
+
+fn redis_i64(fields: &HashMap<String, String>, key: &str) -> i64 {
+    fields
+        .get(key)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or_default()
+}
+
+fn avg(sum: i64, count: i64) -> i64 {
+    if count <= 0 { 0 } else { sum / count }
+}
+
+fn success_rate(counters: PerfCounters) -> f64 {
+    if counters.request_count <= 0 {
+        0.0
+    } else {
+        counters.success_count as f64 / counters.request_count as f64 * 100.0
+    }
+}
+
+fn avg_tps(counters: PerfCounters) -> f64 {
+    if counters.output_tokens <= 0 || counters.generation_ms <= 0 {
+        0.0
+    } else {
+        counters.output_tokens as f64 / (counters.generation_ms as f64 / 1000.0)
+    }
+}
+
+fn round_two(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+/// Go's JSON encoder emits an integral `float64` as an integer token (for
+/// example `75`, not `75.0`).  Keep the strict-wire differential stable while
+/// retaining fractional values as JSON floats.
+fn go_number(value: f64) -> Value {
+    if value.is_finite()
+        && value.fract() == 0.0
+        && value >= i64::MIN as f64
+        && value <= i64::MAX as f64
+    {
+        Value::from(value as i64)
+    } else {
+        Value::from(value)
+    }
+}
+
+fn perf_group_value(group: &str, buckets: &[(i64, PerfCounters)]) -> Value {
+    let mut total = PerfCounters::default();
+    let series = buckets
+        .iter()
+        .map(|(bucket_ts, counters)| {
+            total.add_assign(*counters);
+            json!({
+                "ts": bucket_ts,
+                "avg_ttft_ms": avg(counters.ttft_sum_ms, counters.ttft_count),
+                "avg_latency_ms": avg(counters.total_latency_ms, counters.request_count),
+                "success_rate": go_number(success_rate(*counters)),
+                "avg_tps": go_number(avg_tps(*counters)),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "group": group,
+        "avg_ttft_ms": avg(total.ttft_sum_ms, total.ttft_count),
+        "avg_latency_ms": avg(total.total_latency_ms, total.request_count),
+        "success_rate": go_number(success_rate(total)),
+        "avg_tps": go_number(avg_tps(total)),
+        "series": series,
+    })
 }
 
 impl PgObservabilityStore {
@@ -1047,6 +1564,42 @@ fn values(rows: Vec<sqlx::postgres::PgRow>) -> Value {
     )
 }
 
+#[cfg(test)]
+fn format_user_visible_logs(value: Value) -> Value {
+    let Value::Array(items) = value else {
+        return value;
+    };
+    Value::Array(
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut item)| {
+                let Value::Object(object) = &mut item else {
+                    return item;
+                };
+                // Go's self/token log formatter hides channel labels and
+                // operator-only audit fields from non-admin viewers.
+                object.insert("id".to_owned(), Value::from(index as i64 + 1));
+                object.insert("channel_name".to_owned(), Value::String(String::new()));
+                let Some(Value::String(raw_other)) = object.get("other").cloned() else {
+                    return item;
+                };
+                let Ok(mut other) = serde_json::from_str::<Map<String, Value>>(&raw_other) else {
+                    object.insert("other".to_owned(), Value::String("null".to_owned()));
+                    return item;
+                };
+                other.remove("admin_info");
+                other.remove("audit_info");
+                other.remove("stream_status");
+                if let Ok(serialized) = serde_json::to_string(&other) {
+                    object.insert("other".to_owned(), Value::String(serialized));
+                }
+                item
+            })
+            .collect(),
+    )
+}
+
 /// A dependency error that preserves the legacy 500 error branch.
 #[derive(Clone, Debug, Error)]
 pub enum ObservabilityStoreError {
@@ -1106,14 +1659,28 @@ pub fn observability_read_router(state: ObservabilityState) -> Router {
     observability_read_routes().with_state(state)
 }
 
+/// Builds the production-owned PostgreSQL performance metric reads.
+///
+/// Process/filesystem maintenance remains deliberately outside this router;
+/// it cannot be treated as owned until Rust has an application-level service
+/// with the same disk, log, and runtime-stat semantics as Go.
+pub fn observability_metrics_router(state: ObservabilityState) -> Router {
+    observability_metrics_routes().with_state(state)
+}
+
+fn observability_metrics_routes() -> Router<ObservabilityState> {
+    Router::new()
+        .route("/api/perf-metrics", get(perf_metrics))
+        .route("/api/perf-metrics/summary", get(perf_metrics_summary))
+}
+
 /// Builds the full observability and maintenance candidate router.
 ///
 /// `/api/system-info` and `/api/system-task` are intentionally absent: their
 /// PostgreSQL-backed ownership is already established in `control_admin`.
 pub fn observability_router(state: ObservabilityState) -> Router {
     observability_read_routes()
-        .route("/api/perf-metrics", get(perf_metrics))
-        .route("/api/perf-metrics/summary", get(perf_metrics_summary))
+        .merge(observability_metrics_routes())
         .route("/api/performance/disk_cache", delete(clear_disk_cache))
         .route("/api/performance/gc", post(force_gc))
         .route(
@@ -1143,6 +1710,10 @@ fn success(data: Value) -> Response {
         data: Some(data),
     })
     .into_response()
+}
+
+fn success_data(data: Value) -> Response {
+    Json(json!({"success": true, "data": data})).into_response()
 }
 
 fn success_message(message: &str) -> Response {
@@ -1253,6 +1824,32 @@ async fn execute_authorized(
     {
         Ok(data) => success(data),
         Err(ObservabilityStoreError::Legacy(message)) => failure(StatusCode::OK, message),
+        Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+    };
+    if dashboard_user {
+        with_auth_version(response)
+    } else {
+        response
+    }
+}
+
+async fn execute_authorized_data_only(
+    state: &ObservabilityState,
+    principal: ObservabilityPrincipal,
+    operation: ObservabilityOperation,
+    query: BTreeMap<String, String>,
+) -> Response {
+    let dashboard_user = matches!(&principal, ObservabilityPrincipal::User { .. });
+    let response = match state
+        .store
+        .execute(ObservabilityCall {
+            operation,
+            principal,
+            query,
+        })
+        .await
+    {
+        Ok(data) => success_data(data),
         Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
     if dashboard_user {
@@ -1521,7 +2118,7 @@ async fn deprecated_log_search(
         Err(response) => return response,
     };
     let _ = principal;
-    with_auth_version(failure(StatusCode::OK, "该接口已废弃"))
+    failure(StatusCode::OK, "该接口已废弃")
 }
 
 async fn self_logs(
@@ -1548,7 +2145,7 @@ async fn deprecated_self_log_search(
         Err(response) => return response,
     };
     let _ = principal;
-    with_auth_version(failure(StatusCode::OK, "该接口已废弃"))
+    failure(StatusCode::OK, "该接口已废弃")
 }
 
 async fn self_log_stats(
@@ -1612,7 +2209,7 @@ async fn perf_metrics(
             &principal,
         );
     }
-    execute_authorized(
+    execute_authorized_data_only(
         &state,
         principal,
         ObservabilityOperation::PerfMetrics,
@@ -1626,12 +2223,15 @@ async fn perf_metrics_summary(
     headers: HeaderMap,
     raw_query: RawQuery,
 ) -> Response {
-    execute_raw(
+    let principal = match authorize(&state, &headers, ObservabilityAccess::PublicOrUser).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    execute_authorized_data_only(
         &state,
-        &headers,
-        ObservabilityAccess::PublicOrUser,
+        principal,
         ObservabilityOperation::PerfMetricsSummary,
-        raw_query,
+        parse_query(raw_query),
     )
     .await
 }
@@ -1804,7 +2404,10 @@ mod tests {
         body::{Body, to_bytes},
         http::Request,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tower::ServiceExt;
 
     struct StaticDashboardAuth {
@@ -1885,6 +2488,17 @@ mod tests {
         async fn execute(&self, _: ObservabilityCall) -> Result<Value, ObservabilityStoreError> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Ok(json!({}))
+        }
+    }
+
+    #[derive(Default)]
+    struct QueryCapturingStore(Mutex<Option<ObservabilityCall>>);
+
+    #[async_trait]
+    impl ObservabilityStore for QueryCapturingStore {
+        async fn execute(&self, call: ObservabilityCall) -> Result<Value, ObservabilityStoreError> {
+            *self.0.lock().expect("query capture lock") = Some(call);
+            Ok(json!([]))
         }
     }
 
@@ -2015,6 +2629,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn token_logs_without_timestamps_keep_the_legacy_unbounded_query() {
+        let store = Arc::new(QueryCapturingStore::default());
+        let authorizer = DashboardObservabilityAuthorizer::new(
+            Arc::new(StaticDashboardAuth {
+                user: user(ADMIN_ROLE),
+            }),
+            Arc::new(StaticTokenAuth),
+        );
+        let response =
+            observability_read_router(ObservabilityState::new(store.clone(), Arc::new(authorizer)))
+                .oneshot(
+                    Request::get("/api/log/token")
+                        .header("authorization", "Bearer token")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let call = store
+            .0
+            .lock()
+            .expect("query capture lock")
+            .take()
+            .expect("token log storage call");
+        assert_eq!(call.operation, ObservabilityOperation::LogsByToken);
+        assert!(call.query.is_empty());
+        assert_eq!(
+            OPTIONAL_LOG_TIME_RANGE,
+            "($2 = 0 OR created_at >= $2) AND ($3 = 0 OR created_at <= $3)"
+        );
+        let body = response_body(response).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["data"], json!([]));
+        assert!(body.get("page").is_none());
+    }
+
+    #[test]
+    fn token_log_query_matches_the_legacy_recent_rows_contract() {
+        let query = log_query(ObservabilityOperation::LogsByToken);
+        assert!(query.contains("WHERE token_id = $1 ORDER BY id DESC LIMIT 1000"));
+        assert!(!query.contains("WHERE token_id = $1 AND"));
+        assert!(query.contains("'channel', COALESCE(channel_id, 0)"));
+    }
+
+    #[test]
+    fn user_visible_logs_match_legacy_masking_and_display_ids() {
+        let formatted = format_user_visible_logs(json!([
+            {
+                "id": 91,
+                "channel_name": "private-channel",
+                "other": r#"{"admin_info":{"operator":"root"},"audit_info":{"route":"/api/log/token"},"stream_status":"done","safe":"kept"}"#,
+            },
+            {
+                "id": 92,
+                "channel_name": "another-private-channel",
+                "other": "not-json",
+            }
+        ]));
+
+        assert_eq!(formatted[0]["id"], 1);
+        assert_eq!(formatted[0]["channel_name"], "");
+        assert_eq!(formatted[0]["other"], r#"{"safe":"kept"}"#);
+        assert_eq!(formatted[1]["id"], 2);
+        assert_eq!(formatted[1]["channel_name"], "");
+        assert_eq!(formatted[1]["other"], "null");
+    }
+
+    #[tokio::test]
     async fn unavailable_runtime_adapters_fail_closed_without_success_payloads() {
         let query = BTreeMap::new();
         assert!(
@@ -2092,5 +2776,39 @@ mod tests {
             response_body(response).await["message"],
             Value::String("observability backend unavailable".to_owned())
         );
+    }
+
+    #[test]
+    fn performance_metric_aggregation_matches_legacy_integer_and_percentage_rules() {
+        let counters = PerfCounters {
+            request_count: 4,
+            success_count: 3,
+            total_latency_ms: 1_000,
+            ttft_sum_ms: 200,
+            ttft_count: 2,
+            output_tokens: 300,
+            generation_ms: 2_000,
+        };
+        let value = perf_group_value("default", &[(1_700_000_000, counters)]);
+        assert_eq!(value["avg_ttft_ms"], 100);
+        assert_eq!(value["avg_latency_ms"], 250);
+        assert_eq!(value["success_rate"].as_i64(), Some(75));
+        assert_eq!(value["avg_tps"].as_i64(), Some(150));
+        assert_eq!(value["series"][0]["ts"], 1_700_000_000);
+    }
+
+    #[test]
+    fn performance_metric_hours_use_go_defaults_and_thirty_day_cap() {
+        let default_range = perf_time_range(&BTreeMap::new()).expect("default time range");
+        assert!((default_range.1 - default_range.0) >= 24 * 60 * 60);
+        assert!((default_range.1 - default_range.0) <= 24 * 60 * 60 + 1);
+
+        let zero_range = perf_time_range(&BTreeMap::from([("hours".to_owned(), "0".to_owned())]))
+            .expect("zero uses default");
+        assert!((zero_range.1 - zero_range.0) >= 24 * 60 * 60);
+        let capped_range =
+            perf_time_range(&BTreeMap::from([("hours".to_owned(), "9999".to_owned())]))
+                .expect("large range is capped");
+        assert!((capped_range.1 - capped_range.0) <= 30 * 24 * 60 * 60 + 1);
     }
 }

@@ -132,7 +132,8 @@ async fn top_level_token_shapes_keep_the_frozen_go_error_for_create_and_update()
     ] {
         for method in ["POST", "PUT"] {
             let path = "/api/token/";
-            let value = body(call_raw(&router(), method, path, payload, principal).await).await;
+            let value =
+                body(call_raw(&frozen_router(), method, path, payload, principal).await).await;
             assert_eq!(
                 value,
                 json!({"success": false, "message": expected}),
@@ -1498,11 +1499,33 @@ fn router_for(pool: PgPool, valkey_url: &str) -> axum::Router {
     router_for_limited(pool, valkey_url, 1_000)
 }
 fn router_for_limited(pool: PgPool, valkey_url: &str, max_user_tokens: i64) -> axum::Router {
-    api_token_router(ApiTokenHttpState::new(Arc::new(
-        PgValkeyApiTokenService::new(pool, redis::Client::open(valkey_url).unwrap())
-            .with_crypto_secret("api-token-integration-secret")
-            .with_max_user_tokens(max_user_tokens),
-    )))
+    router_for_with_wire_errors(pool, valkey_url, max_user_tokens, false)
+}
+fn frozen_router() -> axum::Router {
+    router_for_with_wire_errors(
+        PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(25))
+            .connect_lazy("postgres://127.0.0.1:1/unused")
+            .expect("lazy test pool"),
+        "redis://127.0.0.1/",
+        1_000,
+        true,
+    )
+}
+fn router_for_with_wire_errors(
+    pool: PgPool,
+    valkey_url: &str,
+    max_user_tokens: i64,
+    frozen_wire_errors: bool,
+) -> axum::Router {
+    api_token_router(
+        ApiTokenHttpState::new(Arc::new(
+            PgValkeyApiTokenService::new(pool, redis::Client::open(valkey_url).unwrap())
+                .with_crypto_secret("api-token-integration-secret")
+                .with_max_user_tokens(max_user_tokens),
+        ))
+        .with_frozen_wire_errors(frozen_wire_errors),
+    )
 }
 fn token_cache_key(key: &str) -> String {
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(b"api-token-integration-secret")

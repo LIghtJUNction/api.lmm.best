@@ -50,14 +50,14 @@ impl ChannelAdminAuthorizer for DashboardChannelAuthorizer {
         headers: &HeaderMap,
         action: ChannelAction,
     ) -> Result<(), ChannelError> {
-        let token = dashboard_credential(headers).ok_or(ChannelError::Unauthorized)?;
+        let token = dashboard_credential(headers).ok_or(ChannelError::ConsoleNotFound)?;
         let user = self
             .auth
-            .self_user(SecretString::from(token.to_owned()))
+            .self_user_view_for_optional(SecretString::from(token.to_owned()))
             .await
-            .map_err(|_| ChannelError::Unauthorized)?;
-        if user.status != STATUS_ENABLED {
-            return Err(ChannelError::Unauthorized);
+            .map_err(|_| ChannelError::ConsoleNotFound)?;
+        if user.id <= 0 || user.status != STATUS_ENABLED || !user.developer_access_granted {
+            return Err(ChannelError::ConsoleNotFound);
         }
         if user.role < ADMIN_ROLE {
             return Err(ChannelError::Forbidden);
