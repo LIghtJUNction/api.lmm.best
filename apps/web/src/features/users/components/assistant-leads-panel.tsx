@@ -56,6 +56,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import {
   getAssistantIntentSummary,
+  getAssistantFundingSummary,
   getAssistantProfileSummary,
   listAssistantHandoffs,
   resolveAssistantHandoff,
@@ -74,6 +75,7 @@ const RESOLVED_HANDOFFS_QUERY_KEY = [
 ] as const
 const INTENT_SUMMARY_QUERY_KEY = ['assistant-admin-intents', 30] as const
 const PROFILE_SUMMARY_QUERY_KEY = ['assistant-admin-profiles', 30] as const
+const FUNDING_SUMMARY_QUERY_KEY = ['assistant-admin-funding', 30] as const
 const EMPTY_INTENTS: AssistantIntentSummary[] = []
 const EMPTY_PROFILES: AssistantProfileSummary[] = []
 
@@ -155,11 +157,31 @@ export function AssistantLeadsPanel() {
     staleTime: 30_000,
     retry: false,
   })
+  const fundingQuery = useQuery({
+    queryKey: FUNDING_SUMMARY_QUERY_KEY,
+    queryFn: () => getAssistantFundingSummary(30),
+    staleTime: 30_000,
+    retry: false,
+  })
 
   const pending = pendingQuery.data ?? []
   const resolved = resolvedQuery.data ?? []
   const intents = intentsQuery.data ?? EMPTY_INTENTS
   const profiles = profilesQuery.data ?? EMPTY_PROFILES
+  const funding = fundingQuery.data
+  const numberFormatter = useMemo(
+    () => new Intl.NumberFormat(i18n.language),
+    [i18n.language]
+  )
+  const currencyFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(i18n.language, {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: 4,
+      }),
+    [i18n.language]
+  )
   const totalIntents = useMemo(
     () => intents.reduce((total, item) => total + item.count, 0),
     [intents]
@@ -226,7 +248,7 @@ export function AssistantLeadsPanel() {
 
   const requiredQueries = [pendingQuery, resolvedQuery, intentsQuery]
   if (requiredQueries.some((query) => isNotFound(query.error))) return null
-  const queries = [...requiredQueries, profilesQuery]
+  const queries = [...requiredQueries, profilesQuery, fundingQuery]
 
   const firstError = queries.find(
     (query) => query.isError && !isNotFound(query.error)
@@ -443,10 +465,14 @@ export function AssistantLeadsPanel() {
           )}
         </div>
 
-        <div className='flex flex-wrap gap-2' aria-label={t('Customer profiles')}>
+        <div
+          className='flex flex-wrap gap-2'
+          aria-label={t('Customer profiles')}
+        >
           {profilesQuery.isLoading ? (
             <Skeleton className='h-5 w-40' />
-          ) : profilesQuery.isError && !isNotFound(profilesQuery.error) ? null : (
+          ) : profilesQuery.isError &&
+            !isNotFound(profilesQuery.error) ? null : (
             <>
               <Badge variant='outline'>
                 {t('{{count}} profile signals in 30 days', {
@@ -462,6 +488,75 @@ export function AssistantLeadsPanel() {
             </>
           )}
         </div>
+
+        <Card className='bg-muted/20'>
+          <CardHeader className='pb-3'>
+            <CardTitle className='text-base'>
+              {t('AI assistant')} · {t('Cost')}
+            </CardTitle>
+            <CardDescription>
+              {t(
+                'AI customer-service token usage is charged to the super administrator account, not your wallet.'
+              )}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {fundingQuery.isLoading ? (
+              <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+                {[1, 2, 3, 4].map((key) => (
+                  <Skeleton key={key} className='h-16 w-full' />
+                ))}
+              </div>
+            ) : fundingQuery.isError && !isNotFound(fundingQuery.error) ? (
+              <p className='text-muted-foreground text-sm'>
+                {fundingQuery.error instanceof Error
+                  ? fundingQuery.error.message
+                  : t('Unable to load assistant leads')}
+              </p>
+            ) : funding ? (
+              <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
+                <div className='rounded-md border p-3'>
+                  <p className='text-muted-foreground text-xs'>{t('Cost')}</p>
+                  <p className='mt-1 text-lg font-semibold'>
+                    {currencyFormatter.format(funding.cost_usd)}
+                  </p>
+                </div>
+                <div className='rounded-md border p-3'>
+                  <p className='text-muted-foreground text-xs'>
+                    {t('Requests')}
+                  </p>
+                  <p className='mt-1 text-lg font-semibold'>
+                    {numberFormatter.format(funding.requests)}
+                  </p>
+                </div>
+                <div className='rounded-md border p-3'>
+                  <p className='text-muted-foreground text-xs'>
+                    {t('Total tokens')}
+                  </p>
+                  <p className='mt-1 text-lg font-semibold'>
+                    {numberFormatter.format(funding.total_tokens)}
+                  </p>
+                </div>
+                <div className='rounded-md border p-3'>
+                  <p className='text-muted-foreground text-xs'>
+                    {t('Remaining quota')}
+                  </p>
+                  <p className='mt-1 text-lg font-semibold'>
+                    {currencyFormatter.format(funding.remaining_usd)}
+                  </p>
+                  <p className='text-muted-foreground text-xs'>
+                    {numberFormatter.format(funding.remaining_quota)}{' '}
+                    {t('Remaining quota units')}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className='text-muted-foreground text-sm'>
+                {t('No recent usage')}
+              </p>
+            )}
+          </CardContent>
+        </Card>
 
         <Tabs defaultValue='pending'>
           <TabsList>

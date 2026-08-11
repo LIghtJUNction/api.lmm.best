@@ -107,6 +107,19 @@ export type AssistantProfileSummary = {
   count: number
 }
 
+export type AssistantFundingSummary = {
+  start_timestamp: number
+  end_timestamp: number
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  quota: number
+  cost_usd: number
+  remaining_quota: number
+  remaining_usd: number
+}
+
 export type AssistantReply = {
   content: string
   intent?: AssistantIntent
@@ -401,6 +414,20 @@ export async function getAssistantProfileSummary(
     skipErrorHandler: true,
   })
   return requireAssistantData(response.data, 'Unable to load profile summary')
+}
+
+export async function getAssistantFundingSummary(
+  days = 30
+): Promise<AssistantFundingSummary> {
+  const response = await api.get<AssistantAPIResponse<AssistantFundingSummary>>(
+    '/api/assistant/admin/funding',
+    {
+      params: { days },
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Unable to load assistant funding')
 }
 
 export async function resolveAssistantHandoff(

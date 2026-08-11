@@ -176,6 +176,25 @@ describe('AssistantLeadsPanel', () => {
           },
         }
       }
+      if (url === '/api/assistant/admin/funding') {
+        return {
+          data: {
+            success: true,
+            data: {
+              start_timestamp: 1_786_300_000,
+              end_timestamp: 1_786_400_000,
+              requests: 6,
+              prompt_tokens: 120,
+              completion_tokens: 80,
+              total_tokens: 200,
+              quota: 300,
+              cost_usd: 0.003,
+              remaining_quota: 100_000,
+              remaining_usd: 1,
+            },
+          },
+        }
+      }
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
@@ -221,6 +240,9 @@ describe('AssistantLeadsPanel', () => {
     assert.match(container.textContent ?? '', /6 questions in 30 days/)
     assert.match(container.textContent ?? '', /4 profile signals in 30 days/)
     assert.match(container.textContent ?? '', /Guided buyer: 3/)
+    assert.match(container.textContent ?? '', /AI assistant.*Cost/)
+    assert.match(container.textContent ?? '', /\$0\.003/)
+    assert.match(container.textContent ?? '', /100,000 Remaining quota units/)
 
     await act(async () => {
       findButton('Resolved').click()
