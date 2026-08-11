@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,13 @@ type assistantCreateKeyInput struct {
 	Confirmed bool   `json:"confirmed"`
 	Name      string `json:"name"`
 	Group     string `json:"group"`
+}
+
+type assistantKeyGroupOption struct {
+	ID            string   `json:"id"`
+	Description   string   `json:"description"`
+	Automatic     bool     `json:"automatic"`
+	RoutingGroups []string `json:"routing_groups,omitempty"`
 }
 
 type assistantHandoffInput struct {
@@ -60,6 +68,75 @@ func getAssistantDeveloperAccess(userID int) (*model.UserBase, bool, error) {
 	return user, access.Granted, nil
 }
 
+func getAssistantKeyGroupOptions(userGroup string) []assistantKeyGroupOption {
+	usableGroups := service.GetUserUsableGroups(userGroup)
+	groupIDs := make([]string, 0, len(usableGroups))
+	for groupID := range usableGroups {
+		if service.IsUserSelectableGroup(userGroup, groupID) {
+			groupIDs = append(groupIDs, groupID)
+		}
+	}
+	sort.Strings(groupIDs)
+
+	options := make([]assistantKeyGroupOption, 0, len(groupIDs)+1)
+	if routingGroups := service.GetUserAutoGroup(userGroup); len(routingGroups) > 0 {
+		options = append(options, assistantKeyGroupOption{
+			ID:            "auto",
+			Description:   "Automatic routing across the listed groups",
+			Automatic:     true,
+			RoutingGroups: routingGroups,
+		})
+	}
+	for _, groupID := range groupIDs {
+		options = append(options, assistantKeyGroupOption{
+			ID:          groupID,
+			Description: usableGroups[groupID],
+		})
+	}
+	return options
+}
+
+func executeAssistantCreateKeyRequestTool(userID int, input map[string]any) map[string]any {
+	user, granted, err := getAssistantDeveloperAccess(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "account access could not be loaded"}
+	}
+	if !granted {
+		return map[string]any{"ok": false, "error": "L1 access is required to create an API key"}
+	}
+
+	options := getAssistantKeyGroupOptions(user.Group)
+	group := inputString(input, "group")
+	if group == "" {
+		return map[string]any{
+			"ok":               true,
+			"status":           "group_required",
+			"action":           "create_key",
+			"available_groups": options,
+			"message":          "Ask the user to choose one exact routing group before requesting confirmation.",
+			"requested_name":   inputString(input, "name"),
+		}
+	}
+	if (group != "auto" && !service.IsUserSelectableGroup(user.Group, group)) ||
+		(group == "auto" && len(service.GetUserAutoGroup(user.Group)) == 0) {
+		return map[string]any{
+			"ok":               false,
+			"status":           "invalid_group",
+			"error":            "the selected group is not available for this account",
+			"available_groups": options,
+		}
+	}
+	return map[string]any{
+		"ok":              true,
+		"status":          "confirmation_required",
+		"action":          "create_key",
+		"ui_path":         "/keys",
+		"message":         "Ask the user to explicitly confirm creating the key with this exact group; do not claim that a key exists yet.",
+		"requested_name":  inputString(input, "name"),
+		"requested_group": group,
+	}
+}
+
 // CreateAssistantDefaultKey creates the same safe unlimited, non-expiring key
 // offered by the regular key form. It is deliberately confirmation-gated and
 // restricted to L1+ browser sessions.
@@ -72,10 +149,6 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_INVALID_REQUEST", errors.New("invalid key creation request"))
 		return
 	}
-	if !requireAssistantConfirmation(c, input.Confirmed) {
-		return
-	}
-
 	userID := c.GetInt("id")
 	user, granted, err := getAssistantDeveloperAccess(userID)
 	if err != nil {
@@ -100,12 +173,24 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_GROUP_TOO_LONG", errors.New("API key group must be at most 64 characters"))
 		return
 	}
-	if group != "" && group != "auto" && !service.IsUserSelectableGroup(user.Group, group) {
+	if group == "" {
+		c.AbortWithStatusJSON(http.StatusUnprocessableEntity, gin.H{
+			"success":          false,
+			"code":             "ASSISTANT_KEY_GROUP_REQUIRED",
+			"message":          "choose a routing group before confirming key creation",
+			"available_groups": getAssistantKeyGroupOptions(user.Group),
+		})
+		return
+	}
+	if group != "auto" && !service.IsUserSelectableGroup(user.Group, group) {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_INVALID_GROUP", errors.New("the selected group is not available for this account"))
 		return
 	}
 	if group == "auto" && len(service.GetUserAutoGroup(user.Group)) == 0 {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_INVALID_GROUP", errors.New("automatic routing is not available for this account"))
+		return
+	}
+	if !requireAssistantConfirmation(c, input.Confirmed) {
 		return
 	}
 	count, err := model.CountUserTokens(userID)
