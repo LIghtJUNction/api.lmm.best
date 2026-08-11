@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type AssistantPresetId =
   | 'onboarding'
+  | 'service'
   | 'plan'
   | 'api-key'
   | 'client-setup'
@@ -38,6 +39,7 @@ let memoryMessage: string | null = null
 function isAssistantPresetId(value: string): value is AssistantPresetId {
   return [
     'onboarding',
+    'service',
     'plan',
     'api-key',
     'client-setup',

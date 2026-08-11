@@ -407,7 +407,7 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('limits an L0 assistant to the administrator access request', async () => {
+  test('keeps L0 guidance useful without exposing account or payment actions', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/status') {
         return {
@@ -437,10 +437,6 @@ describe('AssistantPanel', () => {
       )
       assert.doesNotMatch(
         document.body.textContent ?? '',
-        /Which option is the best value\?/
-      )
-      assert.doesNotMatch(
-        document.body.textContent ?? '',
         /What are my Base URL, model ID, and API key\?/
       )
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
@@ -454,10 +450,20 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
       assert.ok(findButton('Ask an administrator to raise my access level'))
-      assert.doesNotMatch(
+      assert.ok(findButton('Which option is the best value?'))
+      assert.ok(findButton('What can I do while access is under review?'))
+      assert.ok(findButton('How do I set up Claude Code or CC Switch?'))
+
+      await act(async () => {
+        findButton('Which option is the best value?').click()
+        await flushEffects()
+      })
+      assert.match(
         document.body.textContent ?? '',
-        /Which option is the best value\?/
+        /live prices, discounts, and checkout remain locked until L1 approval/
       )
+      assert.equal(document.querySelector('a[href="/wallet"]'), null)
+      assert.doesNotMatch(document.body.textContent ?? '', /Compare live plans/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

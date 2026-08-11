@@ -124,6 +124,10 @@ type AssistantPreset = {
   question: string
   answer: string
   action?: AssistantAction
+  restricted?: {
+    answer: string
+    action?: AssistantAction
+  }
 }
 
 type ConversationEntry = {
@@ -313,6 +317,28 @@ export function AssistantPanel(props: {
           label: t('Unlock L1 access'),
           tool: 'activation',
         },
+        restricted: {
+          answer: t(
+            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+          ),
+          action: {
+            kind: 'tool',
+            label: t('Unlock L1 access'),
+            tool: 'activation',
+          },
+        },
+      },
+      {
+        id: 'service',
+        question: t('What can I do while access is under review?'),
+        answer: t(
+          'I can explain LMM services, compare plans, estimate costs, prepare client setup, and introduce open-source challenges while your request is reviewed.'
+        ),
+        restricted: {
+          answer: t(
+            'While review is pending, I can explain LMM, help compare future plans, estimate costs, and prepare client setup. API keys, payment, and account changes remain locked until L1 approval.'
+          ),
+        },
       },
       {
         id: 'plan',
@@ -324,6 +350,11 @@ export function AssistantPanel(props: {
           kind: 'tool',
           label: t('Compare live plans'),
           tool: 'plan',
+        },
+        restricted: {
+          answer: t(
+            'Tell me your expected monthly usage and budget. I can explain how to compare plan value now; live prices, discounts, and checkout remain locked until L1 approval.'
+          ),
         },
       },
       {
@@ -350,6 +381,11 @@ export function AssistantPanel(props: {
           label: t('Open client setup guide'),
           tool: 'setup',
         },
+        restricted: {
+          answer: t(
+            'You can install clients while L0 access is under review. API requests become available after L1 approval.'
+          ),
+        },
       },
       {
         id: 'bounty',
@@ -361,6 +397,16 @@ export function AssistantPanel(props: {
           kind: 'route',
           label: t('Explore open-source bounties'),
           to: '/open-source-bounties',
+        },
+        restricted: {
+          answer: t(
+            'A publisher funds a challenge and reviews submitted work. When a contribution is accepted, the publisher can add a tip before settlement; every financial confirmation shows the exact amount first.'
+          ),
+          action: {
+            kind: 'route',
+            label: t('Explore open-source bounties'),
+            to: '/open-source-bounties',
+          },
         },
       },
       {
@@ -469,7 +515,7 @@ export function AssistantPanel(props: {
   const accountToolActive = activeTool !== null
   let visiblePresets: AssistantPreset[] = []
   if (accountAccessState === 'restricted') {
-    visiblePresets = presets.filter((preset) => preset.id === 'onboarding')
+    visiblePresets = presets.filter((preset) => preset.restricted !== undefined)
   } else if (developerAccessGranted) {
     visiblePresets = presets
   }
@@ -513,23 +559,30 @@ export function AssistantPanel(props: {
     assistantDescription = t('Unable to verify account access')
   }
 
-  const appendPreset = useCallback((preset: AssistantPreset) => {
-    setActiveTool(preset.id === 'onboarding' ? 'activation' : null)
-    setEntries((current) => [
-      ...current,
-      {
-        id: nanoid(),
-        role: 'user',
-        content: preset.question,
-      },
-      {
-        id: nanoid(),
-        role: 'assistant',
-        content: preset.answer,
-        action: preset.action,
-      },
-    ])
-  }, [])
+  const appendPreset = useCallback(
+    (preset: AssistantPreset) => {
+      const presentation =
+        accountAccessState === 'restricted' && preset.restricted
+          ? preset.restricted
+          : preset
+      setActiveTool(preset.id === 'onboarding' ? 'activation' : null)
+      setEntries((current) => [
+        ...current,
+        {
+          id: nanoid(),
+          role: 'user',
+          content: preset.question,
+        },
+        {
+          id: nanoid(),
+          role: 'assistant',
+          content: presentation.answer,
+          action: presentation.action,
+        },
+      ])
+    },
+    [accountAccessState]
+  )
 
   useEffect(
     () =>
@@ -538,7 +591,7 @@ export function AssistantPanel(props: {
         const preset = presets.find((item) => item.id === presetId)
         if (
           accountAccessState !== 'granted' &&
-          !(accountAccessState === 'restricted' && preset?.id === 'onboarding')
+          !(accountAccessState === 'restricted' && preset?.restricted)
         ) {
           return
         }
@@ -563,10 +616,9 @@ export function AssistantPanel(props: {
       const suggestedPreset = suggestedPresetId
         ? presets.find((preset) => preset.id === suggestedPresetId)
         : undefined
-      const suggestedAction =
-        developerAccessGranted || suggestedPreset?.id === 'onboarding'
-          ? suggestedPreset?.action
-          : undefined
+      const suggestedAction = developerAccessGranted
+        ? suggestedPreset?.action
+        : suggestedPreset?.restricted?.action
       setEntries((current) => [
         ...current,
         {
