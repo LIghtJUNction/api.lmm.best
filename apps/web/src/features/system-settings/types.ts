@@ -182,6 +182,11 @@ export type ContentSettings = {
   AssistantEnabled: boolean
   AssistantModel: string
   AssistantWeeklyCreditUSD: number
+  AssistantAgentLoopEnabled: boolean
+  AssistantMaxSteps: number
+  AssistantTimeoutSeconds: number
+  AssistantCacheEnabled: boolean
+  AssistantCacheTTLMinutes: number
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean

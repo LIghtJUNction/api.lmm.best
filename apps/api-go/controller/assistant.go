@@ -3,7 +3,6 @@ package controller
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -48,16 +46,21 @@ type assistantChatInput struct {
 }
 
 type assistantOpenAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string                    `json:"role"`
+	Content    string                    `json:"content,omitempty"`
+	Name       string                    `json:"name,omitempty"`
+	ToolCalls  []assistantOpenAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string                    `json:"tool_call_id,omitempty"`
 }
 
 type assistantOpenAIRequest struct {
-	Model       string                   `json:"model"`
-	Messages    []assistantOpenAIMessage `json:"messages"`
-	Stream      bool                     `json:"stream"`
-	Temperature float64                  `json:"temperature"`
-	MaxTokens   int                      `json:"max_tokens"`
+	Model       string                          `json:"model"`
+	Messages    []assistantOpenAIMessage        `json:"messages"`
+	Stream      bool                            `json:"stream"`
+	Temperature float64                         `json:"temperature"`
+	MaxTokens   int                             `json:"max_tokens"`
+	Tools       []assistantOpenAIToolDefinition `json:"tools,omitempty"`
+	ToolChoice  string                          `json:"tool_choice,omitempty"`
 }
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings) string {
@@ -171,6 +174,16 @@ func PrepareAssistantRequest(c *gin.Context) {
 			common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
 		}
 	}
+	c.Set("assistant_conversation", conversation)
+	if cacheKey := assistantCacheKey(settings, conversation); cacheKey != "" {
+		c.Set("assistant_cache_key", cacheKey)
+		if cached, found := getAssistantCachedResponse(cacheKey); found {
+			c.Header("X-LMM-Assistant-Cache", "HIT")
+			c.Abort()
+			c.Data(cached.Status, "application/json; charset=utf-8", cached.Body)
+			return
+		}
+	}
 
 	requestMessages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
 	requestMessages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings)}
@@ -182,26 +195,14 @@ func PrepareAssistantRequest(c *gin.Context) {
 		Temperature: 0.2,
 		MaxTokens:   900,
 	}
-	payload, err := common.Marshal(request)
-	if err != nil {
-		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to build assistant request"))
-		return
+	if settings.AgentLoopEnabled && settings.MaxSteps > 1 {
+		request.Tools = assistantToolDefinitions()
+		request.ToolChoice = "auto"
 	}
-
-	common.CleanupBodyStorage(c)
-	storage, err := common.CreateBodyStorage(payload)
-	if err != nil {
+	if err := setAssistantRelayRequest(c, request); err != nil {
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to store assistant request"))
 		return
 	}
-	c.Set(common.KeyBodyStorage, storage)
-	c.Set("assistant_request", true)
-	c.Request.Body = io.NopCloser(storage)
-	c.Request.ContentLength = int64(len(payload))
-	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.URL.Path = "/v1/chat/completions"
-	c.Request.URL.RawPath = ""
-	c.Request.RequestURI = "/v1/chat/completions"
 
 	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	if usingGroup == "" {
@@ -212,6 +213,7 @@ func PrepareAssistantRequest(c *gin.Context) {
 }
 
 func AssistantChat(c *gin.Context) {
+	settings := setting.GetAssistantSettings()
 	userId := c.GetInt("id")
 	userCache, err := model.GetUserCache(userId)
 	if err != nil {
@@ -230,7 +232,13 @@ func AssistantChat(c *gin.Context) {
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_CONTEXT_FAILED", errors.New("failed to prepare assistant context"))
 		return
 	}
-	Relay(c, types.RelayFormatOpenAI)
+	conversation, _ := c.Get("assistant_conversation")
+	conversationMessages, ok := conversation.([]assistantOpenAIMessage)
+	if !ok || len(conversationMessages) == 0 {
+		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_CONTEXT_FAILED", errors.New("assistant conversation is unavailable"))
+		return
+	}
+	runAssistantAgent(c, settings, conversationMessages)
 }
 
 func GetAssistantStatus(c *gin.Context) {
@@ -252,5 +260,12 @@ func GetAssistantStatus(c *gin.Context) {
 		"model":                    settings.Model,
 		"credit":                   credit,
 		"developer_access_granted": developerAccessGranted,
+		"agent": gin.H{
+			"enabled":           settings.AgentLoopEnabled,
+			"max_steps":         settings.MaxSteps,
+			"timeout_seconds":   settings.TimeoutSeconds,
+			"cache_enabled":     settings.CacheEnabled,
+			"cache_ttl_minutes": settings.CacheTTLMinutes,
+		},
 	})
 }

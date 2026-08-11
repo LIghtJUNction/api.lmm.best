@@ -48,6 +48,11 @@ const assistantSettingsSchema = z.object({
   AssistantEnabled: z.boolean(),
   AssistantModel: z.string().trim().min(1).max(128),
   AssistantWeeklyCreditUSD: z.number().min(0).max(1000),
+  AssistantAgentLoopEnabled: z.boolean(),
+  AssistantMaxSteps: z.number().int().min(1).max(12),
+  AssistantTimeoutSeconds: z.number().int().min(5).max(120),
+  AssistantCacheEnabled: z.boolean(),
+  AssistantCacheTTLMinutes: z.number().int().min(0).max(10080),
 })
 
 type AssistantSettingsFormValues = z.infer<typeof assistantSettingsSchema>
@@ -78,6 +83,8 @@ export function AssistantSettingsSection(props: {
   }
 
   const enabled = form.watch('AssistantEnabled')
+  const agentLoopEnabled = form.watch('AssistantAgentLoopEnabled')
+  const cacheEnabled = form.watch('AssistantCacheEnabled')
 
   return (
     <SettingsSection title={t('AI assistant settings')}>
@@ -156,6 +163,147 @@ export function AssistantSettingsSection(props: {
                     {t(
                       'System-funded assistant credit available to each user every week before account balance is charged.'
                     )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <div className='border-border/60 bg-muted/20 space-y-4 rounded-lg border p-4'>
+            <div>
+              <h3 className='text-sm font-medium'>{t('Agent runtime')}</h3>
+              <p className='text-muted-foreground mt-1 text-sm'>
+                {t(
+                  'Configure the assistant tool loop and its safety limits. Tool actions that change an account still require explicit confirmation.'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='AssistantAgentLoopEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable agent tool loop')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Allow the assistant to call safe information and calculation tools before producing its final answer.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={!enabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <div className='grid gap-6 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='AssistantMaxSteps'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Maximum agent steps')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={12}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!enabled || !agentLoopEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Maximum number of model/tool turns in one assistant request (1–12).'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantTimeoutSeconds'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Agent timeout (seconds)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={5}
+                        max={120}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!enabled || !agentLoopEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Hard limit for the complete agent loop (5–120 seconds).'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name='AssistantCacheEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>
+                      {t('Cache identical first questions')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Return the same successful answer for an identical first question during the cache window without calling an upstream model.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={!enabled}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AssistantCacheTTLMinutes'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Cache window (minutes)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={10080}
+                      step={1}
+                      {...safeNumberFieldProps(field)}
+                      disabled={!enabled || !cacheEnabled}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Set to 0 to disable caching; the maximum is 7 days.')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

@@ -126,6 +126,11 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
 	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
 	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = strconv.FormatFloat(assistantSettings.WeeklyCreditUSD, 'f', -1, 64)
+	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
+	common.OptionMap[setting.AssistantMaxStepsOptionKey] = strconv.Itoa(assistantSettings.MaxSteps)
+	common.OptionMap[setting.AssistantTimeoutSecondsOptionKey] = strconv.Itoa(assistantSettings.TimeoutSeconds)
+	common.OptionMap[setting.AssistantCacheEnabledOptionKey] = strconv.FormatBool(assistantSettings.CacheEnabled)
+	common.OptionMap[setting.AssistantCacheTTLMinutesOptionKey] = strconv.Itoa(assistantSettings.CacheTTLMinutes)
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
@@ -407,6 +412,10 @@ func updateOptionMap(key string, value string) (err error) {
 			ratio_setting.SetExposeRatioEnabled(boolValue)
 		case setting.AssistantEnabledOptionKey:
 			setting.SetAssistantEnabled(boolValue)
+		case setting.AssistantAgentLoopEnabledOptionKey:
+			setting.SetAssistantAgentLoopEnabled(boolValue)
+		case setting.AssistantCacheEnabledOptionKey:
+			setting.SetAssistantCacheEnabled(boolValue)
 		}
 	}
 	switch key {
@@ -437,6 +446,12 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantModel(value)
 	case setting.AssistantWeeklyCreditUSDOptionKey:
 		err = setting.UpdateAssistantWeeklyCreditUSD(value)
+	case setting.AssistantMaxStepsOptionKey:
+		err = setting.UpdateAssistantMaxSteps(value)
+	case setting.AssistantTimeoutSecondsOptionKey:
+		err = setting.UpdateAssistantTimeoutSeconds(value)
+	case setting.AssistantCacheTTLMinutesOptionKey:
+		err = setting.UpdateAssistantCacheTTLMinutes(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "MaxTokenAutoGroups":
