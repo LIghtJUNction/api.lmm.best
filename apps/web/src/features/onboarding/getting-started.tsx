@@ -314,7 +314,7 @@ export function GettingStarted() {
                           size='sm'
                           onClick={() => requestAssistantOpen(step.preset)}
                         >
-                          {isCurrent ? t('Continue') : t('Open')}
+                          {t('Continue')}
                           <ArrowRight
                             data-icon='inline-end'
                             aria-hidden='true'
