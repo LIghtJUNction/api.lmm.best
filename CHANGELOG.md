@@ -28,6 +28,9 @@ authenticated users then see it once after their next login.
   reliability, concurrency, rate limits and observability are not mistaken for
   abuse; bypass, scanning and brute-force language still follows the security
   risk path.
+- Refined assistant persona precedence so an explicit request for step-by-step
+  help is routed to the guided-buyer strategy even when the message also says
+  the user is technical; added deterministic A–I welcome-strategy coverage.
 - Tightened administrator handoffs so the request is required and contains at
   least five characters at the AI tool, browser form and API validation layers;
   security-risk signals now take precedence over promotion-seeking signals.

@@ -254,10 +254,10 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 		return assistantProfileAccessible, signals
 	case assistantTextContainsAnyValue(signals, "privacy_conscious_language"):
 		return assistantProfilePrivacy, signals
-	case assistantTextContainsAnyValue(signals, "cost_sensitive_technical_language"):
-		return assistantProfileTechnical, signals
 	case assistantTextContainsAnyValue(signals, "guided_setup_language"):
 		return assistantProfileGuided, signals
+	case assistantTextContainsAnyValue(signals, "cost_sensitive_technical_language"):
+		return assistantProfileTechnical, signals
 	case len(signals) == 0:
 		return assistantProfileNormal, signals
 	default:
