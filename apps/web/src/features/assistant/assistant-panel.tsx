@@ -16,9 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  Alert02Icon,
+  ArrowRight01Icon,
+  CleanIcon,
+  ReloadIcon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, CircleAlert, RotateCcw } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -50,6 +56,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
   SheetContent,
@@ -106,6 +113,10 @@ type ConversationEntry = {
   content: string
   action?: AssistantAction
   error?: boolean
+  retry?: {
+    message: string
+    history: AssistantChatMessage[]
+  }
 }
 
 function getBaseUrl(): string {
@@ -122,7 +133,12 @@ function PresetAction(props: {
     return (
       <Button variant='outline' onClick={() => props.onToolOpen(action.tool)}>
         {action.label}
-        <ArrowRight data-icon='inline-end' aria-hidden='true' />
+        <HugeiconsIcon
+          icon={ArrowRight01Icon}
+          strokeWidth={2}
+          data-icon='inline-end'
+          aria-hidden='true'
+        />
       </Button>
     )
   }
@@ -130,7 +146,12 @@ function PresetAction(props: {
     return (
       <Button variant='outline' render={<a href={action.href} />}>
         {action.label}
-        <ArrowRight data-icon='inline-end' aria-hidden='true' />
+        <HugeiconsIcon
+          icon={ArrowRight01Icon}
+          strokeWidth={2}
+          data-icon='inline-end'
+          aria-hidden='true'
+        />
       </Button>
     )
   }
@@ -138,7 +159,12 @@ function PresetAction(props: {
   return (
     <Button variant='outline' render={<Link to={action.to} />}>
       {action.label}
-      <ArrowRight data-icon='inline-end' aria-hidden='true' />
+      <HugeiconsIcon
+        icon={ArrowRight01Icon}
+        strokeWidth={2}
+        data-icon='inline-end'
+        aria-hidden='true'
+      />
     </Button>
   )
 }
@@ -174,7 +200,7 @@ function AssistantAccountStatusNotice(props: {
 
   return (
     <Alert variant='destructive'>
-      <CircleAlert aria-hidden='true' />
+      <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
       <AlertTitle>{t('Unable to verify account access')}</AlertTitle>
       <AlertDescription>
         {t('Retry before using account-specific assistant tools.')}
@@ -353,18 +379,12 @@ export function AssistantPanel(props: {
     props.onOpenChange(open)
   }
 
-  const submitMessage = async ({ text }: { text?: string }) => {
-    const message = text?.trim()
-    if (!message || sending) return
-    setEntries((current) => [
-      ...current,
-      { id: nanoid(), role: 'user', content: message },
-    ])
+  const requestAssistantReply = async (
+    message: string,
+    history: AssistantChatMessage[]
+  ) => {
     setSending(true)
     try {
-      const history: AssistantChatMessage[] = entries
-        .filter((entry) => !entry.error)
-        .map((entry) => ({ role: entry.role, content: entry.content }))
       const reply = await sendAssistantMessage(message, history)
       const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
       const suggestedAction = suggestedPresetId
@@ -390,6 +410,7 @@ export function AssistantPanel(props: {
             'The AI assistant could not answer right now. Try again or contact support.'
           ),
           error: true,
+          retry: { message, history },
           action: {
             kind: 'route',
             label: t('Contact support'),
@@ -400,6 +421,25 @@ export function AssistantPanel(props: {
     } finally {
       setSending(false)
     }
+  }
+
+  const submitMessage = async ({ text }: { text?: string }) => {
+    const message = text?.trim()
+    if (!message || sending) return
+    const history: AssistantChatMessage[] = entries
+      .filter((entry) => !entry.error)
+      .map((entry) => ({ role: entry.role, content: entry.content }))
+    setEntries((current) => [
+      ...current,
+      { id: nanoid(), role: 'user', content: message },
+    ])
+    await requestAssistantReply(message, history)
+  }
+
+  const retryMessage = async (entry: ConversationEntry) => {
+    if (!entry.retry || sending) return
+    setEntries((current) => current.filter((item) => item.id !== entry.id))
+    await requestAssistantReply(entry.retry.message, entry.retry.history)
   }
 
   return (
@@ -444,7 +484,12 @@ export function AssistantPanel(props: {
                       onClick={() => appendPreset(preset)}
                     >
                       <span>{preset.question}</span>
-                      <ArrowRight className='shrink-0' aria-hidden='true' />
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        strokeWidth={2}
+                        className='shrink-0'
+                        aria-hidden='true'
+                      />
                     </Button>
                   ))}
                 </div>
@@ -462,12 +507,30 @@ export function AssistantPanel(props: {
                       }
                     >
                       <p className='whitespace-pre-wrap'>{entry.content}</p>
-                      {entry.action ? (
-                        <div>
-                          <PresetAction
-                            action={entry.action}
-                            onToolOpen={setActiveTool}
-                          />
+                      {entry.retry || entry.action ? (
+                        <div className='flex flex-wrap gap-2'>
+                          {entry.retry ? (
+                            <Button
+                              type='button'
+                              variant='outline'
+                              onClick={() => void retryMessage(entry)}
+                              disabled={sending}
+                            >
+                              <HugeiconsIcon
+                                icon={ReloadIcon}
+                                strokeWidth={2}
+                                data-icon='inline-start'
+                                aria-hidden='true'
+                              />
+                              {t('Retry')}
+                            </Button>
+                          ) : null}
+                          {entry.action ? (
+                            <PresetAction
+                              action={entry.action}
+                              onToolOpen={setActiveTool}
+                            />
+                          ) : null}
                         </div>
                       ) : null}
                     </MessageContent>
@@ -519,7 +582,8 @@ export function AssistantPanel(props: {
                     onCreateKey={() => setActiveTool('key')}
                   />
                 ) : null}
-                <div className='border-t pt-3'>
+                <div className='grid gap-3 pt-1'>
+                  <Separator />
                   <Button
                     type='button'
                     variant='ghost'
@@ -530,7 +594,12 @@ export function AssistantPanel(props: {
                     }}
                     disabled={sending}
                   >
-                    <RotateCcw data-icon='inline-start' aria-hidden='true' />
+                    <HugeiconsIcon
+                      icon={CleanIcon}
+                      strokeWidth={2}
+                      data-icon='inline-start'
+                      aria-hidden='true'
+                    />
                     {t('Clear conversation')}
                   </Button>
                 </div>
@@ -540,39 +609,42 @@ export function AssistantPanel(props: {
           <ConversationScrollButton />
         </Conversation>
 
-        <div className='border-border/70 bg-background border-t px-3 py-3 sm:px-4'>
-          <PromptInput
-            onSubmit={submitMessage}
-            groupClassName='rounded-xl'
-            aria-label={t('Ask AI assistant')}
-          >
-            <PromptInputBody>
-              <PromptInputTextarea
-                placeholder={t('Ask about plans, setup, keys, or costs...')}
-                maxLength={4000}
-                disabled={sending}
-                className='min-h-14'
-              />
-            </PromptInputBody>
-            <PromptInputFooter>
-              <span className='text-muted-foreground truncate text-xs'>
-                {statusQuery.data
-                  ? t('Weekly included credit remaining: {{amount}}', {
-                      amount: creditLabel,
-                    })
-                  : t('Weekly included AI credit applies first.')}
-              </span>
-              <PromptInputSubmit
-                status={sending ? 'submitted' : 'ready'}
-                disabled={sending}
-              />
-            </PromptInputFooter>
-          </PromptInput>
-          <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
-            {t(
-              'AI answers may be inaccurate. Never send passwords or API keys.'
-            )}
-          </p>
+        <div className='bg-background'>
+          <Separator className='bg-border/70' />
+          <div className='px-3 py-3 sm:px-4'>
+            <PromptInput
+              onSubmit={submitMessage}
+              groupClassName='rounded-xl'
+              aria-label={t('Ask AI assistant')}
+            >
+              <PromptInputBody>
+                <PromptInputTextarea
+                  placeholder={t('Ask about plans, setup, keys, or costs...')}
+                  maxLength={4000}
+                  disabled={sending}
+                  className='min-h-14'
+                />
+              </PromptInputBody>
+              <PromptInputFooter>
+                <span className='text-muted-foreground truncate text-xs'>
+                  {statusQuery.data
+                    ? t('Weekly included credit remaining: {{amount}}', {
+                        amount: creditLabel,
+                      })
+                    : t('Weekly included AI credit applies first.')}
+                </span>
+                <PromptInputSubmit
+                  status={sending ? 'submitted' : 'ready'}
+                  disabled={sending}
+                />
+              </PromptInputFooter>
+            </PromptInput>
+            <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
+              {t(
+                'AI answers may be inaccurate. Never send passwords or API keys.'
+              )}
+            </p>
+          </div>
         </div>
       </SheetContent>
     </Sheet>
