@@ -476,6 +476,18 @@ const (
 	PaymentProviderFastPay      = "fastpay"
 )
 
+// LinuxDO Credit is not a fiat payment. The current ePay adapter persists it
+// as provider=epay, method=epay; a few older imports used the descriptive
+// aliases below. None of these rows may unlock paid-only access or contribute
+// to the trust-level USD total.
+var linuxDOCreditPaymentMethods = []string{
+	"epay",
+	"ldc",
+	"linuxdo",
+	"linux_do",
+	"linuxdo_credit",
+}
+
 var (
 	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
 	ErrTopUpNotFound         = errors.New("topup not found")
@@ -563,7 +575,12 @@ func successfulExternalPaidTopUpQuery(query *gorm.DB) *gorm.DB {
 		Where("status = ?", common.TopUpStatusSuccess).
 		Where("(settled_amount_micros > 0 OR (settled_amount_micros = 0 AND money > 0))").
 		Where("(payment_method IS NULL OR payment_method <> ?)", PaymentMethodBalance).
-		Where("(payment_provider IS NULL OR payment_provider <> ?)", PaymentProviderBalance)
+		Where("(payment_provider IS NULL OR payment_provider <> ?)", PaymentProviderBalance).
+		Where(
+			"NOT (LOWER(COALESCE(payment_provider, '')) = ? AND LOWER(COALESCE(payment_method, '')) IN ?)",
+			PaymentProviderEpay,
+			linuxDOCreditPaymentMethods,
+		)
 }
 
 func topUpPaidAmountMicros(topUp *TopUp) int64 {

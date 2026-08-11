@@ -6177,6 +6177,9 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Eligible credited amount (USD)": "Зачисленная сумма, учитываемая для уровня (USD)",
+    "{{amount}} credited USD needed for L{{level}}": "Для L{{level}} нужно ещё {{amount}} USD зачислений",
+    "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "Это сумма, зачисленная на баланс API, а не фактически списанная сумма. Платежи LinuxDO Credit исключаются."
   }
 }

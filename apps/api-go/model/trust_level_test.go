@@ -153,7 +153,7 @@ func TestGetTrustLevelInfoUsesCompletedExternalTopUps(t *testing.T) {
 	info, err := GetTrustLevelInfoForUser(&user)
 	require.NoError(t, err)
 	assert.Equal(t, 1, info.Level)
-	assert.InDelta(t, 0.01, info.PaidAmount, 0.0001)
+	assert.InDelta(t, 1, info.PaidAmount, 0.0001)
 }
 
 type topUpQueryCounter struct {

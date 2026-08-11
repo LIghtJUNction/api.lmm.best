@@ -6177,6 +6177,9 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Eligible credited amount (USD)": "レベル計算対象の付与額（USD）",
+    "{{amount}} credited USD needed for L{{level}}": "L{{level}} までに必要な付与額（USD）：{{amount}}",
+    "This is the amount credited to your API balance, not the amount charged. LinuxDO Credit payments are excluded.": "これはAPI残高に付与された金額であり、実際の支払額ではありません。LinuxDO Creditのポイント決済はレベル計算から除外されます。"
   }
 }
