@@ -33,6 +33,20 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/about", controller.GetAbout)
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
+		securityRoute := apiRouter.Group("/security")
+		{
+			// Public policy/statistics intentionally omit matcher patterns,
+			// prompt contents, user identifiers, and per-rule event rows.
+			securityRoute.GET("/policy", controller.GetPublicSecurityPolicy)
+			securityRoute.GET("/stats", controller.GetPublicSecurityStats)
+		}
+		securityAdminRoute := apiRouter.Group("/security/admin")
+		securityAdminRoute.Use(middleware.AdminAuth())
+		{
+			securityAdminRoute.GET("/policy", controller.GetAdminSecurityPolicy)
+			securityAdminRoute.GET("/stats", controller.GetAdminSecurityStats)
+			securityAdminRoute.GET("/events", controller.ListAdminSecurityEvents)
+		}
 		// Compatibility alias for older edge configurations. New package-managed
 		// Nginx uses /internal/access-ip-policy outside the API rate-limit group.
 		apiRouter.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)
@@ -167,7 +181,6 @@ func SetApiRouter(router *gin.Engine) {
 				// Admin 2FA routes
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
-
 
 			}
 		}

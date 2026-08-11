@@ -34,6 +34,9 @@ func TestCheckAdvancedSecurityTextUsesEnabledRulesAndAhoCorasick(t *testing.T) {
 	if matches[0].Pattern != "ignore previous instructions" {
 		t.Fatalf("unexpected matched pattern: %+v", matches[0])
 	}
+	if matches[0].Layer != "custom" || matches[0].Severity != "medium" || matches[0].Source != "local_custom" || matches[0].RuleVersion != "v1" {
+		t.Fatalf("expected normalized rule metadata: %+v", matches[0])
+	}
 	if matches := CheckAdvancedSecurityText("secret disabled"); len(matches) != 0 {
 		t.Fatalf("disabled rule matched: %+v", matches)
 	}
