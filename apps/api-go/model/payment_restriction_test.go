@@ -65,3 +65,15 @@ func TestPaymentRestrictionMarkerRequiresAdminPopulation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(adminPayload), `"payment_restriction_flags":2`)
 }
+
+func TestDisposableEmailMarkerIsAdminOnly(t *testing.T) {
+	user := &User{Email: "person@mailinator.com"}
+	selfPayload, err := json.Marshal(user)
+	require.NoError(t, err)
+	assert.NotContains(t, string(selfPayload), "disposable_email")
+
+	PopulateAdminPaymentRestriction(user)
+	adminPayload, err := json.Marshal(user)
+	require.NoError(t, err)
+	assert.Contains(t, string(adminPayload), `"disposable_email":true`)
+}

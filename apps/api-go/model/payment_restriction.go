@@ -101,6 +101,7 @@ func PopulateAdminPaymentRestriction(user *User) {
 		return
 	}
 	user.AdminPaymentRestrictionFlags = EffectivePaymentRestrictionFlags(user)
+	user.AdminDisposableEmail = IsDisposableEmail(user.Email)
 	if user.LinuxDOScoreUpdatedAt > 0 {
 		score := user.LinuxDOGamificationScore
 		user.AdminLinuxDOGamificationScore = &score
