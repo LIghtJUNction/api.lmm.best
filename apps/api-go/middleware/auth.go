@@ -334,6 +334,8 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodGet
 	case "/api/user/developer-access/request":
 		return method == http.MethodGet || method == http.MethodPost
+	case "/api/release-notes/latest":
+		return method == http.MethodGet
 	case "/api/user/sessions/revoke-others", "/api/user/passkey/register/begin", "/api/user/passkey/register/finish", "/api/user/passkey/verify/begin", "/api/user/passkey/verify/finish", "/api/user/2fa/setup", "/api/user/2fa/enable", "/api/user/2fa/disable", "/api/user/2fa/backup_codes":
 		return method == http.MethodPost
 	case "/api/user/setting":
@@ -342,6 +344,9 @@ func preActivationRouteAllowed(method string, path string) bool {
 
 	if strings.HasPrefix(path, "/api/user/sessions/") || strings.HasPrefix(path, "/api/user/oauth/bindings/") || strings.HasPrefix(path, "/api/user/bindings/") {
 		return method == http.MethodDelete
+	}
+	if strings.HasPrefix(path, "/api/release-notes/") && strings.HasSuffix(path, "/read") {
+		return method == http.MethodPost
 	}
 	return false
 }

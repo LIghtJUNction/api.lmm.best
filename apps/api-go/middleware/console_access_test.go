@@ -24,6 +24,8 @@ func TestPreActivationRouteMatrixKeepsChallengesReadOnly(t *testing.T) {
 		{http.MethodPost, "/api/user/developer-access/request"},
 		{http.MethodGet, "/api/security/policy"},
 		{http.MethodGet, "/api/security/stats"},
+		{http.MethodGet, "/api/release-notes/latest"},
+		{http.MethodPost, "/api/release-notes/7/read"},
 		{http.MethodPut, "/api/user/self"},
 		{http.MethodPost, "/api/user/passkey/register/begin"},
 		{http.MethodGet, "/api/subscription/epay/notify"},
