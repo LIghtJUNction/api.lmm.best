@@ -103,3 +103,9 @@ file through `PERSONA_CREDENTIAL_FILE`. To exercise the deterministic
 assistant-cache and intent checks, additionally set `PERSONA_RUN_ASSISTANT=1`.
 The suite does not create keys, make payments, publish bounties, or call a
 provider; L0 key creation is tested only as a required authorization denial.
+
+Run its offline safety-contract tests with:
+
+```sh
+node apps/web/scripts/operator-persona-suite.test.mjs
+```
