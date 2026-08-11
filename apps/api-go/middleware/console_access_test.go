@@ -32,6 +32,8 @@ func TestPreActivationRouteMatrixPreservesContributorAndPaymentFlows(t *testing.
 		{http.MethodPost, "/api/user/developer-access/request"},
 		{http.MethodGet, "/api/user/checkin"},
 		{http.MethodPost, "/api/user/checkin"},
+		{http.MethodGet, "/api/security/policy"},
+		{http.MethodGet, "/api/security/stats"},
 		{http.MethodPost, "/api/user/stripe/pay"},
 		{http.MethodGet, "/api/user/aff"},
 		{http.MethodPut, "/api/user/self"},
@@ -150,6 +152,8 @@ func TestConsoleAccessGateKeepsPublicAccountAndBountyRoutesReachable(t *testing.
 		path   string
 	}{
 		{http.MethodGet, "/api/status"},
+		{http.MethodGet, "/api/security/policy"},
+		{http.MethodGet, "/api/security/stats"},
 		{http.MethodPost, "/api/user/login"},
 		{http.MethodGet, "/api/open-source-bounties"},
 		{http.MethodGet, "/api/subscription/epay/notify"},

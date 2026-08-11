@@ -142,6 +142,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needAdvancedSecurityCheck := setting.ShouldCheckAdvancedSecurityPrompt()
+	advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
@@ -168,7 +169,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				matchIDs = append(matchIDs, match.RuleID)
 			}
 			logger.LogWarn(c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
-			if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
+			decision := model.AdvancedSecurityDecisionAudited
+			if advancedSecuritySettings.Action == setting.AdvancedSecurityActionBlock {
+				decision = model.AdvancedSecurityDecisionBlocked
+			}
+			service.RecordAdvancedSecurityDetection(c, relayInfo, meta.CombineText, matches, decision)
+			if decision == model.AdvancedSecurityDecisionBlocked {
 				newAPIError = types.NewErrorWithStatusCode(
 					errors.New("prompt blocked by advanced security guardrail"),
 					types.ErrorCodeAdvancedSecurity,

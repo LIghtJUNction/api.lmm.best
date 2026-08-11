@@ -410,6 +410,7 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 		}
 	}
 	if setting.ShouldCheckAdvancedSecurityPrompt() && meta != nil {
+		advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
 		matches := service.CheckAdvancedSecurityText(meta.CombineText)
 		if len(matches) > 0 {
 			matchIDs := make([]string, 0, len(matches))
@@ -417,7 +418,12 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 				matchIDs = append(matchIDs, match.RuleID)
 			}
 			logger.LogWarn(s.c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
-			if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
+			decision := appmodel.AdvancedSecurityDecisionAudited
+			if advancedSecuritySettings.Action == setting.AdvancedSecurityActionBlock {
+				decision = appmodel.AdvancedSecurityDecisionBlocked
+			}
+			service.RecordAdvancedSecurityDetection(s.c, relayInfo, meta.CombineText, matches, decision)
+			if decision == appmodel.AdvancedSecurityDecisionBlocked {
 				return nil, nil, types.NewErrorWithStatusCode(
 					errors.New("prompt blocked by advanced security guardrail"),
 					types.ErrorCodeAdvancedSecurity,

@@ -342,7 +342,7 @@ func mainMigrationModels() []interface{} {
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
-		&AssistantWeeklyUsage{}, &AssistantLead{},
+		&AssistantWeeklyUsage{}, &AssistantLead{}, &AdvancedSecurityEvent{},
 	}
 }
 
@@ -440,6 +440,7 @@ func migrateDBFast() error {
 		{&PersonalAccessIP{}, "PersonalAccessIP"},
 		{&AssistantWeeklyUsage{}, "AssistantWeeklyUsage"},
 		{&AssistantLead{}, "AssistantLead"},
+		{&AdvancedSecurityEvent{}, "AdvancedSecurityEvent"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

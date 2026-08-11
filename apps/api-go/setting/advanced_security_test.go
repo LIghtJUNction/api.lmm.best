@@ -19,8 +19,16 @@ func TestParseAdvancedSecurityRulesNormalizesAndValidates(t *testing.T) {
 		t.Fatalf("unexpected rule set: %+v", ruleSet)
 	}
 	rule := ruleSet.Rules[0]
-	if rule.ID != "prompt-injection" || rule.Name != "prompt-injection" || rule.Category != "abuse" || len(rule.Patterns) != 1 || rule.Patterns[0] != "Ignore previous instructions" {
+	if rule.ID != "prompt-injection" || rule.Name != "prompt-injection" || rule.Category != "abuse" || rule.Severity != "medium" || rule.Source != "local_custom" || rule.Version != "v1" || len(rule.Patterns) != 1 || rule.Patterns[0] != "Ignore previous instructions" {
 		t.Fatalf("unexpected normalized rule: %+v", rule)
+	}
+
+	anthropicRuleSet, err := ParseAdvancedSecurityRules(`[{"id":"child","category":"child_safety","enabled":true,"patterns":["minor"]}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := anthropicRuleSet.Rules[0]; got.Severity != "critical" || got.Source != "anthropic_usage_policy" || got.Description == "" {
+		t.Fatalf("expected Anthropic-aligned metadata, got %+v", got)
 	}
 
 	if _, err := ParseAdvancedSecurityRules(`[{"id":"duplicate","enabled":true,"patterns":["x"]},{"id":"duplicate","enabled":true,"patterns":["y"]}]`); err == nil {
@@ -55,6 +63,28 @@ func TestAdvancedSecuritySettingsUpdates(t *testing.T) {
 	updated := GetAdvancedSecuritySettings()
 	if !updated.Enabled || updated.OnPrompt || updated.Action != AdvancedSecurityActionAudit || len(updated.RuleSet.Rules) != 1 {
 		t.Fatalf("unexpected advanced security settings: %+v", updated)
+	}
+}
+
+func TestAdvancedSecurityRiskCategoryCatalogMatchesPolicyLayers(t *testing.T) {
+	counts := make(map[string]int)
+	for _, category := range GetAdvancedSecurityRiskCategories() {
+		counts[category.Layer]++
+	}
+	if counts["universal_standard"] != 14 {
+		t.Fatalf("expected 14 Universal Usage Standards categories, got %d", counts["universal_standard"])
+	}
+	if counts["high_risk_use_case"] != 7 {
+		t.Fatalf("expected 7 high-risk use-case categories, got %d", counts["high_risk_use_case"])
+	}
+	if counts["additional_guideline"] != 4 {
+		t.Fatalf("expected 4 additional guideline categories, got %d", counts["additional_guideline"])
+	}
+	if counts["custom"] != 1 {
+		t.Fatalf("expected one custom category, got %d", counts["custom"])
+	}
+	if AdvancedSecurityPolicyReferenceDate != "2025-09-15" || AdvancedSecurityPolicyReferenceURL == "" {
+		t.Fatalf("unexpected policy reference metadata: %s %s", AdvancedSecurityPolicyReferenceDate, AdvancedSecurityPolicyReferenceURL)
 	}
 }
 
