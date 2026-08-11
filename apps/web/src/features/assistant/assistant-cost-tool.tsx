@@ -16,8 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  Alert02Icon,
+  Calculator01Icon,
+  ReloadIcon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
-import { Calculator, CircleAlert, RefreshCcw } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -48,6 +53,7 @@ import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getPricing } from '@/features/pricing/api'
+import { toIntlLocale } from '@/i18n/languages'
 
 import { calculateAssistantTextCost } from './cost-calculator'
 
@@ -111,7 +117,7 @@ export function AssistantCostTool(props: {
     : null
   const currency = useMemo(
     () =>
-      new Intl.NumberFormat(i18n.language, {
+      new Intl.NumberFormat(toIntlLocale(i18n.language), {
         style: 'currency',
         currency: 'USD',
         minimumFractionDigits: 4,
@@ -151,7 +157,7 @@ export function AssistantCostTool(props: {
   } else if (pricingQuery.isError) {
     calculatorContent = (
       <Alert variant='destructive'>
-        <CircleAlert aria-hidden='true' />
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
         <AlertTitle>{t('Unable to load live pricing')}</AlertTitle>
         <AlertDescription>
           {t('Live prices are unavailable, so no estimate is shown.')}
@@ -163,7 +169,12 @@ export function AssistantCostTool(props: {
             size='sm'
             onClick={() => void pricingQuery.refetch()}
           >
-            <RefreshCcw data-icon='inline-start' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={ReloadIcon}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
             {t('Retry')}
           </Button>
         </AlertAction>
@@ -174,7 +185,11 @@ export function AssistantCostTool(props: {
       <Empty className='min-h-36 border'>
         <EmptyHeader>
           <EmptyMedia variant='icon'>
-            <Calculator aria-hidden='true' />
+            <HugeiconsIcon
+              icon={Calculator01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
           </EmptyMedia>
           <EmptyTitle>{t('No text-token pricing is available')}</EmptyTitle>
           <EmptyDescription>
@@ -289,7 +304,12 @@ export function AssistantCostTool(props: {
     <Card size='sm'>
       <CardHeader>
         <CardTitle className='flex items-center gap-2'>
-          <Calculator className='size-4' aria-hidden='true' />
+          <HugeiconsIcon
+            icon={Calculator01Icon}
+            className='size-4'
+            strokeWidth={2}
+            aria-hidden='true'
+          />
           {t('Live token cost calculator')}
         </CardTitle>
         <CardDescription>

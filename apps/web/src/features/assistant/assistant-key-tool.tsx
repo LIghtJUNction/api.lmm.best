@@ -16,8 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import {
+  ArrowRight01Icon,
+  Key01Icon,
+  Loading03Icon,
+  ShieldKeyIcon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -128,7 +134,12 @@ export function AssistantKeyTool(props: {
       <Card size='sm' className='border-success/40 bg-success/5'>
         <CardHeader>
           <CardTitle className='flex items-center gap-2'>
-            <ShieldCheck className='text-success size-4' aria-hidden='true' />
+            <HugeiconsIcon
+              icon={ShieldKeyIcon}
+              className='text-success size-4'
+              strokeWidth={2}
+              aria-hidden='true'
+            />
             {t('API key created')}
           </CardTitle>
           <CardDescription>
@@ -185,7 +196,12 @@ export function AssistantKeyTool(props: {
                 onClick={() => setConfirmOpen(true)}
                 disabled={!name.trim()}
               >
-                <KeyRound data-icon='inline-start' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
                 {t('Review key creation')}
               </Button>
             </>
@@ -207,7 +223,12 @@ export function AssistantKeyTool(props: {
                 render={<Link to='/getting-started' />}
               >
                 {t('View onboarding status')}
-                <ArrowRight data-icon='inline-end' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-end'
+                  aria-hidden='true'
+                />
               </Button>
             </div>
           )}
@@ -234,7 +255,12 @@ export function AssistantKeyTool(props: {
               disabled={creating}
             >
               {creating ? (
-                <LoaderCircle className='animate-spin' aria-hidden='true' />
+                <HugeiconsIcon
+                  icon={Loading03Icon}
+                  className='animate-spin'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
               ) : null}
               {t('Confirm and create')}
             </AlertDialogAction>

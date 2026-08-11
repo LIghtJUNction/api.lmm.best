@@ -195,6 +195,24 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantPlanTool', () => {
+  test('formats plan prices and discounts with internal Chinese locale codes', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/subscription/plans') return { data: plansFixture }
+      if (url === '/api/user/topup/info') return { data: topupFixture }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+
+    await i18n.changeLanguage('zhTW')
+    const rendered = await renderTool(true)
+    try {
+      assert.match(rendered.container.textContent ?? '', /US\$8\.00/)
+      assert.match(rendered.container.textContent ?? '', /save 20%/)
+    } finally {
+      await unmount(rendered)
+      await i18n.changeLanguage('en')
+    }
+  })
+
   test('shows live top-up discounts to L0 without requesting restricted plans', async () => {
     let topupCalls = 0
     let planCalls = 0
