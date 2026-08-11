@@ -24,6 +24,7 @@ import { useSidebarView } from '@/hooks/use-sidebar-view'
 import { MOTION_TRANSITION, MOTION_VARIANTS } from '@/lib/motion'
 
 import { NavGroup } from './nav-group'
+import { SidebarQuickLinks } from './sidebar-quick-links'
 import { SidebarViewHeader } from './sidebar-view-header'
 
 /**
@@ -70,6 +71,8 @@ export function AppSidebar() {
           </motion.div>
         </AnimatePresence>
       </SidebarContent>
+
+      <SidebarQuickLinks />
 
       <SidebarRail />
     </Sidebar>

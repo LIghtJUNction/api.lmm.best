@@ -187,6 +187,11 @@ export type ContentSettings = {
   AssistantTimeoutSeconds: number
   AssistantCacheEnabled: boolean
   AssistantCacheTTLMinutes: number
+  AssistantPersona: string
+  AssistantSystemPrompt: string
+  AssistantSearchURL: string
+  AssistantSearchAPIKey: string
+  AssistantSkills: string
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean

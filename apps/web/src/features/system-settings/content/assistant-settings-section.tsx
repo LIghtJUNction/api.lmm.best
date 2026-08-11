@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 
 import {
   SettingsForm,
@@ -53,6 +54,11 @@ const assistantSettingsSchema = z.object({
   AssistantTimeoutSeconds: z.number().int().min(5).max(120),
   AssistantCacheEnabled: z.boolean(),
   AssistantCacheTTLMinutes: z.number().int().min(0).max(10080),
+  AssistantPersona: z.string().max(2000),
+  AssistantSystemPrompt: z.string().max(8000),
+  AssistantSearchURL: z.string().max(512),
+  AssistantSearchAPIKey: z.string().max(512),
+  AssistantSkills: z.string().max(12000),
 })
 
 type AssistantSettingsFormValues = z.infer<typeof assistantSettingsSchema>
@@ -162,6 +168,147 @@ export function AssistantSettingsSection(props: {
                   <FormDescription>
                     {t(
                       'System-funded assistant credit available to each user every week before account balance is charged.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <div className='border-border/60 bg-muted/20 space-y-4 rounded-lg border p-4'>
+            <div>
+              <h3 className='text-sm font-medium'>{t('Assistant behavior')}</h3>
+              <p className='text-muted-foreground mt-1 text-sm'>
+                {t(
+                  'Customize the assistant without changing its built-in privacy and confirmation rules.'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='AssistantPersona'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Personality')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      disabled={!enabled}
+                      rows={3}
+                      maxLength={2000}
+                      placeholder={t(
+                        'Helpful onboarding coach, concise technical writer, and honest product guide.'
+                      )}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Describe the tone, role, and communication style.')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AssistantSystemPrompt'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Administrator instructions')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      disabled={!enabled}
+                      rows={5}
+                      maxLength={8000}
+                      placeholder={t(
+                        'Add product policies, support workflow, and facts the assistant should follow.'
+                      )}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'These instructions are appended to the assistant context.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className='grid gap-6 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='AssistantSearchURL'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Search tool API URL')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        disabled={!enabled}
+                        placeholder='https://search.example/api/search'
+                        autoComplete='off'
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'The assistant sends a GET request with the query parameter q.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantSearchAPIKey'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Search tool API key')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        type='password'
+                        disabled={!enabled}
+                        placeholder={t('Leave blank to keep the existing key')}
+                        autoComplete='new-password'
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'The key is stored server-side and is never shown in the options response.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name='AssistantSkills'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Skills and playbooks')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      disabled={!enabled}
+                      rows={6}
+                      maxLength={12000}
+                      placeholder={t(
+                        'One skill or workflow per line. Example: CC Switch troubleshooting: check endpoint, model ID, key, then run a small request.'
+                      )}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Give the agent reusable guidance for platform setup and support workflows.'
                     )}
                   </FormDescription>
                   <FormMessage />

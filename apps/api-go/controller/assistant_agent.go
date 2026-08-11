@@ -9,13 +9,17 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -97,11 +101,63 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "get_available_models",
+				Description: "Return the model IDs and usable routing groups available to the signed-in user. Never invent a model ID.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_plan_offers",
+				Description: "Return current enabled subscription plans and configured top-up discounts for comparison. Use exact live values and do not invent promotions.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_invitation_rewards",
+				Description: "Explain the signed-in user's invitation code, reward status, and current inviter/invitee reward configuration without exposing secrets.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_bounty_guide",
+				Description: "Return the current safe workflow for publishing, funding, reviewing, tipping, and settling an open-source bounty.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_usage_summary",
+				Description: "Summarize the signed-in user's historical consume calls by model and group. Use this for usage statistics instead of exposing raw logs.",
+				Parameters: objectSchema(map[string]any{
+					"days": map[string]any{"type": "integer", "minimum": 1, "maximum": 90},
+				}, nil),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "search_web",
+				Description: "Search the administrator-configured web search API for current software installation or platform information. If no search API is configured, report that limitation.",
+				Parameters: objectSchema(map[string]any{
+					"query": map[string]any{"type": "string", "minLength": 2, "maxLength": 500},
+				}, []string{"query"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "get_setup_guide",
 				Description: "Return a concise platform-specific setup checklist for Claude Code, CC Switch, or ChatGPT-compatible clients.",
 				Parameters: objectSchema(map[string]any{
 					"platform": map[string]any{"type": "string", "enum": []string{"windows", "linux", "macos"}},
-					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "chatgpt-client"}},
+					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
 				}, []string{"platform", "topic"}),
 			},
 		},
@@ -111,7 +167,8 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 				Name:        "request_create_key",
 				Description: "Prepare the instructions for creating an API key. This is a write action and must remain confirmation-gated; never claim a key was created from this tool.",
 				Parameters: objectSchema(map[string]any{
-					"name": map[string]any{"type": "string", "maxLength": 50},
+					"name":  map[string]any{"type": "string", "maxLength": 50},
+					"group": map[string]any{"type": "string", "maxLength": 64},
 				}, nil),
 			},
 		},
@@ -438,16 +495,29 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantCostTool(input)
 	case "get_account_access":
 		return executeAssistantAccountTool(c.GetInt("id"))
+	case "get_available_models":
+		return executeAssistantModelsTool(c.GetInt("id"))
+	case "get_plan_offers":
+		return executeAssistantPlanOffersTool(c.GetInt("id"))
+	case "get_invitation_rewards":
+		return executeAssistantInvitationTool(c.GetInt("id"))
+	case "get_bounty_guide":
+		return executeAssistantBountyTool()
+	case "get_usage_summary":
+		return executeAssistantUsageTool(c.GetInt("id"), input)
+	case "search_web":
+		return executeAssistantSearchTool(c, input)
 	case "get_setup_guide":
 		return executeAssistantSetupTool(input)
 	case "request_create_key":
 		return map[string]any{
-			"ok":             true,
-			"status":         "confirmation_required",
-			"action":         "create_key",
-			"ui_path":        "/keys",
-			"message":        "Ask the user to confirm key creation in the UI; do not claim that a key exists yet.",
-			"requested_name": inputString(input, "name"),
+			"ok":              true,
+			"status":          "confirmation_required",
+			"action":          "create_key",
+			"ui_path":         "/keys",
+			"message":         "Ask the user to confirm key creation in the UI; do not claim that a key exists yet.",
+			"requested_name":  inputString(input, "name"),
+			"requested_group": inputString(input, "group"),
 		}
 	case "request_human_support":
 		return map[string]any{
@@ -490,6 +560,215 @@ func executeAssistantCostTool(input map[string]any) map[string]any {
 	}
 }
 
+func executeAssistantModelsTool(userID int) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "available models could not be loaded"}
+	}
+	groups := service.GetUserUsableGroups(user.Group)
+	groupNames := make([]string, 0, len(groups))
+	for group := range groups {
+		groupNames = append(groupNames, group)
+	}
+	sort.Strings(groupNames)
+	models := service.GetGroupsEnabledModels(groupNames)
+	sort.Strings(models)
+	return map[string]any{
+		"ok":              true,
+		"groups":          groupNames,
+		"model_ids":       models,
+		"default_model":   setting.GetAssistantSettings().Model,
+		"model_list_path": "/models",
+	}
+}
+
+func executeAssistantPlanOffersTool(userID int) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "account access could not be loaded"}
+	}
+	access, err := model.GetDeveloperAccessStateForUserBase(user)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
+	}
+	result := map[string]any{
+		"ok":                           true,
+		"developer_access_granted":     access.Granted,
+		"plans":                        []any{},
+		"topup_discounts":              []any{},
+		"payment_compliance_confirmed": operation_setting.IsPaymentComplianceConfirmed(),
+	}
+	if !operation_setting.IsPaymentComplianceConfirmed() {
+		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."
+		return result
+	}
+	if model.DB == nil || common.QuotaPerUnit <= 0 {
+		return map[string]any{"ok": false, "error": "subscription plans are temporarily unavailable"}
+	}
+	var plans []model.SubscriptionPlan
+	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+		return map[string]any{"ok": false, "error": "subscription plans could not be loaded"}
+	}
+	planValues := make([]map[string]any, 0, len(plans))
+	for _, plan := range plans {
+		plan.NormalizeDefaults()
+		planValues = append(planValues, map[string]any{
+			"id":                 plan.Id,
+			"title":              plan.Title,
+			"subtitle":           plan.Subtitle,
+			"price_amount":       plan.PriceAmount,
+			"currency":           plan.Currency,
+			"duration_unit":      plan.DurationUnit,
+			"duration_value":     plan.DurationValue,
+			"total_quota":        plan.TotalAmount,
+			"total_quota_usd":    float64(plan.TotalAmount) / common.QuotaPerUnit,
+			"quota_reset_period": plan.QuotaResetPeriod,
+			"upgrade_group":      plan.UpgradeGroup,
+		})
+	}
+	discountValues := make([]map[string]any, 0, len(operation_setting.GetPaymentSetting().AmountDiscount))
+	for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
+		discountValues = append(discountValues, map[string]any{
+			"amount":          amount,
+			"multiplier":      multiplier,
+			"savings_percent": (1 - multiplier) * 100,
+		})
+	}
+	sort.Slice(discountValues, func(i, j int) bool {
+		return discountValues[i]["amount"].(int) < discountValues[j]["amount"].(int)
+	})
+	result["plans"] = planValues
+	result["topup_discounts"] = discountValues
+	return result
+}
+
+func executeAssistantInvitationTool(userID int) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	user, err := model.GetUserById(userID, false)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "invitation information could not be loaded"}
+	}
+	result := map[string]any{
+		"ok":                           true,
+		"affiliate_code":               user.AffCode,
+		"invited_count":                user.AffCount,
+		"pending_reward_usd":           float64(user.AffQuota) / common.QuotaPerUnit,
+		"total_reward_usd":             float64(user.AffHistoryQuota) / common.QuotaPerUnit,
+		"reward_per_inviter_usd":       float64(common.QuotaForInviter) / common.QuotaPerUnit,
+		"reward_per_invitee_usd":       float64(common.QuotaForInvitee) / common.QuotaPerUnit,
+		"payment_compliance_confirmed": operation_setting.IsPaymentComplianceConfirmed(),
+		"next_step":                    "Open the invitation page to generate or copy the current invitation code.",
+	}
+	if user.AffCode != "" {
+		baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
+		if baseURL != "" {
+			result["affiliate_link"] = baseURL + "/sign-up?aff=" + url.QueryEscape(user.AffCode)
+		}
+	}
+	if !operation_setting.IsPaymentComplianceConfirmed() {
+		result["message"] = "Reward configuration is shown for explanation only; payment-related rewards remain subject to the platform compliance setting."
+	}
+	return result
+}
+
+func executeAssistantBountyTool() map[string]any {
+	fee := model.GetOpenSourceBountyFeeConfig()
+	return map[string]any{
+		"ok": true,
+		"steps": []string{
+			"Open the open-source bounties page and choose create project.",
+			"Provide the repository, issue or pull request, acceptance criteria, gross reward, and number of fixes.",
+			"Review the platform fee, net escrow, and total balance debit before publishing.",
+			"Publish only after explicitly confirming the funding action.",
+			"Review submitted evidence; when work is accepted, settle the fix and optionally add a separate non-refundable tip.",
+			"Use the dispute flow when publisher and contributor cannot agree; do not fabricate evidence.",
+		},
+		"platform_fee_percent": fee.RatePercent,
+		"page":                 "/open-source-bounties",
+		"message":              "A bounty publisher may give a contributor a tip, but the exact charge and escrow are shown before confirmation.",
+	}
+}
+
+func executeAssistantUsageTool(userID int, input map[string]any) map[string]any {
+	days := 30
+	if value, exists := inputNumber(input, "days"); exists {
+		days = int(value)
+	}
+	if days < 1 || days > 90 {
+		return map[string]any{"ok": false, "error": "days must be between 1 and 90"}
+	}
+	end := time.Now().Unix()
+	start := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	summary, err := model.GetAssistantUsageSummary(userID, start, end, 20)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "historical usage could not be loaded"}
+	}
+	return map[string]any{
+		"ok":       true,
+		"days":     days,
+		"source":   "consume logs",
+		"summary":  summary,
+		"raw_logs": false,
+	}
+}
+
+func executeAssistantSearchTool(c *gin.Context, input map[string]any) map[string]any {
+	query := inputString(input, "query")
+	if len([]rune(query)) < 2 {
+		return map[string]any{"ok": false, "error": "search query is required"}
+	}
+	settings := setting.GetAssistantSettings()
+	searchURL := strings.TrimSpace(settings.SearchURL)
+	if searchURL == "" {
+		return map[string]any{"ok": false, "configured": false, "error": "web search is not configured by the administrator"}
+	}
+	parsed, err := url.Parse(searchURL)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "configured search URL is invalid"}
+	}
+	params := parsed.Query()
+	params.Set("q", query)
+	parsed.RawQuery = params.Encode()
+	ctx := context.Background()
+	if c != nil && c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "search request could not be created"}
+	}
+	if key := strings.TrimSpace(settings.SearchAPIKey); key != "" {
+		request.Header.Set("Authorization", "Bearer "+key)
+		request.Header.Set("X-API-Key", key)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return map[string]any{"ok": false, "configured": true, "error": "search provider request failed"}
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+	if err != nil {
+		return map[string]any{"ok": false, "configured": true, "error": "search provider response could not be read"}
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return map[string]any{"ok": false, "configured": true, "status": response.StatusCode, "error": "search provider returned an error"}
+	}
+	var data any
+	if json.Unmarshal(body, &data) != nil {
+		data = strings.TrimSpace(string(body))
+	}
+	return map[string]any{"ok": true, "configured": true, "query": query, "results": data}
+}
+
 func executeAssistantAccountTool(userID int) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
@@ -522,7 +801,7 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 	if platform != "windows" && platform != "linux" && platform != "macos" {
 		return map[string]any{"ok": false, "error": "platform must be windows, linux, or macos"}
 	}
-	if topic != "claude-code" && topic != "cc-switch" && topic != "chatgpt-client" {
+	if topic != "claude-code" && topic != "cc-switch" && topic != "chatgpt-client" && topic != "codex" && topic != "cursor" && topic != "open-webui" && topic != "other-openai-compatible" {
 		return map[string]any{"ok": false, "error": "topic is not supported"}
 	}
 	steps := []string{
@@ -545,6 +824,27 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 		steps = append(steps,
 			"Open the desktop or compatible ChatGPT client settings and select a custom OpenAI-compatible endpoint if supported.",
 			"Verify the endpoint and model with a short test conversation.",
+		)
+	}
+	if topic == "codex" {
+		steps = append(steps,
+			"Install Codex using the official instructions and choose its OpenAI-compatible provider or endpoint settings.",
+			"Set the Base URL, Model ID, and API key in the provider profile, then run a small test request.",
+		)
+	} else if topic == "cursor" {
+		steps = append(steps,
+			"Open Cursor Settings, locate Models or API configuration, and add a custom OpenAI-compatible provider if your version exposes it.",
+			"Paste the Base URL, Model ID, and API key, then verify with a short chat or completion.",
+		)
+	} else if topic == "open-webui" {
+		steps = append(steps,
+			"Open Open WebUI administrator settings and configure an OpenAI-compatible connection.",
+			"Use the Base URL, Model ID, and API key shown by this console, then refresh the model list.",
+		)
+	} else if topic == "other-openai-compatible" {
+		steps = append(steps,
+			"Find the client's custom provider or OpenAI-compatible endpoint settings.",
+			"Paste the Base URL, Model ID, and API key, then confirm the client sends requests to /v1.",
 		)
 	}
 	return map[string]any{"ok": true, "platform": platform, "topic": topic, "steps": steps}

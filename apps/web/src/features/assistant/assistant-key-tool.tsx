@@ -23,8 +23,9 @@ import {
   ShieldKeyIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -50,6 +51,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import { getUserGroups } from '@/lib/api'
 
 import { createAssistantDefaultKey, type AssistantCreatedKey } from './api'
 
@@ -83,6 +85,7 @@ function ConnectionDetails(props: {
   baseUrl: string
   model: string
   apiKey?: string
+  group?: string
 }) {
   const { t } = useTranslation()
   return (
@@ -90,6 +93,12 @@ function ConnectionDetails(props: {
       <ConnectionValue label={t('Base URL')} value={props.baseUrl} />
       <Separator />
       <ConnectionValue label={t('Model ID')} value={props.model} />
+      {props.group ? (
+        <>
+          <Separator />
+          <ConnectionValue label={t('Group')} value={props.group} />
+        </>
+      ) : null}
       {props.apiKey ? (
         <>
           <Separator />
@@ -108,16 +117,30 @@ export function AssistantKeyTool(props: {
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState(t('AI assistant key'))
+  const [group, setGroup] = useState('auto')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<AssistantCreatedKey | null>(null)
   const model = props.defaultModel || '<MODEL_ID>'
+  const groupsQuery = useQuery({
+    queryKey: ['assistant-user-groups'],
+    queryFn: getUserGroups,
+    enabled: props.developerAccessGranted,
+    staleTime: 60_000,
+    retry: false,
+  })
+  const groups = Object.keys(groupsQuery.data?.data ?? {})
+
+  useEffect(() => {
+    if (groupsQuery.isLoading || group !== 'auto') return
+    if (!groups.includes('auto') && groups.length > 0) setGroup(groups[0])
+  }, [group, groups, groupsQuery.isLoading])
 
   const createKey = async () => {
     if (creating) return
     setCreating(true)
     try {
-      const result = await createAssistantDefaultKey(name.trim())
+      const result = await createAssistantDefaultKey(name.trim(), group.trim())
       setCreated(result)
       setConfirmOpen(false)
       toast.success(t('API key created'))
@@ -152,6 +175,7 @@ export function AssistantKeyTool(props: {
             baseUrl={props.baseUrl}
             model={model}
             apiKey={created.key}
+            group={created.group}
           />
           <Button
             type='button'
@@ -205,10 +229,32 @@ export function AssistantKeyTool(props: {
                   onChange={(event) => setName(event.target.value)}
                 />
               </div>
+              <div className='grid gap-1.5'>
+                <Label htmlFor='assistant-key-group'>{t('Key group')}</Label>
+                <Input
+                  id='assistant-key-group'
+                  list='assistant-key-groups'
+                  value={group}
+                  maxLength={64}
+                  autoComplete='off'
+                  onChange={(event) => setGroup(event.target.value)}
+                  placeholder={t('Enter a group name, or use auto')}
+                />
+                <datalist id='assistant-key-groups'>
+                  {groups.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+                <p className='text-muted-foreground text-xs'>
+                  {groupsQuery.isLoading
+                    ? t('Loading available groups...')
+                    : t('The group controls routing and pricing for this key.')}
+                </p>
+              </div>
               <Button
                 type='button'
                 onClick={() => setConfirmOpen(true)}
-                disabled={!name.trim()}
+                disabled={!name.trim() || !group.trim()}
               >
                 <HugeiconsIcon
                   icon={Key01Icon}

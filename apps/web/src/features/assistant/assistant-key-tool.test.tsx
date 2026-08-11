@@ -218,6 +218,7 @@ describe('AssistantKeyTool', () => {
     assert.deepEqual(posted?.data, {
       confirmed: true,
       name: 'AI assistant key',
+      group: 'auto',
     })
     assert.match(rendered.container.textContent ?? '', /API key created/)
     assert.match(rendered.container.textContent ?? '', /sk-created-by-test/)

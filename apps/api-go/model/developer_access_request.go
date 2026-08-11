@@ -154,8 +154,13 @@ func ReviewDeveloperAccessRequest(adminUserID int, requestID int, approve bool, 
 			// This timestamp is the durable non-payment activation fact. It
 			// grants L1, while paid top-ups can still raise the automatic level.
 			result := tx.Model(&User{}).
-				Where("id = ? AND console_activated_at = ?", request.UserId, 0).
-				Update("console_activated_at", time.Now().Unix())
+				Where("id = ?", request.UserId).
+				Updates(map[string]interface{}{
+					"console_activated_at": time.Now().Unix(),
+					// A previous explicit L0 test reset must not survive a new
+					// administrator approval.
+					"trust_level_override": nil,
+				})
 			if result.Error != nil {
 				return result.Error
 			}

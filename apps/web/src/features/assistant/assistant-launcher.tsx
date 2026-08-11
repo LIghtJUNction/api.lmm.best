@@ -26,6 +26,7 @@ import { useStatus } from '@/hooks/use-status'
 
 import {
   consumeQueuedAssistantPreset,
+  consumeQueuedAssistantMessage,
   subscribeToAssistantOpen,
   type AssistantPresetId,
 } from './assistant-events'
@@ -43,16 +44,21 @@ export function AssistantLauncher() {
   const [open, setOpen] = useState(false)
   const [hasOpened, setHasOpened] = useState(false)
   const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
+  const [initialMessage, setInitialMessage] = useState<string>()
 
-  const showAssistant = (preset?: AssistantPresetId) => {
+  const showAssistant = (preset?: AssistantPresetId, message?: string) => {
     setInitialPreset(preset)
+    setInitialMessage(message ?? consumeQueuedAssistantMessage())
     setHasOpened(true)
     setOpen(true)
   }
 
   useEffect(() => {
     const queuedPreset = consumeQueuedAssistantPreset()
-    if (queuedPreset) showAssistant(queuedPreset)
+    const queuedMessage = consumeQueuedAssistantMessage()
+    if (queuedPreset || queuedMessage) {
+      showAssistant(queuedPreset, queuedMessage)
+    }
     return subscribeToAssistantOpen(showAssistant)
   }, [])
 
@@ -84,6 +90,7 @@ export function AssistantLauncher() {
           <AssistantPanel
             open={open}
             initialPreset={initialPreset}
+            initialMessage={initialMessage}
             onOpenChange={setOpen}
           />
         </Suspense>

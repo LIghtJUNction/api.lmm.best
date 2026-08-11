@@ -20,6 +20,7 @@ import (
 type assistantCreateKeyInput struct {
 	Confirmed bool   `json:"confirmed"`
 	Name      string `json:"name"`
+	Group     string `json:"group"`
 }
 
 type assistantHandoffInput struct {
@@ -94,6 +95,19 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_NAME_TOO_LONG", errors.New("API key name must be at most 50 characters"))
 		return
 	}
+	group := strings.TrimSpace(input.Group)
+	if utf8.RuneCountInString(group) > 64 {
+		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_GROUP_TOO_LONG", errors.New("API key group must be at most 64 characters"))
+		return
+	}
+	if group != "" && group != "auto" && !service.IsUserSelectableGroup(user.Group, group) {
+		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_INVALID_GROUP", errors.New("the selected group is not available for this account"))
+		return
+	}
+	if group == "auto" && len(service.GetUserAutoGroup(user.Group)) == 0 {
+		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_INVALID_GROUP", errors.New("automatic routing is not available for this account"))
+		return
+	}
 	count, err := model.CountUserTokens(userID)
 	if err != nil {
 		common.ApiError(c, err)
@@ -121,7 +135,10 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		UnlimitedQuota:     true,
 		ModelLimitsEnabled: false,
 	}
-	if setting.DefaultUseAutoGroup && len(service.GetUserAutoGroup(user.Group)) > 0 {
+	if group != "" {
+		token.Group = group
+		token.CrossGroupRetry = group == "auto"
+	} else if setting.DefaultUseAutoGroup && len(service.GetUserAutoGroup(user.Group)) > 0 {
 		token.Group = "auto"
 		token.CrossGroupRetry = true
 	}
