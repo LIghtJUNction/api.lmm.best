@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -78,16 +79,18 @@ type AssistantIntentSummary struct {
 	Count  int64  `json:"count"`
 }
 
-// AssistantProfileEvent is intentionally aggregate-only. It has no user ID,
-// email, raw message, or account metadata; it exists solely to help an
-// administrator compare onboarding strategies over time.
-type AssistantProfileEvent struct {
-	Id        int    `json:"id" gorm:"primaryKey"`
-	Profile   string `json:"profile" gorm:"type:varchar(64);not null;index"`
-	CreatedAt int64  `json:"created_at" gorm:"not null;index"`
+// AssistantProfileBucket is intentionally aggregate-only. It has no user ID,
+// email, raw message, or account metadata. Hourly buckets keep storage bounded
+// while still allowing administrators to compare onboarding strategies over
+// time.
+type AssistantProfileBucket struct {
+	Id          int    `json:"id" gorm:"primaryKey"`
+	Profile     string `json:"profile" gorm:"type:varchar(64);not null;uniqueIndex:idx_assistant_profile_bucket,priority:1"`
+	BucketStart int64  `json:"bucket_start" gorm:"not null;uniqueIndex:idx_assistant_profile_bucket,priority:2"`
+	Count       int64  `json:"count" gorm:"not null;default:0"`
 }
 
-func (AssistantProfileEvent) TableName() string { return "assistant_profile_events" }
+func (AssistantProfileBucket) TableName() string { return "assistant_profile_buckets" }
 
 type AssistantProfileSummary struct {
 	Profile string `json:"profile"`
@@ -292,18 +295,30 @@ func RecordAssistantProfile(profile string) error {
 	if _, ok := assistantProfileNames[profile]; !ok {
 		return errors.New("assistant profile is invalid")
 	}
-	return DB.Create(&AssistantProfileEvent{
-		Profile:   profile,
-		CreatedAt: common.GetTimestamp(),
+	now := common.GetTimestamp()
+	const bucketSeconds int64 = 60 * 60
+	bucketStart := now - now%bucketSeconds
+	return DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "profile"},
+			{Name: "bucket_start"},
+		},
+		DoUpdates: clause.Assignments(map[string]any{
+			"count": gorm.Expr("count + ?", 1),
+		}),
+	}).Create(&AssistantProfileBucket{
+		Profile:     profile,
+		BucketStart: bucketStart,
+		Count:       1,
 	}).Error
 }
 
 func ListAssistantProfileSummary(since int64) ([]AssistantProfileSummary, error) {
-	query := DB.Model(&AssistantProfileEvent{}).
-		Select("profile, COUNT(*) AS count").
+	query := DB.Model(&AssistantProfileBucket{}).
+		Select("profile, SUM(count) AS count").
 		Group("profile").Order("count DESC, profile ASC")
 	if since > 0 {
-		query = query.Where("created_at >= ?", since)
+		query = query.Where("bucket_start >= ?", since)
 	}
 	var summary []AssistantProfileSummary
 	if err := query.Scan(&summary).Error; err != nil {
