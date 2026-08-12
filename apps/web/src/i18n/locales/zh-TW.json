@@ -6659,6 +6659,22 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Payment method enabled": "支付方式已啟用",
+    "Disabled methods are hidden from users and rejected at checkout.": "停用後使用者端不會顯示，結帳請求也會被拒絕。",
+    "User-facing payment description": "使用者端支付說明",
+    "Optional instructions or maintenance note": "可選的使用說明或維護提示",
+    "Shown on the user payment button; do not put secrets here.": "顯示在使用者支付按鈕中；請勿填寫金鑰等敏感資訊。",
+    "Display color": "顯示顏色",
+    "Description must be 240 characters or fewer": "說明不得超過 240 個字元",
+    "Color must be a six-digit hex value": "顏色必須是六位十六進位值",
+    "Minimum top-up must be a non-negative decimal number": "最低儲值必須是非負數字",
+    "User group condition": "使用者群組條件",
+    "Comma-separated user groups; matching is case-insensitive.": "填寫以逗號分隔的使用者群組，比對時不區分大小寫。",
+    "Account role condition": "帳號角色條件",
+    "No role condition": "不限制角色",
+    "Root administrator": "超級管理員",
+    "Select account role": "選擇帳號角色",
+    "Search account roles...": "搜尋帳號角色……"
   }
 }

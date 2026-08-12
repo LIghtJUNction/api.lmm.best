@@ -6659,6 +6659,22 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Payment method enabled": "Payment method enabled",
+    "Disabled methods are hidden from users and rejected at checkout.": "Disabled methods are hidden from users and rejected at checkout.",
+    "User-facing payment description": "User-facing payment description",
+    "Optional instructions or maintenance note": "Optional instructions or maintenance note",
+    "Shown on the user payment button; do not put secrets here.": "Shown on the user payment button; do not put secrets here.",
+    "Display color": "Display color",
+    "Description must be 240 characters or fewer": "Description must be 240 characters or fewer",
+    "Color must be a six-digit hex value": "Color must be a six-digit hex value",
+    "Minimum top-up must be a non-negative decimal number": "Minimum top-up must be a non-negative decimal number",
+    "User group condition": "User group condition",
+    "Comma-separated user groups; matching is case-insensitive.": "Comma-separated user groups; matching is case-insensitive.",
+    "Account role condition": "Account role condition",
+    "No role condition": "No role condition",
+    "Root administrator": "Root administrator",
+    "Select account role": "Select account role",
+    "Search account roles...": "Search account roles..."
   }
 }

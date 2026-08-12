@@ -6659,6 +6659,22 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Payment method enabled": "Способ оплаты включён",
+    "Disabled methods are hidden from users and rejected at checkout.": "Отключённые способы скрыты от пользователей и отклоняются при оплате.",
+    "User-facing payment description": "Описание оплаты для пользователя",
+    "Optional instructions or maintenance note": "Необязательная инструкция или сообщение о технических работах",
+    "Shown on the user payment button; do not put secrets here.": "Показывается на кнопке оплаты; не указывайте здесь секреты.",
+    "Display color": "Цвет отображения",
+    "Description must be 240 characters or fewer": "Описание должно содержать не более 240 символов",
+    "Color must be a six-digit hex value": "Цвет должен быть шестизначным шестнадцатеричным значением",
+    "Minimum top-up must be a non-negative decimal number": "Минимальная сумма должна быть неотрицательным десятичным числом",
+    "User group condition": "Условие группы пользователей",
+    "Comma-separated user groups; matching is case-insensitive.": "Группы через запятую; регистр при сравнении не учитывается.",
+    "Account role condition": "Условие роли аккаунта",
+    "No role condition": "Без ограничения роли",
+    "Root administrator": "Главный администратор",
+    "Select account role": "Выберите роль аккаунта",
+    "Search account roles...": "Поиск ролей аккаунта..."
   }
 }
