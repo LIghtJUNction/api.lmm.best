@@ -68,10 +68,10 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 		return productionStatus{}, err
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", runtime.paths.Service}}); err != nil {
-		return productionStatus{}, errors.New("pre-upgrade lmm-api-go service is not active")
+		return productionStatus{}, errors.New("pre-upgrade lmm-api service is not active")
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-enabled", "--quiet", runtime.paths.Service}}); err != nil {
-		return productionStatus{}, errors.New("pre-upgrade lmm-api-go service is not enabled")
+		return productionStatus{}, errors.New("pre-upgrade lmm-api service is not enabled")
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api"}}); err == nil {
 		return productionStatus{}, errors.New("production still has the split lmm-api package; direct Go deployment only")

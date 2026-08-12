@@ -31,7 +31,7 @@ contains_srcinfo_prefix() {
 for removed in lmm-api-bin lmm-api-git; do
   [[ ! -e $HERE/$removed/PKGBUILD ]] || die "removed core package still has a PKGBUILD: $removed"
 done
-for removed in lmm-api-launcher backend.conf lmm-api.install lmm-api.service lmm-api.env; do
+for removed in lmm-api-launcher backend.conf lmm-api.install lmm-api-go.service lmm-api.env; do
   [[ ! -e $SHARED/$removed ]] || die "removed launcher/provider asset remains: $removed"
 done
 
@@ -106,13 +106,13 @@ grep -Fqx "pkgver=$go_release_pkgver" "$HERE/lmm-api-go/PKGBUILD" ||
   die "canonical Go package version does not match pinned revision: $go_release_pkgver"
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 
-grep -Fqx 'ExecStart=/usr/bin/lmm-api-go serve' "$SHARED/lmm-api-go.service" ||
+grep -Fqx 'ExecStart=/usr/bin/lmm-api serve' "$SHARED/lmm-api.service" ||
   die 'Go systemd service does not execute the backend directly'
 grep -Fqx 'Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist' \
-  "$SHARED/lmm-api-go.service" || die 'Go service does not bind the packaged frontend'
-if grep -R -Eq '/usr/bin/lmm-api([^[:alnum:]_-]|$)|lmm-api-launcher|backends/(go|rs)' \
-    "$HERE"/*/PKGBUILD "$SHARED/lmm-api-go.service"; then
-  die 'package layout retains an unsuffixed launcher or provider directory'
+  "$SHARED/lmm-api.service" || die 'Go service does not bind the packaged frontend'
+if grep -R -Eq 'lmm-api-launcher|backends/(go|rs)' \
+    "$HERE"/*/PKGBUILD "$SHARED/lmm-api.service"; then
+  die 'package layout retains a launcher or provider directory'
 fi
 
 : "${TMPDIR:?set TMPDIR to a marker-owned build workspace}"
@@ -129,7 +129,7 @@ printf '#!/bin/sh\n' > "$rs_bundle/lmm-api-rs"
 printf '#!/bin/sh\n' > "$rs_bundle/lmm-db-migrate"
 chmod 0755 "$go_bundle/lmm-api-go" "$rs_bundle/lmm-api-rs" "$rs_bundle/lmm-db-migrate"
 printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
-cp "$SHARED/lmm-api-go.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
+cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
 for bundle in "$go_bundle" "$rs_bundle"; do
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     printf 'fixture\n' > "$bundle/$file"
@@ -158,16 +158,15 @@ done
 
 for packaged_path in \
   pkg-go/usr/bin/lmm-api-go \
-  pkg-go/usr/lib/systemd/system/lmm-api-go.service \
+  pkg-go/usr/lib/systemd/system/lmm-api.service \
   pkg-go/etc/lmm-api-go/lmm-api-go.env \
   pkg-go/usr/share/lmm-api-go/frontend-dist/index.html \
   pkg-rs/usr/bin/lmm-api-rs \
   pkg-rs/usr/bin/lmm-db-migrate; do
   [[ -f $tmp/$packaged_path ]] || die "mock package layout is missing $packaged_path"
 done
-for removed_path in pkg-go/usr/bin/lmm-api pkg-rs/usr/bin/lmm-api; do
-  [[ ! -e $tmp/$removed_path && ! -L $tmp/$removed_path ]] ||
-    die "mock package exposes removed command $removed_path"
-done
+[[ -L $tmp/pkg-go/usr/bin/lmm-api ]] || die 'Go package is missing the canonical provider symlink'
+[[ ! -e $tmp/pkg-rs/usr/bin/lmm-api && ! -L $tmp/pkg-rs/usr/bin/lmm-api ]] ||
+  die 'Rust package exposes the Go provider command'
 
 printf '%s\n' 'five-package direct-backend AUR matrix verified'

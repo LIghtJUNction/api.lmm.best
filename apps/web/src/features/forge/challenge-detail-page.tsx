@@ -43,6 +43,7 @@ import {
 import { useStatus } from '@/hooks/use-status'
 import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { formatQuota } from '@/lib/format'
+import { toIntlLocale } from '@/i18n/languages'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ForgePublicShell } from './forge-public-shell'
@@ -137,7 +138,7 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
     (acceptanceState === 'available' || acceptanceState === 'retryable')
   const developerAccessGranted = user?.developer_access_granted === true
   const isRetry = acceptanceState === 'retryable'
-  const dateFormatter = new Intl.DateTimeFormat(i18n.language, {
+  const dateFormatter = new Intl.DateTimeFormat(toIntlLocale(i18n.language), {
     dateStyle: 'medium',
     timeStyle: 'short',
   })

@@ -13,7 +13,7 @@ import (
 
 const (
 	defaultProductionEnvFile   = "/etc/lmm-api-go/lmm-api-go.env"
-	defaultProductionDropInDir = "/etc/systemd/system/lmm-api-go.service.d"
+	defaultProductionDropInDir = "/etc/systemd/system/lmm-api.service.d"
 	productionMemoryFileName   = "80-production-memory.conf"
 	legacyEmergencyMemoryFile  = "99-emergency-memory-safety.conf"
 )

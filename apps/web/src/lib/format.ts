@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import dayjs from '@/lib/dayjs'
+import { toIntlLocale } from '@/i18n/languages'
 
 import {
   formatCurrencyFromUSD,
@@ -29,14 +30,26 @@ import {
 // Number Formatting
 // ============================================================================
 
+function normalizeIntlLocales(
+  locales?: Intl.LocalesArgument
+): Intl.LocalesArgument | undefined {
+  if (typeof locales === 'string') return toIntlLocale(locales)
+  if (Array.isArray(locales)) {
+    return locales
+      .map((locale) => toIntlLocale(locale))
+      .filter((locale): locale is string => Boolean(locale))
+  }
+  return locales
+}
+
 export function formatNumber(
   value: number | null | undefined,
   locales?: Intl.LocalesArgument
 ): string {
   if (value == null || Number.isNaN(value as number)) return '-'
-  return Intl.NumberFormat(locales, { maximumFractionDigits: 2 }).format(
-    value as number
-  )
+  return Intl.NumberFormat(normalizeIntlLocales(locales), {
+    maximumFractionDigits: 2,
+  }).format(value as number)
 }
 
 export function formatCompactNumber(
@@ -44,7 +57,7 @@ export function formatCompactNumber(
   locales?: Intl.LocalesArgument
 ): string {
   if (value == null || Number.isNaN(value as number)) return '-'
-  return Intl.NumberFormat(locales, {
+  return Intl.NumberFormat(normalizeIntlLocales(locales), {
     notation: 'compact',
     maximumFractionDigits: 1,
   }).format(value as number)
@@ -187,9 +200,10 @@ export function formatTimestampRelative(
   const ms = unit === 'seconds' ? timestamp * 1000 : timestamp
   const diffSeconds = Math.round((ms - Date.now()) / 1000)
   const absSeconds = Math.abs(diffSeconds)
-  const formatter = new Intl.RelativeTimeFormat(locales, {
-    numeric: 'always',
-  })
+  const formatter = new Intl.RelativeTimeFormat(
+    normalizeIntlLocales(locales),
+    { numeric: 'always' }
+  )
 
   if (absSeconds < 60) {
     return formatter.format(diffSeconds, 'second')

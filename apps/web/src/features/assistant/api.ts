@@ -78,7 +78,7 @@ export type AssistantCreatedKey = {
   name: string
   group: string
   expired_time: number
-  private_card: AssistantPrivateCard
+  card: AssistantPrivateCard
 }
 
 export type AssistantPrivateCard = {
@@ -86,31 +86,43 @@ export type AssistantPrivateCard = {
   label?: string
 }
 
+export type AssistantSecureCardView = {
+  id?: string
+  type?: string
+  label?: string
+  owner: 'self' | 'protected'
+  shield: boolean
+}
+
 export type AssistantConversationHistoryMessage = {
-  id: string
-  role: 'user' | 'assistant'
+  id: number
+  role: 'user' | 'assistant' | 'secure_card'
   content: string
   created_at: number
-  private_card?: {
-    label?: string
-  }
+  cards?: AssistantSecureCardView[]
 }
 
-export type AssistantConversationHistoryItem = {
-  id: string
-  owner: {
-    label: string
-    is_current_user: boolean
-    access_level: number
-  }
+export type AssistantConversationHistorySummary = {
+  id: number
+  title: string
+  last_message_preview: string
   created_at: number
   updated_at: number
-  messages: AssistantConversationHistoryMessage[]
+  owner: 'self' | 'lower_level_user'
+  privacy_notice: string
 }
 
+export type AssistantConversationHistoryItem = AssistantConversationHistorySummary
+
 export type AssistantConversationHistory = {
-  conversations: AssistantConversationHistoryItem[]
-  scope: 'self' | 'lower_access'
+  conversations: AssistantConversationHistorySummary[]
+  privacy_notice?: string
+}
+
+export type AssistantConversationHistoryDetail = {
+  conversation: AssistantConversationHistorySummary
+  messages: AssistantConversationHistoryMessage[]
+  privacy_notice: string
 }
 
 export type AssistantHandoff = {
@@ -438,20 +450,20 @@ export async function createAssistantDefaultKey(
 }
 
 export async function revealAssistantPrivateCard(id: string): Promise<string> {
-  const response = await api.post<
+  const response = await api.get<
     AssistantAPIResponse<{
-      value?: string
+      payload?: Record<string, string>
     }>
-  >(
-    `/api/assistant/private-cards/${encodeURIComponent(id)}/reveal`,
-    {},
-    { skipBusinessError: true, skipErrorHandler: true }
-  )
+  >(`/api/assistant/cards/${encodeURIComponent(id)}/reveal`, {
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   const data = requireAssistantData(
     response.data,
     'Unable to retrieve the private credential'
   )
-  const value = data.value?.trim()
+  const value = data.payload?.api_key?.trim()
   if (!value) throw new Error('Unable to retrieve the private credential')
   return value
 }
@@ -467,6 +479,22 @@ export async function getAssistantConversationHistory(): Promise<AssistantConver
   return requireAssistantData(
     response.data,
     'Unable to load conversation history'
+  )
+}
+
+export async function getAssistantConversationHistoryDetail(
+  id: number
+): Promise<AssistantConversationHistoryDetail> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantConversationHistoryDetail>
+  >(`/api/assistant/conversations/${encodeURIComponent(id)}`, {
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(
+    response.data,
+    'Unable to load conversation details'
   )
 }
 

@@ -69,6 +69,7 @@ const { api } = await import('@/lib/api')
 const { AssistantKeyTool } = await import('./assistant-key-tool')
 
 const originalPost = api.post
+const originalGet = api.get
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -147,6 +148,7 @@ async function unmount(rendered: RenderedTool) {
 
 afterEach(() => {
   api.post = originalPost
+  api.get = originalGet
   document.body.replaceChildren()
 })
 
@@ -181,24 +183,36 @@ describe('AssistantKeyTool', () => {
     await unmount(rendered)
   })
 
-  test('keeps L1 key creation confirmation-gated and shows the new secret', async () => {
-    let posted: { url: string; data: unknown; config: unknown } | undefined
+  test('keeps L1 key creation confirmation-gated and reveals the secret only from a private card', async () => {
+    const posted: Array<{ url: string; data: unknown; config: unknown }> = []
+    const fetched: Array<{ url: string; config: unknown }> = []
     let continued = 0
     api.post = (async (url: string, data: unknown, config: unknown) => {
-      posted = { url, data, config }
+      posted.push({ url, data, config })
+      assert.equal(url, '/api/assistant/tools/create-key')
       return {
         data: {
           success: true,
           data: {
             id: 9,
             name: 'AI assistant key',
-            key: 'sk-created-by-test',
             group: 'auto',
             expired_time: -1,
+            card: { id: 'card-9', label: 'Private API key' },
           },
         },
       }
     }) as typeof api.post
+    api.get = (async (url: string, config: unknown) => {
+      fetched.push({ url, config })
+      assert.equal(url, '/api/assistant/cards/card-9/reveal')
+      return {
+        data: {
+          success: true,
+          data: { payload: { api_key: 'sk-created-by-test' } },
+        },
+      }
+    }) as typeof api.get
     const rendered = await renderTool(true, () => {
       continued += 1
     })
@@ -214,16 +228,33 @@ describe('AssistantKeyTool', () => {
       await flushEffects()
     })
 
-    assert.deepEqual(posted?.url, '/api/assistant/tools/create-key')
-    assert.deepEqual(posted?.data, {
+    assert.deepEqual(posted[0]?.url, '/api/assistant/tools/create-key')
+    assert.deepEqual(posted[0]?.data, {
       confirmed: true,
       name: 'AI assistant key',
       group: 'auto',
     })
     assert.match(rendered.container.textContent ?? '', /API key created/)
-    assert.match(rendered.container.textContent ?? '', /sk-created-by-test/)
     assert.match(rendered.container.textContent ?? '', /claude-sonnet-4-5/)
+    assert.match(rendered.container.textContent ?? '', /Private API key/)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /sk-created-by-test/)
+    assert.ok(rendered.container.querySelector('[data-testid="assistant-private-card"]'))
     assert.equal(continued, 0)
+
+    await act(async () => {
+      findButton('Show securely').click()
+      await flushEffects()
+    })
+    assert.ok(
+      fetched.some(({ url }) => url === '/api/assistant/cards/card-9/reveal')
+    )
+    assert.match(rendered.container.textContent ?? '', /sk-created-by-test/)
+
+    await act(async () => {
+      findButton('Hide credential').click()
+      await flushEffects()
+    })
+    assert.doesNotMatch(rendered.container.textContent ?? '', /sk-created-by-test/)
 
     await act(async () => {
       findButton('I copied it — continue setup').click()

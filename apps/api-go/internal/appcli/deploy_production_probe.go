@@ -265,7 +265,7 @@ func (runtime *productionRuntime) checkErrorJournals(ctx context.Context, since 
 
 func (runtime *productionRuntime) healthCheck(ctx context.Context, workspace productionWorkspace, manifest productionManifest) error {
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", runtime.paths.Service}}); err != nil {
-		return errors.New("lmm-api-go service is not active")
+		return errors.New("lmm-api service is not active")
 	}
 	restarts, err := runtime.readServiceRestarts(ctx)
 	if err != nil {

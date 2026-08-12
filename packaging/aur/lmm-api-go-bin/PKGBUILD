@@ -63,8 +63,9 @@ package() {
   local file
 
   install -Dm0755 "${bundle}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
-  install -Dm0644 "${bundle}/lmm-api-go.service" \
-    "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
+  ln -s lmm-api-go "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0644 "${bundle}/lmm-api.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
   install -Dm0600 "${bundle}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
 

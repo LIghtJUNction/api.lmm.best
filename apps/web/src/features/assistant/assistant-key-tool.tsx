@@ -55,11 +55,11 @@ import { Separator } from '@/components/ui/separator'
 import { getUserGroups } from '@/lib/api'
 
 import { createAssistantDefaultKey, type AssistantCreatedKey } from './api'
+import { AssistantPrivateCard } from './assistant-private-card'
 
 function ConnectionValue(props: {
   label: string
   value: string
-  secret?: boolean
 }) {
   return (
     <div className='flex items-center justify-between gap-2 py-2'>
@@ -68,11 +68,7 @@ function ConnectionValue(props: {
       </span>
       <div className='flex min-w-0 items-center gap-1.5'>
         <code
-          className={
-            props.secret
-              ? 'min-w-0 flex-1 text-xs break-all'
-              : 'min-w-0 flex-1 truncate text-xs'
-          }
+          className='min-w-0 flex-1 truncate text-xs'
         >
           {props.value}
         </code>
@@ -85,7 +81,6 @@ function ConnectionValue(props: {
 function ConnectionDetails(props: {
   baseUrl: string
   model: string
-  apiKey?: string
   group?: string
 }) {
   const { t } = useTranslation()
@@ -98,12 +93,6 @@ function ConnectionDetails(props: {
         <>
           <Separator />
           <ConnectionValue label={t('Group')} value={props.group} />
-        </>
-      ) : null}
-      {props.apiKey ? (
-        <>
-          <Separator />
-          <ConnectionValue label={t('API key')} value={props.apiKey} secret />
         </>
       ) : null}
     </div>
@@ -194,29 +183,19 @@ export function AssistantKeyTool(props: {
             {t('API key created')}
           </CardTitle>
           <CardDescription>
-            {t('Copy the key now and store it somewhere secure.')}
+            {t('The credential is protected in a private card and is never added to chat history.')}
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>
           <ConnectionDetails
             baseUrl={props.baseUrl}
             model={model}
-            apiKey={created.key}
             group={created.group}
           />
-          <Button
-            type='button'
-            variant='outline'
-            onClick={props.onContinueSetup}
-          >
-            {t('I copied it — continue setup')}
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              strokeWidth={2}
-              data-icon='inline-end'
-              aria-hidden='true'
-            />
-          </Button>
+          <AssistantPrivateCard
+            card={created.card}
+            onContinue={props.onContinueSetup}
+          />
         </CardContent>
       </Card>
     )

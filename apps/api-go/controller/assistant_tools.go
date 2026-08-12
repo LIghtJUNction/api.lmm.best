@@ -19,9 +19,10 @@ import (
 )
 
 type assistantCreateKeyInput struct {
-	Confirmed bool   `json:"confirmed"`
-	Name      string `json:"name"`
-	Group     string `json:"group"`
+	Confirmed      bool   `json:"confirmed"`
+	Name           string `json:"name"`
+	Group          string `json:"group"`
+	ConversationID int64  `json:"conversation_id"`
 }
 
 type assistantKeyGroupOption struct {
@@ -241,17 +242,27 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		token.Group = "auto"
 		token.CrossGroupRetry = true
 	}
-	if err := model.InsertTokenAndActivateConsole(&token); err != nil {
-		common.ApiError(c, err)
+	card, err := model.InsertAssistantTokenAndCreateSecureCard(
+		&token,
+		userID,
+		input.ConversationID,
+		"已创建 API 凭证；仅你可一次性查看和复制",
+		fmt.Sprintf(`{"api_key":%q}`, "sk-"+token.Key),
+	)
+	if err != nil {
+		// Never fall back to serializing the key in a normal JSON response. The
+		// model transaction rolls back the token as well as the card on failure.
+		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_SECURE_CARD_CREATE_FAILED", errors.New("API key could not be created securely; please try again"))
 		return
 	}
 	model.RecordLog(userID, model.LogTypeSystem, fmt.Sprintf("created API key %d via assistant", token.Id))
 	common.ApiSuccess(c, gin.H{
-		"id":           token.Id,
-		"name":         token.Name,
-		"key":          "sk-" + token.Key,
-		"group":        token.Group,
-		"expired_time": token.ExpiredTime,
+		"id":             token.Id,
+		"name":           token.Name,
+		"group":          token.Group,
+		"expired_time":   token.ExpiredTime,
+		"card":           model.AssistantSecureCardViewForOwner(card),
+		"privacy_notice": model.AssistantHistoryPrivacyNotice,
 	})
 }
 

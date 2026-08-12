@@ -174,7 +174,7 @@ jobs:
           file "$bundle/lmm-api-go"
           tar -xzf "release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz" \
             -C "$bundle/frontend-dist" --strip-components=1
-          cp packaging/common/lmm-api/lmm-api-go.service "$bundle/"
+          cp packaging/common/lmm-api/lmm-api.service "$bundle/"
           cp packaging/common/lmm-api/lmm-api-go.env "$bundle/"
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
           printf '%s\n' '${{ github.sha }}' > "$bundle/REVISION"

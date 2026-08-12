@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import { Button } from '@/components/ui/button'
 
 import {
   revealAssistantPrivateCard,
@@ -106,9 +107,10 @@ export function AssistantPrivateCard(props: {
         </code>
       ) : null}
       <div className='flex flex-wrap gap-2'>
-        <button
+        <Button
           type='button'
-          className='border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-50'
+          variant='outline'
+          size='sm'
           onClick={() => void copySecret()}
           disabled={loading}
         >
@@ -121,32 +123,35 @@ export function AssistantPrivateCard(props: {
             />
           ) : null}
           {t('Copy securely')}
-        </button>
+        </Button>
         {viewing ? (
-          <button
+          <Button
             type='button'
-            className='border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-medium transition-colors'
+            variant='outline'
+            size='sm'
             onClick={hideSecret}
           >
             {t('Hide credential')}
-          </button>
+          </Button>
         ) : (
-          <button
+          <Button
             type='button'
-            className='border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-50'
+            variant='outline'
+            size='sm'
             onClick={() => void showSecret()}
             disabled={loading}
           >
             {t('Show securely')}
-          </button>
+          </Button>
         )}
-        <button
+        <Button
           type='button'
-          className='text-muted-foreground hover:text-foreground h-8 px-2 text-xs font-medium'
+          variant='ghost'
+          size='sm'
           onClick={props.onContinue}
         >
           {t('I copied it — continue setup')}
-        </button>
+        </Button>
       </div>
     </div>
   )

@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/lmm-api-go geoip update
+ExecStart=/usr/bin/lmm-api geoip update
 User=root
 Group=root
 TimeoutStartSec=5min
