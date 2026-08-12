@@ -1,14 +1,20 @@
 package common
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	htmlstd "html"
 	"net/mail"
 	"net/smtp"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 func generateMessageID() (string, error) {
@@ -118,15 +124,29 @@ func SendEmail(subject string, receiver string, content string) error {
 	if SMTPServer == "" && SMTPAccount == "" {
 		return fmt.Errorf("SMTP 服务器未配置")
 	}
+	if containsEmailHeaderBreak(subject) {
+		return fmt.Errorf("email subject contains a header break")
+	}
+	if containsEmailHeaderBreak(SystemName) {
+		return fmt.Errorf("email sender name contains a header break")
+	}
+	safeContent, err := sanitizeEmailHTML(content)
+	if err != nil {
+		return fmt.Errorf("sanitize email content: %w", err)
+	}
 	encodedSubject := fmt.Sprintf("=?UTF-8?B?%s?=", base64.StdEncoding.EncodeToString([]byte(subject)))
 	fromHeader := (&mail.Address{Name: SystemName, Address: sender.Address}).String()
-	mail := []byte(fmt.Sprintf("To: %s\r\n"+
-		"From: %s\r\n"+
-		"Subject: %s\r\n"+
-		"Date: %s\r\n"+
-		"Message-ID: %s\r\n"+ // 添加 Message-ID 头
-		"Content-Type: text/html; charset=UTF-8\r\n\r\n%s\r\n",
-		toHeader, fromHeader, encodedSubject, time.Now().Format(time.RFC1123Z), id, content))
+	message, err := buildEmailMessage(
+		toHeader,
+		fromHeader,
+		encodedSubject,
+		time.Now().Format(time.RFC1123Z),
+		id,
+		safeContent,
+	)
+	if err != nil {
+		return err
+	}
 	auth := getSMTPAuth()
 	addr := fmt.Sprintf("%s:%d", SMTPServer, SMTPPort)
 	client, err := newSMTPClient(addr)
@@ -151,7 +171,7 @@ func SendEmail(subject string, receiver string, content string) error {
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(mail)
+	_, err = w.Write(message)
 	if err != nil {
 		return err
 	}
@@ -164,4 +184,141 @@ func SendEmail(subject string, receiver string, content string) error {
 		SysError(fmt.Sprintf("failed to send email to %s: %v", receiver, err))
 	}
 	return err
+}
+
+func containsEmailHeaderBreak(value string) bool {
+	return strings.ContainsAny(value, "\r\n")
+}
+
+// buildEmailMessage keeps the body as HTML while constructing each MIME header
+// from a validated field. Body bytes are appended only after the mandatory
+// blank line, so CRLF in a rendered body cannot create another message header.
+func buildEmailMessage(toHeader, fromHeader, encodedSubject, date, messageID, content string) ([]byte, error) {
+	for name, value := range map[string]string{
+		"To":         toHeader,
+		"From":       fromHeader,
+		"Subject":    encodedSubject,
+		"Date":       date,
+		"Message-ID": messageID,
+	} {
+		if containsEmailHeaderBreak(value) {
+			return nil, fmt.Errorf("email %s contains a header break", name)
+		}
+	}
+
+	var message bytes.Buffer
+	writeEmailHeader(&message, "To", toHeader)
+	writeEmailHeader(&message, "From", fromHeader)
+	writeEmailHeader(&message, "Subject", encodedSubject)
+	writeEmailHeader(&message, "Date", date)
+	writeEmailHeader(&message, "Message-ID", messageID)
+	writeEmailHeader(&message, "Content-Type", "text/html; charset=UTF-8")
+	message.WriteString("\r\n")
+	message.WriteString(content)
+	message.WriteString("\r\n")
+	return message.Bytes(), nil
+}
+
+func writeEmailHeader(message *bytes.Buffer, name, value string) {
+	message.WriteString(name)
+	message.WriteString(": ")
+	message.WriteString(value)
+	message.WriteString("\r\n")
+}
+
+var allowedEmailHTMLTags = map[string]struct{}{
+	"a": {}, "blockquote": {}, "br": {}, "code": {}, "div": {}, "em": {},
+	"h1": {}, "h2": {}, "h3": {}, "h4": {}, "h5": {}, "h6": {}, "hr": {},
+	"li": {}, "ol": {}, "p": {}, "pre": {}, "span": {}, "strong": {},
+	"ul": {},
+}
+
+var droppedEmailHTMLTags = map[string]struct{}{
+	"applet": {}, "base": {}, "embed": {}, "form": {}, "iframe": {}, "input": {},
+	"link": {}, "meta": {}, "object": {}, "script": {}, "style": {}, "svg": {},
+	"textarea": {}, "video": {},
+}
+
+func sanitizeEmailHTML(content string) (string, error) {
+	root := &html.Node{Type: html.ElementNode, DataAtom: atom.Div, Data: "div"}
+	nodes, err := html.ParseFragment(strings.NewReader(content), root)
+	if err != nil {
+		return "", err
+	}
+
+	var sanitized strings.Builder
+	for _, node := range nodes {
+		renderSanitizedEmailNode(&sanitized, node)
+	}
+	return sanitized.String(), nil
+}
+
+func renderSanitizedEmailNode(builder *strings.Builder, node *html.Node) {
+	switch node.Type {
+	case html.TextNode:
+		builder.WriteString(htmlstd.EscapeString(node.Data))
+	case html.ElementNode:
+		tag := strings.ToLower(node.Data)
+		if _, drop := droppedEmailHTMLTags[tag]; drop {
+			return
+		}
+		if _, allowed := allowedEmailHTMLTags[tag]; !allowed {
+			for child := node.FirstChild; child != nil; child = child.NextSibling {
+				renderSanitizedEmailNode(builder, child)
+			}
+			return
+		}
+
+		builder.WriteByte('<')
+		builder.WriteString(tag)
+		for _, attribute := range node.Attr {
+			name := strings.ToLower(strings.TrimSpace(attribute.Key))
+			value := attribute.Val
+			switch name {
+			case "href":
+				if tag != "a" {
+					continue
+				}
+				safeValue, ok := sanitizeEmailHref(value)
+				if !ok {
+					continue
+				}
+				value = safeValue
+			case "title":
+				// title is safe as a plain escaped attribute.
+			default:
+				continue
+			}
+			builder.WriteByte(' ')
+			builder.WriteString(name)
+			builder.WriteString("=\"")
+			builder.WriteString(htmlstd.EscapeString(value))
+			builder.WriteByte('"')
+		}
+		builder.WriteByte('>')
+		if tag != "br" && tag != "hr" {
+			for child := node.FirstChild; child != nil; child = child.NextSibling {
+				renderSanitizedEmailNode(builder, child)
+			}
+			builder.WriteString("</")
+			builder.WriteString(tag)
+			builder.WriteByte('>')
+		}
+	}
+}
+
+func sanitizeEmailHref(raw string) (string, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return "", false
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" && scheme != "mailto" {
+		return "", false
+	}
+	return value, true
 }

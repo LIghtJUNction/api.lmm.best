@@ -1,10 +1,11 @@
 package controller
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
+	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -399,13 +400,28 @@ func buildPasswordResetEmailContent(serverAddress, systemName, email, token stri
 	query.Set("token", token)
 	resetURL.RawQuery = query.Encode()
 
-	safeSystemName := html.EscapeString(systemName)
-	safeLink := html.EscapeString(resetURL.String())
-	return fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
-		"<p>点击 <a href=\"%s\">此处</a> 进行密码重置。</p>"+
-		"<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> %s </p>"+
-		"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", safeSystemName, safeLink, safeLink, validMinutes), nil
+	var content bytes.Buffer
+	err = passwordResetEmailTemplate.Execute(&content, struct {
+		SystemName   string
+		ResetURL     string
+		ValidMinutes int
+	}{
+		SystemName:   systemName,
+		ResetURL:     resetURL.String(),
+		ValidMinutes: validMinutes,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render password reset email: %w", err)
+	}
+	return content.String(), nil
 }
+
+var passwordResetEmailTemplate = template.Must(template.New("password-reset-email").Parse(
+	`<p>您好，你正在进行{{.SystemName}}密码重置。</p>` +
+		`<p>点击 <a href="{{.ResetURL}}">此处</a> 进行密码重置。</p>` +
+		`<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> {{.ResetURL}} </p>` +
+		`<p>重置链接 {{.ValidMinutes}} 分钟内有效，如果不是本人操作，请忽略。</p>`,
+))
 
 type PasswordResetRequest struct {
 	Email string `json:"email"`

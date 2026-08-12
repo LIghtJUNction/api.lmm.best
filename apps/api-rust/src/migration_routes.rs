@@ -6,6 +6,7 @@
 //! candidate into a test-only root router without granting production
 //! ownership.
 
+pub mod access_ip;
 pub mod admin_catalog;
 pub mod api_token;
 pub mod assistant;
@@ -17,11 +18,15 @@ pub mod channel_ops;
 pub mod control_admin;
 pub mod control_public;
 pub mod deployment;
+pub mod developer_access;
+pub mod finance_export;
+pub mod gifts;
 pub mod identity_2fa;
 pub mod identity_admin;
 pub mod identity_federation;
 pub mod identity_profile;
 pub mod identity_security;
+pub mod kling_task_reads;
 pub mod media_midjourney;
 pub mod media_tasks;
 pub mod missing_billing_dashboard;
@@ -48,4 +53,9 @@ pub mod relay_misc_active;
 pub mod relay_misc_frozen;
 pub mod relay_misc_postgres;
 pub mod relay_openai;
+pub mod release_notes;
+pub mod responses_websocket;
+pub mod security_overview;
 pub mod system_config;
+pub mod user_rankings;
+pub mod verify_email;

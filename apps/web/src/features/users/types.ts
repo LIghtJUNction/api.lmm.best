@@ -163,6 +163,26 @@ export interface ManageUserTrustLevelPayload {
   value: number
 }
 
+export type AccountActionRequestKind = 'disable' | 'appeal'
+export type AccountActionRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface AccountActionRequestAdmin {
+  id: number
+  target_user_id: number
+  requested_by_user_id: number
+  kind: AccountActionRequestKind
+  status: AccountActionRequestStatus
+  reason: string
+  admin_user_id: number
+  admin_note: string
+  created_at: number
+  reviewed_at: number
+  target_username: string
+  target_email: string
+  requested_by_username: string
+  requested_by_email: string
+}
+
 export type UserTrustLevelInfo = TrustLevelInfo
 
 // ============================================================================

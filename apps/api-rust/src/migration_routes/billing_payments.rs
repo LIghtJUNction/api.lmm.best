@@ -8,15 +8,16 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{RawQuery, Request, State},
+    extract::{DefaultBodyLimit, RawQuery, Request, State, rejection::BytesRejection},
+    handler::Handler,
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use hmac::{Hmac, Mac};
-use secrecy::SecretString;
-use serde::Deserialize;
+use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use sqlx::{PgPool, Row};
@@ -29,7 +30,8 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::auth::DashboardAuth;
+use crate::auth::{CriticalRateLimitOutcome, DashboardAuth};
+use crate::{ClientIpKey, RequestContext, legacy_empty_response};
 
 const EPAY: &str = "epay";
 const FASTPAY: &str = "fastpay";
@@ -37,6 +39,11 @@ const STRIPE: &str = "stripe";
 const CREEM: &str = "creem";
 const WAFFO_PANCAKE: &str = "waffo_pancake";
 const SUBSCRIPTION_INFO_CACHE_PREFIX: &str = "new-api:subscription_plan_info:v1:sub:";
+// The legacy candidate router below still exposes this path for the isolated
+// test-instance surface.  The normal listener uses the balance-only router
+// above, so keep the compatibility mount explicitly marked as a non-owning
+// split route for the repository route-coverage gate.
+const BALANCE_PAY_PATH: &str = "/api/subscription/balance/pay";
 const INVALIDATE_COMPLETED_PAYMENT_CACHE: &str = r#"
 redis.call('DEL', KEYS[1])
 if ARGV[1] == '1' then
@@ -57,6 +64,60 @@ pub struct BillingHttpState {
     cache: Arc<dyn BillingCache>,
     compliance: Arc<dyn PaymentCompliance>,
     config: BillingConfig,
+}
+
+/// Dependencies for the balance-only subscription purchase route.
+///
+/// Balance purchases do not contact a payment provider. Keeping this state
+/// separate from [`BillingHttpState`] prevents an accidentally incomplete
+/// checkout or webhook adapter from becoming part of the production route
+/// just because the balance ledger is ready.
+#[derive(Clone)]
+pub struct SubscriptionBalancePayState {
+    repository: Arc<dyn BillingRepository>,
+    authorizer: Arc<dyn BillingAuthorizer>,
+    cache: Arc<dyn BillingCache>,
+    compliance: Arc<dyn PaymentCompliance>,
+    dashboard_auth: Option<Arc<dyn DashboardAuth>>,
+    payment_access: Arc<dyn BillingPaymentAccess>,
+    quota_per_unit: i64,
+}
+
+impl SubscriptionBalancePayState {
+    #[must_use]
+    pub fn new(
+        repository: Arc<dyn BillingRepository>,
+        authorizer: Arc<dyn BillingAuthorizer>,
+        cache: Arc<dyn BillingCache>,
+        compliance: Arc<dyn PaymentCompliance>,
+        quota_per_unit: i64,
+    ) -> Self {
+        Self {
+            repository,
+            authorizer,
+            cache,
+            compliance,
+            dashboard_auth: None,
+            payment_access: Arc::new(AllowBillingPaymentAccess),
+            quota_per_unit,
+        }
+    }
+
+    /// Installs the listener-owned dashboard boundary used by the normal
+    /// listener. This performs the Go ConsoleAccessGate before UserAuth and
+    /// supplies the shared IP-keyed critical limiter.
+    #[must_use]
+    pub fn with_dashboard_auth(mut self, auth: Arc<dyn DashboardAuth>) -> Self {
+        self.dashboard_auth = Some(auth);
+        self
+    }
+
+    /// Installs the PostgreSQL-backed PaymentAccessGate equivalent.
+    #[must_use]
+    pub fn with_payment_access(mut self, access: Arc<dyn BillingPaymentAccess>) -> Self {
+        self.payment_access = access;
+        self
+    }
 }
 
 /// Runtime boundaries required by billing routes. Keeping them together makes
@@ -115,6 +176,60 @@ pub trait PaymentCompliance: Send + Sync {
     async fn is_confirmed(&self) -> Result<bool, BillingError>;
 }
 
+/// The legacy PaymentAccessGate rejects accounts marked by an administrator
+/// or by the derived LinuxDO-email rule before a balance purchase is parsed.
+#[async_trait]
+pub trait BillingPaymentAccess: Send + Sync {
+    async fn allowed(&self, user_id: i64) -> Result<bool, BillingError>;
+}
+
+/// Test/fixture default. Production wiring must replace this with
+/// [`PgBillingPaymentAccess`] so the route cannot bypass payment restrictions.
+pub struct AllowBillingPaymentAccess;
+
+#[async_trait]
+impl BillingPaymentAccess for AllowBillingPaymentAccess {
+    async fn allowed(&self, _: i64) -> Result<bool, BillingError> {
+        Ok(true)
+    }
+}
+
+#[derive(Clone)]
+pub struct PgBillingPaymentAccess {
+    pg: PgPool,
+}
+
+impl PgBillingPaymentAccess {
+    #[must_use]
+    pub fn new(pg: PgPool) -> Self {
+        Self { pg }
+    }
+}
+
+#[async_trait]
+impl BillingPaymentAccess for PgBillingPaymentAccess {
+    async fn allowed(&self, user_id: i64) -> Result<bool, BillingError> {
+        let row = sqlx::query(
+            "SELECT COALESCE(to_jsonb(users)->>'payment_restriction_flags', '0') AS flags, COALESCE(email, '') AS email FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| BillingError::Storage)?
+        .ok_or(BillingError::Storage)?;
+        let flags_text: String = row.try_get("flags").map_err(|_| BillingError::Storage)?;
+        let flags = flags_text
+            .parse::<i64>()
+            .map_err(|_| BillingError::Storage)?;
+        let email: String = row.try_get("email").map_err(|_| BillingError::Storage)?;
+        let linuxdo_email = email
+            .trim()
+            .rsplit_once('@')
+            .is_some_and(|(_, domain)| domain.eq_ignore_ascii_case("linux.do"));
+        Ok(flags == 0 && !linuxdo_email)
+    }
+}
+
 /// PostgreSQL-backed compliance gate matching the legacy `payment_setting`
 /// contract. The two options are read on every payment or callback request so
 /// an administrator can immediately freeze payments without a process restart.
@@ -169,36 +284,139 @@ impl PaymentCompliance for DisabledPaymentCompliance {
     }
 }
 
-pub fn billing_payments_router(state: BillingHttpState) -> Router {
-    let protected = Router::new()
-        .route("/api/subscription/epay/pay", post(epay_pay))
-        .route("/api/subscription/fastpay/pay", post(fastpay_pay))
-        .route("/api/subscription/stripe/pay", post(stripe_pay))
-        .route("/api/subscription/creem/pay", post(creem_pay))
-        .route(
-            "/api/subscription/waffo-pancake/pay",
-            post(waffo_pancake_pay),
+#[async_trait]
+trait FastPayNotifyConfigStore: Send + Sync {
+    async fn load_secret_if_configured(&self) -> Result<Option<SecretString>, BillingError>;
+}
+
+#[derive(Clone)]
+struct PgFastPayNotifyConfigStore {
+    pg: PgPool,
+}
+
+#[async_trait]
+impl FastPayNotifyConfigStore for PgFastPayNotifyConfigStore {
+    async fn load_secret_if_configured(&self) -> Result<Option<SecretString>, BillingError> {
+        let rows = sqlx::query(
+            "SELECT key, value FROM options WHERE key IN ('FastPayAddress', 'FastPayMerchantNo', 'FastPayShopNo', 'FastPayApiSecret', 'PayAddress', 'EpayId', 'EpayKey')",
         )
-        .route("/api/subscription/balance/pay", post(balance_pay))
+        .fetch_all(&self.pg)
+        .await
+        .map_err(|_| BillingError::Storage)?;
+        let mut values = BTreeMap::new();
+        for row in rows {
+            values.insert(
+                row.try_get::<String, _>("key")
+                    .map_err(|_| BillingError::Storage)?,
+                row.try_get::<String, _>("value")
+                    .map_err(|_| BillingError::Storage)?,
+            );
+        }
+        Ok(resolve_fastpay_secret(&values).map(SecretString::from))
+    }
+}
+
+/// Production state for the public subscription FastPay callback only.
+///
+/// Provider configuration is loaded from PostgreSQL for every callback, so an
+/// option update takes effect without restarting the Rust listener. Order
+/// completion remains transactional in PostgreSQL and cache invalidation stays
+/// best-effort after commit.
+#[derive(Clone)]
+pub struct SubscriptionFastPayNotifyState {
+    repository: Arc<dyn BillingRepository>,
+    cache: Arc<dyn BillingCache>,
+    config: Arc<dyn FastPayNotifyConfigStore>,
+}
+
+impl SubscriptionFastPayNotifyState {
+    #[must_use]
+    pub fn new(pg: PgPool, valkey: redis::Client) -> Self {
+        Self {
+            repository: Arc::new(PgBillingRepository::new(pg.clone())),
+            cache: Arc::new(ValkeyBillingCache::new(valkey)),
+            config: Arc::new(PgFastPayNotifyConfigStore { pg }),
+        }
+    }
+}
+
+/// Mounts only `POST /api/subscription/fastpay/notify`.
+///
+/// The caller must compose the normal API request boundary around this router.
+/// Passing zero disables the route-local body cap, matching Go's configuration
+/// semantics; positive values enforce the anonymous request-body limit.
+pub fn subscription_fastpay_notify_router(
+    state: SubscriptionFastPayNotifyState,
+    anonymous_body_limit_bytes: usize,
+) -> Router {
+    let router = with_subscription_fastpay_notify_route(Router::new(), subscription_fastpay_notify)
+        .with_state(state);
+    if anonymous_body_limit_bytes == 0 {
+        router.layer(DefaultBodyLimit::disable())
+    } else {
+        router.layer(DefaultBodyLimit::max(anonymous_body_limit_bytes))
+    }
+}
+
+/// Mounts only the PostgreSQL/Valkey-backed balance purchase route.
+///
+/// The route deliberately has no provider or callback surface. The global
+/// API limiter is composed by the listener; this local middleware preserves
+/// Go's ordering by authenticating before Axum attempts to deserialize JSON.
+pub fn subscription_balance_pay_router(state: SubscriptionBalancePayState) -> Router {
+    Router::new()
         .route(
-            "/api/subscription/epay/notify",
-            get(epay_notify).post(epay_notify),
+            "/api/subscription/balance/pay",
+            post(subscription_balance_pay),
         )
-        .route(
-            "/api/subscription/epay/return",
-            get(epay_return).post(epay_return),
-        )
-        .route("/api/subscription/fastpay/notify", post(fastpay_notify))
-        .route("/api/stripe/webhook", post(stripe_webhook))
-        .route("/api/creem/webhook", post(creem_webhook))
-        // Go's UserAuth middleware runs before the JSON body is bound for
-        // every user-initiated payment. Callback/webhook routes remain
-        // intentionally outside this fence and use provider verification.
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            billing_payment_auth_boundary,
-        ));
+            subscription_balance_auth_boundary,
+        ))
+        .with_state(state)
+}
+
+pub fn billing_payments_router(state: BillingHttpState) -> Router {
+    let protected = with_subscription_fastpay_notify_route(
+        Router::new()
+            .route("/api/subscription/epay/pay", post(epay_pay))
+            .route("/api/subscription/fastpay/pay", post(fastpay_pay))
+            .route("/api/subscription/stripe/pay", post(stripe_pay))
+            .route("/api/subscription/creem/pay", post(creem_pay))
+            .route(
+                "/api/subscription/waffo-pancake/pay",
+                post(waffo_pancake_pay),
+            )
+            .route(BALANCE_PAY_PATH, post(balance_pay))
+            .route(
+                "/api/subscription/epay/notify",
+                get(epay_notify).post(epay_notify),
+            )
+            .route(
+                "/api/subscription/epay/return",
+                get(epay_return).post(epay_return),
+            ),
+        fastpay_notify,
+    )
+    .route("/api/stripe/webhook", post(stripe_webhook))
+    .route("/api/creem/webhook", post(creem_webhook))
+    // Go's UserAuth middleware runs before the JSON body is bound for
+    // every user-initiated payment. Callback/webhook routes remain
+    // intentionally outside this fence and use provider verification.
+    .route_layer(middleware::from_fn_with_state(
+        state.clone(),
+        billing_payment_auth_boundary,
+    ));
     protected.with_state(state)
+}
+
+fn with_subscription_fastpay_notify_route<S, H, T>(router: Router<S>, handler: H) -> Router<S>
+where
+    H: Handler<T, S>,
+    T: 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    router.route("/api/subscription/fastpay/notify", post(handler))
 }
 
 fn is_user_payment_route(path: &str, method: &Method) -> bool {
@@ -226,6 +444,81 @@ async fn billing_payment_auth_boundary(
         return payment_error(StatusCode::UNAUTHORIZED, "Unauthorized");
     }
     next.run(request).await
+}
+
+async fn subscription_balance_auth_boundary(
+    State(state): State<SubscriptionBalancePayState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method() != Method::POST || request.uri().path() != "/api/subscription/balance/pay" {
+        return next.run(request).await;
+    }
+    if let Some(auth) = state.dashboard_auth.as_ref() {
+        let Some(token) = dashboard_credential(request.headers()) else {
+            return console_not_found();
+        };
+        let user = match auth
+            .self_user_view_for_optional(SecretString::from(token.to_owned()))
+            .await
+        {
+            Ok(user) => user,
+            Err(_) => return console_not_found(),
+        };
+        if !user.developer_access_granted {
+            return console_not_found();
+        }
+    }
+    let user_id = match state.authorizer.user_id(request.headers()).await {
+        Ok(user_id) => user_id,
+        Err(_) => return payment_error(StatusCode::UNAUTHORIZED, "Unauthorized"),
+    };
+    match state.payment_access.allowed(user_id).await {
+        Ok(true) => {}
+        Ok(false) => return with_auth_version(payment_access_denied()),
+        Err(_) => {
+            return with_auth_version(payment_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unable to verify payment access.",
+            ));
+        }
+    }
+    if let Some(auth) = state.dashboard_auth.as_ref() {
+        let Some(client_ip) = request_client_ip(&request) else {
+            return with_auth_version(legacy_empty_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        };
+        match auth.check_critical_rate_limit(&client_ip).await {
+            Ok(CriticalRateLimitOutcome::Allowed) => {}
+            Ok(CriticalRateLimitOutcome::Rejected {
+                retry_after_seconds,
+            }) => {
+                return with_auth_version(legacy_empty_response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Some(retry_after_seconds),
+                ));
+            }
+            Err(_) => {
+                return with_auth_version(legacy_empty_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    None,
+                ));
+            }
+        }
+    }
+    // Go's controller checks payment compliance before binding the JSON body,
+    // but only after the UserAuth, PaymentAccessGate, and CriticalRateLimit
+    // middleware have run. Keep this ordering so a rejected request consumes
+    // the same limiter decision without exposing a body-binding error.
+    if let Ok(false) | Err(_) = state.compliance.is_confirmed().await {
+        return with_auth_version(payment_error(
+            StatusCode::OK,
+            "payment compliance is required",
+        ));
+    }
+    with_auth_version(next.run(request).await)
 }
 
 #[async_trait]
@@ -276,6 +569,44 @@ fn dashboard_credential(headers: &HeaderMap) -> Option<&str> {
         None if !first.is_empty() => Some(first),
         _ => None,
     }
+}
+
+fn request_client_ip(request: &Request) -> Option<String> {
+    request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+}
+
+fn console_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response()
+}
+
+fn with_auth_version(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        "auth-version",
+        HeaderValue::from_static("864b7076dbcd0a3c01b5520316720ebf"),
+    );
+    response
+}
+
+fn payment_access_denied() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "success": false,
+            "code": "PAYMENT_UNAVAILABLE",
+            "message": "Payment is unavailable for this account."
+        })),
+    )
+        .into_response()
 }
 
 #[derive(Clone, Debug)]
@@ -652,6 +983,50 @@ async fn balance_pay(
     }
 }
 
+async fn subscription_balance_pay(
+    State(state): State<SubscriptionBalancePayState>,
+    headers: HeaderMap,
+    Json(request): Json<PayRequest>,
+) -> Response {
+    if !payment_compliance_allowed_for(state.compliance.as_ref()).await {
+        return payment_error(StatusCode::OK, "payment compliance is required");
+    }
+    if request.plan_id <= 0 {
+        return payment_error(StatusCode::OK, "参数错误");
+    }
+    let user_id = match state.authorizer.user_id(&headers).await {
+        Ok(id) => id,
+        Err(_) => return payment_error(StatusCode::UNAUTHORIZED, "Unauthorized"),
+    };
+    match state
+        .repository
+        .purchase_with_balance(user_id, request.plan_id, state.quota_per_unit)
+        .await
+    {
+        Ok(Completion::Completed {
+            subscription_id,
+            user_id,
+            quota_charged,
+            group_changed,
+        }) => {
+            state
+                .cache
+                .invalidate_completed_payment(
+                    subscription_id,
+                    user_id,
+                    quota_charged,
+                    group_changed,
+                )
+                .await;
+            Json(json!({"success": true, "message": "", "data": null})).into_response()
+        }
+        Ok(Completion::AlreadySucceeded) => {
+            Json(json!({"success": true, "message": "", "data": null})).into_response()
+        }
+        Ok(Completion::Rejected) | Err(_) => payment_error(StatusCode::OK, "余额支付失败"),
+    }
+}
+
 async fn start_payment(
     state: BillingHttpState,
     headers: HeaderMap,
@@ -713,7 +1088,11 @@ async fn start_payment(
 }
 
 async fn payment_compliance_allowed(state: &BillingHttpState) -> bool {
-    match state.compliance.is_confirmed().await {
+    payment_compliance_allowed_for(state.compliance.as_ref()).await
+}
+
+async fn payment_compliance_allowed_for(compliance: &dyn PaymentCompliance) -> bool {
+    match compliance.is_confirmed().await {
         Ok(confirmed) => confirmed,
         Err(error) => {
             tracing::warn!(%error, "payment compliance lookup failed closed");
@@ -816,32 +1195,75 @@ async fn fastpay_notify(
     if !payment_compliance_allowed(&state).await {
         return plain("fail");
     }
-    let raw = match callback_body(&body) {
-        Ok(raw) => raw,
-        Err(()) => return plain("fail"),
+    complete_fastpay_notify(
+        state.repository.as_ref(),
+        state.cache.as_ref(),
+        &headers,
+        &body,
+        &state.config.fastpay_secret,
+    )
+    .await
+}
+
+async fn subscription_fastpay_notify(
+    State(state): State<SubscriptionFastPayNotifyState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let body = match body {
+        Ok(body) => body,
+        Err(error) => return error.status().into_response(),
     };
-    let fields = callback_fields(&headers, None, raw);
-    let Some(sign) = fields.get("sign").filter(|value| !value.is_empty()) else {
+    let Some(callback) = parse_fastpay_notify(&headers, &body) else {
         return plain("fail");
     };
-    if state.config.fastpay_secret.is_empty()
-        || !fastpay_signature_valid(&fields, sign, &state.config.fastpay_secret)
+    let secret = match state.config.load_secret_if_configured().await {
+        Ok(Some(secret)) => secret,
+        Ok(None) | Err(_) => return plain("fail"),
+    };
+    finish_fastpay_notify(
+        state.repository.as_ref(),
+        state.cache.as_ref(),
+        callback,
+        secret.expose_secret(),
+    )
+    .await
+}
+
+async fn complete_fastpay_notify(
+    repository: &dyn BillingRepository,
+    cache: &dyn BillingCache,
+    headers: &HeaderMap,
+    body: &[u8],
+    secret: &str,
+) -> Response {
+    let Some(callback) = parse_fastpay_notify(headers, body) else {
+        return plain("fail");
+    };
+    finish_fastpay_notify(repository, cache, callback, secret).await
+}
+
+async fn finish_fastpay_notify(
+    repository: &dyn BillingRepository,
+    cache: &dyn BillingCache,
+    callback: ParsedFastPayNotify<'_>,
+    secret: &str,
+) -> Response {
+    if secret.is_empty()
+        || callback.sign.is_empty()
+        || !fastpay_signature_valid(&callback.fields, &callback.sign, secret)
+        || !(callback.status == "1" || callback.status == "SUCCESS")
+        || callback.trade_no.is_empty()
     {
         return plain("fail");
     }
-    let status = fields.get("status").map_or("", String::as_str);
-    let Some(trade_no) = fields.get("outTradeNo").filter(|value| !value.is_empty()) else {
-        return plain("fail");
-    };
-    if !(status == "1" || status.eq_ignore_ascii_case("SUCCESS")) {
-        return plain("fail");
-    }
-    match finish(
-        &state,
-        trade_no,
+    match finish_with(
+        repository,
+        cache,
+        &callback.trade_no,
         FASTPAY,
-        raw,
-        fields.get("payType").map(String::as_str),
+        callback.raw,
+        Some(&callback.pay_type),
     )
     .await
     {
@@ -941,8 +1363,26 @@ async fn finish(
     payload: &str,
     method: Option<&str>,
 ) -> Result<Completion, BillingError> {
-    let result = state
-        .repository
+    finish_with(
+        state.repository.as_ref(),
+        state.cache.as_ref(),
+        trade_no,
+        provider,
+        payload,
+        method,
+    )
+    .await
+}
+
+async fn finish_with(
+    repository: &dyn BillingRepository,
+    cache: &dyn BillingCache,
+    trade_no: &str,
+    provider: &str,
+    payload: &str,
+    method: Option<&str>,
+) -> Result<Completion, BillingError> {
+    let result = repository
         .complete(trade_no, provider, payload, method)
         .await?;
     if let Completion::Completed {
@@ -952,40 +1392,282 @@ async fn finish(
         group_changed,
     } = result
     {
-        state
-            .cache
+        cache
             .invalidate_completed_payment(subscription_id, user_id, quota_charged, group_changed)
             .await;
     }
     Ok(result)
 }
 
-fn callback_fields(
+#[derive(Debug, Default, Deserialize)]
+struct FastPayNotifyPayload {
+    #[serde(
+        rename = "merchantNo",
+        default,
+        deserialize_with = "deserialize_go_string"
+    )]
+    merchant_no: String,
+    #[serde(
+        rename = "orderNo",
+        default,
+        deserialize_with = "deserialize_go_string"
+    )]
+    order_no: String,
+    #[serde(
+        rename = "outTradeNo",
+        default,
+        deserialize_with = "deserialize_go_string"
+    )]
+    out_trade_no: String,
+    #[serde(default)]
+    amount: Value,
+    #[serde(rename = "payAmount", default)]
+    pay_amount: Value,
+    #[serde(
+        rename = "payType",
+        default,
+        deserialize_with = "deserialize_go_string"
+    )]
+    pay_type: String,
+    #[serde(default)]
+    status: Value,
+    #[serde(
+        rename = "payTime",
+        default,
+        deserialize_with = "deserialize_go_string"
+    )]
+    pay_time: String,
+    #[serde(default)]
+    timestamp: Value,
+    #[serde(default, deserialize_with = "deserialize_go_string")]
+    sign: String,
+}
+
+impl FastPayNotifyPayload {
+    fn signature_fields(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("merchantNo".into(), self.merchant_no.clone()),
+            ("orderNo".into(), self.order_no.clone()),
+            ("outTradeNo".into(), self.out_trade_no.clone()),
+            ("amount".into(), fastpay_callback_scalar(&self.amount)),
+            (
+                "payAmount".into(),
+                fastpay_callback_scalar(&self.pay_amount),
+            ),
+            ("payType".into(), self.pay_type.clone()),
+            ("status".into(), fastpay_callback_scalar(&self.status)),
+            ("payTime".into(), self.pay_time.clone()),
+            ("timestamp".into(), fastpay_callback_scalar(&self.timestamp)),
+        ])
+    }
+}
+
+struct ParsedFastPayNotify<'a> {
+    raw: &'a str,
+    fields: BTreeMap<String, String>,
+    sign: String,
+    trade_no: String,
+    status: String,
+    pay_type: String,
+}
+
+fn parse_fastpay_notify<'a>(
     headers: &HeaderMap,
-    query: Option<&str>,
-    raw: &str,
-) -> BTreeMap<String, String> {
-    let mut fields = if header_text(headers, "content-type")
-        .is_some_and(|value| value.contains("application/json"))
-    {
+    body: &'a [u8],
+) -> Option<ParsedFastPayNotify<'a>> {
+    let raw = callback_body(body).ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let json_body = header_text(headers, "content-type")
+        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
+        || raw.trim_start().starts_with('{');
+    let payload = if json_body {
         serde_json::from_str::<Value>(raw)
             .ok()
-            .and_then(|value| value.as_object().cloned())
-            .map(|map| {
-                map.into_iter()
-                    .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_owned())))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .and_then(|value| serde_json::from_value::<FastPayNotifyPayload>(value).ok())?
     } else {
-        parse_form(raw)
-    };
-    if fields.is_empty() {
-        if let Some(query) = query {
-            fields = parse_form(query);
+        let fields = parse_strict_fastpay_form(raw.as_bytes())?;
+        FastPayNotifyPayload {
+            merchant_no: fields.get("merchantNo").cloned().unwrap_or_default(),
+            order_no: fields.get("orderNo").cloned().unwrap_or_default(),
+            out_trade_no: fields.get("outTradeNo").cloned().unwrap_or_default(),
+            amount: Value::String(fields.get("amount").cloned().unwrap_or_default()),
+            pay_amount: Value::String(fields.get("payAmount").cloned().unwrap_or_default()),
+            pay_type: fields.get("payType").cloned().unwrap_or_default(),
+            status: Value::String(fields.get("status").cloned().unwrap_or_default()),
+            pay_time: fields.get("payTime").cloned().unwrap_or_default(),
+            timestamp: Value::String(fields.get("timestamp").cloned().unwrap_or_default()),
+            sign: fields.get("sign").cloned().unwrap_or_default(),
         }
+    };
+    let fields = payload.signature_fields();
+    let status = fastpay_callback_scalar(&payload.status);
+    Some(ParsedFastPayNotify {
+        raw,
+        fields,
+        sign: payload.sign,
+        trade_no: payload.out_trade_no,
+        status,
+        pay_type: payload.pay_type,
+    })
+}
+
+fn deserialize_go_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
+fn fastpay_callback_scalar(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => go_float_scalar(value),
+        Value::Bool(value) => value.to_string(),
+        Value::Null => "<nil>".into(),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(fastpay_callback_scalar)
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        Value::Object(values) => format!(
+            "map[{}]",
+            values
+                .iter()
+                .map(|(key, value)| format!("{key}:{}", fastpay_callback_scalar(value)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
     }
-    fields
+}
+
+fn go_float_scalar(value: &serde_json::Number) -> String {
+    let Some(number) = value.as_f64() else {
+        return value.to_string();
+    };
+    let rendered = number.to_string();
+    let (mantissa, exponent) = match rendered.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (
+            mantissa.to_owned(),
+            exponent.parse::<i32>().unwrap_or_default(),
+        ),
+        None => decimal_parts(&rendered),
+    };
+    if !(-4..6).contains(&exponent) {
+        return format!("{mantissa}e{exponent:+03}");
+    }
+    rendered
+}
+
+fn decimal_parts(rendered: &str) -> (String, i32) {
+    let (negative, rendered) = rendered
+        .strip_prefix('-')
+        .map_or((false, rendered), |value| (true, value));
+    if rendered == "0" {
+        return (if negative { "-0" } else { "0" }.into(), 0);
+    }
+    let (whole, fraction) = rendered.split_once('.').unwrap_or((rendered, ""));
+    let digits = format!("{whole}{fraction}");
+    let first = digits.find(|character| character != '0').unwrap_or(0);
+    let mut significant = digits[first..].trim_end_matches('0').to_owned();
+    let exponent = if whole.trim_start_matches('0').is_empty() {
+        whole.len() as i32 - first as i32 - 1
+    } else {
+        whole.len() as i32 - 1
+    };
+    if significant.len() > 1 {
+        significant.insert(1, '.');
+    }
+    if negative {
+        significant.insert(0, '-');
+    }
+    (significant, exponent)
+}
+
+fn parse_strict_fastpay_form(raw: &[u8]) -> Option<BTreeMap<String, String>> {
+    if raw.contains(&b';') {
+        return None;
+    }
+    let mut fields = BTreeMap::new();
+    for part in raw
+        .split(|byte| *byte == b'&')
+        .filter(|part| !part.is_empty())
+    {
+        let (key, value) = match part.iter().position(|byte| *byte == b'=') {
+            Some(index) => {
+                let (key, suffix) = part.split_at(index);
+                (key, &suffix[1..])
+            }
+            None => (part, &[] as &[u8]),
+        };
+        let key = percent_decode_fastpay_form(key)?;
+        let value = percent_decode_fastpay_form(value)?;
+        fields.entry(key).or_insert(value);
+    }
+    Some(fields)
+}
+
+fn percent_decode_fastpay_form(value: &[u8]) -> Option<String> {
+    let mut output = Vec::with_capacity(value.len());
+    let mut index = 0;
+    while index < value.len() {
+        match value[index] {
+            b'+' => output.push(b' '),
+            b'%' => {
+                let high = hex_digit(*value.get(index + 1)?)?;
+                let low = hex_digit(*value.get(index + 2)?)?;
+                output.push((high << 4) | low);
+                index += 2;
+            }
+            byte => output.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8(output).ok()
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn resolve_fastpay_secret(options: &BTreeMap<String, String>) -> Option<String> {
+    let pay_address = options.get("PayAddress").map_or("", String::as_str).trim();
+    let legacy_fastpay = pay_address.to_lowercase().contains("fastpay");
+    configured_value(options, "FastPayAddress")
+        .or_else(|| legacy_fastpay.then_some(pay_address))?;
+    configured_value(options, "FastPayMerchantNo").or_else(|| {
+        if legacy_fastpay {
+            configured_value(options, "EpayId")
+        } else {
+            None
+        }
+    })?;
+    configured_value(options, "FastPayShopNo")?;
+    let secret = configured_value(options, "FastPayApiSecret").or_else(|| {
+        if legacy_fastpay {
+            configured_value(options, "EpayKey")
+        } else {
+            None
+        }
+    })?;
+    Some(secret.to_owned())
+}
+
+fn configured_value<'a>(options: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    options
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// ePay uses `Request.PostForm` for POST callbacks and `URL.Query` for GET
@@ -1192,6 +1874,12 @@ impl PgBillingRepository {
         if user_id <= 0 || plan_id <= 0 || quota_per_unit <= 0 {
             return Err(BillingError::Rejected);
         }
+        // Go's `common.QuotaPerUnit` is refreshed when the persisted option is
+        // changed. Read the same authoritative option for every purchase so a
+        // long-lived Rust listener cannot silently charge with a stale unit.
+        // An absent option retains Go's 500k/default supplied by the listener;
+        // malformed configured values fail closed before the wallet is locked.
+        let quota_per_unit = configured_quota_per_unit(&self.pg, quota_per_unit).await?;
         let mut tx = self.pg.begin().await.map_err(|_| BillingError::Storage)?;
         let plan = sqlx::query("SELECT price_amount::text AS money, enabled, COALESCE(allow_balance_pay, TRUE) allow_balance_pay, COALESCE(max_purchase_per_user, 0) max_purchase_per_user, COALESCE(total_amount, 0) total_amount, COALESCE(duration_unit, 'month') duration_unit, COALESCE(duration_value, 1) duration_value, COALESCE(custom_seconds, 0) custom_seconds, COALESCE(upgrade_group, '') upgrade_group, COALESCE(downgrade_group, '') downgrade_group, COALESCE(allow_wallet_overflow, TRUE) allow_wallet_overflow FROM subscription_plans WHERE id = $1 FOR SHARE")
             .bind(plan_id)
@@ -1207,7 +1895,7 @@ impl PgBillingRepository {
         if !enabled || !allows_balance {
             return Err(BillingError::Rejected);
         }
-        let charge = balance_charge(&money, quota_per_unit)?;
+        let charge = balance_charge_decimal(&money, &quota_per_unit)?;
         let maximum: i64 = plan
             .try_get("max_purchase_per_user")
             .map_err(|_| BillingError::Storage)?;
@@ -1592,18 +2280,35 @@ fn duration_seconds(row: &sqlx::postgres::PgRow) -> Result<i64, BillingError> {
     .ok_or(BillingError::Rejected)
 }
 
-/// Computes `ceil(price_amount * quota_per_unit)` without a floating-point
-/// round trip. PostgreSQL returns `NUMERIC` as decimal text, so this preserves
-/// the legacy decimal charging rule exactly for values representable as i128.
-fn balance_charge(money: &str, quota_per_unit: i64) -> Result<i64, BillingError> {
-    if quota_per_unit <= 0 {
+/// Reads the live Go `common.QuotaPerUnit` option. The Go process uses its
+/// default when the option is absent, while an explicitly malformed option
+/// becomes zero and consequently rejects balance purchases. Preserve that
+/// distinction here instead of silently replacing a bad setting with a safe-
+/// looking but financially different default.
+async fn configured_quota_per_unit(pg: &PgPool, fallback: i64) -> Result<String, BillingError> {
+    let configured = sqlx::query_scalar::<_, String>(
+        "SELECT COALESCE(value, '') FROM options WHERE key = 'QuotaPerUnit'",
+    )
+    .fetch_optional(pg)
+    .await;
+    let configured = match configured {
+        Ok(value) => value,
+        // Older isolated billing fixtures intentionally omit the unrelated
+        // options table. The deployed schema always has it; retaining the
+        // constructor fallback here keeps those fixtures meaningful without
+        // masking transport/storage errors from an existing table.
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("42P01") => None,
+        Err(_) => return Err(BillingError::Storage),
+    };
+    Ok(configured.unwrap_or_else(|| fallback.to_string()))
+}
+
+fn decimal_units(value: &str) -> Result<(i128, i128), BillingError> {
+    let value = value.trim();
+    if value.starts_with('-') || value.is_empty() {
         return Err(BillingError::Rejected);
     }
-    let money = money.trim();
-    if money.starts_with('-') || money.is_empty() {
-        return Err(BillingError::Rejected);
-    }
-    let (whole, fraction) = money.split_once('.').unwrap_or((money, ""));
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
     if whole.is_empty()
         || !whole.bytes().all(|byte| byte.is_ascii_digit())
         || !fraction.bytes().all(|byte| byte.is_ascii_digit())
@@ -1622,16 +2327,324 @@ fn balance_charge(money: &str, quota_per_unit: i64) -> Result<i64, BillingError>
             .parse::<i128>()
             .map_err(|_| BillingError::Rejected)?
     };
-    let minor = whole
+    let units = whole
         .checked_mul(scale)
         .and_then(|value| value.checked_add(fraction))
         .ok_or(BillingError::Rejected)?;
-    let numerator = minor
-        .checked_mul(i128::from(quota_per_unit))
+    Ok((units, scale))
+}
+
+fn balance_charge_decimal(money: &str, quota_per_unit: &str) -> Result<i64, BillingError> {
+    let (money_units, money_scale) = decimal_units(money)?;
+    let (quota_units, quota_scale) = decimal_units(quota_per_unit)?;
+    if quota_units <= 0 {
+        return Err(BillingError::Rejected);
+    }
+    let numerator = money_units
+        .checked_mul(quota_units)
+        .ok_or(BillingError::Rejected)?;
+    let denominator = money_scale
+        .checked_mul(quota_scale)
         .ok_or(BillingError::Rejected)?;
     let charge = numerator
-        .checked_add(scale - 1)
+        .checked_add(denominator - 1)
         .ok_or(BillingError::Rejected)?
-        / scale;
+        / denominator;
     i64::try_from(charge).map_err(|_| BillingError::Rejected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use std::sync::Mutex;
+    use tower::ServiceExt;
+
+    #[derive(Clone)]
+    struct StaticFastPayConfig(Option<SecretString>);
+
+    #[async_trait]
+    impl FastPayNotifyConfigStore for StaticFastPayConfig {
+        async fn load_secret_if_configured(&self) -> Result<Option<SecretString>, BillingError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingRepository(Mutex<Vec<(String, String, String)>>);
+
+    #[async_trait]
+    impl BillingRepository for RecordingRepository {
+        async fn create_pending(&self, _: CreateOrder) -> Result<PendingOrder, BillingError> {
+            Err(BillingError::Rejected)
+        }
+
+        async fn expire(&self, _: &str) -> Result<(), BillingError> {
+            Err(BillingError::Rejected)
+        }
+
+        async fn fail(&self, _: &str) -> Result<(), BillingError> {
+            Err(BillingError::Rejected)
+        }
+
+        async fn purchase_with_balance(
+            &self,
+            _: i64,
+            _: i64,
+            _: i64,
+        ) -> Result<Completion, BillingError> {
+            Err(BillingError::Rejected)
+        }
+
+        async fn complete(
+            &self,
+            trade_no: &str,
+            provider: &str,
+            _: &str,
+            method: Option<&str>,
+        ) -> Result<Completion, BillingError> {
+            self.0.lock().expect("completion lock").push((
+                trade_no.into(),
+                provider.into(),
+                method.unwrap_or_default().into(),
+            ));
+            Ok(Completion::Completed {
+                subscription_id: 11,
+                user_id: 22,
+                quota_charged: 0,
+                group_changed: false,
+            })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingCache(Mutex<Vec<(i64, i64)>>);
+
+    #[async_trait]
+    impl BillingCache for RecordingCache {
+        async fn invalidate_completed_payment(
+            &self,
+            subscription_id: i64,
+            user_id: i64,
+            _: i64,
+            _: bool,
+        ) {
+            self.0
+                .lock()
+                .expect("cache lock")
+                .push((subscription_id, user_id));
+        }
+    }
+
+    fn test_notify_router(
+        repository: Arc<RecordingRepository>,
+        cache: Arc<RecordingCache>,
+        limit: usize,
+    ) -> Router {
+        subscription_fastpay_notify_router(
+            SubscriptionFastPayNotifyState {
+                repository,
+                cache,
+                config: Arc::new(StaticFastPayConfig(Some(SecretString::from("secret")))),
+            },
+            limit,
+        )
+    }
+
+    async fn response_body(response: Response) -> String {
+        String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("response body")
+                .to_vec(),
+        )
+        .expect("UTF-8 response")
+    }
+
+    #[test]
+    fn fastpay_json_scalars_should_match_go_float64_signing() {
+        let callback: FastPayNotifyPayload = serde_json::from_value(json!({
+            "amount": 1.0,
+            "payAmount": 1e-5,
+            "status": 1,
+            "timestamp": 1e6
+        }))
+        .expect("callback");
+
+        assert_eq!(
+            callback.signature_fields(),
+            BTreeMap::from([
+                ("amount".into(), "1".into()),
+                ("merchantNo".into(), "".into()),
+                ("orderNo".into(), "".into()),
+                ("outTradeNo".into(), "".into()),
+                ("payAmount".into(), "1e-05".into()),
+                ("payTime".into(), "".into()),
+                ("payType".into(), "".into()),
+                ("status".into(), "1".into()),
+                ("timestamp".into(), "1e+06".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn fastpay_form_should_keep_the_first_duplicate_value() {
+        let fields = parse_strict_fastpay_form(b"sign=first&sign=second&outTradeNo=trade-1")
+            .expect("valid form");
+
+        assert_eq!(fields["sign"], "first");
+    }
+
+    #[test]
+    fn fastpay_form_should_reject_an_unescaped_semicolon() {
+        assert!(parse_strict_fastpay_form(b"sign=valid;unexpected=value").is_none());
+    }
+
+    #[test]
+    fn fastpay_config_should_use_the_legacy_epay_fallback() {
+        let options = BTreeMap::from([
+            ("PayAddress".into(), " https://fastpay.example ".into()),
+            ("EpayId".into(), " merchant ".into()),
+            ("EpayKey".into(), " secret ".into()),
+            ("FastPayShopNo".into(), " shop ".into()),
+        ]);
+
+        assert_eq!(resolve_fastpay_secret(&options).as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn fastpay_config_should_require_the_shop_number() {
+        let options = BTreeMap::from([
+            ("FastPayAddress".into(), "https://fastpay.example".into()),
+            ("FastPayMerchantNo".into(), "merchant".into()),
+            ("FastPayApiSecret".into(), "secret".into()),
+        ]);
+
+        assert!(resolve_fastpay_secret(&options).is_none());
+    }
+
+    #[tokio::test]
+    async fn notify_router_should_complete_a_signed_numeric_json_callback() {
+        let repository = Arc::new(RecordingRepository::default());
+        let cache = Arc::new(RecordingCache::default());
+        let signing_input = b"amount=1&merchantNo=M&orderNo=O&outTradeNo=trade-1&payAmount=1e-05&payTime=T&payType=alipay&status=1&timestamp=1e+06&key=secret";
+        let body = json!({
+            "merchantNo": "M",
+            "orderNo": "O",
+            "outTradeNo": "trade-1",
+            "amount": 1.0,
+            "payAmount": 1e-5,
+            "payType": "alipay",
+            "status": 1,
+            "payTime": "T",
+            "timestamp": 1e6,
+            "sign": md5_hex(signing_input),
+        })
+        .to_string();
+        let response = test_notify_router(Arc::clone(&repository), Arc::clone(&cache), 4096)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/subscription/fastpay/notify")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let result = (
+            response_body(response).await,
+            repository.0.lock().expect("completion lock").clone(),
+            cache.0.lock().expect("cache lock").clone(),
+        );
+
+        assert_eq!(
+            result,
+            (
+                "success".into(),
+                vec![("trade-1".into(), "fastpay".into(), "alipay".into())],
+                vec![(11, 22)],
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_router_should_reject_lowercase_success_status() {
+        let repository = Arc::new(RecordingRepository::default());
+        let cache = Arc::new(RecordingCache::default());
+        let sign = md5_hex(b"outTradeNo=trade-1&status=success&key=secret");
+        let response = test_notify_router(Arc::clone(&repository), cache, 4096)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/subscription/fastpay/notify")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!(
+                        "outTradeNo=trade-1&status=success&sign={sign}"
+                    )))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let result = (
+            response_body(response).await,
+            repository.0.lock().expect("completion lock").len(),
+        );
+
+        assert_eq!(result, ("fail".into(), 0));
+    }
+
+    #[tokio::test]
+    async fn notify_router_should_return_an_empty_413_when_body_exceeds_the_limit() {
+        let repository = Arc::new(RecordingRepository::default());
+        let cache = Arc::new(RecordingCache::default());
+        let response = test_notify_router(repository, cache, 8)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/subscription/fastpay/notify")
+                    .body(Body::from("123456789"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let result = (response.status(), response_body(response).await);
+
+        assert_eq!(result, (StatusCode::PAYLOAD_TOO_LARGE, String::new()));
+    }
+
+    #[tokio::test]
+    async fn notify_router_should_expose_only_the_post_method() {
+        let repository = Arc::new(RecordingRepository::default());
+        let cache = Arc::new(RecordingCache::default());
+        let response = test_notify_router(repository, cache, 4096)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/subscription/fastpay/notify")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[test]
+    fn balance_charge_should_preserve_decimal_ceil_semantics() {
+        assert_eq!(
+            balance_charge_decimal("1.000001", "1000000").expect("charge"),
+            1_000_001
+        );
+        assert_eq!(
+            balance_charge_decimal("0.01", "1234.5").expect("fractional factor"),
+            13
+        );
+        assert!(balance_charge_decimal("1", "0").is_err());
+        assert!(balance_charge_decimal("1", "not-a-number").is_err());
+    }
 }

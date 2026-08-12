@@ -1,107 +1,101 @@
-# Русский глоссарий (Russian Glossary)
+# Russian Glossary (Project Terminology)
 
-Данный раздел предоставляет стандартные переводы ключевой терминологии проекта на русский язык для обеспечения согласованности и точности переводов.
+This glossary defines standard Russian terms used across project localization.
 
-This section provides standard Russian translations for key project terminology to ensure consistency and accuracy in translations.
+## Core Concepts
 
-## Основные концепции (Core Concepts)
+- Emojis are allowed only when present in the source text.
+- Purely technical terms are allowed when they appear in the source.
+- English technical terms are allowed when common in Russian technical usage (for example, API).
 
-- Допускается использовать символы Emoji в переводе, если они были в оригинале.
-- Допускается использование сугубо технических терминов, если они были в оригинале.
-- Допускается использование технических терминов на английском языке, если они широко используются в русскоязычной технической среде (например, API).
+| English Term | Russian Term | Canonical English | Description |
+|--------------|--------------|-------------------|-------------|
+| Ratio | Коэффициент | Ratio/Multiplier | Multiplier used in price calculation. **Important:** For pricing, always use **Коэффициент** instead of **Множитель**. |
+| Token | Токен | Token | API credentials or text units processed by models. |
+| Channel | Канал | Channel | API provider access channel. |
+| Group | Группа | Group | Classification of users or tokens. |
+| Quota | Квота | Quota | Available service quota for the user. |
 
-| Китайский | Русский | Английский | Описание |
-|-----------|--------|-----------|----------|
-| 倍率 | Коэффициент | Ratio/Multiplier | Множитель для расчета цены. **Важно:** В контексте расчетов цен всегда использовать "Коэффициент", а не "Множитель" для обеспечения консистентности терминологии |
-| 令牌 | Токен | Token | Учетные данные API или текстовые единицы |
-| 渠道 | Канал | Channel | Канал доступа к поставщику API |
-| 分组 | Группа | Group | Классификация пользователей или токенов |
-| 额度 | Квота | Quota | Доступная квота услуг для пользователя |
+## Model Related
 
-## Модели (Model Related)
+| English Term | Russian Term | Canonical English | Description |
+|--------------|--------------|-------------------|-------------|
+| Prompt | Prompt / Ввод | Prompt | Input content for model. |
+| Completion | Вывод | Completion | Model output. **Important:** Do not translate as alternatives like "дополнение" or "завершение". |
+| Input | Ввод | Input/Prompt | Content sent to the model. |
+| Output | Вывод | Output/Completion | Content returned by the model. |
+| Model Ratio | Коэффициент модели | Model Ratio | Pricing ratio for different models. |
+| Completion Ratio | Коэффициент вывода | Completion Ratio | Additional multiplier for output pricing. |
+| Price per call | Цена за запрос | Price per call | Price charged per API call. |
+| Pay-as-you-go | Оплата по объему | Pay-as-you-go | Usage-based pricing. |
+| Pay-per-view | Оплата за вызов | Pay-per-call | Flat price per call. |
 
-| Китайский | Русский | Английский | Описание |
-|-----------|--------|-----------|----------|
-| 提示 | Промпт/Ввод | Prompt | Содержимое ввода в модель |
-| 补全 | Вывод | Completion | Содержимое вывода модели. **Важно:** Не использовать "Дополнение" или "Завершение" - только "Вывод" для соответствия технической терминологии |
-| 输入 | Ввод | Input/Prompt | Содержимое, отправляемое в модель |
-| 输出 | Вывод | Output/Completion | Содержимое, возвращаемое моделью |
-| 模型倍率 | Коэффициент модели | Model Ratio | Коэффициент тарификации для разных моделей |
-| 补全倍率 | Коэффициент вывода | Completion Ratio | Дополнительный коэффициент тарификации для вывода |
-| 固定价格 | Цена за запрос | Price per call | Цена за один вызов |
-| 按量计费 | Оплата по объему | Pay-as-you-go | Тарификация на основе использования |
-| 按次计费 | Оплата за запрос | Pay-per-view | Фиксированная цена за вызов |
+## User Management
 
-## Управление пользователями (User Management)
+| English Term | Russian Term | Canonical English | Description |
+|--------------|--------------|-------------------|-------------|
+| Root User | Суперадминистратор | Root User | Administrator with highest privileges. |
+| Admin User | Администратор | Admin User | System administrator. |
+| Normal User | Обычный пользователь | Normal User | User with standard permissions. |
 
-| Китайский | Русский | Английский | Описание |
-|-----------|--------|-----------|----------|
-| 超级管理员 | Суперадминистратор | Root User | Администратор с наивысшими привилегиями |
-| 管理员 | Администратор | Admin User | Системный администратор |
-| 普通用户 | Обычный пользователь | Normal User | Пользователь со стандартными привилегиями |
+## Recharge & Redemption
 
-## Пополнение и обмен (Recharge & Redemption)
+| English Term | Russian Term | Canonical English | Description |
+|--------------|--------------|-------------------|-------------|
+| Top Up | Пополнение | Top Up | Add quota to an account. |
+| Redemption Code | Код обмена | Redemption Code | Code redeemable for quota. |
 
-| Китайский | Русский | Английский | Описание |
-|-----------|--------|-----------|----------|
-| 充值 | Пополнение | Top Up | Добавление квоты на аккаунт |
-| 兑换码 | Код купона | Redemption Code | Код, который можно обменять на квоту |
+## Channel Management
 
-## Управление каналами (Channel Management)
+| English Term | Russian Term | Canonical English | Description |
+|--------------|--------------|-------------------|-------------|
+| Channel | Канал | Channel | API access channel. |
+| API Key | API ключ | API Key | API access key. **Important:** Prefer **API ключ** over alternative wording. |
+| Priority | Приоритет | Priority | Channel selection priority. |
+| Weight | Вес | Weight | Load-balancing weight. |
+| Proxy | Прокси | Proxy | Proxy server address. |
+| Model Mapping | Перенаправление модели | Model Mapping | Replace model name in request payload. |
+| Provider | Поставщик | Provider/Vendor | Service or API provider. |
 
-| Китайский | Русский | Английский | Описание |
-|-----------|--------|-----------|----------|
-| 渠道 | Канал | Channel | Канал поставщика API |
-| API密钥 | API ключ | API Key | Ключ доступа к API. **Важно:** Использовать "API ключ" вместо "API токен" для большей точности и соответствия общепринятой русскоязычной технической терминологии. Термин "ключ" более точно отражает функционал доступа к ресурсам, в то время как "токен" чаще ассоциируется с текстовыми единицами в контексте обработки языковых моделей. |
-| 优先级 | Приоритет | Priority | Приоритет выбора канала |
-| 权重 | Вес | Weight | Вес балансировки нагрузки |
-| 代理 | Прокси | Proxy | Адрес прокси-сервера |
-| 模型重定向 | Перенаправление модели | Model Mapping | Замена имени модели в теле запроса |
-| 供应商 | Поставщик | Provider/Vendor | Поставщик услуг или API |
+## Security Related
 
-## Безопасность (Security Related)
+| English Term | Russian Term | Canonical English | Description |
+|--------------|--------------|-------------------|-------------|
+| Two-Factor Authentication | Двухфакторная аутентификация | Two-Factor Authentication | Additional security verification method. |
+| 2FA | 2FA | Two-Factor Authentication | Abbreviation. |
 
-| Китайский | Русский | Английский | Описание |
-|-----------|--------|-----------|----------|
-| 两步验证 | Двухфакторная аутентификация | Two-Factor Authentication | Дополнительный метод проверки безопасности для аккаунтов |
-| 2FA | 2FA | Two-Factor Authentication | Аббревиатура двухфакторной аутентификации |
+## Translation Guidance
 
-## Рекомендации по переводу (Translation Guidelines)
+### Prompt/Input Context
 
-### Контекстуальные варианты перевода
+- **Промпт**: user interaction, chat/LLM context.
+- **Ввод**: technical processing, billing, and calculation context.
+- **Rule:** Use **Промпт** for conversational UI, **Ввод** for backend and pipeline descriptions.
 
-**Промпт/Ввод (Prompt/Input)**
+### Token Context
 
-- **Промпт**: При общении с LLM, в пользовательском интерфейсе, при описании взаимодействия с моделью
-- **Ввод**: При тарификации, технической документации, описании процесса обработки данных
-- **Правило**: Если речь о пользовательском опыте и взаимодействии с AI → "Промпт", если о техническом процессе или расчетах → "Ввод"
+- API token (API Token)
+- Text token processed by model (Text Token)
+- System access token (Access Token)
 
-**Token**
+### Quota Notes
 
-- API токен доступа (API Token)
-- Текстовая единица, обрабатываемая моделью (Text Token)
-- Токен доступа к системе (Access Token)
+- User service quota.
+- Sometimes translated as **Кредит**.
 
-**Квота (Quota)**
+### Language Notes
 
-- Доступная квота услуг пользователя
-- Иногда переводится как "Кредит"
+- Correct plural forms are required for localization files (`_one`, `_few`, `_many`, `_other`).
+- Watch case/declension in technical terms.
+- Respect grammatical gender (for example, `модель` is feminine, `канал` is masculine).
 
-### Особенности русского языка
+### Standardized Terms
 
-- **Множественные формы**: Требуется правильная реализация множественных форм (_one,_few, _many,_other)
-- **Падежные окончания**: Внимательное отношение к падежным окончаниям в технических терминах
-- **Грамматический род**: Согласование рода технических терминов (например, "модель" - женский род, "канал" - мужской род)
-
-### Стандартизированные термины
-
-- **Вывод (Completion)**: Содержимое вывода модели
-- **Коэффициент (Ratio)**: Множитель для расчета цены
-- **Код купона (Redemption Code)**: Используется вместо "Код обмена" для большей точности
-- **Поставщик (Provider/Vendor)**: Организация или сервис, предоставляющий API или AI-модели
+- **Completion / Вывод**: model output.
+- **Ratio / Коэффициент**: price multiplier.
+- **Redemption Code / Код обмена**: canonical phrasing for top-up code.
+- **Provider / Поставщик**: organization or service exposing APIs or models.
 
 ---
 
-**Примечание для участников:** При обнаружении несогласованности в переводах терминологии или наличии лучших предложений по переводу, не стесняйтесь создавать Issue или Pull Request.
-
-**Contribution Note for Russian:** If you find any inconsistencies in terminology translations or have better translation suggestions for Russian, please feel free to submit an Issue or Pull Request.
+**Contributor note:** If you spot inconsistent terminology or have better Russian translations, open an Issue or Pull Request.

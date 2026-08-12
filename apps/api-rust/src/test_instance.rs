@@ -217,7 +217,10 @@ pub fn durable_missing_control_public_surface(pg: PgPool, auth: Arc<dyn Dashboar
             Arc::new(PgMissingControlStore::new(pg)),
             Arc::new(DashboardMissingControlAuthorizer::new(Arc::clone(&auth))),
         )
-        .with_critical_rate_limiter(Arc::new(DashboardMissingControlRateLimiter::new(auth))),
+        .with_critical_rate_limiter(Arc::new(DashboardMissingControlRateLimiter::new(
+            Arc::clone(&auth),
+        )))
+        .with_console_access_gate(auth),
     )
 }
 
@@ -320,17 +323,23 @@ pub fn safe_candidate_surface(
             ),
             b"test-federation-flow-key",
         )))
-        .merge(observability_router(ObservabilityState::new(
-            Arc::new(PgObservabilityStore::new(
-                pg.clone(),
-                Arc::new(PostgresObservabilityMetrics::new(pg.clone()).with_valkey(valkey.clone())),
-                Arc::new(UnavailableObservabilityMaintenance),
-            )),
-            Arc::new(DashboardObservabilityAuthorizer::new(
-                Arc::clone(&auth),
-                Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
-            )),
-        )))
+        .merge(observability_router(
+            ObservabilityState::new(
+                Arc::new(PgObservabilityStore::new(
+                    pg.clone(),
+                    Arc::new(
+                        PostgresObservabilityMetrics::new(pg.clone())
+                            .with_valkey(valkey.clone()),
+                    ),
+                    Arc::new(UnavailableObservabilityMaintenance),
+                )),
+                Arc::new(DashboardObservabilityAuthorizer::new(
+                    Arc::clone(&auth),
+                    Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
+                )),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        ))
         .merge(open_source_bounty_router(OpenSourceBountyState::new(
             pg.clone(),
             Arc::clone(&auth),

@@ -120,6 +120,32 @@ export type SiteSettings = {
   SidebarModulesAdmin: string
 }
 
+export const ASSISTANT_SEARCH_PROVIDERS = [
+  'none',
+  'exa',
+  'tavily',
+  'brave',
+  'generic_http',
+  'mcp_streamable_http',
+] as const
+
+export type AssistantSearchProvider =
+  (typeof ASSISTANT_SEARCH_PROVIDERS)[number]
+
+export function normalizeAssistantSearchProvider(
+  value: unknown,
+  searchURL = ''
+): AssistantSearchProvider {
+  if (
+    typeof value === 'string' &&
+    (ASSISTANT_SEARCH_PROVIDERS as readonly string[]).includes(value)
+  ) {
+    return value as AssistantSearchProvider
+  }
+
+  return searchURL.trim() ? 'generic_http' : 'none'
+}
+
 export type AuthSettings = {
   PasswordLoginEnabled: boolean
   PasswordRegisterEnabled: boolean
@@ -188,8 +214,10 @@ export type ContentSettings = {
   AssistantCacheTTLMinutes: number
   AssistantPersona: string
   AssistantSystemPrompt: string
+  AssistantSearchProvider: AssistantSearchProvider
   AssistantSearchURL: string
   AssistantSearchAPIKey: string
+  AssistantSearchMCPTool: string
   AssistantSkills: string
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean

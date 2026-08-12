@@ -63,7 +63,7 @@ else
 fi
 cat "$manifest" "$mcp_inventory" >"$work/go-full.tsv"
 
-exec perl - "$work/go-full.tsv" "$frozen" "$implemented" "$legacy_stubs" "$blockers" "$normal_mounts" "$results_dir" "$strict_classification" <<'PERL'
+perl - "$work/go-full.tsv" "$frozen" "$implemented" "$legacy_stubs" "$blockers" "$normal_mounts" "$results_dir" "$strict_classification" <<'PERL'
 use strict;
 use warnings;
 use JSON::PP qw(decode_json encode_json);

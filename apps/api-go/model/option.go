@@ -133,8 +133,10 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantCacheTTLMinutesOptionKey] = strconv.Itoa(assistantSettings.CacheTTLMinutes)
 	common.OptionMap[setting.AssistantPersonaOptionKey] = assistantSettings.Persona
 	common.OptionMap[setting.AssistantSystemPromptOptionKey] = assistantSettings.SystemPrompt
+	common.OptionMap[setting.AssistantSearchProviderOptionKey] = string(assistantSettings.SearchProvider)
 	common.OptionMap[setting.AssistantSearchURLOptionKey] = assistantSettings.SearchURL
 	common.OptionMap[setting.AssistantSearchAPIKeyOptionKey] = assistantSettings.SearchAPIKey
+	common.OptionMap[setting.AssistantSearchMCPToolOptionKey] = assistantSettings.SearchMCPTool
 	common.OptionMap[setting.AssistantSkillsOptionKey] = assistantSettings.Skills
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
@@ -480,10 +482,14 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantPersona(value)
 	case setting.AssistantSystemPromptOptionKey:
 		err = setting.UpdateAssistantSystemPrompt(value)
+	case setting.AssistantSearchProviderOptionKey:
+		err = setting.UpdateAssistantSearchProvider(value)
 	case setting.AssistantSearchURLOptionKey:
 		err = setting.UpdateAssistantSearchURL(value)
 	case setting.AssistantSearchAPIKeyOptionKey:
 		err = setting.UpdateAssistantSearchAPIKey(value)
+	case setting.AssistantSearchMCPToolOptionKey:
+		err = setting.UpdateAssistantSearchMCPTool(value)
 	case setting.AssistantSkillsOptionKey:
 		err = setting.UpdateAssistantSkills(value)
 	case "AutoGroups":

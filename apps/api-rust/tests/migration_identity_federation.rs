@@ -1,15 +1,17 @@
 use async_trait::async_trait;
 use axum::{
+    Router,
     body::Body,
     http::{HeaderMap, HeaderValue, Request, StatusCode},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
+use lmm_api_rs::auth::DashboardAuth;
 use lmm_api_rs::migration_routes::identity_federation::{
     FederatedLogin, FederatedUser, FederationError, FederationIdentity,
     FederationMutationPublisher, FederationPrincipal, FederationProviderError, FederationProviders,
-    FederationState, OAuthFlowContext, bindings_router, provider_router, router,
-    verify_telegram_authorization,
+    FederationState, OAuthFlowContext, bindings_router, oauth_email_bind_router,
+    oauth_state_router, provider_router, router, verify_telegram_authorization,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -23,6 +25,18 @@ use std::{
 use tower::ServiceExt;
 
 struct NoIdentity;
+
+#[test]
+fn oauth_state_router_constructor_is_exposed_for_listener_composition() {
+    let _constructor: fn(FederationState, Arc<dyn DashboardAuth>, usize) -> Router =
+        oauth_state_router;
+}
+
+#[test]
+fn oauth_email_bind_router_constructor_is_exposed_for_listener_composition() {
+    let _constructor: fn(FederationState, Arc<dyn DashboardAuth>) -> Router =
+        oauth_email_bind_router;
+}
 
 #[async_trait]
 impl FederationIdentity for NoIdentity {

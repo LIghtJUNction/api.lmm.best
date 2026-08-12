@@ -22,6 +22,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { useIsMobile } from '@/hooks/use-mobile'
 import { useStatus } from '@/hooks/use-status'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
@@ -44,8 +45,9 @@ export function AssistantLauncher() {
   const { t } = useTranslation()
   const { status } = useStatus()
   const user = useAuthStore((state) => state.auth.user)
-  const [open, setOpen] = useState(false)
-  const [hasOpened, setHasOpened] = useState(false)
+  const isMobile = useIsMobile()
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false)
   const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
   const [initialMessage, setInitialMessage] = useState<string>()
   const [initialMessageRevision, setInitialMessageRevision] = useState(0)
@@ -58,8 +60,8 @@ export function AssistantLauncher() {
       if (nextMessage?.trim()) {
         setInitialMessageRevision((revision) => revision + 1)
       }
-      setHasOpened(true)
-      setOpen(true)
+      setDesktopCollapsed(false)
+      setMobileOpen(true)
     },
     []
   )
@@ -73,55 +75,80 @@ export function AssistantLauncher() {
     return subscribeToAssistantOpen(showAssistant)
   }, [showAssistant])
 
-  const preload = () => {
-    void loadAssistantPanel()
-  }
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        !event.shiftKey ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLowerCase() !== 'a'
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      showAssistant()
+    }
+
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [showAssistant])
 
   if (status?.assistant?.enabled === false) return null
 
   const needsL1Unlock = user !== null && !isConsoleActivated(user)
   const visibleLabel = needsL1Unlock
     ? t('Unlock L1 with AI')
-    : t('AI assistant')
+    : t('Service guide')
   const accessibleLabel = needsL1Unlock
     ? t('Unlock L1 with AI')
     : t('Open AI assistant')
 
   return (
-    <>
-      <Button
-        type='button'
-        size='default'
-        className='fixed right-4 bottom-20 z-50 h-11 max-w-[calc(100vw-2rem)] gap-2 rounded-full px-4 shadow-lg sm:right-6 sm:bottom-20'
-        aria-label={accessibleLabel}
-        title={accessibleLabel}
-        aria-haspopup='dialog'
-        aria-expanded={open}
-        aria-controls={hasOpened ? 'ai-assistant-panel' : undefined}
-        data-testid='assistant-launcher'
-        onClick={() => showAssistant()}
-        onMouseEnter={preload}
-        onFocus={preload}
-      >
-        <HugeiconsIcon
-          icon={AiChat02Icon}
-          strokeWidth={2}
-          data-icon='inline-start'
-        />
-        <span className='truncate text-sm font-medium'>{visibleLabel}</span>
-      </Button>
-
-      {hasOpened ? (
-        <Suspense fallback={null}>
-          <AssistantPanel
-            open={open}
-            initialPreset={initialPreset}
-            initialMessage={initialMessage}
-            initialMessageRevision={initialMessageRevision}
-            onOpenChange={setOpen}
+    <div className='contents'>
+      <div className='border-border bg-background flex w-full shrink-0 items-center border-t px-3 py-1.5 md:hidden'>
+        <Button
+          type='button'
+          variant='ghost'
+          className='h-10 w-full justify-start gap-2 px-2'
+          aria-label={accessibleLabel}
+          title={accessibleLabel}
+          aria-haspopup='dialog'
+          aria-expanded={mobileOpen}
+          aria-controls='ai-assistant-panel'
+          data-testid='assistant-launcher'
+          onClick={() => showAssistant()}
+        >
+          <HugeiconsIcon
+            icon={AiChat02Icon}
+            strokeWidth={2}
+            data-icon='inline-start'
+            aria-hidden='true'
           />
-        </Suspense>
-      ) : null}
-    </>
+          <span className='truncate text-sm font-medium'>{visibleLabel}</span>
+        </Button>
+      </div>
+
+      <Suspense
+        fallback={
+          <aside
+            className='bg-background hidden min-h-0 w-[clamp(20rem,28vw,30rem)] shrink-0 border-l md:flex'
+            aria-hidden='true'
+          />
+        }
+      >
+        <AssistantPanel
+          mode={isMobile ? 'mobile' : 'rail'}
+          open={isMobile ? mobileOpen : true}
+          collapsed={!isMobile && desktopCollapsed}
+          initialPreset={initialPreset}
+          initialMessage={initialMessage}
+          initialMessageRevision={initialMessageRevision}
+          onOpenChange={setMobileOpen}
+          onToggleCollapsed={() => setDesktopCollapsed((value) => !value)}
+        />
+      </Suspense>
+    </div>
   )
 }

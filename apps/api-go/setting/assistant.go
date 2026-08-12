@@ -22,10 +22,26 @@ const (
 	AssistantCacheTTLMinutesOptionKey  = "AssistantCacheTTLMinutes"
 	AssistantPersonaOptionKey          = "AssistantPersona"
 	AssistantSystemPromptOptionKey     = "AssistantSystemPrompt"
+	AssistantSearchProviderOptionKey   = "AssistantSearchProvider"
 	AssistantSearchURLOptionKey        = "AssistantSearchURL"
 	AssistantSearchAPIKeyOptionKey     = "AssistantSearchAPIKey"
+	AssistantSearchMCPToolOptionKey    = "AssistantSearchMCPTool"
 	AssistantSkillsOptionKey           = "AssistantSkills"
 	DefaultAssistantModel              = "deepseek-v4-flash"
+)
+
+type AssistantSearchProvider string
+
+const (
+	AssistantSearchProviderNone              AssistantSearchProvider = "none"
+	AssistantSearchProviderExa               AssistantSearchProvider = "exa"
+	AssistantSearchProviderTavily            AssistantSearchProvider = "tavily"
+	AssistantSearchProviderBrave             AssistantSearchProvider = "brave"
+	AssistantSearchProviderGenericHTTP       AssistantSearchProvider = "generic_http"
+	AssistantSearchProviderMCPStreamableHTTP AssistantSearchProvider = "mcp_streamable_http"
+	// DefaultAssistantSearchProvider keeps installations that already have a
+	// SearchURL working after the provider selector is introduced.
+	DefaultAssistantSearchProvider = AssistantSearchProviderGenericHTTP
 )
 
 type AssistantSettings struct {
@@ -38,8 +54,10 @@ type AssistantSettings struct {
 	CacheTTLMinutes  int
 	Persona          string
 	SystemPrompt     string
+	SearchProvider   AssistantSearchProvider
 	SearchURL        string
 	SearchAPIKey     string
+	SearchMCPTool    string
 	Skills           string
 }
 
@@ -55,8 +73,10 @@ var (
 		CacheTTLMinutes:  1440,
 		Persona:          "",
 		SystemPrompt:     "",
+		SearchProvider:   DefaultAssistantSearchProvider,
 		SearchURL:        "",
 		SearchAPIKey:     "",
+		SearchMCPTool:    "",
 		Skills:           "",
 	}
 )
@@ -155,6 +175,17 @@ func UpdateAssistantSystemPrompt(value string) error {
 	return updateAssistantText(&assistantSettings.SystemPrompt, value, 8000, "assistant system prompt must be at most 8000 characters")
 }
 
+func UpdateAssistantSearchProvider(value string) error {
+	provider := AssistantSearchProvider(strings.TrimSpace(value))
+	if !IsAssistantSearchProvider(provider) {
+		return errors.New("assistant search provider is invalid")
+	}
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.SearchProvider = provider
+	return nil
+}
+
 func UpdateAssistantSearchURL(value string) error {
 	if err := ValidateAssistantSearchURL(value); err != nil {
 		return err
@@ -164,6 +195,10 @@ func UpdateAssistantSearchURL(value string) error {
 
 func UpdateAssistantSearchAPIKey(value string) error {
 	return updateAssistantText(&assistantSettings.SearchAPIKey, value, 512, "assistant search API key must be at most 512 characters")
+}
+
+func UpdateAssistantSearchMCPTool(value string) error {
+	return updateAssistantText(&assistantSettings.SearchMCPTool, value, 128, "assistant search MCP tool must be at most 128 characters")
 }
 
 func UpdateAssistantSkills(value string) error {
@@ -203,11 +238,19 @@ func ValidateAssistantOption(key string, value string) error {
 		if len([]rune(strings.TrimSpace(value))) > 8000 {
 			return errors.New("assistant system prompt must be at most 8000 characters")
 		}
+	case AssistantSearchProviderOptionKey:
+		if !IsAssistantSearchProvider(AssistantSearchProvider(strings.TrimSpace(value))) {
+			return errors.New("assistant search provider is invalid")
+		}
 	case AssistantSearchURLOptionKey:
 		return ValidateAssistantSearchURL(value)
 	case AssistantSearchAPIKeyOptionKey:
 		if len([]rune(strings.TrimSpace(value))) > 512 {
 			return errors.New("assistant search API key must be at most 512 characters")
+		}
+	case AssistantSearchMCPToolOptionKey:
+		if len([]rune(strings.TrimSpace(value))) > 128 {
+			return errors.New("assistant search MCP tool must be at most 128 characters")
 		}
 	case AssistantSkillsOptionKey:
 		if len([]rune(strings.TrimSpace(value))) > 12000 {
@@ -215,6 +258,20 @@ func ValidateAssistantOption(key string, value string) error {
 		}
 	}
 	return nil
+}
+
+func IsAssistantSearchProvider(provider AssistantSearchProvider) bool {
+	switch provider {
+	case AssistantSearchProviderNone,
+		AssistantSearchProviderExa,
+		AssistantSearchProviderTavily,
+		AssistantSearchProviderBrave,
+		AssistantSearchProviderGenericHTTP,
+		AssistantSearchProviderMCPStreamableHTTP:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateAssistantSearchURL checks the administrator-supplied search

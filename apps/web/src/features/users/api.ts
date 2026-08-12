@@ -29,6 +29,8 @@ import type {
   ManageUserQuotaPayload,
   ManageUserTrustLevelPayload,
   ApiResponse,
+  AccountActionRequestAdmin,
+  AccountActionRequestStatus,
 } from './types'
 
 export type DeveloperAccessRequestAdmin = {
@@ -65,6 +67,26 @@ export async function reviewDeveloperAccessRequest(
   note = ''
 ): Promise<ApiResponse<DeveloperAccessRequestAdmin>> {
   const res = await api.post(`/api/developer-access/requests/${id}/${action}`, {
+    note,
+  })
+  return res.data
+}
+
+export async function listAccountActionRequests(
+  status: AccountActionRequestStatus = 'pending'
+): Promise<ApiResponse<AccountActionRequestAdmin[]>> {
+  const res = await api.get('/api/account-action-requests', {
+    params: { status },
+  })
+  return res.data
+}
+
+export async function reviewAccountActionRequest(
+  id: number,
+  action: 'approve' | 'reject',
+  note = ''
+): Promise<ApiResponse<AccountActionRequestAdmin>> {
+  const res = await api.post(`/api/account-action-requests/${id}/${action}`, {
     note,
   })
   return res.data

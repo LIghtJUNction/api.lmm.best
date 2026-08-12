@@ -53,16 +53,19 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
             showTopNav={consoleActivated}
             showSearch={consoleActivated}
           />
-          <div className='flex min-h-0 w-full flex-1'>
+          <div className='flex min-h-0 w-full flex-1 flex-wrap md:flex-nowrap'>
             <AppSidebar />
             <SidebarInset
-              className={cn('@container/content', 'min-h-0 overflow-hidden')}
+              className={cn(
+                '@container/content',
+                'min-h-0 min-w-0 overflow-hidden'
+              )}
             >
               {props.children ?? <AnimatedOutlet />}
             </SidebarInset>
+            <AssistantLauncher />
           </div>
           <AccessRestrictionNotice className='shrink-0' />
-          <AssistantLauncher />
           <ReleaseNoteDialog />
         </SidebarProvider>
       </SearchProvider>

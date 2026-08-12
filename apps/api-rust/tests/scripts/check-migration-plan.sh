@@ -276,8 +276,24 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
   }
   # Candidate routers commonly format a route over several lines. Remove
   # Rust line comments before whitespace so a comment cannot satisfy the
-  # exact `.route("/path"` source-mount check.
-  if ! sed 's#//.*$##' "$source_file" | tr -d '[:space:]' | grep -Fq -- ".route(\"$router_path\""; then
+  # exact `.route("/path"` source-mount check. Axum represents a Gin
+  # `/*path` registration as two non-overlapping routes when the single
+  # segment has a distinct handler, so accept that exact pair as one frozen
+  # wildcard contract.
+  compact_router=$(sed 's#//.*$##' "$source_file" | tr -d '[:space:]')
+  route_found=0
+  if grep -Fq -- ".route(\"$router_path\"" <<<"$compact_router"; then
+    route_found=1
+  elif [[ $path == */\** ]]; then
+    wildcard_prefix=${path%/*}
+    single_path=$(normalize_ledger_path "$wildcard_prefix/{model}")
+    tail_path=$(normalize_ledger_path "$wildcard_prefix/{model}/{*tail}")
+    if grep -Fq -- ".route(\"$single_path\"" <<<"$compact_router" && \
+       grep -Fq -- ".route(\"$tail_path\"" <<<"$compact_router"; then
+      route_found=1
+    fi
+  fi
+  if (( route_found == 0 )); then
     echo "mounted $method $path lacks exact router mount $router_path in $router_evidence" >&2
     exit 1
   fi
@@ -360,12 +376,12 @@ candidate_mod="$repo_root/apps/api-rust/src/migration_routes.rs"
 # a newly added helper cannot silently evade the module inventory.
 is_candidate_helper() {
   case $1 in
-    relay_misc_postgres) return 0 ;;
+    relay_anthropic_gemini_postgres|relay_misc_postgres) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-for helper in relay_misc_postgres; do
+for helper in relay_anthropic_gemini_postgres relay_misc_postgres; do
   [[ -f "$candidate_dir/$helper.rs" ]] || {
     echo "declared migration helper is missing: $helper.rs" >&2
     exit 1

@@ -20,7 +20,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
-import * as z from 'zod'
 
 import {
   Form,
@@ -32,6 +31,14 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -43,24 +50,15 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  ASSISTANT_SEARCH_PROVIDERS,
+  type AssistantSearchProvider,
+} from '../types'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-
-const assistantSettingsSchema = z.object({
-  AssistantEnabled: z.boolean(),
-  AssistantModel: z.string().trim().min(1).max(128),
-  AssistantAgentLoopEnabled: z.boolean(),
-  AssistantMaxSteps: z.number().int().min(1).max(12),
-  AssistantTimeoutSeconds: z.number().int().min(5).max(120),
-  AssistantCacheEnabled: z.boolean(),
-  AssistantCacheTTLMinutes: z.number().int().min(0).max(10080),
-  AssistantPersona: z.string().max(2000),
-  AssistantSystemPrompt: z.string().max(8000),
-  AssistantSearchURL: z.string().max(512),
-  AssistantSearchAPIKey: z.string().max(512),
-  AssistantSkills: z.string().max(12000),
-})
-
-type AssistantSettingsFormValues = z.infer<typeof assistantSettingsSchema>
+import {
+  assistantSettingsSchema,
+  type AssistantSettingsFormValues,
+} from './assistant-settings-schema'
 
 export function AssistantSettingsSection(props: {
   defaultValues: AssistantSettingsFormValues
@@ -90,6 +88,19 @@ export function AssistantSettingsSection(props: {
   const enabled = form.watch('AssistantEnabled')
   const agentLoopEnabled = form.watch('AssistantAgentLoopEnabled')
   const cacheEnabled = form.watch('AssistantCacheEnabled')
+  const searchProvider = form.watch('AssistantSearchProvider')
+  const searchProviderDescription: Record<AssistantSearchProvider, string> = {
+    none: t('Disable assistant web search.'),
+    exa: t('Uses the official Exa Search API from the server.'),
+    tavily: t('Uses the official Tavily Search API from the server.'),
+    brave: t('Uses the official Brave Search API from the server.'),
+    generic_http: t(
+      'Send a GET request with the q query parameter to a custom endpoint.'
+    ),
+    mcp_streamable_http: t(
+      'Connect to an MCP server over Streamable HTTP from the server.'
+    ),
+  }
 
   return (
     <SettingsSection title={t('AI assistant settings')}>
@@ -213,7 +224,56 @@ export function AssistantSettingsSection(props: {
               )}
             />
 
-            <div className='grid gap-6 sm:grid-cols-2'>
+            <FormField
+              control={form.control}
+              name='AssistantSearchProvider'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Search provider')}</FormLabel>
+                  <Select
+                    value={field.value}
+                    onValueChange={(value) => {
+                      if (
+                        typeof value === 'string' &&
+                        (
+                          ASSISTANT_SEARCH_PROVIDERS as readonly string[]
+                        ).includes(value)
+                      ) {
+                        field.onChange(value)
+                      }
+                    }}
+                  >
+                    <FormControl>
+                      <SelectTrigger className='w-full' disabled={!enabled}>
+                        <SelectValue
+                          placeholder={t('Select a search provider')}
+                        />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        <SelectItem value='none'>{t('Disabled')}</SelectItem>
+                        <SelectItem value='exa'>Exa</SelectItem>
+                        <SelectItem value='tavily'>Tavily</SelectItem>
+                        <SelectItem value='brave'>Brave Search</SelectItem>
+                        <SelectItem value='generic_http'>
+                          {t('Custom HTTP')}
+                        </SelectItem>
+                        <SelectItem value='mcp_streamable_http'>
+                          {t('MCP (Streamable HTTP)')}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    {searchProviderDescription[searchProvider]}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {searchProvider === 'generic_http' && (
               <FormField
                 control={form.control}
                 name='AssistantSearchURL'
@@ -237,32 +297,84 @@ export function AssistantSettingsSection(props: {
                   </FormItem>
                 )}
               />
+            )}
 
-              <FormField
-                control={form.control}
-                name='AssistantSearchAPIKey'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Search tool API key')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        {...field}
-                        type='password'
-                        disabled={!enabled}
-                        placeholder={t('Leave blank to keep the existing key')}
-                        autoComplete='new-password'
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'The key is stored server-side and is never shown in the options response.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
+            {searchProvider === 'mcp_streamable_http' && (
+              <>
+                <FormField
+                  control={form.control}
+                  name='AssistantSearchURL'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('MCP Streamable HTTP endpoint')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          disabled={!enabled}
+                          placeholder='https://search.example/mcp'
+                          autoComplete='off'
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'The endpoint and credentials are used only by the server.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='AssistantSearchMCPTool'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Optional MCP search tool name')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          disabled={!enabled}
+                          placeholder='web_search'
+                          autoComplete='off'
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('Leave empty to automatically find a search tool.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
+
+            <FormField
+              control={form.control}
+              name='AssistantSearchAPIKey'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Search tool API key')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      type='password'
+                      disabled={!enabled}
+                      placeholder={t('Leave blank to keep the existing key')}
+                      autoComplete='new-password'
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'The key is stored server-side and is never shown in the options response.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             <FormField
               control={form.control}

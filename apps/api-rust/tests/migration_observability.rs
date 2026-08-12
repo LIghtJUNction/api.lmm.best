@@ -8,8 +8,9 @@ use axum::{
 use lmm_api_rs::migration_routes::observability::{
     InMemoryObservabilityStore, ObservabilityAccess, ObservabilityAuthError,
     ObservabilityAuthorizer, ObservabilityCall, ObservabilityPrincipal, ObservabilityState,
-    ObservabilityStore, ObservabilityStoreError, observability_metrics_router,
-    observability_read_router, observability_router,
+    ObservabilityStore, ObservabilityStoreError, observability_disk_cache_router,
+    observability_metrics_router, observability_performance_router, observability_read_router,
+    observability_router,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -93,6 +94,20 @@ fn metrics_router() -> axum::Router {
     ))
 }
 
+fn performance_router() -> axum::Router {
+    observability_performance_router(ObservabilityState::new(
+        Arc::new(SuccessStore),
+        Arc::new(Allow { role: 100 }),
+    ))
+}
+
+fn disk_cache_router() -> axum::Router {
+    observability_disk_cache_router(ObservabilityState::new(
+        Arc::new(SuccessStore),
+        Arc::new(Allow { role: 100 }),
+    ))
+}
+
 #[tokio::test]
 async fn observability_read_router_mounts_the_storage_only_surface() {
     let response = read_router()
@@ -127,6 +142,47 @@ async fn observability_metrics_router_mounts_the_postgres_metric_reads() {
             .await
             .expect("router response");
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn observability_performance_router_mounts_only_the_root_operations() {
+    for (method, uri) in [
+        ("GET", "/api/performance/stats"),
+        ("POST", "/api/performance/reset_stats"),
+        ("DELETE", "/api/performance/logs?mode=by_count&value=1"),
+    ] {
+        let response = performance_router()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
+async fn observability_disk_cache_router_mounts_its_two_root_operations() {
+    for (method, uri) in [
+        ("DELETE", "/api/performance/disk_cache"),
+        ("GET", "/api/performance/logs"),
+    ] {
+        let response = disk_cache_router()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
     }
 }
 

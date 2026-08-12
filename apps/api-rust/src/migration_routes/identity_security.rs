@@ -29,12 +29,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 
+use crate::migration_routes::verify_email::ValkeyVerificationCodeStore;
 use crate::{
     ClientIpKey, RequestContext,
     auth::{
         AnonymousRequestSecurity, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth,
-        TurnstileCheckOutcome, dashboard_token_candidate, turnstile_failure_response,
-        turnstile_missing_response,
+        SecurityProof, TurnstileCheckOutcome, dashboard_token_candidate,
+        turnstile_failure_response, turnstile_missing_response,
     },
     legacy_empty_response,
 };
@@ -161,6 +162,28 @@ pub trait SecurityAuthorizer: Send + Sync {
 
     /// Resolves an administrator identity from server-validated credentials.
     async fn admin(&self, headers: &HeaderMap) -> Result<SecurityActor, SecurityError>;
+
+    /// Runs the shared IP-keyed CriticalRateLimit after UserAuth and before a
+    /// sensitive JSON body is parsed. Test authorizers default to Allowed;
+    /// the production dashboard adapter delegates to the real auth service.
+    async fn check_critical_rate_limit(
+        &self,
+        _client_ip: &str,
+    ) -> Result<CriticalRateLimitOutcome, SecurityError> {
+        Ok(CriticalRateLimitOutcome::Allowed)
+    }
+
+    /// Issues a session-bound proof only after the provider has consumed the
+    /// purpose-scoped verification input. Authorizers without the shared auth
+    /// authority fail closed.
+    async fn issue_security_proof(
+        &self,
+        _actor: &SecurityActor,
+        _method: &str,
+        _scopes: &[String],
+    ) -> Result<SecurityProof, SecurityError> {
+        Err(SecurityError::Unavailable)
+    }
 }
 
 /// Production authorization adapter backed by the shared dashboard-auth service.
@@ -240,6 +263,41 @@ impl SecurityAuthorizer for DashboardSecurityAuthorizer {
 
     async fn admin(&self, headers: &HeaderMap) -> Result<SecurityActor, SecurityError> {
         self.actor(headers).await
+    }
+
+    async fn check_critical_rate_limit(
+        &self,
+        client_ip: &str,
+    ) -> Result<CriticalRateLimitOutcome, SecurityError> {
+        self.auth
+            .check_critical_rate_limit(client_ip)
+            .await
+            .map_err(|_| SecurityError::Unavailable)
+    }
+
+    async fn issue_security_proof(
+        &self,
+        actor: &SecurityActor,
+        method: &str,
+        scopes: &[String],
+    ) -> Result<SecurityProof, SecurityError> {
+        let session_id = actor
+            .session_id
+            .as_deref()
+            .filter(|session_id| !session_id.trim().is_empty())
+            .ok_or(SecurityError::SessionRequired)?;
+        self.auth
+            .issue_security_proof(actor.user_id, session_id, method, scopes)
+            .await
+            .map_err(|error| match error.kind {
+                AuthErrorKind::TokenExpired => SecurityError::TokenExpired,
+                AuthErrorKind::SessionRevoked => SecurityError::SessionRevoked,
+                AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials => {
+                    SecurityError::Unauthorized
+                }
+                AuthErrorKind::UserDisabled => SecurityError::UserDisabled,
+                _ => SecurityError::Unavailable,
+            })
     }
 }
 
@@ -477,11 +535,14 @@ impl SecurityProvider for MemorySecurityProvider {
 /// WebAuthn ceremony validation and outbound mail deliberately remain outside
 /// this adapter: accepting a browser assertion or claiming a message was sent
 /// without a configured standards-compliant boundary would be a security bug.
-/// Those operations therefore fail closed with [`SecurityError::Unavailable`].
+/// Universal email verification is the exception: it consumes the shared
+/// purpose-scoped Valkey code here and delegates proof signing to the shared
+/// session authority.
 #[derive(Clone)]
 pub struct PgValkeySecurityProvider {
     pool: PgPool,
     _valkey: redis::Client,
+    verification_codes: ValkeyVerificationCodeStore,
 }
 
 impl PgValkeySecurityProvider {
@@ -489,6 +550,7 @@ impl PgValkeySecurityProvider {
     pub fn new(pool: PgPool, valkey: redis::Client) -> Self {
         Self {
             pool,
+            verification_codes: ValkeyVerificationCodeStore::new(valkey.clone()),
             _valkey: valkey,
         }
     }
@@ -570,6 +632,88 @@ impl PgValkeySecurityProvider {
             })
             .collect::<Result<Vec<_>, SecurityError>>()?;
         Ok(Value::Array(sessions))
+    }
+
+    async fn preferred_security_method(
+        &self,
+        actor: &SecurityActor,
+    ) -> Result<(String, Option<String>), SecurityError> {
+        let email = sqlx::query_scalar::<_, String>(
+            "SELECT COALESCE(email, '') FROM users WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(actor.user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| SecurityError::Unavailable)?
+        .ok_or(SecurityError::Unauthorized)?;
+        let email = email.trim().to_ascii_lowercase();
+        if email.is_empty() {
+            Ok(("passkey".to_owned(), None))
+        } else {
+            Ok(("email".to_owned(), Some(email)))
+        }
+    }
+
+    async fn universal_verify(&self, call: SecurityCall) -> Result<Value, SecurityError> {
+        let actor = Self::actor(&call)?;
+        let method = call
+            .input
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|method| !method.is_empty() && method.len() <= 32)
+            .ok_or(SecurityError::Invalid("参数错误"))?;
+        let scope = call
+            .input
+            .get("scope")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|scope| !scope.is_empty() && scope.len() <= 128)
+            .ok_or(SecurityError::Invalid("不支持的安全验证范围"))?;
+        if !matches!(
+            scope,
+            "channel.key.read" | "passkey.register" | "passkey.delete"
+        ) {
+            return Err(SecurityError::Invalid("不支持的安全验证范围"));
+        }
+
+        let (preferred_method, email) = self.preferred_security_method(actor).await?;
+        if method != preferred_method {
+            return Err(SecurityError::Rejected(
+                "请绑定邮箱后使用邮箱验证；未绑定邮箱时请使用 Passkey 验证".to_owned(),
+            ));
+        }
+        match method {
+            "email" => {
+                let code = call
+                    .input
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|code| !code.is_empty() && code.len() <= 64)
+                    .ok_or(SecurityError::Invalid("验证码不能为空"))?;
+                let email = email.ok_or(SecurityError::Unavailable)?;
+                let valid = self
+                    .verification_codes
+                    .verify_and_consume(&email, code, "s")
+                    .await
+                    .map_err(|_| SecurityError::Unavailable)?;
+                if !valid {
+                    return Err(SecurityError::Rejected(
+                        "验证失败，请检查邮箱验证码".to_owned(),
+                    ));
+                }
+            }
+            "passkey" => {
+                return Err(SecurityError::Rejected(
+                    "Passkey 验证必须使用 Passkey verify 流程".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(SecurityError::Rejected("不支持的安全验证方式".to_owned()));
+            }
+        }
+        Ok(json!({"method": method, "scope": scope}))
     }
 
     async fn option(&self, key: &str) -> Result<Option<String>, SecurityError> {
@@ -778,8 +922,8 @@ impl SecurityProvider for PgValkeySecurityProvider {
             | SecurityOperation::PasskeyRegisterFinish
             | SecurityOperation::PasskeyVerifyBegin
             | SecurityOperation::PasskeyVerifyFinish
-            | SecurityOperation::ResetPassword
-            | SecurityOperation::UniversalVerify => Err(SecurityError::Unavailable),
+            | SecurityOperation::ResetPassword => Err(SecurityError::Unavailable),
+            SecurityOperation::UniversalVerify => self.universal_verify(call).await,
             SecurityOperation::Register => self.register(call.input).await,
         }
     }
@@ -1581,7 +1725,89 @@ async fn revoke_other_sessions(state: State<IdentitySecurityState>, request: Req
     )
 }
 async fn universal_verify(state: State<IdentitySecurityState>, request: Request) -> Response {
-    user_json(state, request, SecurityOperation::UniversalVerify).await
+    let locale = LegacyLocale::from_headers(request.headers());
+    let actor = match authenticated_browser_session(&state, request.headers()).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    let client_ip = request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    match state.authorizer.check_critical_rate_limit(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => {}
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => {
+            return with_auth_version(legacy_empty_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                Some(retry_after_seconds),
+            ));
+        }
+        Err(_) => {
+            return with_auth_version(legacy_empty_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
+    }
+    let input = match json_after_auth(request, locale).await {
+        Ok(input) => input,
+        Err(response) => return with_no_store(with_auth_version(*response)),
+    };
+    let method_and_scope = match state
+        .provider
+        .execute(SecurityCall {
+            operation: SecurityOperation::UniversalVerify,
+            actor: Some(actor.clone()),
+            input,
+        })
+        .await
+    {
+        Ok(data) => data,
+        Err(error) => return with_no_store(with_auth_version(error.response(locale))),
+    };
+    let Some(method) = method_and_scope.get("method").and_then(Value::as_str) else {
+        return with_no_store(with_auth_version(
+            SecurityError::Unavailable.response(locale),
+        ));
+    };
+    let Some(scope) = method_and_scope.get("scope").and_then(Value::as_str) else {
+        return with_no_store(with_auth_version(
+            SecurityError::Unavailable.response(locale),
+        ));
+    };
+    let scopes = vec![scope.to_owned()];
+    let proof = match state
+        .authorizer
+        .issue_security_proof(&actor, method, &scopes)
+        .await
+    {
+        Ok(proof) => proof,
+        Err(error) => return with_no_store(with_auth_version(error.response(locale))),
+    };
+    let response = legacy_json_content_type(
+        Json(json!({
+            "success": true,
+            "message": "验证成功",
+            "data": {
+                "proof_token": proof.token,
+                "expires_at": proof.expires_at,
+                "method": method,
+                "scope": scope,
+            },
+        }))
+        .into_response(),
+    );
+    with_no_store(with_auth_version(response))
 }
 
 #[cfg(test)]

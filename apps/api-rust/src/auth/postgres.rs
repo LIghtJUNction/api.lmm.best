@@ -3,7 +3,7 @@ use super::{
     AuthBundle, AuthError, AuthErrorKind, AuthResponseData, CriticalRateLimitOutcome,
     DashboardAuth, DashboardSelfUserFacts, DashboardSessionContext, DashboardUser,
     DashboardUserView, LOGIN_SESSION_TTL_SECONDS, LoginOutcome, LoginRequest, LoginSessionView,
-    LogoutRequest, LogoutResult, REFRESH_REPLAY_WINDOW_SECONDS, RequestMetadata,
+    LogoutRequest, LogoutResult, REFRESH_REPLAY_WINDOW_SECONDS, RequestMetadata, SecurityProof,
     SecuritySessionRotationRequest, TWO_FACTOR_FLOW_TTL_SECONDS, TwoFactorChallenge,
     TwoFactorLoginRequest,
 };
@@ -1222,6 +1222,134 @@ return {0, ttl}
             client_ip: session.ip,
             user_agent: session.user_agent,
         })
+    }
+
+    async fn issue_security_proof(
+        &self,
+        user_id: i64,
+        session_id: &str,
+        method: &str,
+        scopes: &[String],
+    ) -> Result<SecurityProof, AuthError> {
+        if user_id <= 0
+            || session_id.trim().is_empty()
+            || method.trim().is_empty()
+            || scopes.is_empty()
+        {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        let session = self.session_by_sid(session_id).await?;
+        let now = unix_now();
+        if session.user_id != user_id
+            || session.status != ACTIVE
+            || session.revoked_at != 0
+            || session.expires_at <= now
+        {
+            return Err(AuthError::new(AuthErrorKind::SessionRevoked));
+        }
+        let user = self.user_by_id(user_id).await?;
+        if user.status != ENABLED || user.auth_version != session.user_auth_version {
+            return Err(AuthError::new(AuthErrorKind::SessionRevoked));
+        }
+        let identity = AuthIdentity {
+            user_id,
+            session_id: session.sid.clone(),
+            user_auth_version: session.user_auth_version,
+            session_version: session.version,
+        };
+        self.validate_valkey_floor(&session, &identity).await?;
+        let (token, expires_at) = self.codec.issue_security_proof(&identity, method, scopes)?;
+        Ok(SecurityProof { token, expires_at })
+    }
+
+    async fn verify_security_proof(
+        &self,
+        raw: SecretString,
+        user_id: i64,
+        session_id: &str,
+        required_scope: &str,
+        allowed_methods: &[String],
+    ) -> Result<String, AuthError> {
+        if user_id <= 0 || session_id.trim().is_empty() {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        let session = self.session_by_sid(session_id).await?;
+        let now = unix_now();
+        if session.user_id != user_id
+            || session.status != ACTIVE
+            || session.revoked_at != 0
+            || session.expires_at <= now
+        {
+            return Err(AuthError::new(AuthErrorKind::SessionRevoked));
+        }
+        let user = self.user_by_id(user_id).await?;
+        if user.status != ENABLED || user.auth_version != session.user_auth_version {
+            return Err(AuthError::new(AuthErrorKind::SessionRevoked));
+        }
+        let identity = AuthIdentity {
+            user_id,
+            session_id: session.sid.clone(),
+            user_auth_version: session.user_auth_version,
+            session_version: session.version,
+        };
+        self.validate_valkey_floor(&session, &identity).await?;
+        self.codec
+            .verify_security_proof(&raw, &identity, required_scope, allowed_methods)
+    }
+
+    async fn create_assistant_l1_confirmation(
+        &self,
+        user_id: i64,
+        session_id: &str,
+        payload: &str,
+        ttl: Duration,
+    ) -> Result<String, AuthError> {
+        if user_id <= 0 || session_id.trim().is_empty() || ttl.is_zero() {
+            return Err(AuthError::new(AuthErrorKind::Internal));
+        }
+        let mut bytes = [0_u8; 32];
+        rand::rng().fill_bytes(&mut bytes);
+        let token = SecretString::from(URL_SAFE_NO_PAD.encode(bytes));
+        let token_hash = self.codec.hash_auth_flow(&token)?;
+        sqlx::query(
+            "INSERT INTO auth_flows (token_hash, purpose, user_id, session_id, payload, created_at, expires_at) VALUES ($1, 'assistant_l1_recommendation', $2, $3, $4, NOW(), NOW() + make_interval(secs => $5))",
+        )
+        .bind(token_hash)
+        .bind(user_id)
+        .bind(session_id.trim())
+        .bind(payload)
+        .bind(ttl.as_secs() as f64)
+        .execute(&self.pool)
+        .await
+        .map_err(internal)?;
+        Ok(token.expose_secret().to_owned())
+    }
+
+    async fn consume_assistant_l1_confirmation(
+        &self,
+        user_id: i64,
+        session_id: &str,
+        token: SecretString,
+    ) -> Result<String, crate::auth::AssistantL1ConfirmationError> {
+        use crate::auth::AssistantL1ConfirmationError;
+
+        if user_id <= 0 || session_id.trim().is_empty() || token.expose_secret().trim().is_empty() {
+            return Err(AssistantL1ConfirmationError::Invalid);
+        }
+        let token_hash = self
+            .codec
+            .hash_auth_flow(&token)
+            .map_err(|_| AssistantL1ConfirmationError::Internal)?;
+        sqlx::query_scalar::<_, String>(
+            "UPDATE auth_flows SET consumed_at = NOW() WHERE token_hash = $1 AND purpose = 'assistant_l1_recommendation' AND user_id = $2 AND session_id = $3 AND consumed_at IS NULL AND expires_at > NOW() RETURNING payload",
+        )
+        .bind(token_hash)
+        .bind(user_id)
+        .bind(session_id.trim())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| AssistantL1ConfirmationError::Internal)?
+        .ok_or(AssistantL1ConfirmationError::Invalid)
     }
 
     async fn self_user_for_optional(

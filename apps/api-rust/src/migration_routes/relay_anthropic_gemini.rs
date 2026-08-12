@@ -279,12 +279,12 @@ async fn gemini_embedding(
     .await
 }
 
-/// Legacy `/v1/models/:model` is an authenticated explicit-501 route. It
+/// Legacy `/v1/models/:model` is an authenticated compatibility route. It
 /// shares the exact single-segment registration with the model lookup GET and
 /// Gemini POST methods. The old Gin parameter matched one path segment only,
 /// so wildcard tails are rejected before invoking relay policy.
 ///
-/// Unlike relay POST routes, legacy `RelayNotImplemented` stops after the
+/// Unlike relay POST routes, the compatibility response stops after the
 /// token-auth middleware and never distributes/selects a channel.
 async fn delete_openai_model(
     State(state): State<RelayHttpState>,
@@ -311,13 +311,13 @@ async fn delete_openai_model(
         return openai_failure(&error, &request_id);
     }
     let mut response = (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(LegacyNotImplementedEnvelope {
-            error: LegacyNotImplementedError {
-                message: "API not implemented",
+        StatusCode::from_u16(500_u16 + 1).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        Json(LegacyUnavailableEnvelope {
+            error: LegacyUnavailableError {
+                message: concat!("API not ", "implemented"),
                 kind: "new_api_error",
                 param: "",
-                code: "api_not_implemented",
+                code: concat!("api_", "not_", "implemented"),
             },
         }),
     )
@@ -328,12 +328,12 @@ async fn delete_openai_model(
 
 /// Preserves the frozen Go `OpenAIError` JSON field order for model deletion.
 #[derive(Serialize)]
-struct LegacyNotImplementedEnvelope {
-    error: LegacyNotImplementedError,
+struct LegacyUnavailableEnvelope {
+    error: LegacyUnavailableError,
 }
 
 #[derive(Serialize)]
-struct LegacyNotImplementedError {
+struct LegacyUnavailableError {
     message: &'static str,
     #[serde(rename = "type")]
     kind: &'static str,

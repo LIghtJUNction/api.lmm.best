@@ -6,8 +6,12 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -18,6 +22,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use chrono::{SecondsFormat, Utc};
 use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -382,6 +387,538 @@ impl ObservabilityMaintenance for UnavailableObservabilityMaintenance {
     ) -> Result<Value, ObservabilityStoreError> {
         Err(ObservabilityStoreError::Unavailable)
     }
+}
+
+/// PostgreSQL-configured disk-cache maintenance for the one filesystem
+/// operation whose Rust listener can prove the legacy side effects.
+///
+/// Go recomputes this directory from `performance_setting.disk_cache_path` on
+/// every call and appends `new-api-body-cache`; an absent option means the
+/// process temporary directory.  The adapter deliberately only removes
+/// regular files older than ten minutes, never follows directory entries or
+/// symlinks, and treats a missing cache directory as an already-clean state.
+/// The other performance maintenance operations remain unavailable until the
+/// Rust process owns equivalent log/GC/counter services.
+#[derive(Clone)]
+pub struct PgDiskCacheMaintenance {
+    pg: PgPool,
+    stats: Arc<PerformanceStatsState>,
+}
+
+#[derive(Default)]
+struct PerformanceStatsState {
+    disk_cache_hits: AtomicI64,
+    memory_cache_hits: AtomicI64,
+}
+
+impl PgDiskCacheMaintenance {
+    #[must_use]
+    pub fn new(pg: PgPool) -> Self {
+        Self {
+            pg,
+            stats: Arc::new(PerformanceStatsState::default()),
+        }
+    }
+
+    async fn cache_dir(&self) -> Result<PathBuf, ObservabilityStoreError> {
+        let configured = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT value FROM options WHERE key = 'performance_setting.disk_cache_path'",
+        )
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| ObservabilityStoreError::Unavailable)?
+        .flatten()
+        .unwrap_or_default();
+        Ok(disk_cache_dir(&configured))
+    }
+
+    async fn performance_options(
+        &self,
+    ) -> Result<HashMap<String, String>, ObservabilityStoreError> {
+        let rows = sqlx::query(
+            "SELECT key, value FROM options WHERE key LIKE 'performance_setting.%' OR key = 'performance_setting'",
+        )
+        .fetch_all(&self.pg)
+        .await
+        .map_err(|_| ObservabilityStoreError::Unavailable)?;
+        let mut options = HashMap::new();
+        for row in rows {
+            let key = row
+                .try_get::<String, _>("key")
+                .map_err(|_| ObservabilityStoreError::Unavailable)?;
+            let value = row
+                .try_get::<Option<String>, _>("value")
+                .map_err(|_| ObservabilityStoreError::Unavailable)?
+                .unwrap_or_default();
+            if key == "performance_setting" {
+                if let Ok(Value::Object(values)) = serde_json::from_str::<Value>(&value) {
+                    for (name, value) in values {
+                        options.insert(
+                            format!("performance_setting.{name}"),
+                            value_to_string(value),
+                        );
+                    }
+                }
+            } else {
+                options.insert(key, value);
+            }
+        }
+        Ok(options)
+    }
+
+    async fn performance_stats(&self) -> Result<Value, ObservabilityStoreError> {
+        let options = self.performance_options().await?;
+        let configured_path = options
+            .get("performance_setting.disk_cache_path")
+            .map_or("", String::as_str);
+        let cache_dir = disk_cache_dir(configured_path);
+        let cache_info = disk_cache_info(&cache_dir);
+        let disk_space = disk_space_info(cache_dir.parent().unwrap_or(&cache_dir));
+        let cache_config = json!({
+            "disk_cache_enabled": option_bool(&options, "performance_setting.disk_cache_enabled", false),
+            "disk_cache_threshold_mb": option_i64(&options, "performance_setting.disk_cache_threshold_mb", 10),
+            "disk_cache_max_size_mb": option_i64(&options, "performance_setting.disk_cache_max_size_mb", 1024),
+            "disk_cache_path": configured_path.trim(),
+            "is_running_in_container": running_in_container(),
+            "monitor_enabled": option_bool(&options, "performance_setting.monitor_enabled", true),
+            "monitor_cpu_threshold": option_i64(&options, "performance_setting.monitor_cpu_threshold", 90),
+            "monitor_memory_threshold": option_i64(&options, "performance_setting.monitor_memory_threshold", 90),
+            "monitor_disk_threshold": option_i64(&options, "performance_setting.monitor_disk_threshold", 95),
+        });
+        let max_bytes = option_i64(&options, "performance_setting.disk_cache_max_size_mb", 1024)
+            .max(0)
+            .saturating_mul(1024 * 1024);
+        let threshold_bytes =
+            option_i64(&options, "performance_setting.disk_cache_threshold_mb", 10)
+                .max(0)
+                .saturating_mul(1024 * 1024);
+        Ok(json!({
+            "cache_stats": {
+                "active_disk_files": cache_info.file_count,
+                "current_disk_usage_bytes": cache_info.total_size,
+                "active_memory_buffers": 0,
+                "current_memory_usage_bytes": 0,
+                "disk_cache_hits": self.stats.disk_cache_hits.load(Ordering::Relaxed),
+                "memory_cache_hits": self.stats.memory_cache_hits.load(Ordering::Relaxed),
+                "disk_cache_max_bytes": max_bytes,
+                "disk_cache_threshold_bytes": threshold_bytes,
+            },
+            "memory_stats": process_memory_stats(),
+            "disk_cache_info": {
+                "path": cache_dir,
+                "exists": cache_info.exists,
+                "file_count": cache_info.file_count,
+                "total_size": cache_info.total_size,
+            },
+            "disk_space_info": disk_space,
+            "config": cache_config,
+        }))
+    }
+}
+
+#[async_trait]
+impl ObservabilityMaintenance for PgDiskCacheMaintenance {
+    async fn execute(
+        &self,
+        operation: ObservabilityOperation,
+        query: &BTreeMap<String, String>,
+    ) -> Result<Value, ObservabilityStoreError> {
+        match operation {
+            ObservabilityOperation::ClearDiskCache => {
+                let directory = self.cache_dir().await?;
+                cleanup_disk_cache(&directory).map_err(|_| ObservabilityStoreError::Unavailable)?;
+                Ok(Value::Null)
+            }
+            ObservabilityOperation::LogFiles => read_log_files(),
+            ObservabilityOperation::CleanupLogFiles => perform_log_cleanup(query, &self.stats),
+            ObservabilityOperation::ResetPerformanceStats => {
+                self.stats.disk_cache_hits.store(0, Ordering::Relaxed);
+                self.stats.memory_cache_hits.store(0, Ordering::Relaxed);
+                Ok(Value::Null)
+            }
+            ObservabilityOperation::PerformanceStats => self.performance_stats().await,
+            _ => Err(ObservabilityStoreError::Unavailable),
+        }
+    }
+}
+
+const DISK_CACHE_DIRECTORY: &str = "new-api-body-cache";
+
+fn disk_cache_dir(configured: &str) -> PathBuf {
+    let configured = configured.trim();
+    let configured = configured
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(configured)
+        .trim();
+    let base = if configured.is_empty() {
+        std::env::temp_dir()
+    } else {
+        PathBuf::from(configured)
+    };
+    base.join(DISK_CACHE_DIRECTORY)
+}
+
+fn value_to_string(value: Value) -> String {
+    match value {
+        Value::String(value) => value,
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => String::new(),
+        value => value.to_string(),
+    }
+}
+
+fn option_bool(options: &HashMap<String, String>, key: &str, default: bool) -> bool {
+    options
+        .get(key)
+        .and_then(|value| match value.trim() {
+            "1" | "true" | "TRUE" | "True" | "t" | "T" => Some(true),
+            "0" | "false" | "FALSE" | "False" | "f" | "F" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn option_i64(options: &HashMap<String, String>, key: &str, default: i64) -> i64 {
+    options
+        .get(key)
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .unwrap_or(default)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct DiskCacheInfoSnapshot {
+    exists: bool,
+    file_count: i64,
+    total_size: i64,
+}
+
+fn disk_cache_info(directory: &Path) -> DiskCacheInfoSnapshot {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return DiskCacheInfoSnapshot::default();
+    };
+    let mut info = DiskCacheInfoSnapshot {
+        exists: true,
+        ..DiskCacheInfoSnapshot::default()
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        info.file_count = info.file_count.saturating_add(1);
+        if let Ok(size) = entry.metadata().map(|metadata| metadata.len()) {
+            info.total_size = info
+                .total_size
+                .saturating_add(i64::try_from(size).unwrap_or(i64::MAX));
+        }
+    }
+    info
+}
+
+fn disk_space_info(path: &Path) -> Value {
+    #[cfg(unix)]
+    {
+        if let Ok(stat) = rustix::fs::statvfs(path) {
+            let total = stat.f_blocks.saturating_mul(stat.f_bsize);
+            let free = stat.f_bavail.saturating_mul(stat.f_bsize);
+            let used = total.saturating_sub(stat.f_bfree.saturating_mul(stat.f_bsize));
+            let used_percent = if total == 0 {
+                0.0
+            } else {
+                used as f64 / total as f64 * 100.0
+            };
+            return json!({
+                "total": total,
+                "free": free,
+                "used": used,
+                "used_percent": used_percent,
+            });
+        }
+    }
+    json!({"total": 0, "free": 0, "used": 0, "used_percent": 0.0})
+}
+
+fn process_memory_stats() -> Value {
+    #[cfg(target_os = "linux")]
+    {
+        let resident = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|raw| {
+                raw.lines()
+                    .find(|line| line.starts_with("VmRSS:"))
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .map(|kilobytes| kilobytes.saturating_mul(1024))
+            })
+            .unwrap_or_default();
+        let goroutines = std::fs::read_dir("/proc/self/task")
+            .map(|entries| entries.filter_map(Result::ok).count())
+            .unwrap_or_default();
+        json!({
+            "alloc": resident,
+            "total_alloc": resident,
+            "sys": resident,
+            "num_gc": 0,
+            "num_goroutine": goroutines,
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        json!({
+            "alloc": 0,
+            "total_alloc": 0,
+            "sys": 0,
+            "num_gc": 0,
+            "num_goroutine": 0,
+        })
+    }
+}
+
+fn running_in_container() -> bool {
+    if Path::new("/.dockerenv").exists() {
+        return true;
+    }
+    std::fs::read_to_string("/proc/1/cgroup")
+        .map(|value| {
+            value.contains("docker") || value.contains("kubepods") || value.contains("containerd")
+        })
+        .unwrap_or(false)
+}
+
+fn cleanup_disk_cache(directory: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(_) => continue,
+        };
+        if now.duration_since(modified).unwrap_or_default() > Duration::from_secs(10 * 60) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    Ok(())
+}
+
+fn configured_log_directory() -> Option<PathBuf> {
+    let configured = std::env::var_os("LMM_LOG_DIR")
+        .or_else(|| std::env::var_os("LOG_DIR"))
+        .or_else(|| {
+            let mut args = std::env::args_os().skip(1);
+            while let Some(argument) = args.next() {
+                if argument == "--log-dir" {
+                    return args.next();
+                }
+                if let Some(value) = argument
+                    .to_str()
+                    .and_then(|value| value.strip_prefix("--log-dir="))
+                {
+                    return Some(value.into());
+                }
+            }
+            None
+        })?;
+    let configured = configured.to_string_lossy();
+    if configured.trim().is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(configured.trim());
+    Some(if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    })
+}
+
+fn system_time_rfc3339(value: SystemTime) -> Option<String> {
+    let duration = value.duration_since(UNIX_EPOCH).ok()?;
+    Some(
+        chrono::DateTime::<Utc>::from_timestamp(
+            i64::try_from(duration.as_secs()).ok()?,
+            duration.subsec_nanos(),
+        )?
+        .to_rfc3339_opts(SecondsFormat::AutoSi, true),
+    )
+}
+
+fn read_log_files() -> Result<Value, ObservabilityStoreError> {
+    let Some(directory) = configured_log_directory() else {
+        return Ok(json!({"enabled": false}));
+    };
+    let entries =
+        std::fs::read_dir(&directory).map_err(|_| ObservabilityStoreError::Unavailable)?;
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("oneapi-") || !name.ends_with(".log") {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        let Some(mod_time) = system_time_rfc3339(metadata.modified().unwrap_or(UNIX_EPOCH)) else {
+            continue;
+        };
+        files.push(json!({
+            "name": name,
+            "size": metadata.len(),
+            "mod_time": mod_time,
+        }));
+    }
+    files.sort_by(|left, right| {
+        right["name"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(left["name"].as_str().unwrap_or_default())
+    });
+    let total_size = files
+        .iter()
+        .filter_map(|file| file["size"].as_u64())
+        .sum::<u64>();
+    let oldest_time = files
+        .iter()
+        .filter_map(|file| file["mod_time"].as_str())
+        .min()
+        .map(str::to_owned);
+    let newest_time = files
+        .iter()
+        .filter_map(|file| file["mod_time"].as_str())
+        .max()
+        .map(str::to_owned);
+    let mut response = json!({
+        "log_dir": directory,
+        "enabled": true,
+        "file_count": files.len(),
+        "total_size": total_size,
+        "files": files,
+    });
+    if let Some(oldest_time) = oldest_time {
+        response["oldest_time"] = Value::String(oldest_time);
+    }
+    if let Some(newest_time) = newest_time {
+        response["newest_time"] = Value::String(newest_time);
+    }
+    Ok(response)
+}
+
+#[derive(Clone, Debug)]
+struct LogFileEntry {
+    name: String,
+    size: u64,
+    modified: SystemTime,
+}
+
+fn configured_log_entries() -> Result<(PathBuf, Vec<LogFileEntry>), ObservabilityStoreError> {
+    let directory = configured_log_directory().ok_or_else(|| {
+        ObservabilityStoreError::Legacy("log directory not configured".to_owned())
+    })?;
+    let entries =
+        std::fs::read_dir(&directory).map_err(|_| ObservabilityStoreError::Unavailable)?;
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("oneapi-") || !name.ends_with(".log") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        files.push(LogFileEntry {
+            name,
+            size: metadata.len(),
+            modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+        });
+    }
+    files.sort_by(|left, right| right.name.cmp(&left.name));
+    Ok((directory, files))
+}
+
+fn perform_log_cleanup(
+    query: &BTreeMap<String, String>,
+    _: &PerformanceStatsState,
+) -> Result<Value, ObservabilityStoreError> {
+    let mode = query.get("mode").map_or("", String::as_str);
+    let value = query
+        .get("value")
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            ObservabilityStoreError::Legacy("invalid value, must be a positive integer".to_owned())
+        })?;
+    if mode != "by_count" && mode != "by_days" {
+        return Err(ObservabilityStoreError::Legacy(
+            "invalid mode, must be by_count or by_days".to_owned(),
+        ));
+    }
+    let (directory, files) = configured_log_entries()?;
+    let active_path = std::env::var_os("LMM_ACTIVE_LOG_PATH").map(PathBuf::from);
+    let cutoff = SystemTime::now().checked_sub(Duration::from_secs(
+        value.saturating_mul(24 * 60 * 60) as u64,
+    ));
+    let mut to_delete = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        let should_delete = match mode {
+            "by_count" => i64::try_from(index).unwrap_or(i64::MAX) >= value,
+            "by_days" => cutoff.is_some_and(|cutoff| file.modified < cutoff),
+            _ => false,
+        };
+        if !should_delete {
+            continue;
+        }
+        let path = directory.join(&file.name);
+        if active_path.as_ref().is_some_and(|active| *active == path) {
+            continue;
+        }
+        to_delete.push((path, file));
+    }
+
+    let mut deleted_count = 0_i64;
+    let mut freed_bytes = 0_i64;
+    let mut failed_files = Vec::new();
+    for (path, file) in to_delete {
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                deleted_count = deleted_count.saturating_add(1);
+                freed_bytes =
+                    freed_bytes.saturating_add(i64::try_from(file.size).unwrap_or(i64::MAX));
+            }
+            Err(_) => failed_files.push(file.name.clone()),
+        }
+    }
+    Ok(json!({
+        "deleted_count": deleted_count,
+        "freed_bytes": freed_bytes,
+        "failed_files": failed_files,
+    }))
 }
 
 /// PostgreSQL implementation for the dashboard and usage-audit records.
@@ -1628,6 +2165,23 @@ impl ObservabilityState {
     ) -> Self {
         Self { store, authorizer }
     }
+
+    /// Retained as a source-compatible composition hook for callers that used
+    /// the early candidate API. The frozen Go router applies its route-local
+    /// UserAuth/AdminAuth/RootAuth tiers to observability paths; a blanket
+    /// console gate would incorrectly turn `/api/data/self` and `/api/log/self`
+    /// into 404s before those handlers can return their auth envelopes.
+    #[must_use]
+    pub fn with_console_access_gate(self, _auth: Arc<dyn DashboardAuth>) -> Self {
+        self
+    }
+}
+
+fn mount_observability_routes(
+    routes: Router<ObservabilityState>,
+    state: ObservabilityState,
+) -> Router {
+    routes.with_state(state)
 }
 
 fn observability_read_routes() -> Router<ObservabilityState> {
@@ -1656,7 +2210,7 @@ fn observability_read_routes() -> Router<ObservabilityState> {
 /// the concrete Valkey affinity-cache read. Performance metrics and all
 /// process/filesystem maintenance routes remain outside this surface.
 pub fn observability_read_router(state: ObservabilityState) -> Router {
-    observability_read_routes().with_state(state)
+    mount_observability_routes(observability_read_routes(), state)
 }
 
 /// Builds the production-owned PostgreSQL performance metric reads.
@@ -1665,7 +2219,7 @@ pub fn observability_read_router(state: ObservabilityState) -> Router {
 /// it cannot be treated as owned until Rust has an application-level service
 /// with the same disk, log, and runtime-stat semantics as Go.
 pub fn observability_metrics_router(state: ObservabilityState) -> Router {
-    observability_metrics_routes().with_state(state)
+    mount_observability_routes(observability_metrics_routes(), state)
 }
 
 fn observability_metrics_routes() -> Router<ObservabilityState> {
@@ -1674,25 +2228,53 @@ fn observability_metrics_routes() -> Router<ObservabilityState> {
         .route("/api/perf-metrics/summary", get(perf_metrics_summary))
 }
 
+/// Builds the production-mounted filesystem maintenance read/write routes
+/// whose behavior is implemented by [`PgDiskCacheMaintenance`].
+///
+/// Keeping this separate from [`observability_router`] prevents the still
+/// unavailable GC/log/counter operations from being exposed by accident.
+pub fn observability_disk_cache_router(state: ObservabilityState) -> Router {
+    mount_observability_routes(
+        Router::new()
+            .route("/api/performance/disk_cache", delete(clear_disk_cache))
+            .route("/api/performance/logs", get(log_files)),
+        state,
+    )
+}
+
+/// Builds the root-only performance routes backed by the Rust process and
+/// PostgreSQL configuration. The force-GC operation stays on the candidate
+/// router because Rust has no Go-style runtime GC contract to invoke.
+pub fn observability_performance_router(state: ObservabilityState) -> Router {
+    mount_observability_routes(
+        Router::new()
+            .route("/api/performance/stats", get(performance_stats))
+            .route(
+                "/api/performance/reset_stats",
+                post(reset_performance_stats),
+            )
+            .route("/api/performance/logs", delete(cleanup_log_files)),
+        state,
+    )
+}
+
+fn observability_force_gc_router(state: ObservabilityState) -> Router {
+    mount_observability_routes(
+        Router::new().route("/api/performance/gc", post(force_gc)),
+        state,
+    )
+}
+
 /// Builds the full observability and maintenance candidate router.
 ///
 /// `/api/system-info` and `/api/system-task` are intentionally absent: their
 /// PostgreSQL-backed ownership is already established in `control_admin`.
 pub fn observability_router(state: ObservabilityState) -> Router {
-    observability_read_routes()
-        .merge(observability_metrics_routes())
-        .route("/api/performance/disk_cache", delete(clear_disk_cache))
-        .route("/api/performance/gc", post(force_gc))
-        .route(
-            "/api/performance/logs",
-            get(log_files).delete(cleanup_log_files),
-        )
-        .route(
-            "/api/performance/reset_stats",
-            post(reset_performance_stats),
-        )
-        .route("/api/performance/stats", get(performance_stats))
-        .with_state(state)
+    observability_read_router(state.clone())
+        .merge(observability_metrics_router(state.clone()))
+        .merge(observability_disk_cache_router(state.clone()))
+        .merge(observability_performance_router(state.clone()))
+        .merge(observability_force_gc_router(state))
 }
 
 #[derive(Serialize)]
@@ -1732,6 +2314,18 @@ fn failure(status: StatusCode, message: impl Into<String>) -> Response {
             success: false,
             message: message.into(),
             data: None,
+        }),
+    )
+        .into_response()
+}
+
+fn failure_data(status: StatusCode, message: impl Into<String>, data: Value) -> Response {
+    (
+        status,
+        Json(LegacyEnvelope {
+            success: false,
+            message: message.into(),
+            data: Some(data),
         }),
     )
         .into_response()
@@ -1822,6 +2416,28 @@ async fn execute_authorized(
         })
         .await
     {
+        Ok(data)
+            if operation == ObservabilityOperation::CleanupLogFiles
+                && data
+                    .get("failed_files")
+                    .and_then(Value::as_array)
+                    .is_some_and(|files| !files.is_empty()) =>
+        {
+            let failed = data
+                .get("failed_files")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            let deleted = data
+                .get("deleted_count")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let attempted = deleted.saturating_add(i64::try_from(failed).unwrap_or(i64::MAX));
+            failure_data(
+                StatusCode::OK,
+                format!("部分文件删除失败（{failed}/{attempted}）"),
+                data,
+            )
+        }
         Ok(data) => success(data),
         Err(ObservabilityStoreError::Legacy(message)) => failure(StatusCode::OK, message),
         Err(error) => failure(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -2629,6 +3245,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observability_routes_keep_their_go_auth_boundaries_without_a_blanket_gate() {
+        let store = Arc::new(CountingStore(AtomicUsize::new(0)));
+        let auth: Arc<dyn DashboardAuth> = Arc::new(StaticDashboardAuth { user: user(1) });
+        let authorizer =
+            DashboardObservabilityAuthorizer::new(Arc::clone(&auth), Arc::new(StaticTokenAuth));
+        let router = observability_router(
+            ObservabilityState::new(store.clone(), Arc::new(authorizer))
+                .with_console_access_gate(auth),
+        );
+
+        let user_read = router
+            .clone()
+            .oneshot(Request::get("/api/data/self").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(user_read.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.0.load(Ordering::Relaxed), 0);
+
+        let public_metric = router
+            .oneshot(
+                Request::get("/api/perf-metrics/summary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(public_metric.status(), StatusCode::OK);
+        assert_eq!(store.0.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
     async fn token_logs_without_timestamps_keep_the_legacy_unbounded_query() {
         let store = Arc::new(QueryCapturingStore::default());
         let authorizer = DashboardObservabilityAuthorizer::new(
@@ -2732,6 +3379,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, ObservabilityStoreError::Unavailable));
+    }
+
+    #[test]
+    fn disk_cache_directory_matches_go_option_and_default() {
+        assert_eq!(
+            disk_cache_dir(""),
+            std::env::temp_dir().join("new-api-body-cache")
+        );
+        assert_eq!(
+            disk_cache_dir("/var/tmp"),
+            PathBuf::from("/var/tmp/new-api-body-cache")
+        );
+        assert_eq!(
+            disk_cache_dir("\"/var/tmp\""),
+            PathBuf::from("/var/tmp/new-api-body-cache")
+        );
+    }
+
+    #[test]
+    fn disk_cache_cleanup_treats_missing_directory_as_success() {
+        let missing = std::env::temp_dir().join(format!(
+            "lmm-observability-missing-cache-{}",
+            std::process::id()
+        ));
+        assert!(cleanup_disk_cache(&missing).is_ok());
     }
 
     #[test]

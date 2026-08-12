@@ -17,7 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
-import type { ContentSettings, SystemOption } from '../types'
+import {
+  normalizeAssistantSearchProvider,
+  type ContentSettings,
+  type SystemOption,
+} from '../types'
 import {
   CONTENT_DEFAULT_SECTION,
   getContentSectionContent,
@@ -46,8 +50,10 @@ const defaultContentSettings: ContentSettings = {
   AssistantCacheTTLMinutes: 1440,
   AssistantPersona: '',
   AssistantSystemPrompt: '',
+  AssistantSearchProvider: 'none',
   AssistantSearchURL: '',
   AssistantSearchAPIKey: '',
+  AssistantSearchMCPTool: '',
   AssistantSkills: '',
   DrawingEnabled: false,
   MjNotifyEnabled: false,
@@ -65,6 +71,11 @@ function resolveContentSettings(
 
   const optionMap = new Map(raw.map((item) => [item.key, item.value]))
   const next = { ...settings }
+
+  next.AssistantSearchProvider = normalizeAssistantSearchProvider(
+    optionMap.get('AssistantSearchProvider'),
+    next.AssistantSearchURL
+  )
 
   const legacyMap = [
     { current: 'console_setting.announcements', legacy: 'Announcements' },

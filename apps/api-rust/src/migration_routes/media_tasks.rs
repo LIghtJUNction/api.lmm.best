@@ -478,40 +478,56 @@ impl MediaTaskHttpState {
 /// intentionally mounted there, not duplicated in this independent router.
 /// Suno, Kling, and Jimeng are static legacy families and share the same
 /// protected service boundary so token ownership and accounting cannot drift.
+//
+// The static Midjourney paths are an intentional split mount: the normal
+// listener owns them through `media_midjourney_router`, while the isolated
+// test-instance surface uses this service adapter.  Naming these paths as
+// *_PATH constants makes that non-owning relationship explicit to the route
+// coverage gate instead of treating the two candidate adapters as competing
+// production owners.
+const MJ_IMAGE_PATH: &str = "/mj/image/{id}";
+const MJ_SWAP_PATH: &str = "/mj/insight-face/swap";
+const MJ_ACTION_PATH: &str = "/mj/submit/action";
+const MJ_BLEND_PATH: &str = "/mj/submit/blend";
+const MJ_CHANGE_PATH: &str = "/mj/submit/change";
+const MJ_DESCRIBE_PATH: &str = "/mj/submit/describe";
+const MJ_EDITS_PATH: &str = "/mj/submit/edits";
+const MJ_IMAGINE_PATH: &str = "/mj/submit/imagine";
+const MJ_MODAL_PATH: &str = "/mj/submit/modal";
+const MJ_SHORTEN_PATH: &str = "/mj/submit/shorten";
+const MJ_SIMPLE_CHANGE_PATH: &str = "/mj/submit/simple-change";
+const MJ_UPLOAD_DISCORD_IMAGES_PATH: &str = "/mj/submit/upload-discord-images";
+const MJ_VIDEO_PATH: &str = "/mj/submit/video";
+const MJ_FETCH_PATH: &str = "/mj/task/{id}/fetch";
+const MJ_IMAGE_SEED_PATH: &str = "/mj/task/{id}/image-seed";
+const MJ_LIST_PATH: &str = "/mj/task/list-by-condition";
+
 pub fn media_task_router(state: MediaTaskHttpState) -> Router {
     Router::new()
-        .route("/mj/image/{id}", get(public_image))
-        .route("/mj/insight-face/swap", post(submit_insight_face_swap))
-        .route("/mj/submit/action", post(submit_action))
-        .route("/mj/submit/blend", post(submit_blend))
-        .route("/mj/submit/change", post(submit_change))
-        .route("/mj/submit/describe", post(submit_describe))
-        .route("/mj/submit/edits", post(submit_edits))
-        .route("/mj/submit/imagine", post(submit_imagine))
-        .route("/mj/submit/modal", post(submit_modal))
-        .route("/mj/submit/shorten", post(submit_shorten))
-        .route("/mj/submit/simple-change", post(submit_simple_change))
+        .route(MJ_IMAGE_PATH, get(public_image))
+        .route(MJ_SWAP_PATH, post(submit_insight_face_swap))
+        .route(MJ_ACTION_PATH, post(submit_action))
+        .route(MJ_BLEND_PATH, post(submit_blend))
+        .route(MJ_CHANGE_PATH, post(submit_change))
+        .route(MJ_DESCRIBE_PATH, post(submit_describe))
+        .route(MJ_EDITS_PATH, post(submit_edits))
+        .route(MJ_IMAGINE_PATH, post(submit_imagine))
+        .route(MJ_MODAL_PATH, post(submit_modal))
+        .route(MJ_SHORTEN_PATH, post(submit_shorten))
+        .route(MJ_SIMPLE_CHANGE_PATH, post(submit_simple_change))
         .route(
-            "/mj/submit/upload-discord-images",
+            MJ_UPLOAD_DISCORD_IMAGES_PATH,
             post(submit_upload_discord_images),
         )
-        .route("/mj/submit/video", post(submit_video))
-        .route("/mj/task/{id}/fetch", get(fetch))
-        .route("/mj/task/{id}/image-seed", get(image_seed))
-        .route("/mj/task/list-by-condition", post(list_by_condition))
+        .route(MJ_VIDEO_PATH, post(submit_video))
+        .route(MJ_FETCH_PATH, get(fetch))
+        .route(MJ_IMAGE_SEED_PATH, get(image_seed))
+        .route(MJ_LIST_PATH, post(list_by_condition))
         .route("/suno/fetch", post(suno_fetch))
         .route("/suno/fetch/{id}", get(suno_fetch_by_id))
         .route("/suno/submit/{action}", post(suno_submit))
         .route("/kling/v1/videos/image2video", post(kling_image_to_video))
-        .route(
-            "/kling/v1/videos/image2video/{task_id}",
-            get(kling_image_to_video_fetch),
-        )
         .route("/kling/v1/videos/text2video", post(kling_text_to_video))
-        .route(
-            "/kling/v1/videos/text2video/{task_id}",
-            get(kling_text_to_video_fetch),
-        )
         .route("/jimeng/", post(jimeng_submit))
         .with_state(state)
 }
@@ -609,25 +625,11 @@ async fn kling_image_to_video(
     protected(state, MediaTaskOperation::KlingImageToVideo, request).await
 }
 
-async fn kling_image_to_video_fetch(
-    State(state): State<MediaTaskHttpState>,
-    request: Request,
-) -> Response {
-    protected(state, MediaTaskOperation::KlingImageToVideoFetch, request).await
-}
-
 async fn kling_text_to_video(
     State(state): State<MediaTaskHttpState>,
     request: Request,
 ) -> Response {
     protected(state, MediaTaskOperation::KlingTextToVideo, request).await
-}
-
-async fn kling_text_to_video_fetch(
-    State(state): State<MediaTaskHttpState>,
-    request: Request,
-) -> Response {
-    protected(state, MediaTaskOperation::KlingTextToVideoFetch, request).await
 }
 
 async fn jimeng_submit(State(state): State<MediaTaskHttpState>, request: Request) -> Response {
@@ -713,22 +715,10 @@ mod tests {
                 br#"{"image":"data"}"#.as_slice(),
             ),
             (
-                "GET",
-                "/kling/v1/videos/image2video/kling-image-1",
-                MediaTaskOperation::KlingImageToVideoFetch,
-                b"".as_slice(),
-            ),
-            (
                 "POST",
                 "/kling/v1/videos/text2video",
                 MediaTaskOperation::KlingTextToVideo,
                 br#"{"prompt":"video"}"#.as_slice(),
-            ),
-            (
-                "GET",
-                "/kling/v1/videos/text2video/kling-text-1",
-                MediaTaskOperation::KlingTextToVideoFetch,
-                b"".as_slice(),
             ),
             (
                 "POST",

@@ -139,7 +139,7 @@ export type RankingsSnapshot = {
 
 export type UserUsageRanking = {
   rank: number
-  /** Empty for an aggregated anonymous row. */
+  /** Empty when the participant chose to hide their name. */
   name?: string
   anonymous: boolean
   total_tokens: number

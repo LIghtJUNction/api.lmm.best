@@ -73,7 +73,7 @@ func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
 	assert.Equal(t, int64(7), result.TotalRequests)
 	assert.Equal(t, 3, result.ParticipantCount)
 	assert.Equal(t, 2, result.AnonymousParticipantCount)
-	require.Len(t, result.Users, 2)
+	require.Len(t, result.Users, 3)
 
 	assert.Equal(t, 1, result.Users[0].Rank)
 	assert.Equal(t, "Public user", result.Users[0].Name)
@@ -85,7 +85,14 @@ func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
 	assert.Equal(t, 2, result.Users[1].Rank)
 	assert.Empty(t, result.Users[1].Name)
 	assert.True(t, result.Users[1].Anonymous)
-	assert.Equal(t, int64(150), result.Users[1].TotalTokens)
-	assert.Equal(t, int64(3), result.Users[1].Requests)
-	assert.InDelta(t, 1.0/3.0, result.Users[1].Share, 0.0001)
+	assert.Equal(t, int64(100), result.Users[1].TotalTokens)
+	assert.Equal(t, int64(2), result.Users[1].Requests)
+	assert.InDelta(t, 2.0/9.0, result.Users[1].Share, 0.0001)
+
+	assert.Equal(t, 3, result.Users[2].Rank)
+	assert.Empty(t, result.Users[2].Name)
+	assert.True(t, result.Users[2].Anonymous)
+	assert.Equal(t, int64(50), result.Users[2].TotalTokens)
+	assert.Equal(t, int64(1), result.Users[2].Requests)
+	assert.InDelta(t, 1.0/9.0, result.Users[2].Share, 0.0001)
 }

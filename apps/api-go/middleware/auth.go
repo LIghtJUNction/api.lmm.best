@@ -335,6 +335,8 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodGet
 	case "/api/user/developer-access/request":
 		return method == http.MethodGet || method == http.MethodPost
+	case "/api/user/account-action-requests", "/api/user/account-action-requests/appeal":
+		return method == http.MethodGet || method == http.MethodPost
 	case "/api/release-notes/latest":
 		return method == http.MethodGet
 	case "/api/user/sessions/revoke-others", "/api/user/passkey/register/begin", "/api/user/passkey/register/finish", "/api/user/passkey/verify/begin", "/api/user/passkey/verify/finish", "/api/user/2fa/setup", "/api/user/2fa/enable", "/api/user/2fa/disable", "/api/user/2fa/backup_codes":

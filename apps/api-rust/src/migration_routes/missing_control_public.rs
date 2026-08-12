@@ -422,6 +422,7 @@ pub struct MissingControlPublicState {
     store: Arc<dyn MissingControlStore>,
     authorizer: Arc<dyn MissingControlAuthorizer>,
     limiter: Arc<dyn MissingControlRateLimiter>,
+    console_access_auth: Option<Arc<dyn DashboardAuth>>,
     last_good: Arc<RwLock<MissingControlLastGood>>,
 }
 
@@ -435,6 +436,7 @@ impl MissingControlPublicState {
             store,
             authorizer,
             limiter: Arc::new(AllowMissingControlRateLimiter),
+            console_access_auth: None,
             last_good: Arc::new(RwLock::new(MissingControlLastGood::default())),
         }
     }
@@ -445,6 +447,15 @@ impl MissingControlPublicState {
         limiter: Arc<dyn MissingControlRateLimiter>,
     ) -> Self {
         self.limiter = limiter;
+        self
+    }
+
+    /// Enables the API-wide Go ConsoleAccessGate for the normal listener.
+    /// Candidate/module tests leave it disabled so they can exercise the
+    /// route-local optional-auth behavior without a second boundary.
+    #[must_use]
+    pub fn with_console_access_gate(mut self, auth: Arc<dyn DashboardAuth>) -> Self {
+        self.console_access_auth = Some(auth);
         self
     }
 
@@ -578,7 +589,7 @@ pub fn ratio_config_router(state: RatioConfigState) -> Router {
 
 /// Mount point used by the migration root.
 pub fn missing_control_public_router(state: MissingControlPublicState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/api/assistant/pricing", get(assistant_pricing))
         .route("/api/group/", get(groups))
         .route("/api/models", get(models))
@@ -595,7 +606,65 @@ pub fn missing_control_public_router(state: MissingControlPublicState) -> Router
             "/api/usage/token/",
             get(token_usage_get).fallback(token_usage_method_fallback),
         )
-        .with_state(state)
+        .with_state(state.clone());
+    if state.console_access_auth.is_some() {
+        router.layer(middleware::from_fn_with_state(
+            state,
+            console_access_boundary,
+        ))
+    } else {
+        router
+    }
+}
+
+async fn console_access_boundary(
+    State(state): State<MissingControlPublicState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !console_discovery_route(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let Some(auth) = state.console_access_auth.as_ref() else {
+        return next.run(request).await;
+    };
+    let Some(token) = dashboard_credential(request.headers()) else {
+        return console_not_found();
+    };
+    let user = match auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+    {
+        Ok(user) => user,
+        Err(_) => return console_not_found(),
+    };
+    if !user.developer_access_granted {
+        return console_not_found();
+    }
+    next.run(request).await
+}
+
+fn console_discovery_route(path: &str) -> bool {
+    [
+        "/api/assistant/pricing",
+        "/api/group",
+        "/api/models",
+        "/api/pricing",
+        "/api/rankings",
+        "/api/ratio_config",
+        "/api/usage",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
+}
+
+fn console_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response()
 }
 
 async fn assistant_pricing(

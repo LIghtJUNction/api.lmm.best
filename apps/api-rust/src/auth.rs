@@ -32,6 +32,12 @@ pub enum CriticalRateLimitOutcome {
     Rejected { retry_after_seconds: u64 },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssistantL1ConfirmationError {
+    Invalid,
+    Internal,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct LoginRequest {
     pub username: String,
@@ -107,6 +113,15 @@ pub struct DashboardSessionContext {
     pub session_id: String,
     pub client_ip: String,
     pub user_agent: String,
+}
+
+/// Short-lived proof issued after a purpose-scoped sensitive verification.
+/// The token is bound to the current dashboard session by the auth adapter;
+/// callers must not construct or persist it themselves.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecurityProof {
+    pub token: String,
+    pub expires_at: i64,
 }
 
 const TRUST_LEVEL_THRESHOLDS: [f64; 5] = [0.0, 0.0, 100.0, 500.0, 2_000.0];
@@ -807,6 +822,57 @@ pub trait DashboardAuth: Send + Sync {
         _access_token: SecretString,
     ) -> Result<DashboardSessionContext, AuthError> {
         Err(AuthError::new(AuthErrorKind::Unauthorized))
+    }
+
+    /// Issues a Go-compatible security proof for an already authenticated
+    /// browser session. Implementations must revalidate the durable session
+    /// and user auth version before signing; adapters without that authority
+    /// fail closed.
+    async fn issue_security_proof(
+        &self,
+        _user_id: i64,
+        _session_id: &str,
+        _method: &str,
+        _scopes: &[String],
+    ) -> Result<SecurityProof, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Internal))
+    }
+
+    /// Validates a security proof against the current durable browser session.
+    /// Implementations without the shared session authority fail closed.
+    async fn verify_security_proof(
+        &self,
+        _raw: SecretString,
+        _user_id: i64,
+        _session_id: &str,
+        _required_scope: &str,
+        _allowed_methods: &[String],
+    ) -> Result<String, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Internal))
+    }
+
+    /// Creates the short-lived, session-bound confirmation used by the
+    /// assistant's L1 recommendation UI. Adapters without the durable auth
+    /// flow authority fail closed.
+    async fn create_assistant_l1_confirmation(
+        &self,
+        _user_id: i64,
+        _session_id: &str,
+        _payload: &str,
+        _ttl: std::time::Duration,
+    ) -> Result<String, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Internal))
+    }
+
+    /// Atomically consumes a session-bound assistant L1 confirmation and
+    /// returns its server-owned draft payload.
+    async fn consume_assistant_l1_confirmation(
+        &self,
+        _user_id: i64,
+        _session_id: &str,
+        _token: SecretString,
+    ) -> Result<String, AssistantL1ConfirmationError> {
+        Err(AssistantL1ConfirmationError::Internal)
     }
 
     /// Resolves a dashboard credential before the route-specific `UserAuth`

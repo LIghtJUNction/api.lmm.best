@@ -10,12 +10,19 @@ use http::{ApiTokenMount, AppState, RuntimeState};
 use lmm_api_rs::{
     auth::{AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth},
     migration_routes::{
+        access_ip::{AccessIpState, router as access_ip_router},
         admin_catalog::{
             AdminCatalogState, DashboardAdminCatalogAuthorizer, PgCatalogProvider,
             router as admin_catalog_router,
         },
         api_token::{ApiTokenHttpState, PgValkeyApiTokenService},
         assistant::{AssistantRateLimitConfig, AssistantReadState, assistant_read_router},
+        billing_payments::{
+            DashboardBillingAuthorizer, PgBillingPaymentAccess, PgBillingRepository,
+            PgPaymentCompliance, SubscriptionBalancePayState, SubscriptionFastPayNotifyState,
+            ValkeyBillingCache, subscription_balance_pay_router,
+            subscription_fastpay_notify_router,
+        },
         billing_subscriptions::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
             spawn_maintenance as spawn_subscription_maintenance,
@@ -39,15 +46,24 @@ use lmm_api_rs::{
             DeploymentJobRunner, DeploymentState, DisabledDeploymentJobRunner,
             IoNetDeploymentJobRunner, PgValkeyDeploymentProvider, router as deployment_router,
         },
+        developer_access::{DeveloperAccessState, router as developer_access_router},
+        finance_export::{FinanceExportState, router as finance_export_router},
+        gifts::{GiftState, router as gift_router},
         identity_2fa::{Identity2FAState, router as identity_2fa_router},
         identity_admin::{IdentityAdminState, router as identity_admin_router},
         identity_federation::{
-            DashboardFederationIdentity, DisabledEmailCodeVerifier, FederationState,
+            DashboardFederationIdentity, FederationState, ValkeyEmailCodeVerifier,
+            ValkeyFederationMutationPublisher,
             bindings_router as identity_federation_bindings_router,
+            oauth_email_bind_router as identity_federation_oauth_email_bind_router,
+            oauth_state_router as identity_federation_oauth_state_router,
         },
         identity_profile::{ProfileState, router as identity_profile_router},
         identity_security::{
             DashboardSecurityAuthorizer, IdentitySecurityState, PgValkeySecurityProvider,
+        },
+        kling_task_reads::{
+            KlingTaskReadState, PgKlingTaskReadService, router as kling_task_read_router,
         },
         media_midjourney::{
             MidjourneyHttpState, PgMidjourneyDispatchBackend, media_midjourney_router,
@@ -76,8 +92,10 @@ use lmm_api_rs::{
         missing_relay_models_billing::{ModelLookupState, PgStaticModelLookup},
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityAuthorizer, ObservabilityState,
-            PgObservabilityStore, PgReadOnlyObservabilityTokenAuthorizer,
-            PostgresObservabilityMetrics, ValkeyObservabilityMetrics, observability_metrics_router,
+            PgDiskCacheMaintenance, PgObservabilityStore, PgReadOnlyObservabilityTokenAuthorizer,
+            PostgresObservabilityMetrics, UnavailableObservabilityMetrics,
+            ValkeyObservabilityMetrics, observability_disk_cache_router,
+            observability_metrics_router, observability_performance_router,
             observability_read_router,
         },
         open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
@@ -95,9 +113,16 @@ use lmm_api_rs::{
         relay_openai::{
             OpenAiRelayHttpState, OpenAiUpstreamClient, PgOpenAiRelayService, openai_relay_router,
         },
+        release_notes::{ReleaseNoteState, router as release_note_router},
+        security_overview::{SecurityOverviewState, router as security_overview_router},
         system_config::{
             DashboardRootAuthorizer, HttpProjectUpdateClient, HttpWaffoPancakeGateway,
             ProcessRuntimeOptions, SystemConfigHttpState, system_config_router,
+        },
+        user_rankings::{UserRankingsState, router as user_rankings_router},
+        verify_email::{
+            PgSmtpSecurityEmailSender, ValkeyVerificationCodeStore, VerifyEmailState,
+            router as verify_email_router,
         },
     },
     models::{ModelsHttpState, ModelsListenerMode, PgModelsService},
@@ -362,22 +387,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let identity_security =
             http::api_global_rate_limited_surface(&app_state, identity_security);
+        // The security-email sender and `/api/verify` consumer share the same
+        // purpose-scoped Valkey store. Codes are atomically consumed before
+        // the dashboard auth adapter issues a session-bound proof.
+        let verify_email = http::api_global_rate_limited_surface(
+            &app_state,
+            verify_email_router(
+                VerifyEmailState::new(pg.clone(), valkey.clone(), Arc::clone(&auth))
+                    .with_mailer(Arc::new(PgSmtpSecurityEmailSender::new(pg.clone())))
+                    .with_code_store(Arc::new(ValkeyVerificationCodeStore::new(valkey.clone()))),
+            ),
+        );
         let federation_identity = Arc::new(
             DashboardFederationIdentity::new(
                 Arc::clone(&auth),
                 pg.clone(),
                 &config.auth_session_secret,
-                Arc::new(DisabledEmailCodeVerifier),
+                Arc::new(ValkeyEmailCodeVerifier::new(valkey.clone())),
             )
             .map_err(|_| io::Error::other("failed to initialize federation identity"))?,
         );
+        let federation_state = FederationState::new(
+            pg.clone(),
+            federation_identity,
+            config.auth_session_secret.expose_secret(),
+        )
+        .with_mutation_publisher(Arc::new(ValkeyFederationMutationPublisher::new(
+            valkey.clone(),
+        )));
         let identity_federation_bindings = http::api_global_rate_limited_surface(
             &app_state,
-            identity_federation_bindings_router(FederationState::new(
-                pg.clone(),
-                federation_identity,
-                config.auth_session_secret.expose_secret(),
-            )),
+            identity_federation_bindings_router(federation_state.clone()),
+        );
+        let identity_federation_oauth_state = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_federation_oauth_state_router(
+                federation_state.clone(),
+                Arc::clone(&auth),
+                config.auth_anonymous_body_limit_bytes,
+            ),
+        );
+        let identity_federation_oauth_email_bind = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_federation_oauth_email_bind_router(federation_state, Arc::clone(&auth)),
         );
         let identity_2fa = identity_2fa_router(
             Identity2FAState::new(pg.clone(), valkey.clone(), auth_impl.clone())
@@ -449,17 +501,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let _subscription_maintenance =
             spawn_subscription_maintenance(pg.clone(), Some(valkey.clone()));
-        let assistant_reads = assistant_read_router(AssistantReadState::new(
-            pg.clone(),
-            valkey.clone(),
-            Arc::clone(&auth),
-            AssistantRateLimitConfig {
-                enabled: config.auth_critical_rate_limit_enabled,
-                max_requests: config.auth_critical_rate_limit,
-                window: config.auth_critical_rate_limit_window,
-                dependency_timeout: config.dependency_timeout,
-            },
-        ));
+        let relay_client = lmm_api_rs::outbound_http::relay_client(config.dependency_timeout)
+            .map_err(|_| io::Error::other("failed to initialize relay HTTP client"))?;
+        let assistant_reads = assistant_read_router(
+            AssistantReadState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+                AssistantRateLimitConfig {
+                    enabled: config.auth_critical_rate_limit_enabled,
+                    max_requests: config.auth_critical_rate_limit,
+                    window: config.auth_critical_rate_limit_window,
+                    dependency_timeout: config.dependency_timeout,
+                },
+            )
+            .with_agent_relay(relay_client.clone(), config.dependency_timeout),
+        );
+        let developer_access = http::api_global_rate_limited_surface(
+            &app_state,
+            developer_access_router(DeveloperAccessState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+            )),
+        );
+        let finance_export = http::api_global_rate_limited_surface(
+            &app_state,
+            finance_export_router(FinanceExportState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let release_notes = http::api_global_rate_limited_surface(
+            &app_state,
+            release_note_router(ReleaseNoteState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let security_overview = http::api_global_rate_limited_surface(
+            &app_state,
+            security_overview_router(SecurityOverviewState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let access_ip = http::api_global_rate_limited_surface(
+            &app_state,
+            access_ip_router(AccessIpState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let user_rankings = http::api_global_rate_limited_surface(
+            &app_state,
+            user_rankings_router(UserRankingsState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let gifts = http::api_global_rate_limited_surface(
+            &app_state,
+            gift_router(GiftState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+            )),
+        );
+        // Balance purchases are the first payment write family whose complete
+        // ledger is local to PostgreSQL. The provider-capable checkout and
+        // callback routes remain separately frozen until their Go SDK
+        // contracts are ported and configured. The repository re-reads the
+        // persisted QuotaPerUnit option per transaction; this value is only
+        // the legacy default used when that option is absent.
+        let subscription_balance_pay = http::api_global_rate_limited_surface(
+            &app_state,
+            subscription_balance_pay_router(
+                SubscriptionBalancePayState::new(
+                    Arc::new(PgBillingRepository::new(pg.clone())),
+                    Arc::new(DashboardBillingAuthorizer::new(Arc::clone(&auth))),
+                    Arc::new(ValkeyBillingCache::new(valkey.clone())),
+                    Arc::new(PgPaymentCompliance::new(pg.clone())),
+                    500_000,
+                )
+                .with_dashboard_auth(Arc::clone(&auth))
+                .with_payment_access(Arc::new(PgBillingPaymentAccess::new(pg.clone()))),
+            ),
+        );
+        let subscription_fastpay_notify = http::api_global_rate_limited_surface(
+            &app_state,
+            subscription_fastpay_notify_router(
+                SubscriptionFastPayNotifyState::new(pg.clone(), valkey.clone()),
+                config.auth_anonymous_body_limit_bytes,
+            ),
+        );
+        let kling_task_reads = kling_task_read_router(KlingTaskReadState::new(Arc::new(
+            PgKlingTaskReadService::new(pg.clone(), Arc::clone(&models_service)),
+        )));
         let billing_dashboard = billing_dashboard_router(BillingDashboardState::new(
             Arc::new(PgBillingDashboardStore::new(pg.clone())),
             Arc::new(PgBillingDashboardAuthorizer::new(pg.clone())),
@@ -469,33 +592,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
                 Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
             ));
-        let control_tasks = missing_control_tasks_router(MissingControlTasksState::new(
-            Arc::new(PgControlTaskStore::new(pg.clone())),
-            Arc::clone(&observability_authorizer),
-            Arc::new(ListenerControlTaskStatusProbe {
-                pg: pg.clone(),
-                runtime: runtime.clone(),
-            }),
-        ));
+        let control_tasks = missing_control_tasks_router(
+            MissingControlTasksState::new(
+                Arc::new(PgControlTaskStore::new(pg.clone())),
+                Arc::clone(&observability_authorizer),
+                Arc::new(ListenerControlTaskStatusProbe {
+                    pg: pg.clone(),
+                    runtime: runtime.clone(),
+                }),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        );
         let ratio_sync = ratio_sync_router(RatioSyncHttpState::new(
             Arc::new(PgRatioSyncRepository::new(pg.clone())),
             Arc::new(HttpRatioSyncUpstream),
             Arc::new(DashboardRatioSyncAuthorizer::new(Arc::clone(&auth))),
         ));
-        let observability_read = observability_read_router(ObservabilityState::new(
-            Arc::new(PgObservabilityStore::postgres_read_only(
-                pg.clone(),
-                Arc::new(ValkeyObservabilityMetrics::new(valkey.clone())),
-            )),
-            Arc::clone(&observability_authorizer),
-        ));
-        let observability_metrics = observability_metrics_router(ObservabilityState::new(
-            Arc::new(PgObservabilityStore::postgres_read_only(
-                pg.clone(),
-                Arc::new(PostgresObservabilityMetrics::new(pg.clone()).with_valkey(valkey.clone())),
-            )),
-            observability_authorizer,
-        ));
+        let observability_read = observability_read_router(
+            ObservabilityState::new(
+                Arc::new(PgObservabilityStore::postgres_read_only(
+                    pg.clone(),
+                    Arc::new(ValkeyObservabilityMetrics::new(valkey.clone())),
+                )),
+                Arc::clone(&observability_authorizer),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        );
+        let observability_metrics = observability_metrics_router(
+            ObservabilityState::new(
+                Arc::new(PgObservabilityStore::postgres_read_only(
+                    pg.clone(),
+                    Arc::new(
+                        PostgresObservabilityMetrics::new(pg.clone()).with_valkey(valkey.clone()),
+                    ),
+                )),
+                Arc::clone(&observability_authorizer),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        );
+        let observability_disk_cache = observability_disk_cache_router(
+            ObservabilityState::new(
+                Arc::new(PgObservabilityStore::new(
+                    pg.clone(),
+                    Arc::new(UnavailableObservabilityMetrics),
+                    Arc::new(PgDiskCacheMaintenance::new(pg.clone())),
+                )),
+                Arc::clone(&observability_authorizer),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        );
+        let observability_performance = observability_performance_router(
+            ObservabilityState::new(
+                Arc::new(PgObservabilityStore::new(
+                    pg.clone(),
+                    Arc::new(UnavailableObservabilityMetrics),
+                    Arc::new(PgDiskCacheMaintenance::new(pg.clone())),
+                )),
+                Arc::clone(&observability_authorizer),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        );
         let open_source_bounties =
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
         // OpenAI-compatible and media relay routes use the same PostgreSQL
@@ -503,8 +659,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the upstream client bounded and let each executor own its billing
         // transaction; these routes must not fall through to a legacy Go
         // process once the Rust listener is selected.
-        let relay_client = lmm_api_rs::outbound_http::relay_client(config.dependency_timeout)
-            .map_err(|_| io::Error::other("failed to initialize relay HTTP client"))?;
         let relay_openai = openai_relay_router(OpenAiRelayHttpState::new(
             Arc::new(PgOpenAiRelayService::new(
                 pg.clone(),
@@ -617,7 +771,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(identity_checkin)
             .merge(identity_stripe_amount)
             .merge(identity_security)
+            .merge(verify_email)
             .merge(identity_federation_bindings)
+            .merge(identity_federation_oauth_state)
+            .merge(identity_federation_oauth_email_bind)
             .merge(identity_2fa)
             .merge(channel_core)
             .merge(channel_ops)
@@ -625,12 +782,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(deployment)
             .merge(control_admin)
             .merge(assistant_reads)
+            .merge(developer_access)
+            .merge(finance_export)
+            .merge(release_notes)
+            .merge(security_overview)
+            .merge(access_ip)
+            .merge(user_rankings)
+            .merge(gifts)
+            .merge(subscription_balance_pay)
+            .merge(subscription_fastpay_notify)
+            .merge(kling_task_reads)
             .merge(billing_subscriptions)
             .merge(billing_dashboard)
             .merge(control_tasks)
             .merge(ratio_sync)
             .merge(observability_read)
             .merge(observability_metrics)
+            .merge(observability_disk_cache)
+            .merge(observability_performance)
             .merge(open_source_bounties)
             .merge(relay_openai)
             .merge(relay_midjourney)

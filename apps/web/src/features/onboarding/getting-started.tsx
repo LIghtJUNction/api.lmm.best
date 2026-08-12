@@ -18,8 +18,8 @@ import { Link } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Message, MessageContent } from '@/components/ai-elements/message'
 import { SectionPageLayout } from '@/components/layout'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -87,191 +87,36 @@ export function GettingStarted() {
           {t('Getting started')}
         </SectionPageLayout.Title>
         <SectionPageLayout.Content>
-          <div className='mx-auto flex w-full max-w-4xl flex-col gap-8 pb-14'>
-            <section className='border-primary/40 bg-primary/5 border px-5 py-8 shadow-sm sm:px-8 sm:py-10'>
-              <div className='flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between'>
-                <div className='max-w-2xl'>
-                  <p className='text-primary text-sm font-semibold'>
-                    {t('AI assistant')}
-                  </p>
-                  <h3 className='mt-2 text-2xl font-semibold sm:text-3xl'>
-                    {t('Ask for L1 access')}
-                  </h3>
-                  <p className='text-muted-foreground mt-3 text-sm leading-6'>
-                    {t(
-                      'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-                    )}
-                  </p>
-                </div>
-                <div className='flex shrink-0 flex-wrap gap-2'>
-                  <Badge variant='outline'>
-                    {t('L{{level}}', { level: trustLevel })}
-                  </Badge>
-                  <Badge variant='outline'>{t('Read-only')}</Badge>
-                </div>
-              </div>
-
-              <form
-                className='mt-7 flex flex-col gap-3 sm:flex-row'
-                onSubmit={submitPrompt}
+          <div className='mx-auto flex w-full max-w-2xl flex-col gap-5 pb-10 sm:pb-14'>
+            <section className='bg-muted/20 flex min-h-[min(36rem,calc(100vh-12rem))] flex-col border px-4 py-5 sm:px-6 sm:py-6'>
+              <div
+                className='flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto'
+                role='log'
+                aria-live='polite'
+                aria-label={t('Service guide')}
               >
-                <Input
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  maxLength={4000}
-                  className='bg-background h-12 flex-1'
-                  placeholder={t(
-                    'Write a short explanation of what you want to build or why you need L1 access.'
-                  )}
-                  aria-label={t('Tell the AI assistant what you need')}
-                />
-                <Button type='submit' size='lg' disabled={!prompt.trim()}>
-                  <HugeiconsIcon
-                    icon={AiChat02Icon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                    aria-hidden='true'
-                  />
-                  {t('Start with AI assistant')}
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    strokeWidth={2}
-                    data-icon='inline-end'
-                    aria-hidden='true'
-                  />
-                </Button>
-              </form>
-
-              <Button
-                type='button'
-                variant='outline'
-                className='bg-background mt-3 h-auto min-h-11 w-full justify-between px-4 py-3 text-left whitespace-normal'
-                onClick={() => requestAssistantOpen('onboarding')}
-              >
-                <span>
-                  {t('Ask an administrator to raise my access level')}
-                </span>
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  className='shrink-0'
-                  strokeWidth={2}
-                  aria-hidden='true'
-                />
-              </Button>
-
-              <div className='mt-5 border-t pt-4'>
-                <p className='text-sm font-medium'>
-                  {t('What the assistant can do')}
-                </p>
-                <p className='text-muted-foreground mt-1 text-xs leading-5'>
-                  {t(
-                    'Choose a common question or ask anything about using LMM.'
-                  )}
-                </p>
-                <div className='mt-3 grid gap-2 sm:grid-cols-2'>
-                  {[
-                    {
-                      id: 'service' as const,
-                      question: t(
-                        'What can I do while access is under review?'
-                      ),
-                    },
-                    {
-                      id: 'plan' as const,
-                      question: t('Which option is the best value?'),
-                    },
-                    {
-                      id: 'cost' as const,
-                      question: t('How is request cost calculated?'),
-                    },
-                    {
-                      id: 'client-setup' as const,
-                      question: t('How do I set up Claude Code or CC Switch?'),
-                    },
-                    {
-                      id: 'bounty' as const,
-                      question: t('How do open-source bounties and tips work?'),
-                    },
-                  ].map((item) => (
-                    <Button
-                      key={item.id}
-                      type='button'
-                      variant='outline'
-                      className='bg-background h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
-                      onClick={() => requestAssistantOpen(item.id)}
-                    >
-                      <span>{item.question}</span>
-                      <HugeiconsIcon
-                        icon={ArrowRight01Icon}
-                        className='shrink-0'
-                        strokeWidth={2}
-                        aria-hidden='true'
-                      />
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {accessRequest?.status === 'pending' ? (
-                <Alert className='border-primary/30 bg-background/80 mt-5 px-4 py-4'>
-                  <AlertTitle className='flex flex-wrap items-center justify-between gap-2'>
-                    <span>{t('AI recommendation submitted')}</span>
-                    <Badge variant='outline'>{t('Pending review')}</Badge>
-                  </AlertTitle>
-                  <AlertDescription className='mt-1 leading-5'>
-                    {t(
-                      'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
-                    )}
-                  </AlertDescription>
-                  <div className='mt-4 flex items-center gap-3'>
-                    <Progress
-                      value={66}
-                      className='flex-1'
-                      aria-label={t('Pending review')}
-                    />
-                    <span className='text-muted-foreground shrink-0 text-xs tabular-nums'>
-                      2/3
-                    </span>
-                  </div>
-                  {accessRequest.reason || accessRequest.ai_recommendation ? (
-                    <div className='mt-4 grid gap-3 sm:grid-cols-2'>
-                      {accessRequest.reason ? (
-                        <div className='bg-muted/20 border p-3'>
-                          <p className='text-xs font-medium'>
-                            {t('Your statement')}
-                          </p>
-                          <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
-                            {accessRequest.reason}
-                          </p>
-                        </div>
-                      ) : null}
-                      {accessRequest.ai_recommendation ? (
-                        <div className='bg-muted/20 border p-3'>
-                          <p className='text-xs font-medium'>
-                            {t('AI recommendation')}
-                          </p>
-                          <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
-                            {accessRequest.ai_recommendation}
-                          </p>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <Separator className='my-4' />
-                  <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-                    <p className='text-muted-foreground text-xs leading-5'>
+                <Message from='assistant'>
+                  <MessageContent
+                    variant='flat'
+                    className='gap-2 text-sm leading-6'
+                  >
+                    <p className='font-medium'>{t('Service guide')}</p>
+                    <p>
                       {t(
-                        'Choose a common question or ask anything about using LMM.'
+                        'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
                       )}
+                    </p>
+                    <p className='text-muted-foreground text-xs'>
+                      {t('Read-only')}
                     </p>
                     <Button
                       type='button'
                       variant='outline'
                       size='sm'
-                      className='bg-background shrink-0'
-                      onClick={() => requestAssistantOpen('service')}
+                      className='mt-1 w-fit'
+                      onClick={() => requestAssistantOpen('onboarding')}
                     >
-                      {t('Continue')}
+                      {t('Ask an administrator to raise my access level')}
                       <HugeiconsIcon
                         icon={ArrowRight01Icon}
                         strokeWidth={2}
@@ -279,111 +124,158 @@ export function GettingStarted() {
                         aria-hidden='true'
                       />
                     </Button>
-                  </div>
-                </Alert>
-              ) : null}
+                  </MessageContent>
+                </Message>
 
-              {accessRequest?.status === 'rejected' ? (
-                <Alert variant='destructive' className='mt-5 px-4 py-4'>
-                  <AlertTitle>{t('Access request rejected')}</AlertTitle>
-                  <AlertDescription className='mt-1 leading-5'>
-                    {t('Your previous unlock request was not approved.')}
-                  </AlertDescription>
-                  {accessRequest.admin_note ? (
-                    <div className='bg-background text-foreground mt-4 border p-3'>
-                      <p className='text-xs font-medium'>
-                        {t('Administrator reply')}
+                {accessRequest?.status === 'pending' ? (
+                  <Message from='assistant'>
+                    <MessageContent
+                      variant='flat'
+                      className='gap-2 text-sm leading-6'
+                    >
+                      <p className='font-medium'>
+                        {t('AI recommendation submitted')}
                       </p>
-                      <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
-                        {accessRequest.admin_note}
+                      <p>
+                        {t(
+                          'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
+                        )}
                       </p>
-                    </div>
-                  ) : null}
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    className='bg-background mt-4'
-                    onClick={() => requestAssistantOpen('onboarding')}
-                  >
-                    {t('Revise')}
-                    <HugeiconsIcon
-                      icon={ArrowRight01Icon}
-                      strokeWidth={2}
-                      data-icon='inline-end'
-                      aria-hidden='true'
-                    />
-                  </Button>
-                </Alert>
-              ) : null}
+                      <p className='text-muted-foreground text-xs'>
+                        {t('Pending review')}
+                      </p>
+                      {accessRequest.reason ? (
+                        <p className='text-muted-foreground whitespace-pre-wrap'>
+                          {accessRequest.reason}
+                        </p>
+                      ) : null}
+                      {accessRequest.ai_recommendation ? (
+                        <p className='text-muted-foreground whitespace-pre-wrap'>
+                          {accessRequest.ai_recommendation}
+                        </p>
+                      ) : null}
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='sm'
+                        className='mt-1 w-fit'
+                        onClick={() => requestAssistantOpen('onboarding')}
+                      >
+                        {t('Continue')}
+                        <HugeiconsIcon
+                          icon={ArrowRight01Icon}
+                          strokeWidth={2}
+                          data-icon='inline-end'
+                          aria-hidden='true'
+                        />
+                      </Button>
+                    </MessageContent>
+                  </Message>
+                ) : null}
 
-              {accessRequest?.status === 'approved' ? (
-                <Alert className='border-primary/30 bg-background/80 mt-5 px-4 py-4'>
-                  <AlertTitle>{t('Access request approved')}</AlertTitle>
-                  <AlertDescription className='mt-1 leading-5'>
-                    {t(
-                      'Your developer access is active. Continue setup to create a key and connect your client.'
-                    )}
-                  </AlertDescription>
-                  {accessRequest.admin_note ? (
-                    <div className='bg-muted/20 mt-4 border p-3'>
-                      <p className='text-xs font-medium'>
-                        {t('Administrator reply')}
+                {accessRequest?.status === 'rejected' ? (
+                  <Message from='assistant'>
+                    <MessageContent
+                      variant='flat'
+                      className='text-destructive gap-2 text-sm leading-6'
+                    >
+                      <p className='font-medium'>
+                        {t('Access request rejected')}
                       </p>
-                      <p className='text-muted-foreground mt-1 text-xs leading-5 whitespace-pre-wrap'>
-                        {accessRequest.admin_note}
+                      <p>
+                        {t('Your previous unlock request was not approved.')}
                       </p>
-                    </div>
-                  ) : null}
-                  <Button
-                    type='button'
-                    size='sm'
-                    className='mt-4'
-                    onClick={() => void refreshUser()}
-                  >
-                    {t('Continue setup')}
-                    <HugeiconsIcon
-                      icon={ArrowRight01Icon}
-                      strokeWidth={2}
-                      data-icon='inline-end'
-                      aria-hidden='true'
-                    />
-                  </Button>
-                </Alert>
-              ) : null}
+                      {accessRequest.admin_note ? (
+                        <p className='whitespace-pre-wrap'>
+                          {accessRequest.admin_note}
+                        </p>
+                      ) : null}
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        className='mt-1 w-fit'
+                        onClick={() => requestAssistantOpen('onboarding')}
+                      >
+                        {t('Revise')}
+                        <HugeiconsIcon
+                          icon={ArrowRight01Icon}
+                          strokeWidth={2}
+                          data-icon='inline-end'
+                          aria-hidden='true'
+                        />
+                      </Button>
+                    </MessageContent>
+                  </Message>
+                ) : null}
 
+                {accessRequest?.status === 'approved' ? (
+                  <Message from='assistant'>
+                    <MessageContent
+                      variant='flat'
+                      className='gap-2 text-sm leading-6'
+                    >
+                      <p className='font-medium'>
+                        {t('Access request approved')}
+                      </p>
+                      <p>
+                        {t(
+                          'Your developer access is active. Continue setup to create a key and connect your client.'
+                        )}
+                      </p>
+                      {accessRequest.admin_note ? (
+                        <p className='text-muted-foreground whitespace-pre-wrap'>
+                          {accessRequest.admin_note}
+                        </p>
+                      ) : null}
+                      <Button
+                        type='button'
+                        size='sm'
+                        className='mt-1 w-fit'
+                        onClick={() => void refreshUser()}
+                      >
+                        {t('Continue setup')}
+                        <HugeiconsIcon
+                          icon={ArrowRight01Icon}
+                          strokeWidth={2}
+                          data-icon='inline-end'
+                          aria-hidden='true'
+                        />
+                      </Button>
+                    </MessageContent>
+                  </Message>
+                ) : null}
+              </div>
+
+              <form
+                className='mt-5 flex flex-col gap-2 border-t pt-4 sm:flex-row'
+                onSubmit={submitPrompt}
+              >
+                <Input
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  maxLength={4000}
+                  className='h-11 flex-1'
+                  placeholder={t(
+                    'Write a short explanation of what you want to build or why you need L1 access.'
+                  )}
+                  aria-label={t('Tell the AI assistant what you need')}
+                />
+                <Button type='submit' disabled={!prompt.trim()}>
+                  <HugeiconsIcon
+                    icon={AiChat02Icon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                    aria-hidden='true'
+                  />
+                  {t('Start with AI assistant')}
+                </Button>
+              </form>
               <p className='text-muted-foreground mt-3 text-xs leading-5'>
                 {t(
                   'Never paste a password, API key, session cookie, or other secret into the conversation.'
                 )}
               </p>
-            </section>
-
-            <section className='border-y px-5 py-6 sm:px-8'>
-              <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
-                <div>
-                  <h3 className='text-sm font-semibold'>
-                    {t('Open-source challenges')}
-                  </h3>
-                  <p className='text-muted-foreground mt-1 text-sm'>
-                    {t('Browse challenges in read-only mode.')}
-                  </p>
-                </div>
-                <Button variant='outline' render={<Link to='/challenges' />}>
-                  {t('Browse challenges')}
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    strokeWidth={2}
-                    data-icon='inline-end'
-                    aria-hidden='true'
-                  />
-                </Button>
-              </div>
-              <ChallengeList
-                limit={3}
-                showHeading={false}
-                heading={t('Open-source challenges')}
-              />
             </section>
           </div>
         </SectionPageLayout.Content>

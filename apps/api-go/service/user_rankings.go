@@ -82,7 +82,6 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 	}
 
 	candidates := make([]userUsageCandidate, 0, len(totals))
-	anonymousIndex := -1
 	var totalTokens int64
 	var totalRequests int64
 	participantCount := 0
@@ -105,14 +104,15 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 
 		if visibility == dto.UsageLeaderboardVisibilityAnonymous {
 			anonymousParticipantCount++
-			if anonymousIndex < 0 {
-				candidates = append(candidates, userUsageCandidate{
-					anonymous: true,
-				})
-				anonymousIndex = len(candidates) - 1
-			}
-			candidates[anonymousIndex].requests += total.Requests
-			candidates[anonymousIndex].tokens += total.TotalTokens
+			// Anonymous visibility hides the user's name, not their independent
+			// ranking row. Keep each user's totals separate so one participant
+			// cannot make all anonymous usage appear as a single account.
+			candidates = append(candidates, userUsageCandidate{
+				userID:    user.Id,
+				anonymous: true,
+				requests:  total.Requests,
+				tokens:    total.TotalTokens,
+			})
 			continue
 		}
 

@@ -59,6 +59,8 @@ import { getServerErrorMessageKey } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { AccountAppealForm } from './account-appeal-form'
+
 export function UserAuthForm({
   className,
   redirectTo,
@@ -492,6 +494,9 @@ export function UserAuthForm({
           </div>
         </Dialog>
       )}
+      <div className='pt-2'>
+        <AccountAppealForm />
+      </div>
     </Form>
   )
 }

@@ -772,8 +772,6 @@ async fn complete_topup(
         let payment_method: String = row.get("payment_method");
         let provider: String = row.get("payment_provider");
         let money: String = row.get("money");
-        let top_up_json: Value = row.get("top_up_json");
-        let credited_quota = json_i64(&top_up_json, "credited_quota");
         // Go loads `common.QuotaPerUnit` from the authoritative options table and
         // uses it while this same completion transaction holds the order lock.
         // Keep that snapshot local to this transaction so an option change cannot
@@ -782,11 +780,10 @@ async fn complete_topup(
             Ok(value) => value,
             Err(_) => return fail("系统错误"),
         };
-        let units = normalized_manual_topup_quota(
+        let units = manual_topup_quota(
             amount,
-            &payment_method,
             &provider,
-            credited_quota,
+            &money,
             quota_per_unit,
         )
         .unwrap_or(0);
@@ -1096,39 +1093,24 @@ async fn quota_per_unit(transaction: &mut Transaction<'_, Postgres>) -> Result<f
     })
 }
 
-/// Mirrors Go's `decimal.NewFromFloat(...).Mul(...).IntPart()` result for the
-/// positive values accepted by manual completion, while rejecting values that
-/// cannot be represented as the legacy integer quota.
-fn normalized_manual_topup_quota(
+/// Mirrors the frozen Go manual-completion path.  Stripe orders use their
+/// stored money amount; every other order uses the stored display amount.  The
+/// legacy endpoint intentionally does not gate this calculation on the
+/// payment-provider allowlist or on a newer credited-quota column.
+fn manual_topup_quota(
     amount: i64,
-    payment_method: &str,
     provider: &str,
-    credited_quota: i64,
+    money: &str,
     quota_per_unit: f64,
 ) -> Option<i64> {
     if !quota_per_unit.is_finite() {
         return None;
     }
-    let provider = provider.trim();
-    let payment_method = payment_method.trim();
-    let known_external_source = matches!(
-        provider,
-        "epay" | "stripe" | "creem" | "fastpay" | "waffo" | "waffo_pancake"
-    ) || (provider.is_empty()
-        && matches!(
-            payment_method,
-            "stripe" | "creem" | "waffo" | "waffo_pancake" | "alipay" | "wxpay"
-        ));
-    if !known_external_source {
-        return Some(0);
-    }
-    if credited_quota > 0 {
-        return Some(credited_quota);
-    }
-    if provider == "creem" || payment_method == "creem" {
-        return Some(amount);
-    }
-    let quantity = amount as f64;
+    let quantity = if provider.trim() == "stripe" {
+        money.parse::<f64>().ok()?
+    } else {
+        amount as f64
+    };
     let quota = (quantity * quota_per_unit).trunc();
     (quota.is_finite() && quota >= i64::MIN as f64 && quota <= i64::MAX as f64)
         .then_some(quota as i64)
@@ -1788,23 +1770,20 @@ mod tests {
     }
 
     #[test]
-    fn normalized_manual_topup_quota_keeps_external_rules_and_rejects_malformed_values() {
+    fn manual_topup_quota_matches_the_frozen_provider_switch() {
         assert_eq!(
-            normalized_manual_topup_quota(2, "epay", "epay", 0, DEFAULT_QUOTA_PER_UNIT),
+            manual_topup_quota(2, "epay", "2", DEFAULT_QUOTA_PER_UNIT),
             Some(1_000_000)
         );
         assert_eq!(
-            normalized_manual_topup_quota(2, "manual", "", 0, DEFAULT_QUOTA_PER_UNIT),
-            Some(0)
+            manual_topup_quota(2, "", "2", DEFAULT_QUOTA_PER_UNIT),
+            Some(1_000_000)
         );
         assert_eq!(
-            normalized_manual_topup_quota(2, "epay", "epay", 123, DEFAULT_QUOTA_PER_UNIT),
-            Some(123)
+            manual_topup_quota(2, "stripe", "3.5", DEFAULT_QUOTA_PER_UNIT),
+            Some(1_750_000)
         );
-        assert_eq!(
-            normalized_manual_topup_quota(2, "epay", "epay", 0, f64::NAN),
-            None
-        );
+        assert_eq!(manual_topup_quota(2, "epay", "2", f64::NAN), None);
     }
 
     #[test]
