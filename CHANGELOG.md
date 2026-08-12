@@ -6,10 +6,10 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
-- Expanded the shell-only customer simulation set with new L0 applicants,
-  team integrators, and login-recovery users; these profiles exercise
-  onboarding, API-key/group setup, and human-support routing without writing
-  keys, payments, or upstream requests.
+- Expanded the shell-only customer simulation set to a continuous A–N matrix,
+  including open-source contributors, high-frequency API builders, new L0
+  applicants, team integrators, and login-recovery users; these profiles do
+  not write keys, payments, or upstream requests.
 - Added a per-context assistant cache gate so concurrent identical L0
   questions do not fan out into duplicate upstream model calls before the
   first deterministic response is stored; tool-backed and cross-context

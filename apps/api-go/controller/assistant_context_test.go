@@ -160,6 +160,18 @@ func TestAssistantOperatorPersonasProduceIntentSpecificWelcomeStrategies(t *test
 			strategy: "reliability",
 		},
 		{
+			id:       "J",
+			message:  "我想通过开源悬赏贡献代码，如何发布挑战并提交真实 PR？",
+			want:     assistantProfileTechnical,
+			strategy: "Do not pressure the user to pay",
+		},
+		{
+			id:       "K",
+			message:  "我有高频 API 项目，关心稳定性、并发、延迟，想查看用量统计。",
+			want:     assistantProfileOperator,
+			strategy: "reliability",
+		},
+		{
 			id:       "L",
 			message:  "我刚注册还是 L0，不知道怎么申请 L1。请一步一步说明审核需要哪些真实使用信息。",
 			want:     assistantProfileGuided,
