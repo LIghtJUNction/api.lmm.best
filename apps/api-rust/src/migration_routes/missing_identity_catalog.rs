@@ -54,7 +54,7 @@ impl IdentityCatalogState {
 pub fn router(state: IdentityCatalogState) -> Router {
     public_routes()
         .merge(protected_read_routes())
-        .route("/api/user/token", get(generate_access_token))
+        .route("/api/user/token", get(generate_access_token_no_store))
         .with_state(state)
 }
 
@@ -74,11 +74,11 @@ pub fn protected_read_router(state: IdentityCatalogState) -> Router {
 }
 
 /// Mounts only personal-token generation for the normal auth integration
-/// tests. The handler still performs the same server-side auth and developer
-/// access checks as the combined catalogue router.
+/// tests. The handler still performs the same server-side `UserAuth` check as
+/// the combined catalogue router.
 pub fn token_router(state: IdentityCatalogState) -> Router {
     Router::new()
-        .route(TOKEN_PATH, get(generate_access_token))
+        .route(TOKEN_PATH, get(generate_access_token_no_store))
         .with_state(state)
 }
 
@@ -172,15 +172,12 @@ async fn generate_access_token(
 ) -> Result<Response, CatalogError> {
     let access_token =
         credential(&headers).ok_or_else(|| CatalogError::unauthorized(locale(&headers)))?;
-    // The Go route is inside `UserAuth`, so enforce its role/status policy
-    // before delegating the durable update to the auth service.  The current
-    // Go listener's outer ConsoleAccessGate also hides this developer surface
-    // until trust-level activation; keep that 404 boundary here rather than
-    // issuing a management token to a merely authenticated account.
-    let user = authenticated(&state, &headers).await?;
-    if !user.developer_access_granted {
-        return Ok(not_found());
-    }
+    // The Go route is inside `UserAuth`, so enforce only its role/status
+    // policy before delegating the durable update to the auth service.  Unlike
+    // dashboard discovery routes, `/api/user/token` is not protected by a
+    // developer-access gate in the legacy router; an authenticated L0 user
+    // must be able to rotate the personal token as well.
+    let _user = authenticated(&state, &headers).await?;
     // `generate_personal_access_token` verifies the same bearer session and
     // generates the 29..=32-character legacy base64 token atomically.  Do not
     // reimplement this here: it also owns duplicate detection and user-cache
@@ -191,6 +188,22 @@ async fn generate_access_token(
         .await
         .map_err(|error| CatalogError::from_auth(error, locale(&headers)))?;
     Ok(success(Some(token)))
+}
+
+async fn generate_access_token_no_store(
+    state: State<IdentityCatalogState>,
+    headers: HeaderMap,
+) -> Response {
+    let mut response = generate_access_token(state, headers)
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+    // Gin attaches DisableCache after UserAuth.  Consequently an auth
+    // rejection (401/403/404) has no cache headers, while every handler
+    // response—including the legacy 200 ApiError envelope—does.
+    if response.status().is_success() {
+        disable_cache(&mut response);
+    }
+    response
 }
 
 async fn authenticated(
@@ -221,6 +234,14 @@ struct GroupConfig {
     group_ratios: BTreeMap<String, BTreeMap<String, f64>>,
     special: BTreeMap<String, BTreeMap<String, String>>,
     auto: Vec<String>,
+}
+
+/// Current account-scoped routing groups shared by the dashboard token form
+/// and assistant key creation. The selectable map is sorted by group ID, while
+/// automatic groups preserve the administrator-configured routing order.
+pub(crate) struct UserGroupSelection {
+    pub selectable: BTreeMap<String, String>,
+    pub automatic: Vec<String>,
 }
 
 async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
@@ -390,6 +411,25 @@ fn auto_groups(config: &GroupConfig, usable: &BTreeMap<String, String>) -> Vec<S
         .collect()
 }
 
+pub(crate) async fn user_group_selection(
+    pg: &PgPool,
+    user_group: &str,
+) -> Result<UserGroupSelection, String> {
+    let config = group_config(pg).await.map_err(|error| error.message)?;
+    let usable = usable_groups(&config, user_group);
+    let automatic = auto_groups(&config, &usable);
+    let selectable = usable
+        .into_iter()
+        .filter(|(group, _)| {
+            !group.is_empty() && group != "auto" && config.ratios.contains_key(group)
+        })
+        .collect();
+    Ok(UserGroupSelection {
+        selectable,
+        automatic,
+    })
+}
+
 fn string_map(raw: Option<&String>) -> Option<BTreeMap<String, String>> {
     serde_json::from_str(raw?).ok()
 }
@@ -454,6 +494,19 @@ fn legacy_json_content_type(mut response: Response) -> Response {
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
     response
+}
+
+fn disable_cache(response: &mut Response) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
 }
 
 #[derive(Debug)]
@@ -794,7 +847,7 @@ mod tests {
             &self,
             _: SecretString,
         ) -> Result<DashboardUserView, crate::auth::AuthError> {
-            Ok(activated_user_view())
+            Ok(unactivated_user_view())
         }
 
         async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, crate::auth::AuthError> {
@@ -939,7 +992,7 @@ mod tests {
             &self,
             _: SecretString,
         ) -> Result<DashboardUserView, AuthError> {
-            Ok(activated_user_view())
+            Ok(unactivated_user_view())
         }
 
         async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, AuthError> {
@@ -1077,14 +1130,8 @@ mod tests {
         );
     }
 
-    fn activated_user_view() -> DashboardUserView {
-        DashboardUserView::build(
-            valid_user(),
-            DashboardSelfUserFacts {
-                paid_activation_complete: true,
-                ..DashboardSelfUserFacts::default()
-            },
-        )
+    fn unactivated_user_view() -> DashboardUserView {
+        DashboardUserView::build(valid_user(), DashboardSelfUserFacts::default())
     }
 
     fn valid_user() -> DashboardUser {

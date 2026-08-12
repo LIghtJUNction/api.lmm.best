@@ -8,7 +8,10 @@ use serde::Serialize;
 use crate::{
     MigrationError,
     contract::{ContractInstallOutcome, install_or_verify},
-    forward_schema::{BOUNTY_SCHEMA_CONTRACT_ID, verify_open_source_bounty_schema},
+    forward_schema::{
+        BOUNTY_SCHEMA_CONTRACT_ID, CURRENT_DASHBOARD_SCHEMA_CONTRACT_ID,
+        verify_current_dashboard_schema, verify_open_source_bounty_schema,
+    },
     postgres_catalog::acquire_shared_migration_lock,
     release::ReleaseBinding,
 };
@@ -64,6 +67,9 @@ pub fn forward(options: &ForwardOptions<'_>) -> Result<ForwardReport, MigrationE
         options.release,
     )?;
     verify_open_source_bounty_schema(&mut transaction, options.schema)?;
+    if options.release.contract_id().as_i64() >= CURRENT_DASHBOARD_SCHEMA_CONTRACT_ID {
+        verify_current_dashboard_schema(&mut transaction, options.schema)?;
+    }
     transaction.commit()?;
     Ok(ForwardReport {
         status: "verified",

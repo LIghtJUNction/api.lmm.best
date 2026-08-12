@@ -33,6 +33,7 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.AutoMigrate(
 		&model.User{}, &model.UserSession{}, &model.Log{}, &model.CasbinRule{}, &model.AuthzRole{},
+		&model.TopUp{}, &model.DeveloperAccessRequest{},
 	))
 
 	t.Cleanup(func() {
@@ -119,6 +120,15 @@ func TestManageUserResetOnboardingToL0(t *testing.T) {
 		AuthVersion: 4,
 	}
 	require.NoError(t, db.Create(&user).Error)
+	// A completed external payment is a durable L1 fact. The explicit L0
+	// override must take precedence over it until a later administrator action
+	// deliberately clears the reset.
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId: user.Id, TradeNo: "managed-reset-paid", Amount: 1,
+		CreditedQuota: int64(common.QuotaPerUnit), Money: 1,
+		Status: common.TopUpStatusSuccess, PaymentProvider: model.PaymentProviderStripe,
+		CompleteTime: now,
+	}).Error)
 	require.NoError(t, db.Create(&model.UserSession{
 		SID: "managed-reset-session", UserID: user.Id, Version: 4, UserAuthVersion: 4,
 		Status: model.UserSessionStatusActive, RefreshHash: "reset-refresh-hash", LoginMethod: "password",
@@ -138,10 +148,32 @@ func TestManageUserResetOnboardingToL0(t *testing.T) {
 	access, err := model.GetDeveloperAccessStateForUser(&updated)
 	require.NoError(t, err)
 	assert.False(t, access.Granted)
+	trust, err := model.GetTrustLevelInfoForUser(&updated)
+	require.NoError(t, err)
+	assert.Equal(t, model.TrustLevelMinUser, trust.Level)
 
 	var session model.UserSession
 	require.NoError(t, db.First(&session, "sid = ?", "managed-reset-session").Error)
 	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+
+	// The reset is a temporary, administrator-controlled floor rather than a
+	// permanent lock. A fresh AI recommendation approved by an administrator
+	// must clear the override and restore L1 access.
+	request, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I need access for the managed integration test",
+		"Recommend L1 because the user supplied a concrete integration purpose for the test.",
+	)
+	require.NoError(t, err)
+	_, err = model.ReviewDeveloperAccessRequest(9999, request.Id, true, "approved for the managed test")
+	require.NoError(t, err)
+	var upgraded model.User
+	require.NoError(t, db.First(&upgraded, user.Id).Error)
+	assert.Nil(t, upgraded.TrustLevelOverride)
+	assert.Positive(t, upgraded.ConsoleActivatedAt)
+	access, err = model.GetDeveloperAccessStateForUser(&upgraded)
+	require.NoError(t, err)
+	assert.True(t, access.Granted)
 }
 
 func TestManageUserDisableAdvancesAuthVersionOnceAndRevokesSession(t *testing.T) {

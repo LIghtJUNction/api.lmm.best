@@ -1,0 +1,153 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import { Loading03Icon, ShieldKeyIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
+
+import {
+  revealAssistantPrivateCard,
+  type AssistantPrivateCard,
+} from './api'
+
+export function AssistantPrivateCard(props: {
+  card: AssistantPrivateCard
+  onContinue: () => void
+}) {
+  const { t } = useTranslation()
+  const secretRef = useRef('')
+  const [viewing, setViewing] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const getSecret = async (): Promise<string | null> => {
+    if (secretRef.current) return secretRef.current
+    setLoading(true)
+    try {
+      const secret = await revealAssistantPrivateCard(props.card.id)
+      secretRef.current = secret
+      return secret
+    } catch {
+      toast.error(t('Unable to retrieve the private credential.'))
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const showSecret = async () => {
+    const secret = await getSecret()
+    if (secret) setViewing(true)
+  }
+
+  const copySecret = async () => {
+    const secret = await getSecret()
+    if (!secret) return
+    const copied = await copyToClipboard(secret)
+    if (copied) {
+      toast.success(t('Copied to clipboard'))
+      secretRef.current = ''
+      setViewing(false)
+      return
+    }
+    toast.error(t('Failed to copy'))
+  }
+
+  const hideSecret = () => {
+    secretRef.current = ''
+    setViewing(false)
+  }
+
+  return (
+    <div
+      className='border-success/40 bg-success/5 grid gap-3 rounded-lg border p-3'
+      data-testid='assistant-private-card'
+    >
+      <div className='flex items-start gap-2'>
+        <HugeiconsIcon
+          icon={ShieldKeyIcon}
+          className='text-success mt-0.5 size-4 shrink-0'
+          strokeWidth={2}
+          aria-hidden='true'
+        />
+        <div className='min-w-0'>
+          <p className='text-sm font-medium'>
+            {props.card.label || t('Private credential')}
+          </p>
+          <p className='text-muted-foreground mt-1 text-xs leading-5'>
+            {t('This card is visible only to you. Credentials are never written into chat history.')}
+          </p>
+        </div>
+      </div>
+      {viewing && secretRef.current ? (
+        <code
+          className='bg-background/80 block break-all rounded-md border px-2 py-2 text-xs'
+          data-testid='assistant-private-card-value'
+        >
+          {secretRef.current}
+        </code>
+      ) : null}
+      <div className='flex flex-wrap gap-2'>
+        <button
+          type='button'
+          className='border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-50'
+          onClick={() => void copySecret()}
+          disabled={loading}
+        >
+          {loading ? (
+            <HugeiconsIcon
+              icon={Loading03Icon}
+              className='mr-1 animate-spin'
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+          ) : null}
+          {t('Copy securely')}
+        </button>
+        {viewing ? (
+          <button
+            type='button'
+            className='border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-medium transition-colors'
+            onClick={hideSecret}
+          >
+            {t('Hide credential')}
+          </button>
+        ) : (
+          <button
+            type='button'
+            className='border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex h-8 items-center justify-center rounded-md border px-3 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-50'
+            onClick={() => void showSecret()}
+            disabled={loading}
+          >
+            {t('Show securely')}
+          </button>
+        )}
+        <button
+          type='button'
+          className='text-muted-foreground hover:text-foreground h-8 px-2 text-xs font-medium'
+          onClick={props.onContinue}
+        >
+          {t('I copied it — continue setup')}
+        </button>
+      </div>
+    </div>
+  )
+}

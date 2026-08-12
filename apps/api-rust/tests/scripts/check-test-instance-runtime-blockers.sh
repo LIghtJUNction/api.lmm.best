@@ -21,10 +21,10 @@ command -v sha256sum >/dev/null || fail "sha256sum is required"
 # method/path/adapter triples.  It is regenerated from safe_candidate_surface
 # and each selected router definition when the adapter wiring changes.  The
 # ledger must cover the inventory exactly: a valid-but-omitted row is a failure.
-source_inventory_rows=178
-source_inventory_paths=159
-source_inventory_adapters=34
-source_inventory_key_digest=b556917b2c3a573a505704af6cbd77d65710ba23e6b3834918d15187a87ab542
+source_inventory_rows=167
+source_inventory_paths=148
+source_inventory_adapters=32
+source_inventory_key_digest=f32b2810a6d3825038ae2368b8d223d879cad6b63fd64c4ac555f1b74dc1673d
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/test-instance-runtime-blockers.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT

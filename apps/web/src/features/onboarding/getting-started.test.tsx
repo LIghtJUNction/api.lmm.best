@@ -210,10 +210,7 @@ describe('getting started access boundaries', () => {
       l0Page.container.textContent?.includes('Three steps to get started'),
       false
     )
-    assert.equal(
-      l0Page.container.textContent?.includes('Ask for L1 access'),
-      true
-    )
+    assert.equal(l0Page.container.textContent?.includes('Service guide'), true)
     await unmountPage(l0Page)
 
     const l1Page = await renderPage(false, undefined, null, {
@@ -231,7 +228,7 @@ describe('getting started access boundaries', () => {
     await unmountPage(l1Page)
   })
 
-  test('offers the access request and safe learning presets to L0', async () => {
+  test('offers only the access conversation to L0', async () => {
     const opened: Array<string | undefined> = []
     const messages: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((preset) => {
@@ -255,38 +252,17 @@ describe('getting started access boundaries', () => {
     assert.deepEqual(opened, ['onboarding'])
     assert.deepEqual(messages, [undefined])
 
-    const planQuestion = [...page.container.querySelectorAll('button')].find(
-      (button) =>
-        button.textContent?.includes('Which option is the best value?')
+    assert.deepEqual(opened, ['onboarding'])
+    assert.deepEqual(messages, [undefined])
+    assert.equal(
+      page.container.textContent?.includes('Which option is the best value?'),
+      false
     )
-    assert.ok(planQuestion)
-    await act(async () => {
-      planQuestion.click()
-      await flushEffects()
-    })
-
-    assert.deepEqual(opened, ['onboarding', 'plan'])
-    assert.deepEqual(messages, [undefined, undefined])
-
-    const costQuestion = [...page.container.querySelectorAll('button')].find(
-      (button) =>
-        button.textContent?.includes('How is request cost calculated?')
+    assert.equal(
+      page.container.textContent?.includes('How is request cost calculated?'),
+      false
     )
-    assert.ok(costQuestion)
-    await act(async () => {
-      costQuestion.click()
-      await flushEffects()
-    })
-
-    assert.deepEqual(opened, ['onboarding', 'plan', 'cost'])
-    assert.deepEqual(messages, [undefined, undefined, undefined])
-    assert.ok(
-      [...page.container.querySelectorAll('button')].some((button) =>
-        button.textContent?.includes(
-          'What can I do while access is under review?'
-        )
-      )
-    )
+    assert.ok(page.container.querySelector('input'))
     await unmountPage(page)
     unsubscribe()
   })
@@ -358,9 +334,7 @@ describe('getting started access boundaries', () => {
       ),
       true
     )
-    assert.ok(
-      page.container.querySelector('[role="progressbar"][aria-valuenow="66"]')
-    )
+    assert.equal(page.container.querySelector('[role="progressbar"]'), null)
     await unmountPage(page)
   })
 
@@ -410,38 +384,36 @@ describe('getting started access boundaries', () => {
     unsubscribe()
   })
 
-  test('shows only read-only challenges and the AI access request surface to L0', async () => {
+  test('shows only the read-only access conversation to L0', async () => {
     const page = await renderPage(true)
     await act(flushEffects)
 
     assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
     assert.equal(page.gets.includes('/api/user/topup/info'), false)
-    assert.equal(
-      page.container.textContent?.includes('Open-source challenges'),
-      true
-    )
-    assert.equal(
-      page.container.textContent?.includes(
-        'Browse challenges in read-only mode.'
-      ),
-      true
-    )
-    assert.ok(page.container.querySelector('a[href="/challenges"]'))
+    assert.equal(page.container.textContent?.includes('Service guide'), true)
+    assert.equal(page.container.querySelector('a[href="/challenges"]'), null)
     assert.equal(page.container.textContent?.includes('Create API key'), false)
     assert.equal(
       page.container.textContent?.includes('Open setup guide'),
       false
     )
-    assert.equal(page.container.textContent?.includes('Quick links'), false)
     assert.equal(
       page.gets.some((url) => url.startsWith('/api/open-source-bounties?')),
-      true
+      false
     )
     await unmountPage(page)
   })
 
   test('keeps unavailable optional probes inline and does not retry them', async () => {
-    const page = await renderPage(true, new Error('Not Found'))
+    const page = await renderPage(true, new Error('Not Found'), null, {
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
     await act(flushEffects)
 
     const bountyCalls = page.gets.filter((url) =>

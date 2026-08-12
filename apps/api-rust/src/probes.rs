@@ -51,6 +51,20 @@ const OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS: &[&str] = &[
     "SELECT id, challenge_id, project_id, opened_by_user_id, against_user_id, reason, statement, project_title_snapshot, repository_url_snapshot, project_rules_snapshot, project_escrow_quota_snapshot, challenge_status_snapshot, issue_url_snapshot, pull_request_url_snapshot, submission_note_snapshot, review_note_snapshot, reward_quota_snapshot, tip_quota_snapshot, owner_rating_score_snapshot, owner_rating_comment_snapshot, contributor_rating_score_snapshot, contributor_rating_comment_snapshot, status, resolution, resolved_by_user_id, created_at, updated_at, resolved_at FROM open_source_bounty_disputes WHERE FALSE",
 ];
 
+const CURRENT_DASHBOARD_SCHEMA_SELECTS: &[&str] = &[
+    "SELECT archived_at FROM open_source_bounty_projects WHERE FALSE",
+    "SELECT id, user_id, status, source, reason, ai_recommendation, admin_user_id, admin_note, created_at, reviewed_at FROM developer_access_requests WHERE FALSE",
+    "SELECT id, version, revision, content, published_at, published_by FROM release_notes WHERE FALSE",
+    "SELECT id, release_note_id, user_id, read_at FROM release_note_reads WHERE FALSE",
+    "SELECT id, title, description, quota, start_at, end_at, min_used_quota, min_account_age_days, enabled, created_at FROM gifts WHERE FALSE",
+    "SELECT id, gift_id, user_id, username, quota, created_at FROM gift_claims WHERE FALSE",
+    r#"SELECT id, created_at, request_id, user_id, username, token_id, channel_id,
+model_name, "group", endpoint, decision, rule_id, rule_name, category, layer,
+severity, source, rule_version, pattern_digest, input_digest, match_count
+FROM advanced_security_events WHERE FALSE"#,
+    "SELECT user_id, ip, created_at, updated_at FROM personal_access_ips WHERE FALSE",
+];
+
 pub struct InfrastructureProbe {
     pg: PgPool,
     valkey: redis::Client,
@@ -166,6 +180,11 @@ async fn schema_compatible_with(
     for query in OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS {
         backend.verify_select(query).await?;
     }
+    if schema_contract >= 3 {
+        for query in CURRENT_DASHBOARD_SCHEMA_SELECTS {
+            backend.verify_select(query).await?;
+        }
+    }
     Ok(())
 }
 
@@ -240,6 +259,20 @@ mod tests {
                 .expect_err("missing table, column, or SELECT grant must fail readiness");
             assert_eq!(error.dependency, "schema", "query: {query}");
         }
+    }
+
+    #[tokio::test]
+    async fn contract_three_requires_the_bounty_archive_column() {
+        let backend = backend(Some(CURRENT_DASHBOARD_SCHEMA_SELECTS[0]));
+        let error = schema_compatible_with(&backend, 3)
+            .await
+            .expect_err("contract 3 must fail closed without archived_at");
+
+        assert_eq!(error.dependency, "schema");
+        assert_eq!(
+            backend.seen.lock().expect("mock schema lock").last(),
+            Some(&CURRENT_DASHBOARD_SCHEMA_SELECTS[0])
+        );
     }
 
     #[tokio::test]

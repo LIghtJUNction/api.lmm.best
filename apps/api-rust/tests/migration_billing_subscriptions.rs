@@ -113,6 +113,17 @@ fn smoke_router() -> axum::Router {
     ))
 }
 
+fn console_gate_smoke_router() -> axum::Router {
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
+        .connect_lazy("postgres://postgres@127.0.0.1:1/billing")
+        .expect("valid lazy PostgreSQL test URL");
+    router(
+        BillingSubscriptionsState::new(pool, None, Arc::new(FixtureAuth))
+            .with_console_access_gate(),
+    )
+}
+
 async fn error_body(response: axum::response::Response) -> serde_json::Value {
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -137,6 +148,23 @@ async fn subscription_routes_should_reject_missing_bearer_token_before_database_
         error_body(response).await,
         json!({"success": false, "message": "Unauthorized, invalid access token"})
     );
+}
+
+#[tokio::test]
+async fn l0_subscription_plan_reads_are_hidden_before_database_access() {
+    let response = console_gate_smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/subscription/plans")
+                .header("authorization", "Bearer user")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(error_body(response).await, json!({"message": "Not Found"}));
 }
 
 #[tokio::test]

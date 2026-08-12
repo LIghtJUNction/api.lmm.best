@@ -225,6 +225,9 @@ after(() => domWindow.close())
 describe('AssistantPanel', () => {
   test('uses an L1 unlock label only for L0 users', async () => {
     api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
       assert.equal(url, '/api/status')
       return {
         data: {
@@ -261,7 +264,7 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
 
-      assert.equal(launcherButton.textContent?.trim(), 'AI assistant')
+      assert.equal(launcherButton.textContent?.trim(), 'Service guide')
       assert.equal(
         launcherButton.getAttribute('aria-label'),
         'Open AI assistant'
@@ -273,7 +276,7 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('keeps the conversation when the floating assistant is closed and reopened', async () => {
+  test('keeps the conversation when the desktop service guide is collapsed and expanded', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/status') {
         return {
@@ -295,7 +298,10 @@ describe('AssistantPanel', () => {
       assert.ok(launcherButton)
       assert.equal(launcherButton.getAttribute('aria-haspopup'), 'dialog')
       assert.equal(launcherButton.getAttribute('aria-expanded'), 'false')
-      assert.equal(launcherButton.hasAttribute('aria-controls'), false)
+      assert.equal(
+        launcherButton.getAttribute('aria-controls'),
+        'ai-assistant-panel'
+      )
       await act(async () => {
         launcherButton.click()
         await flushEffects()
@@ -331,24 +337,24 @@ describe('AssistantPanel', () => {
         /Choose by workload rather than list price\./
       )
 
-      const closeButton = document.querySelector<HTMLButtonElement>(
-        '[data-slot="sheet-close"]'
+      const collapseButton = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-collapse"]'
       )
-      assert.ok(closeButton)
+      assert.ok(collapseButton)
       await act(async () => {
-        closeButton.click()
+        collapseButton.click()
         await flushEffects()
       })
       await act(async () =>
         waitForCondition(
-          () => document.querySelector('[data-slot="sheet-content"]') === null,
-          'Assistant panel did not close'
+          () =>
+            document.querySelector('[data-testid="assistant-expand"]') !== null,
+          'Assistant rail did not collapse'
         )
       )
-      assert.equal(launcherButton.getAttribute('aria-expanded'), 'false')
 
       await act(async () => {
-        launcherButton.click()
+        findButton('Expand').click()
         await flushEffects()
       })
       await act(async () =>
@@ -361,10 +367,8 @@ describe('AssistantPanel', () => {
         )
       )
       assert.equal(
-        (document.body.textContent ?? '').match(
-          /Which option is the best value\?/g
-        )?.length,
-        1
+        document.querySelector('[data-testid="assistant-collapse"]') !== null,
+        true
       )
     } finally {
       await act(async () => rendered.root.unmount())
@@ -501,31 +505,19 @@ describe('AssistantPanel', () => {
       })
       assert.ok(findButton('Ask an administrator to raise my access level'))
       assert.throws(() => findButton('Which option is the best value?'))
-      assert.ok(findButton('How is request cost calculated?'))
-      assert.ok(findButton('What can I do while access is under review?'))
-      assert.ok(findButton('How do I set up Claude Code or CC Switch?'))
+      assert.throws(() => findButton('How is request cost calculated?'))
+      assert.throws(() =>
+        findButton('What can I do while access is under review?')
+      )
+      assert.throws(() =>
+        findButton('How do I set up Claude Code or CC Switch?')
+      )
 
       assert.doesNotMatch(document.body.textContent ?? '', /save 20%/)
       assert.equal(document.querySelector('#assistant-expected-credit'), null)
       assert.equal(document.querySelector('#assistant-topup-credit'), null)
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
 
-      await act(async () => {
-        findButton('How do I set up Claude Code or CC Switch?').click()
-        await flushEffects()
-        findButton('Open client setup guide').click()
-        await flushEffects()
-        findButton('Windows').click()
-        await flushEffects()
-      })
-      assert.match(
-        document.body.textContent ?? '',
-        /winget install Anthropic\.ClaudeCode/
-      )
-      assert.equal(
-        document.querySelector('select[aria-label="Model ID"]'),
-        null
-      )
       assert.throws(() => findButton('Create API key'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
     } finally {

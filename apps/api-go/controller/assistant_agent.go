@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -210,9 +209,11 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "request_human_support",
-				Description: "Prepare a handoff to an administrator. The message is required and must contain at least 5 characters. This is a write action and requires an explicit confirmation in the UI.",
+				Description: "Prepare a handoff to an administrator. The message is required and must contain at least 5 characters. Use action=disable_account only when the conversation has established a concrete account-safety reason; this creates an administrator review request and never disables an account directly. Any write action requires explicit confirmation in the UI.",
 				Parameters: objectSchema(map[string]any{
-					"message": map[string]any{"type": "string", "minLength": 5, "maxLength": 2000},
+					"message":        map[string]any{"type": "string", "minLength": 5, "maxLength": 2000},
+					"action":         map[string]any{"type": "string", "enum": []string{"support", "disable_account"}},
+					"target_user_id": map[string]any{"type": "integer", "minimum": 1},
 				}, []string{"message"}),
 			},
 		},
@@ -585,6 +586,9 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 				"error":  "support message must contain 5 to 2000 characters",
 			}
 		}
+		if inputString(input, "action") == "disable_account" {
+			return executeAssistantAccountDisableRequestTool(c, actorUserID, input, message)
+		}
 		return map[string]any{
 			"ok":            true,
 			"status":        "confirmation_required",
@@ -595,6 +599,82 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
+	}
+}
+
+// executeAssistantAccountDisableRequestTool follows the existing assistant
+// action pattern: prepare a short-lived, session-bound confirmation draft and
+// expose it as lmm_assistant_action. The follow-up endpoint consumes the flow
+// and creates a pending admin request; this function never changes User.Status.
+func executeAssistantAccountDisableRequestTool(c *gin.Context, userID int, input map[string]any, reason string) map[string]any {
+	if c == nil || userID <= 0 || c.GetBool("use_access_token") {
+		return map[string]any{"ok": false, "error": "账号安全操作需要有效的浏览器登录会话"}
+	}
+	sessionID := strings.TrimSpace(c.GetString("session_id"))
+	if sessionID == "" {
+		return map[string]any{"ok": false, "error": "账号安全操作需要有效的浏览器登录会话"}
+	}
+	actor, err := model.GetUserById(userID, false)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "无法读取当前账号"}
+	}
+	targetUserID := userID
+	if rawTarget, exists := input["target_user_id"]; exists {
+		number, ok := inputNumber(input, "target_user_id")
+		if !ok || number < 1 || math.Trunc(number) != number {
+			return map[string]any{"ok": false, "status": "target_invalid", "error": "目标用户编号无效"}
+		}
+		targetUserID = int(number)
+		if rawTarget == nil {
+			return map[string]any{"ok": false, "status": "target_invalid", "error": "目标用户编号无效"}
+		}
+	}
+	if actor.Role < common.RoleAdminUser && targetUserID != actor.Id {
+		return map[string]any{"ok": false, "status": "target_forbidden", "error": "普通用户只能为自己的账号提交安全申请"}
+	}
+	if actor.Role >= common.RoleAdminUser && targetUserID == actor.Id {
+		return map[string]any{"ok": false, "status": "target_forbidden", "error": "管理员只能指定低权限目标账号"}
+	}
+	target, err := model.GetUserById(targetUserID, false)
+	if err != nil {
+		return map[string]any{"ok": false, "status": "target_not_found", "error": "目标账号不存在"}
+	}
+	if target.Role == common.RoleRootUser || (actor.Role < common.RoleRootUser && target.Role >= common.RoleAdminUser) {
+		return map[string]any{"ok": false, "status": "target_forbidden", "error": "该目标账号不在当前管理员可操作范围内"}
+	}
+	payload, err := json.Marshal(assistantAccountDisableDraft{
+		TargetUserID: targetUserID,
+		Reason:       reason,
+	})
+	if err != nil {
+		return map[string]any{"ok": false, "error": "账号安全申请无法准备"}
+	}
+	confirmationToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   assistantAccountDisableAuthFlowPurpose,
+		UserId:    actor.Id,
+		SessionId: sessionID,
+		Payload:   string(payload),
+		ExpiresAt: time.Now().Add(assistantRecommendationTTL),
+	})
+	if err != nil {
+		return map[string]any{"ok": false, "error": "账号安全申请确认无法创建"}
+	}
+	action := map[string]any{
+		"type":               "account_disable_request",
+		"target_user_id":     targetUserID,
+		"target_username":    target.Username,
+		"reason":             reason,
+		"confirmation_token": confirmationToken,
+	}
+	c.Set(assistantClientActionKey, action)
+	return map[string]any{
+		"ok":                 true,
+		"status":             "confirmation_required",
+		"action":             "account_disable_request",
+		"target_user_id":     targetUserID,
+		"target_username":    target.Username,
+		"admin_confirmation": true,
+		"message":            "这只是提交给管理员的禁用建议。请向用户展示目标、原因和管理员审核说明，并在用户明确确认后调用账号操作申请接口；在管理员批准前账号不会被禁用。",
 	}
 }
 
@@ -956,98 +1036,27 @@ func executeAssistantUsageTool(userID int, input map[string]any) map[string]any 
 
 func executeAssistantSearchTool(c *gin.Context, input map[string]any) map[string]any {
 	query := inputString(input, "query")
-	if len([]rune(query)) < 2 {
-		return map[string]any{"ok": false, "error": "search query is required"}
-	}
-	settings := setting.GetAssistantSettings()
-	searchURL := strings.TrimSpace(settings.SearchURL)
-	if searchURL == "" {
-		return map[string]any{"ok": false, "configured": false, "error": "web search is not configured by the administrator"}
-	}
-	parsed, err := url.Parse(searchURL)
-	if err != nil || setting.ValidateAssistantSearchURL(searchURL) != nil {
-		return map[string]any{"ok": false, "error": "configured search URL is invalid"}
-	}
-	params := parsed.Query()
-	params.Set("q", query)
-	parsed.RawQuery = params.Encode()
 	ctx := context.Background()
 	if c != nil && c.Request != nil {
 		ctx = c.Request.Context()
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	response, err := ExecuteAssistantSearch(ctx, query)
 	if err != nil {
-		return map[string]any{"ok": false, "error": "search request could not be created"}
-	}
-	if key := strings.TrimSpace(settings.SearchAPIKey); key != "" {
-		request.Header.Set("Authorization", "Bearer "+key)
-		request.Header.Set("X-API-Key", key)
-	}
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			Proxy: nil,
-			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-				return dialAssistantSearchAddress(ctx, network, address)
-			},
-		},
-		CheckRedirect: func(request *http.Request, via []*http.Request) error {
-			if len(via) >= 3 || setting.ValidateAssistantSearchURL(request.URL.String()) != nil {
-				return errors.New("search provider redirect is not allowed")
-			}
-			return nil
-		},
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return map[string]any{"ok": false, "configured": true, "error": "search provider request failed"}
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 64*1024))
-	if err != nil {
-		return map[string]any{"ok": false, "configured": true, "error": "search provider response could not be read"}
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return map[string]any{"ok": false, "configured": true, "status": response.StatusCode, "error": "search provider returned an error"}
-	}
-	var data any
-	if json.Unmarshal(body, &data) != nil {
-		data = strings.TrimSpace(string(body))
-	}
-	return map[string]any{"ok": true, "configured": true, "query": query, "results": data}
-}
-
-func dialAssistantSearchAddress(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, errors.New("search provider address is invalid")
-	}
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	if ip := net.ParseIP(host); ip != nil {
-		if !setting.IsAssistantSearchPublicIP(ip) {
-			return nil, errors.New("search provider resolved to a non-public address")
+		return map[string]any{
+			"ok":         false,
+			"configured": response.Configured,
+			"query":      response.Query,
+			"status":     response.Status,
+			"error":      err.Error(),
 		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 	}
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return nil, errors.New("search provider hostname could not be resolved")
+	return map[string]any{
+		"ok":         true,
+		"configured": response.Configured,
+		"query":      response.Query,
+		"status":     response.Status,
+		"results":    response.Results,
 	}
-	var lastErr error
-	for _, ip := range ips {
-		if !setting.IsAssistantSearchPublicIP(ip) {
-			continue
-		}
-		connection, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if dialErr == nil {
-			return connection, nil
-		}
-		lastErr = dialErr
-	}
-	if lastErr != nil {
-		return nil, errors.New("search provider has no reachable public address")
-	}
-	return nil, errors.New("search provider resolved only to non-public addresses")
 }
 
 func executeAssistantAccountTool(userID int) map[string]any {

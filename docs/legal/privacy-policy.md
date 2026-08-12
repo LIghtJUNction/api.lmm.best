@@ -1,38 +1,55 @@
-# LMM API 隐私政策
+# LMM API Privacy Policy
 
-生效日期：2026 年 8 月 9 日；最后更新：2026 年 8 月 9 日
+Effective date: August 9, 2026.
+Last updated: August 9, 2026.
 
-本政策说明 LIghtJUNction（以下简称“我们”）在您使用 LMM API、LMM Forge、网站、控制台及开放源代码悬赏服务时如何处理个人信息。注册或使用服务即表示您已阅读本政策。您可以通过 support@lmm.best 联系我们提出隐私请求或安全问题。
+This policy explains how LIghtJUNction ("we") processes personal information when you use LMM API, LMM Forge, the website, console, and open-source bounty services.
 
-## 1. 我们收集的信息
+By registering or using our services, you agree to this policy. You can contact support@lmm.best for privacy requests or security-related questions.
 
-- **账户信息**：用户名、邮箱、登录凭据的加密摘要、登录方式、账户状态和安全设置。
-- **服务与计费信息**：API 密钥的必要标识、请求时间、模型和用量、余额、订单、充值、退款及悬赏结算记录。
-- **设备与安全信息**：IP 地址、浏览器或客户端标识、会话、错误日志、风控信号和必要的审计记录。
-- **您主动提交的内容**：悬赏描述、代码交付证据、工单、反馈以及您在 API 请求中提交的输入和附件。
+## 1. Information We Collect
 
-我们只收集提供服务、保障安全、完成结算和履行法律义务所需的信息；不会要求您提交与服务无关的敏感信息。
+- **Account information**: username, email, hashed login credentials, sign-in method, account status, and security settings.
+- **Service and billing information**: identifying API key metadata required for operations, request timestamps, models and usage, balance, orders, top-up transactions, refunds, and bounty settlement records.
+- **Device and security information**: IP address, browser/client identifiers, sessions, error logs, anti-abuse signals, and required audit logs.
+- **User-submitted content**: bounty descriptions, submission evidence, tickets, feedback, and content you submit in API calls (including attachments).
 
-## 2. 使用目的与法律依据
+We only collect information necessary to provide the service, protect security, complete settlement, and meet legal obligations. We do not require sensitive personal data unrelated to the service.
 
-我们使用信息来创建和保护账户、认证请求、提供模型和悬赏服务、计量及扣费、处理退款、检测滥用、响应支持、改进可靠性，以及遵守税务、反欺诈和其他适用法律义务。对于需要同意的处理，我们会在相应页面请求您的明确同意；您可以撤回同意，但可能无法继续使用依赖该处理的功能。
+## 2. Purposes and Legal Basis
 
-## 3. 第三方处理与跨境传输
+We process information to create and secure accounts, authenticate requests, provide model and bounty services, measure and bill usage, handle refunds, detect abuse, respond to support requests, improve reliability, and comply with tax, fraud-prevention, and other legal obligations.
 
-为完成您发起的请求，输入、必要的请求元数据或交付内容可能发送给您选择的模型、支付、代码托管、身份验证、邮件或基础设施服务商。第三方按照其自身条款和隐私政策处理信息。跨境传输仅在提供服务、履行合同或法律允许的其他基础上进行，并采取访问控制、传输加密和最小化措施。请勿提交您无权分享的个人、机密或受监管数据。
+Where processing requires your consent, we will request it on the relevant page. You may withdraw consent at any time, though some features may stop working if that processing is required.
 
-## 4. 保存期限
+## 3. Third-Party Processing and Cross-Border Transfer
 
-账户、用量、订单和安全审计记录通常在账户存续期间保存；注销后，我们会在完成结算、处理争议、欺诈防范和法律义务所需期限内保留必要记录，随后删除或匿名化。请求内容按功能、故障排查和相关第三方服务商的保留设置处理。具体期限会因记录类型、法律要求和安全需要而不同。
+To fulfill your requests, inputs, required request metadata, and delivery artifacts may be sent to selected model providers, payment processors, code hosting services, authentication providers, email providers, and infrastructure services. These providers process information under their own terms and privacy policies.
 
-## 5. 安全措施
+Cross-border transfer occurs only when required to provide the service, perform a contract, or where legally permitted. We apply access controls, transport encryption, and data minimization. Do not submit personal, confidential, or regulated data you are not authorized to share.
 
-我们采用访问分级、凭据哈希、密钥隔离、传输加密、审计和异常检测等措施保护信息。没有任何在线服务可以保证绝对安全；如果发现可能影响您账户的事件，我们会在法律要求的范围内通知并采取补救措施。
+## 4. Data Retention
 
-## 6. 您的权利
+Account, usage, order, and security audit logs are normally retained while the account is active. After account closure, we retain only records needed for settlement, disputes, fraud prevention, and legal compliance, then delete or anonymize.
 
-在适用法律范围内，您可以请求访问、更正、删除、限制或导出个人信息，反对特定处理，或撤回同意。请使用账户邮箱联系 support@lmm.best，并说明请求范围；我们可能要求验证身份。删除账户前请先处理未结算订单、退款和悬赏义务。
+Request data is retained based on its function, troubleshooting needs, and retention settings of related third-party services. Retention varies by record type, legal requirement, and security necessity.
 
-## 7. Cookie、未成年人和政策更新
+## 5. Security Controls
 
-我们使用维持登录、安全和偏好所需的 Cookie 或类似技术，不以其建立与服务无关的画像。服务不面向未满适用法定年龄的人员；如监护人发现未成年人未经许可提供信息，请联系我们。政策更新会在本页面公布新的生效日期；重大变化会通过站内提示或账户可用的联系方式通知。
+We use role-based access control, hashed credentials, key isolation, transport encryption, audit logging, and anomaly detection.
+
+No online service is absolutely secure. If we detect a security event that may affect your account, we will notify you where legally required and take remedial action.
+
+## 6. Your Rights
+
+Where applicable, you can request access, correction, deletion, restriction, or export of personal data, object to specific processing, and withdraw consent. Contact support@lmm.best with the email associated with your account and a clear description of your request. We may ask for identity verification.
+
+Before closing your account, ensure all open orders, refunds, and bounty obligations are settled.
+
+## 7. Cookies, Minors, and Policy Updates
+
+We use cookies or similar technologies required for authentication, security, and user preferences and do not use them for unrelated profiling.
+
+Our services are not intended for persons below the legally required age. If a guardian discovers unauthorized disclosure by a minor, contact us immediately.
+
+Updated versions of this policy are published on this page with a new effective date. Material changes will also be communicated through in-app notices or account contact channels.

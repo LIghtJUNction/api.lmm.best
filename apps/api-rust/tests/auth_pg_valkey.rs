@@ -4,8 +4,8 @@ use axum::{
 };
 use bcrypt::{DEFAULT_COST, hash};
 use lmm_api_rs::auth::{
-    AuthConfig, AuthErrorKind, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth,
-    UserAuthPolicyError, auth_router, enforce_user_auth,
+    AssistantL1ConfirmationError, AuthConfig, AuthErrorKind, AuthHttpState, DashboardAuth,
+    PgValkeyDashboardAuth, UserAuthPolicyError, auth_router, enforce_user_auth,
 };
 use lmm_api_rs::migration_routes::missing_identity_catalog::{IdentityCatalogState, token_router};
 use lmm_api_rs::{ClientIpKey, RequestContext};
@@ -887,6 +887,50 @@ async fn assert_concurrent_limit(
             .expect("active count"),
         1
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18 and Valkey; use auth-listener-differential.sh"]
+async fn assistant_l1_confirmation_should_be_session_bound_and_single_use() {
+    let (database_url, valkey_url) = integration_urls();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("test PostgreSQL must be reachable");
+    reset_schema(&pool).await;
+    let valkey = redis::Client::open(valkey_url).expect("Valkey URL");
+    let auth =
+        PgValkeyDashboardAuth::new(pool, valkey, integration_config()).expect("auth adapter");
+    let token = auth
+        .create_assistant_l1_confirmation(
+            7,
+            "browser-session",
+            r#"{"user_statement":"concrete use case","recommendation":"concrete recommendation for administrator review"}"#,
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("confirmation token");
+
+    let wrong_session = auth
+        .consume_assistant_l1_confirmation(
+            7,
+            "different-session",
+            SecretString::from(token.clone()),
+        )
+        .await;
+    assert_eq!(wrong_session, Err(AssistantL1ConfirmationError::Invalid));
+
+    let payload = auth
+        .consume_assistant_l1_confirmation(7, "browser-session", SecretString::from(token.clone()))
+        .await
+        .expect("matching confirmation consumes once");
+    assert!(payload.contains("concrete use case"));
+
+    let replay = auth
+        .consume_assistant_l1_confirmation(7, "browser-session", SecretString::from(token))
+        .await;
+    assert_eq!(replay, Err(AssistantL1ConfirmationError::Invalid));
 }
 
 fn integration_config() -> AuthConfig {

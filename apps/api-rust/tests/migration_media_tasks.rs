@@ -318,16 +318,12 @@ async fn every_selected_submit_and_task_route_reaches_its_exact_operation() {
         "/suno/fetch/suno-job",
         "/suno/submit/extend",
         "/kling/v1/videos/image2video",
-        "/kling/v1/videos/image2video/kling-image-job",
         "/kling/v1/videos/text2video",
-        "/kling/v1/videos/text2video/kling-text-job",
         "/jimeng/",
     ] {
         let method = if (path.ends_with("/fetch") && path != "/suno/fetch")
             || path.ends_with("image-seed")
             || path.ends_with("suno-job")
-            || path.ends_with("kling-image-job")
-            || path.ends_with("kling-text-job")
         {
             "GET"
         } else {
@@ -340,7 +336,7 @@ async fn every_selected_submit_and_task_route_reaches_its_exact_operation() {
         );
     }
     let calls = service.calls.lock().expect("calls lock");
-    assert_eq!(calls.len(), 23);
+    assert_eq!(calls.len(), 21);
     assert_eq!(calls[12].operation, MediaTaskOperation::Fetch);
     assert_eq!(calls[13].operation, MediaTaskOperation::ImageSeed);
     assert_eq!(calls[14].operation, MediaTaskOperation::ListByCondition);
@@ -348,14 +344,6 @@ async fn every_selected_submit_and_task_route_reaches_its_exact_operation() {
     assert_eq!(calls[16].operation, MediaTaskOperation::SunoFetchById);
     assert_eq!(calls[17].operation, MediaTaskOperation::SunoSubmit);
     assert_eq!(calls[18].operation, MediaTaskOperation::KlingImageToVideo);
-    assert_eq!(
-        calls[19].operation,
-        MediaTaskOperation::KlingImageToVideoFetch
-    );
-    assert_eq!(calls[20].operation, MediaTaskOperation::KlingTextToVideo);
-    assert_eq!(
-        calls[21].operation,
-        MediaTaskOperation::KlingTextToVideoFetch
-    );
-    assert_eq!(calls[22].operation, MediaTaskOperation::JimengSubmit);
+    assert_eq!(calls[19].operation, MediaTaskOperation::KlingTextToVideo);
+    assert_eq!(calls[20].operation, MediaTaskOperation::JimengSubmit);
 }

@@ -55,7 +55,6 @@ import {
   AlertDescription,
   AlertTitle,
 } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -73,12 +72,14 @@ import {
   getAssistantStatus,
   sendAssistantMessage,
   type AssistantChatMessage,
+  type AssistantAccountDisableAction,
   type AssistantL1RecommendationAction,
 } from './api'
 import {
   getAssistantAccountAccessState,
   type AssistantAccountAccessState,
 } from './assistant-access'
+import { AssistantAccountActionTool } from './assistant-account-action-tool'
 import { AssistantActivationTool } from './assistant-activation-tool'
 import { AssistantCostTool } from './assistant-cost-tool'
 import {
@@ -141,6 +142,8 @@ type ConversationEntry = {
     history: AssistantChatMessage[]
   }
 }
+
+type AssistantPanelMode = 'mobile' | 'rail'
 
 function getBaseUrl(): string {
   if (typeof window === 'undefined') return 'https://api.lmm.best/v1'
@@ -268,15 +271,65 @@ function AssistantPromptInputSync(props: {
   return null
 }
 
+function AssistantPanelHeader(props: {
+  mode: AssistantPanelMode
+  description: string
+  onToggleCollapsed?: () => void
+}) {
+  const { t } = useTranslation()
+
+  if (props.mode === 'mobile') {
+    return (
+      <SheetHeader className={sideDrawerHeaderClassName('pr-12')}>
+        <SheetTitle>{t('Service guide')}</SheetTitle>
+        <SheetDescription>{props.description}</SheetDescription>
+      </SheetHeader>
+    )
+  }
+
+  return (
+    <header className='border-border/70 bg-background/95 supports-[backdrop-filter]:bg-background/80 flex shrink-0 items-start gap-3 border-b px-4 py-3 backdrop-blur'>
+      <div className='min-w-0 flex-1'>
+        <h2 className='text-base leading-6 font-semibold'>
+          {t('Service guide')}
+        </h2>
+        <p className='text-muted-foreground mt-0.5 text-xs leading-5'>
+          {props.description}
+        </p>
+      </div>
+      <Button
+        type='button'
+        variant='ghost'
+        size='icon-sm'
+        aria-label={t('Collapse')}
+        title={t('Collapse')}
+        data-testid='assistant-collapse'
+        onClick={props.onToggleCollapsed}
+      >
+        <HugeiconsIcon
+          icon={ArrowRight01Icon}
+          strokeWidth={2}
+          aria-hidden='true'
+        />
+      </Button>
+    </header>
+  )
+}
+
 export function AssistantPanel(props: {
   open: boolean
+  mode?: AssistantPanelMode
+  collapsed?: boolean
   initialPreset?: AssistantPresetId
   initialMessage?: string
   initialMessageRevision?: number
   onOpenChange: (open: boolean) => void
+  onToggleCollapsed?: () => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const mode = props.mode ?? 'mobile'
+  const panelVisible = mode === 'rail' ? !props.collapsed : props.open
   const baseUrl = getBaseUrl()
   const presets = useMemo<AssistantPreset[]>(
     () => [
@@ -473,6 +526,8 @@ export function AssistantPanel(props: {
   const [sending, setSending] = useState(false)
   const [recommendationDraft, setRecommendationDraft] =
     useState<AssistantL1RecommendationAction | null>(null)
+  const [accountDisableDraft, setAccountDisableDraft] =
+    useState<AssistantAccountDisableAction | null>(null)
   const [activeTool, setActiveTool] = useState<
     | 'activation'
     | 'key'
@@ -487,7 +542,7 @@ export function AssistantPanel(props: {
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
     queryFn: getAssistantStatus,
-    enabled: props.open,
+    enabled: panelVisible,
     staleTime: 30_000,
     retry: false,
   })
@@ -513,7 +568,7 @@ export function AssistantPanel(props: {
   const accountToolActive = activeTool !== null
   let visiblePresets: AssistantPreset[] = []
   if (accountAccessState === 'restricted') {
-    visiblePresets = presets.filter((preset) => preset.restricted !== undefined)
+    visiblePresets = presets.filter((preset) => preset.id === 'onboarding')
   } else if (developerAccessGranted) {
     visiblePresets = presets
   }
@@ -603,15 +658,23 @@ export function AssistantPanel(props: {
         : undefined
       let suggestedAction = developerAccessGranted
         ? suggestedPreset?.action
-        : suggestedPreset?.restricted?.action
-      if (reply.action) {
+        : suggestedPresetId === 'onboarding'
+          ? suggestedPreset?.restricted?.action
+          : undefined
+      if (reply.action?.type === 'l1_recommendation') {
         setRecommendationDraft(reply.action)
+        setAccountDisableDraft(null)
         setActiveTool('activation')
         suggestedAction = {
           kind: 'tool',
           label: t('Review AI recommendation'),
           tool: 'activation',
         }
+      } else if (reply.action?.type === 'account_disable_request') {
+        setAccountDisableDraft(reply.action)
+        setRecommendationDraft(null)
+        setActiveTool(null)
+        suggestedAction = undefined
       }
       setEntries((current) => [
         ...current,
@@ -667,256 +730,305 @@ export function AssistantPanel(props: {
     await requestAssistantReply(entry.retry.message, entry.retry.history)
   }
 
+  const panelContent = (
+    <>
+      <AssistantPanelHeader
+        mode={mode}
+        description={assistantDescription}
+        onToggleCollapsed={props.onToggleCollapsed}
+      />
+      <Conversation className='bg-muted/20'>
+        <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
+          {entries.length === 0 ? (
+            <div className='flex flex-1 flex-col gap-5'>
+              <div>
+                <p className='text-base font-medium'>{t('How can I help?')}</p>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Choose a common question or ask anything about using LMM.'
+                  )}
+                </p>
+              </div>
+              {accountAccessState === 'loading' ||
+              accountAccessState === 'error' ? (
+                <AssistantAccountStatusNotice
+                  state={accountAccessState === 'error' ? 'error' : 'loading'}
+                  onRetry={() => void statusQuery.refetch()}
+                />
+              ) : null}
+              <div className='grid gap-2'>
+                {visiblePresets.map((preset) => (
+                  <Button
+                    key={preset.id}
+                    type='button'
+                    variant='outline'
+                    className='h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
+                    onClick={() => appendPreset(preset)}
+                  >
+                    <span>{preset.question}</span>
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      strokeWidth={2}
+                      className='shrink-0'
+                      aria-hidden='true'
+                    />
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <>
+              {entries.map((entry) => (
+                <Message from={entry.role} key={entry.id}>
+                  <MessageContent
+                    variant='flat'
+                    className={
+                      entry.error
+                        ? 'text-destructive gap-3 text-sm leading-6'
+                        : 'gap-3 text-sm leading-6'
+                    }
+                  >
+                    <p className='whitespace-pre-wrap'>{entry.content}</p>
+                    {entry.retry || entry.action ? (
+                      <div className='flex flex-wrap gap-2'>
+                        {entry.retry ? (
+                          <Button
+                            type='button'
+                            variant='outline'
+                            onClick={() => void retryMessage(entry)}
+                            disabled={sending}
+                          >
+                            <HugeiconsIcon
+                              icon={ReloadIcon}
+                              strokeWidth={2}
+                              data-icon='inline-start'
+                              aria-hidden='true'
+                            />
+                            {t('Retry')}
+                          </Button>
+                        ) : null}
+                        {entry.action ? (
+                          <PresetAction
+                            action={entry.action}
+                            onToolOpen={setActiveTool}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </MessageContent>
+                </Message>
+              ))}
+              {sending ? (
+                <Message from='assistant'>
+                  <MessageContent
+                    variant='flat'
+                    className='text-muted-foreground flex-row items-center gap-2'
+                    aria-live='polite'
+                  >
+                    <Loader size={14} />
+                    <span>{t('Assistant is thinking...')}</span>
+                  </MessageContent>
+                </Message>
+              ) : null}
+              {accountToolActive && !accountAccessConfirmed ? (
+                <AssistantAccountStatusNotice
+                  state={accountAccessState === 'error' ? 'error' : 'loading'}
+                  onRetry={() => void statusQuery.refetch()}
+                />
+              ) : null}
+              {activeTool === 'key' && developerAccessGranted ? (
+                <AssistantKeyTool
+                  baseUrl={baseUrl}
+                  availableModels={connectionModelsQuery.data ?? []}
+                  modelsLoading={connectionModelsQuery.isLoading}
+                  developerAccessGranted={developerAccessGranted}
+                  onContinueSetup={() => setActiveTool('setup')}
+                />
+              ) : null}
+              {activeTool === 'activation' && accountAccessConfirmed ? (
+                <AssistantActivationTool
+                  recommendationDraft={recommendationDraft}
+                  onContinueSetup={() => setActiveTool('setup')}
+                  onSubmitted={() => {
+                    setRecommendationDraft(null)
+                    setEntries((current) => [
+                      ...current,
+                      {
+                        id: nanoid(),
+                        role: 'assistant',
+                        content: t(
+                          'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
+                        ),
+                      },
+                    ])
+                  }}
+                />
+              ) : null}
+              {accountDisableDraft ? (
+                <AssistantAccountActionTool
+                  action={accountDisableDraft}
+                  onSubmitted={() => setAccountDisableDraft(null)}
+                />
+              ) : null}
+              {activeTool === 'cost' && accountAccessConfirmed ? (
+                <AssistantCostTool
+                  developerAccessGranted={developerAccessGranted}
+                />
+              ) : null}
+              {activeTool === 'handoff' && developerAccessGranted ? (
+                <AssistantHandoffTool />
+              ) : null}
+              {activeTool === 'models' && developerAccessGranted ? (
+                <AssistantModelsTool />
+              ) : null}
+              {activeTool === 'plan' && accountAccessConfirmed ? (
+                <AssistantPlanTool
+                  developerAccessGranted={developerAccessGranted}
+                  onRequestAccess={() => setActiveTool('activation')}
+                />
+              ) : null}
+              {activeTool === 'setup' && accountAccessConfirmed ? (
+                <AssistantSetupTool
+                  rootUrl={baseUrl.replace(/\/v1$/, '')}
+                  openAIBaseUrl={baseUrl}
+                  availableModels={connectionModelsQuery.data ?? []}
+                  modelsLoading={connectionModelsQuery.isLoading}
+                  developerAccessGranted={developerAccessGranted}
+                  onCreateKey={() => setActiveTool('key')}
+                  onRequestAccess={() => setActiveTool('activation')}
+                />
+              ) : null}
+              {activeTool === 'usage' && developerAccessGranted ? (
+                <AssistantUsageTool
+                  developerAccessGranted={developerAccessGranted}
+                />
+              ) : null}
+              <div className='grid gap-3 pt-1'>
+                <Separator />
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  onClick={() => {
+                    setEntries([])
+                    setActiveTool(null)
+                    setRecommendationDraft(null)
+                    setAccountDisableDraft(null)
+                  }}
+                  disabled={sending}
+                >
+                  <HugeiconsIcon
+                    icon={CleanIcon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                    aria-hidden='true'
+                  />
+                  {t('Clear conversation')}
+                </Button>
+              </div>
+            </>
+          )}
+        </ConversationContent>
+        <ConversationScrollButton />
+      </Conversation>
+
+      <div className='bg-background'>
+        <Separator className='bg-border/70' />
+        <div className='px-3 py-3 sm:px-4'>
+          <PromptInputProvider initialInput={props.initialMessage}>
+            <AssistantPromptInputSync
+              initialMessage={props.initialMessage}
+              initialMessageRevision={props.initialMessageRevision}
+            />
+            <PromptInput
+              onSubmit={submitMessage}
+              groupClassName='rounded-xl'
+              aria-label={t('Ask AI assistant')}
+            >
+              <PromptInputBody>
+                <PromptInputTextarea
+                  placeholder={assistantPromptPlaceholder}
+                  maxLength={4000}
+                  disabled={sending}
+                  className='min-h-14'
+                />
+              </PromptInputBody>
+              <PromptInputFooter>
+                <span className='text-muted-foreground truncate text-xs'>
+                  {assistantFooterStatus}
+                </span>
+                <PromptInputSubmit
+                  status={sending ? 'submitted' : 'ready'}
+                  disabled={sending}
+                />
+              </PromptInputFooter>
+            </PromptInput>
+          </PromptInputProvider>
+          {accountAccessConfirmed && superAdministratorFunded ? (
+            <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
+              {t(
+                'AI customer-service token usage is charged to the super administrator account, not your wallet.'
+              )}
+            </p>
+          ) : null}
+          <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
+            {t(
+              'AI answers may be inaccurate. Never send passwords or API keys.'
+            )}
+          </p>
+        </div>
+      </div>
+    </>
+  )
+
+  if (mode === 'rail') {
+    if (props.collapsed) {
+      return (
+        <aside
+          id='ai-assistant-panel'
+          className='bg-background hidden min-h-0 w-12 shrink-0 flex-col border-l md:flex'
+          aria-label={t('Service guide')}
+        >
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon'
+            className='m-2'
+            aria-label={t('Expand')}
+            title={t('Expand')}
+            data-testid='assistant-expand'
+            onClick={props.onToggleCollapsed}
+          >
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+            <span className='sr-only'>{t('Expand')}</span>
+          </Button>
+          <span className='sr-only'>{t('Service guide')}</span>
+        </aside>
+      )
+    }
+
+    return (
+      <aside
+        id='ai-assistant-panel'
+        className='bg-background hidden min-h-0 w-[clamp(20rem,28vw,30rem)] shrink-0 flex-col border-l md:flex'
+        aria-label={t('Service guide')}
+      >
+        {panelContent}
+      </aside>
+    )
+  }
+
   return (
     <Sheet open={props.open} onOpenChange={handleOpenChange}>
       <SheetContent
         id='ai-assistant-panel'
         className={sideDrawerContentClassName('max-w-none sm:!max-w-[480px]')}
       >
-        <SheetHeader className={sideDrawerHeaderClassName('pr-12')}>
-          <div className='flex flex-wrap items-center gap-2'>
-            <SheetTitle>{t('AI assistant')}</SheetTitle>
-            <Badge variant='secondary'>{t('Service guide')}</Badge>
-          </div>
-          <SheetDescription>{assistantDescription}</SheetDescription>
-        </SheetHeader>
-
-        <Conversation className='bg-muted/20'>
-          <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
-            {entries.length === 0 ? (
-              <div className='flex flex-1 flex-col gap-5'>
-                <div>
-                  <p className='text-base font-medium'>
-                    {t('How can I help?')}
-                  </p>
-                  <p className='text-muted-foreground mt-1 text-sm leading-6'>
-                    {t(
-                      'Choose a common question or ask anything about using LMM.'
-                    )}
-                  </p>
-                </div>
-                {accountAccessState === 'loading' ||
-                accountAccessState === 'error' ? (
-                  <AssistantAccountStatusNotice
-                    state={accountAccessState === 'error' ? 'error' : 'loading'}
-                    onRetry={() => void statusQuery.refetch()}
-                  />
-                ) : null}
-                <div className='grid gap-2'>
-                  {visiblePresets.map((preset) => (
-                    <Button
-                      key={preset.id}
-                      type='button'
-                      variant='outline'
-                      className='h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
-                      onClick={() => appendPreset(preset)}
-                    >
-                      <span>{preset.question}</span>
-                      <HugeiconsIcon
-                        icon={ArrowRight01Icon}
-                        strokeWidth={2}
-                        className='shrink-0'
-                        aria-hidden='true'
-                      />
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <>
-                {entries.map((entry) => (
-                  <Message from={entry.role} key={entry.id}>
-                    <MessageContent
-                      variant='flat'
-                      className={
-                        entry.error
-                          ? 'text-destructive gap-3 text-sm leading-6'
-                          : 'gap-3 text-sm leading-6'
-                      }
-                    >
-                      <p className='whitespace-pre-wrap'>{entry.content}</p>
-                      {entry.retry || entry.action ? (
-                        <div className='flex flex-wrap gap-2'>
-                          {entry.retry ? (
-                            <Button
-                              type='button'
-                              variant='outline'
-                              onClick={() => void retryMessage(entry)}
-                              disabled={sending}
-                            >
-                              <HugeiconsIcon
-                                icon={ReloadIcon}
-                                strokeWidth={2}
-                                data-icon='inline-start'
-                                aria-hidden='true'
-                              />
-                              {t('Retry')}
-                            </Button>
-                          ) : null}
-                          {entry.action ? (
-                            <PresetAction
-                              action={entry.action}
-                              onToolOpen={setActiveTool}
-                            />
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </MessageContent>
-                  </Message>
-                ))}
-                {sending ? (
-                  <Message from='assistant'>
-                    <MessageContent
-                      variant='flat'
-                      className='text-muted-foreground flex-row items-center gap-2'
-                      aria-live='polite'
-                    >
-                      <Loader size={14} />
-                      <span>{t('Assistant is thinking...')}</span>
-                    </MessageContent>
-                  </Message>
-                ) : null}
-                {accountToolActive && !accountAccessConfirmed ? (
-                  <AssistantAccountStatusNotice
-                    state={accountAccessState === 'error' ? 'error' : 'loading'}
-                    onRetry={() => void statusQuery.refetch()}
-                  />
-                ) : null}
-                {activeTool === 'key' && developerAccessGranted ? (
-                  <AssistantKeyTool
-                    baseUrl={baseUrl}
-                    availableModels={connectionModelsQuery.data ?? []}
-                    modelsLoading={connectionModelsQuery.isLoading}
-                    developerAccessGranted={developerAccessGranted}
-                    onContinueSetup={() => setActiveTool('setup')}
-                  />
-                ) : null}
-                {activeTool === 'activation' && accountAccessConfirmed ? (
-                  <AssistantActivationTool
-                    recommendationDraft={recommendationDraft}
-                    onContinueSetup={() => setActiveTool('setup')}
-                    onSubmitted={() => {
-                      setRecommendationDraft(null)
-                      setEntries((current) => [
-                        ...current,
-                        {
-                          id: nanoid(),
-                          role: 'assistant',
-                          content: t(
-                            'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
-                          ),
-                        },
-                      ])
-                    }}
-                  />
-                ) : null}
-                {activeTool === 'cost' && accountAccessConfirmed ? (
-                  <AssistantCostTool
-                    developerAccessGranted={developerAccessGranted}
-                  />
-                ) : null}
-                {activeTool === 'handoff' && developerAccessGranted ? (
-                  <AssistantHandoffTool />
-                ) : null}
-                {activeTool === 'models' && developerAccessGranted ? (
-                  <AssistantModelsTool />
-                ) : null}
-                {activeTool === 'plan' && accountAccessConfirmed ? (
-                  <AssistantPlanTool
-                    developerAccessGranted={developerAccessGranted}
-                    onRequestAccess={() => setActiveTool('activation')}
-                  />
-                ) : null}
-                {activeTool === 'setup' && accountAccessConfirmed ? (
-                  <AssistantSetupTool
-                    rootUrl={baseUrl.replace(/\/v1$/, '')}
-                    openAIBaseUrl={baseUrl}
-                    availableModels={connectionModelsQuery.data ?? []}
-                    modelsLoading={connectionModelsQuery.isLoading}
-                    developerAccessGranted={developerAccessGranted}
-                    onCreateKey={() => setActiveTool('key')}
-                    onRequestAccess={() => setActiveTool('activation')}
-                  />
-                ) : null}
-                {activeTool === 'usage' && developerAccessGranted ? (
-                  <AssistantUsageTool
-                    developerAccessGranted={developerAccessGranted}
-                  />
-                ) : null}
-                <div className='grid gap-3 pt-1'>
-                  <Separator />
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    onClick={() => {
-                      setEntries([])
-                      setActiveTool(null)
-                      setRecommendationDraft(null)
-                    }}
-                    disabled={sending}
-                  >
-                    <HugeiconsIcon
-                      icon={CleanIcon}
-                      strokeWidth={2}
-                      data-icon='inline-start'
-                      aria-hidden='true'
-                    />
-                    {t('Clear conversation')}
-                  </Button>
-                </div>
-              </>
-            )}
-          </ConversationContent>
-          <ConversationScrollButton />
-        </Conversation>
-
-        <div className='bg-background'>
-          <Separator className='bg-border/70' />
-          <div className='px-3 py-3 sm:px-4'>
-            <PromptInputProvider initialInput={props.initialMessage}>
-              <AssistantPromptInputSync
-                initialMessage={props.initialMessage}
-                initialMessageRevision={props.initialMessageRevision}
-              />
-              <PromptInput
-                onSubmit={submitMessage}
-                groupClassName='rounded-xl'
-                aria-label={t('Ask AI assistant')}
-              >
-                <PromptInputBody>
-                  <PromptInputTextarea
-                    placeholder={assistantPromptPlaceholder}
-                    maxLength={4000}
-                    disabled={sending}
-                    className='min-h-14'
-                  />
-                </PromptInputBody>
-                <PromptInputFooter>
-                  <span className='text-muted-foreground truncate text-xs'>
-                    {assistantFooterStatus}
-                  </span>
-                  <PromptInputSubmit
-                    status={sending ? 'submitted' : 'ready'}
-                    disabled={sending}
-                  />
-                </PromptInputFooter>
-              </PromptInput>
-            </PromptInputProvider>
-            {accountAccessConfirmed && superAdministratorFunded ? (
-              <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
-                {t(
-                  'AI customer-service token usage is charged to the super administrator account, not your wallet.'
-                )}
-              </p>
-            ) : null}
-            <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
-              {t(
-                'AI answers may be inaccurate. Never send passwords or API keys.'
-              )}
-            </p>
-          </div>
-        </div>
+        {panelContent}
       </SheetContent>
     </Sheet>
   )

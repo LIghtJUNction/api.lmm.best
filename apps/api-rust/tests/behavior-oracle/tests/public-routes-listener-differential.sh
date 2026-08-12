@@ -191,7 +191,11 @@ compare() {
       *) return 0 ;;
     esac
     jq -cn --arg method GET --arg path "$path" --argjson cases 1 \
-      '{method:$method,path:$path,differential_verified:true,differential_scope:"public-routes",cases:$cases,real_tcp:true,postgres_valkey_isolated:true,approval_credit:false,differences:null,mismatch_names:[]}' \
+      --arg go_manifest "$frozen_go_manifest_sha256" \
+      --arg rust_source "$rust_source_sha256" \
+      --arg rust_binary "$rust_binary_sha256" \
+      --argjson approval_eligible "$([[ $approval_mode == 1 ]] && echo true || echo false)" \
+      '{method:$method,path:$path,differential_verified:true,differential_scope:"public-routes",cases:$cases,real_tcp:true,postgres_valkey_isolated:true,approval_eligible:$approval_eligible,approval_credit:false,frozen_go_manifest_sha256:$go_manifest,rust_source_sha256:$rust_source,rust_binary_sha256:$rust_binary,differences:null,mismatch_names:[]}' \
       >"$result_dir/public-routes-$index.json"
   fi
 }
@@ -201,4 +205,8 @@ options_snapshot go >"$runtime/go.options.before"; options_snapshot rust >"$runt
 for route in /api/notice /api/about /api/home_page_content /api/user-agreement /api/privacy-policy /api/uptime/status; do compare "$route"; done
 [[ $scenario_total == 6 ]] || { echo "scenario count mismatch: $scenario_total" >&2; exit 1; }
 options_snapshot go >"$runtime/go.options.after"; options_snapshot rust >"$runtime/rust.options.after"; diff -u "$runtime/go.options.before" "$runtime/go.options.after"; diff -u "$runtime/rust.options.before" "$runtime/rust.options.after"; valkey_snapshot "$go_valkey_port" "$go_password" >"$runtime/go.valkey.after"; valkey_snapshot "$rust_valkey_port" "$rust_password" >"$runtime/rust.valkey.after"; [[ ! -s $runtime/go.valkey.after ]]; diff -u /dev/null "$runtime/rust.valkey.before"; diff -u /dev/null "$runtime/rust.valkey.after"
-jq -cn --arg go "$frozen_go_manifest_sha256" --arg rust "$rust_source_sha256" --arg binary "$rust_binary_sha256" --argjson approval "$approval_mode" --argjson scenarios "$scenario_total" '{test:"public-routes-listener-differential",mode:"full",approval_eligible:($approval==1),real_tcp:true,scenario_count:$scenarios,routes:["GET /api/notice","GET /api/about","GET /api/home_page_content","GET /api/user-agreement","GET /api/privacy-policy","GET /api/uptime/status"],frozen_go_manifest_sha256:$go,rust_source_sha256:$rust,rust_binary_sha256:$binary,result:"passed"}'
+summary=$(jq -cn --arg go "$frozen_go_manifest_sha256" --arg rust "$rust_source_sha256" --arg binary "$rust_binary_sha256" --argjson approval "$approval_mode" --argjson scenarios "$scenario_total" '{test:"public-routes-listener-differential",mode:"full",approval_eligible:($approval==1),approval_credit:false,real_tcp:true,scenario_count:$scenarios,routes:["GET /api/notice","GET /api/about","GET /api/home_page_content","GET /api/user-agreement","GET /api/privacy-policy","GET /api/uptime/status"],frozen_go_manifest_sha256:$go,rust_source_sha256:$rust,rust_binary_sha256:$binary,result:"passed"}')
+if [[ -n $result_dir ]]; then
+  printf '%s\n' "$summary" >"$result_dir/public-routes-summary.json"
+fi
+printf '%s\n' "$summary"

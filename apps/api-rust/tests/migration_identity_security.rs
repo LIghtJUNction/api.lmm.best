@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode},
 };
+use lmm_api_rs::auth::SecurityProof;
 use lmm_api_rs::migration_routes::identity_security::{
     IdentitySecurityState, MemorySecurityProvider, PgValkeySecurityProvider, SecurityActor,
     SecurityAuthorizer, SecurityCall, SecurityError, SecurityOperation, SecurityProvider,
@@ -18,6 +19,32 @@ use tower::ServiceExt;
 struct Authorizer {
     user: Result<SecurityActor, SecurityError>,
     admin: Result<SecurityActor, SecurityError>,
+}
+
+#[derive(Clone)]
+struct ProofAuthorizer {
+    actor: SecurityActor,
+    proof: Result<SecurityProof, SecurityError>,
+}
+
+#[async_trait]
+impl SecurityAuthorizer for ProofAuthorizer {
+    async fn user(&self, _: &HeaderMap) -> Result<SecurityActor, SecurityError> {
+        Ok(self.actor.clone())
+    }
+
+    async fn admin(&self, _: &HeaderMap) -> Result<SecurityActor, SecurityError> {
+        Ok(self.actor.clone())
+    }
+
+    async fn issue_security_proof(
+        &self,
+        _: &SecurityActor,
+        _: &str,
+        _: &[String],
+    ) -> Result<SecurityProof, SecurityError> {
+        self.proof.clone()
+    }
 }
 
 #[async_trait]
@@ -164,7 +191,7 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
             )
             .await
             .expect("candidate responds");
-        let expected_status = if uri == "/api/user/register" {
+        let expected_status = if matches!(uri, "/api/user/register" | "/api/verify") {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
             StatusCode::OK
@@ -301,6 +328,81 @@ async fn unavailable_webauthn_boundary_never_reports_a_fabricated_success() {
     )
     .await
     .expect("response");
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn universal_verify_returns_a_proof_only_after_provider_verification() {
+    let provider = Arc::new(MemorySecurityProvider::new(Ok(json!({
+        "method": "email",
+        "scope": "channel.key.read"
+    }))));
+    let application = router(IdentitySecurityState::new(
+        provider,
+        Arc::new(ProofAuthorizer {
+            actor: user(),
+            proof: Ok(SecurityProof {
+                token: "proof-token".to_owned(),
+                expires_at: 1_900_000_000,
+            }),
+        }),
+    ));
+    let response = application
+        .oneshot(
+            Request::post("/api/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"method":"email","code":"123456","scope":"channel.key.read"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("JSON"),
+        json!({
+            "success": true,
+            "message": "验证成功",
+            "data": {
+                "proof_token": "proof-token",
+                "expires_at": 1_900_000_000_i64,
+                "method": "email",
+                "scope": "channel.key.read"
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn universal_verify_rejects_provider_success_without_proof_fields() {
+    let provider = Arc::new(MemorySecurityProvider::new(Ok(json!({"accepted": true}))));
+    let application = router(IdentitySecurityState::new(
+        provider,
+        Arc::new(ProofAuthorizer {
+            actor: user(),
+            proof: Ok(SecurityProof {
+                token: "must-not-be-used".to_owned(),
+                expires_at: 1_900_000_000,
+            }),
+        }),
+    ));
+    let response = application
+        .oneshot(
+            Request::post("/api/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"method":"email","code":"123456","scope":"channel.key.read"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

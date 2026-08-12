@@ -243,6 +243,29 @@ async fn payment_auth_precedes_malformed_json_rejection() {
     );
 }
 
+#[tokio::test]
+async fn subscription_fastpay_notify_router_exposes_only_the_public_post_callback() {
+    let pg = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+        .expect("lazy PostgreSQL pool");
+    let valkey = redis::Client::open("redis://127.0.0.1:1").expect("lazy Valkey client");
+    let app = subscription_fastpay_notify_router(
+        SubscriptionFastPayNotifyState::new(pg, valkey),
+        512 * 1024,
+    );
+
+    let response = app
+        .oneshot(
+            Request::get("/api/subscription/fastpay/notify")
+                .body(Body::empty())
+                .expect("route request"),
+        )
+        .await
+        .expect("route response");
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
 async fn body(response: Response) -> String {
     String::from_utf8(
         to_bytes(response.into_body(), usize::MAX)
@@ -645,6 +668,71 @@ async fn balance_payment_should_return_the_legacy_success_envelope() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&body(response).await).expect("json response"),
         serde_json::json!({"success": true, "message": "", "data": null})
+    );
+}
+
+#[tokio::test]
+async fn balance_payment_mount_should_expose_only_the_local_ledger_route() {
+    let repo = Arc::new(MemoryRepo {
+        completions: Mutex::new(Vec::new()),
+        failures: Mutex::new(Vec::new()),
+    });
+    let app = subscription_balance_pay_router(SubscriptionBalancePayState::new(
+        repo,
+        Arc::new(AllowUser),
+        Arc::new(TestCache),
+        Arc::new(MutableCompliance(AtomicBool::new(true))),
+        500_000,
+    ));
+
+    let method_not_allowed = app
+        .clone()
+        .oneshot(
+            Request::get("/api/subscription/balance/pay")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(method_not_allowed.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+    let unrelated_route = app
+        .oneshot(
+            Request::post("/api/subscription/stripe/pay")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"plan_id":1}"#))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unrelated_route.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn balance_payment_mount_authenticates_before_json_binding() {
+    let repo = Arc::new(MemoryRepo {
+        completions: Mutex::new(Vec::new()),
+        failures: Mutex::new(Vec::new()),
+    });
+    let response = subscription_balance_pay_router(SubscriptionBalancePayState::new(
+        repo,
+        Arc::new(DenyUser),
+        Arc::new(TestCache),
+        Arc::new(MutableCompliance(AtomicBool::new(true))),
+        500_000,
+    ))
+    .oneshot(
+        Request::post("/api/subscription/balance/pay")
+            .header("content-type", "application/json")
+            .body(Body::from("{"))
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body(response).await).expect("json response"),
+        serde_json::json!({"success": false, "message": "Unauthorized"})
     );
 }
 

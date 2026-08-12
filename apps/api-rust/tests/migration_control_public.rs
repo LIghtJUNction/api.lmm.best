@@ -875,6 +875,42 @@ async fn dashboard_adapter_policy_matrix_keeps_optional_and_required_headers_dis
 }
 
 #[tokio::test]
+async fn console_gate_hides_l0_pricing_before_optional_header_nav_or_store_reads() {
+    for path in ["/api/pricing", "/api/assistant/pricing"] {
+        let auth: Arc<dyn DashboardAuth> = Arc::new(PolicyMatrixAuth {
+            user: matrix_user(1, 1),
+        });
+        let app = missing_control_public_router(
+            MissingControlPublicState::new(
+                Arc::new(missing_control_store()),
+                Arc::new(DashboardMissingControlAuthorizer::new(Arc::clone(&auth))),
+            )
+            .with_console_access_gate(auth),
+        );
+        let response = app
+            .oneshot(
+                Request::get(path)
+                    .header(header::AUTHORIZATION, "Bearer recognized")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                &to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body"),
+            )
+            .expect("JSON"),
+            serde_json::json!({"message": "Not Found"}),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn required_header_nav_enforces_user_auth_policy_statuses_without_auth_version() {
     for (error, expected_status) in [
         (UserAuthPolicyError::UserDisabled, StatusCode::UNAUTHORIZED),

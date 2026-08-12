@@ -3,10 +3,9 @@
 //! The Go service exposes the public bounty list through `TryUserAuth`: an
 //! anonymous visitor may browse published/paused projects, while a valid
 //! dashboard credential receives the current user's challenge for each
-//! project. This slice owns public discovery, authenticated read views, and
-//! settlement-notification acknowledgement paths. Mutating escrow, challenge,
-//! and MCP operations remain Go-owned until their transaction and provider
-//! evidence is migrated.
+//! project. This slice owns public discovery, authenticated read views, owner
+//! lifecycle changes, escrow and challenge settlement, MCP credentials, and
+//! settlement-notification acknowledgement paths.
 
 use crate::{ClientIpKey, legacy_empty_response};
 use axum::{
@@ -78,6 +77,14 @@ pub fn router(state: OpenSourceBountyState) -> Router {
         .route(
             "/api/open-source-bounties/projects/{id}/close",
             post(close_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/archive",
+            post(archive_bounty),
+        )
+        .route(
+            "/api/open-source-bounties/projects/{id}/unarchive",
+            post(unarchive_bounty),
         )
         .route(
             "/api/open-source-bounties/projects/{id}/accept",
@@ -175,6 +182,19 @@ struct DisputeListQuery {
 #[derive(Debug, Deserialize)]
 struct NotificationQuery {
     limit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OwnedQuery {
+    archived: Option<String>,
+}
+
+impl OwnedQuery {
+    fn archived(&self) -> bool {
+        self.archived
+            .as_deref()
+            .is_some_and(|value| matches!(value, "1" | "t" | "T" | "TRUE" | "true" | "True"))
+    }
 }
 
 impl NotificationQuery {
@@ -312,9 +332,12 @@ struct BountyProject {
     updated_at: i64,
     published_at: i64,
     closed_at: i64,
+    archived_at: i64,
 }
 
-const RAW_PROJECT_SELECT: &str = "SELECT id::BIGINT AS id, owner_user_id::BIGINT AS owner_user_id, repository_url, title, description, rules, reward_quota::BIGINT AS reward_quota, net_reward_quota::BIGINT AS net_reward_quota, reward_slots::BIGINT AS reward_slots, escrow_quota::BIGINT AS escrow_quota, platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, platform_fee_quota::BIGINT AS platform_fee_quota, status, created_at::BIGINT AS created_at, updated_at::BIGINT AS updated_at, published_at::BIGINT AS published_at, closed_at::BIGINT AS closed_at FROM open_source_bounty_projects WHERE id = $1";
+const RAW_PROJECT_SELECT: &str = "SELECT id::BIGINT AS id, owner_user_id::BIGINT AS owner_user_id, repository_url, title, description, rules, reward_quota::BIGINT AS reward_quota, net_reward_quota::BIGINT AS net_reward_quota, reward_slots::BIGINT AS reward_slots, escrow_quota::BIGINT AS escrow_quota, platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, platform_fee_quota::BIGINT AS platform_fee_quota, status, created_at::BIGINT AS created_at, updated_at::BIGINT AS updated_at, published_at::BIGINT AS published_at, closed_at::BIGINT AS closed_at, archived_at::BIGINT AS archived_at FROM open_source_bounty_projects WHERE id = $1";
+
+const RAW_OWNED_PROJECT_SELECT_FOR_UPDATE: &str = "SELECT id::BIGINT AS id, owner_user_id::BIGINT AS owner_user_id, repository_url, title, description, rules, reward_quota::BIGINT AS reward_quota, net_reward_quota::BIGINT AS net_reward_quota, reward_slots::BIGINT AS reward_slots, escrow_quota::BIGINT AS escrow_quota, platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, platform_fee_quota::BIGINT AS platform_fee_quota, status, created_at::BIGINT AS created_at, updated_at::BIGINT AS updated_at, published_at::BIGINT AS published_at, closed_at::BIGINT AS closed_at, archived_at::BIGINT AS archived_at FROM open_source_bounty_projects WHERE id = $1 AND owner_user_id = $2 FOR UPDATE";
 
 fn raw_project_from_row(row: &PgRow) -> Result<BountyProject, sqlx::Error> {
     Ok(BountyProject {
@@ -335,6 +358,7 @@ fn raw_project_from_row(row: &PgRow) -> Result<BountyProject, sqlx::Error> {
         updated_at: row.try_get("updated_at")?,
         published_at: row.try_get("published_at")?,
         closed_at: row.try_get("closed_at")?,
+        archived_at: row.try_get("archived_at")?,
     })
 }
 
@@ -1261,6 +1285,133 @@ async fn close_bounty(
         }),
     })
     .into_response()
+}
+
+fn archive_status_is_final(status: &str) -> bool {
+    matches!(status, "completed" | "closed")
+}
+
+async fn archive_bounty(
+    state: State<OpenSourceBountyState>,
+    path: Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    set_bounty_archived(state, path, headers, true).await
+}
+
+async fn unarchive_bounty(
+    state: State<OpenSourceBountyState>,
+    path: Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    set_bounty_archived(state, path, headers, false).await
+}
+
+async fn set_bounty_archived(
+    State(state): State<OpenSourceBountyState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    archived: bool,
+) -> Response {
+    let viewer_id = match required_developer_viewer_id(&state, &headers).await {
+        Ok(viewer_id) => viewer_id,
+        Err(response) => return response,
+    };
+    let project_id = match parse_positive_id(
+        &project_id,
+        "OPEN_SOURCE_BOUNTY_INVALID_ID",
+        "invalid open-source bounty identifier",
+    ) {
+        Ok(project_id) => project_id,
+        Err(response) => return *response,
+    };
+    let mut transaction = match state.pg.begin().await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to begin bounty archive change");
+            return internal_failure();
+        }
+    };
+    let row = match sqlx::query(RAW_OWNED_PROJECT_SELECT_FOR_UPDATE)
+        .bind(project_id)
+        .bind(viewer_id)
+        .fetch_optional(&mut *transaction)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return business_failure(
+                "OPEN_SOURCE_BOUNTY_NOT_FOUND",
+                "bounty project was not found",
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to lock bounty for archive change");
+            return internal_failure();
+        }
+    };
+    let project = match raw_project_from_row(&row) {
+        Ok(project) => project,
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to decode bounty for archive change");
+            return internal_failure();
+        }
+    };
+    if !archive_status_is_final(&project.status) {
+        return business_failure(
+            "OPEN_SOURCE_BOUNTY_ARCHIVE_UNAVAILABLE",
+            "only completed or closed bounties can be archived",
+        );
+    }
+    if (project.archived_at > 0) != archived {
+        let now = chrono::Utc::now().timestamp();
+        let archived_at = if archived { now } else { 0 };
+        if let Err(error) = sqlx::query(
+            "UPDATE open_source_bounty_projects SET archived_at=$1,updated_at=$2 WHERE id=$3",
+        )
+        .bind(archived_at)
+        .bind(now)
+        .bind(project_id)
+        .execute(&mut *transaction)
+        .await
+        {
+            tracing::error!(%error, viewer_id, project_id, "failed to update bounty archive state");
+            return internal_failure();
+        }
+    }
+    if let Err(error) = transaction.commit().await {
+        tracing::error!(%error, viewer_id, project_id, "failed to commit bounty archive change");
+        return internal_failure();
+    }
+
+    let action = if archived { "Archived" } else { "Unarchived" };
+    let content = format!("{action} open-source bounty {project_id}");
+    if let Err(error) = sqlx::query(
+        "INSERT INTO logs (user_id,created_at,type,content,username,request_id) SELECT id,$2,4,$3,username,$4 FROM users WHERE id=$1",
+    )
+    .bind(viewer_id)
+    .bind(chrono::Utc::now().timestamp())
+    .bind(content)
+    .bind(uuid::Uuid::new_v4().to_string())
+    .execute(&state.pg)
+    .await
+    {
+        tracing::error!(%error, viewer_id, project_id, "failed to record bounty archive change");
+    }
+
+    match load_raw_project(&state, project_id).await {
+        Ok(Some(project)) => Json(LegacySuccessEnvelope {
+            success: true,
+            message: "",
+            data: project,
+        })
+        .into_response(),
+        Ok(None) => internal_failure(),
+        Err(error) => {
+            tracing::error!(%error, viewer_id, project_id, "failed to reload bounty after archive change");
+            internal_failure()
+        }
+    }
 }
 
 async fn accept_bounty(State(state): State<OpenSourceBountyState>, request: Request) -> Response {
@@ -3135,6 +3286,7 @@ struct BountyProjectView {
     updated_at: i64,
     published_at: i64,
     closed_at: i64,
+    archived_at: i64,
     owner_username: String,
     active_challenge_count: i64,
     approved_challenge_count: i64,
@@ -3844,6 +3996,26 @@ async fn required_viewer_id(
     }
 }
 
+async fn required_developer_viewer_id(
+    state: &OpenSourceBountyState,
+    headers: &HeaderMap,
+) -> Result<i64, Response> {
+    let token =
+        authorization_token(headers).ok_or_else(|| auth_failure(AuthErrorKind::Unauthorized))?;
+    let view = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+        .map_err(|error| auth_failure(error.kind))?;
+    if view.id <= 0 || view.status != ENABLED_USER_STATUS {
+        return Err(auth_failure(AuthErrorKind::Unauthorized));
+    }
+    if !view.developer_access_granted {
+        return Err(console_not_found());
+    }
+    Ok(view.id)
+}
+
 /// Mirrors the Go ConsoleAccessGate boundary around the MCP management
 /// surface. Anonymous, invalid, disabled, and pre-activation dashboard
 /// credentials are deliberately concealed as a generic 404 before UserAuth
@@ -3908,7 +4080,7 @@ async fn required_admin_id(
 fn project_select() -> &'static str {
     // Keep casts explicit: Go's integer fields are persisted differently by
     // historical PostgreSQL migrations, while the wire contract is numeric.
-    "SELECT p.id::BIGINT AS id, p.owner_user_id::BIGINT AS owner_user_id, p.repository_url, p.title, p.description, p.rules, p.reward_quota::BIGINT AS reward_quota, p.net_reward_quota::BIGINT AS net_reward_quota, p.reward_slots::BIGINT AS reward_slots, p.escrow_quota::BIGINT AS escrow_quota, p.platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, p.platform_fee_quota::BIGINT AS platform_fee_quota, p.status, p.created_at::BIGINT AS created_at, p.updated_at::BIGINT AS updated_at, p.published_at::BIGINT AS published_at, p.closed_at::BIGINT AS closed_at, u.username AS owner_username, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND (c.status IN ('accepted','submitted') OR (c.status = 'rejected' AND c.rejected_at > $1 AND NOT EXISTS (SELECT 1 FROM open_source_bounty_disputes resolved_dispute WHERE resolved_dispute.challenge_id = c.id AND resolved_dispute.status IN ('resolved_paid','resolved_denied'))) OR EXISTS (SELECT 1 FROM open_source_bounty_disputes dispute WHERE dispute.challenge_id = c.id AND dispute.status = 'open'))) AS active_challenge_count, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND c.status = 'approved') AS approved_challenge_count, COALESCE((SELECT AVG(c.contributor_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0), 0)::DOUBLE PRECISION AS owner_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0) AS owner_rating_count, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_ledgers heart WHERE heart.user_id = p.owner_user_id AND heart.kind = 'tip_transfer' AND heart.thanked_at > 0) AS owner_thank_heart_count FROM open_source_bounty_projects p JOIN users u ON u.id = p.owner_user_id AND u.deleted_at IS NULL"
+    "SELECT p.id::BIGINT AS id, p.owner_user_id::BIGINT AS owner_user_id, p.repository_url, p.title, p.description, p.rules, p.reward_quota::BIGINT AS reward_quota, p.net_reward_quota::BIGINT AS net_reward_quota, p.reward_slots::BIGINT AS reward_slots, p.escrow_quota::BIGINT AS escrow_quota, p.platform_fee_rate_bps::BIGINT AS platform_fee_rate_bps, p.platform_fee_quota::BIGINT AS platform_fee_quota, p.status, p.created_at::BIGINT AS created_at, p.updated_at::BIGINT AS updated_at, p.published_at::BIGINT AS published_at, p.closed_at::BIGINT AS closed_at, p.archived_at::BIGINT AS archived_at, u.username AS owner_username, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND (c.status IN ('accepted','submitted') OR (c.status = 'rejected' AND c.rejected_at > $1 AND NOT EXISTS (SELECT 1 FROM open_source_bounty_disputes resolved_dispute WHERE resolved_dispute.challenge_id = c.id AND resolved_dispute.status IN ('resolved_paid','resolved_denied'))) OR EXISTS (SELECT 1 FROM open_source_bounty_disputes dispute WHERE dispute.challenge_id = c.id AND dispute.status = 'open'))) AS active_challenge_count, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c WHERE c.project_id = p.id AND c.status = 'approved') AS approved_challenge_count, COALESCE((SELECT AVG(c.contributor_rating_score)::DOUBLE PRECISION FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0), 0)::DOUBLE PRECISION AS owner_rating_average, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_challenges c JOIN open_source_bounty_projects rated_project ON rated_project.id = c.project_id WHERE rated_project.owner_user_id = p.owner_user_id AND c.contributor_rating_score > 0) AS owner_rating_count, (SELECT COUNT(*)::BIGINT FROM open_source_bounty_ledgers heart WHERE heart.user_id = p.owner_user_id AND heart.kind = 'tip_transfer' AND heart.thanked_at > 0) AS owner_thank_heart_count FROM open_source_bounty_projects p JOIN users u ON u.id = p.owner_user_id AND u.deleted_at IS NULL"
 }
 
 fn project_from_row(row: &PgRow) -> Result<BountyProjectView, sqlx::Error> {
@@ -3930,6 +4102,7 @@ fn project_from_row(row: &PgRow) -> Result<BountyProjectView, sqlx::Error> {
         updated_at: row.try_get("updated_at")?,
         published_at: row.try_get("published_at")?,
         closed_at: row.try_get("closed_at")?,
+        archived_at: row.try_get("archived_at")?,
         owner_username: row.try_get("owner_username")?,
         active_challenge_count: row.try_get("active_challenge_count")?,
         approved_challenge_count: row.try_get("approved_challenge_count")?,
@@ -4230,7 +4403,7 @@ async fn detail_bounty(
             return internal_failure();
         }
     };
-    if matches!(project.status.as_str(), "draft" | "closed")
+    if (matches!(project.status.as_str(), "draft" | "closed") || project.archived_at > 0)
         && viewer_id != Some(project.owner_user_id)
     {
         return business_failure(
@@ -4390,6 +4563,7 @@ async fn list_bounties(
 
 async fn owned_bounties(
     State(state): State<OpenSourceBountyState>,
+    Query(query): Query<OwnedQuery>,
     headers: HeaderMap,
 ) -> Response {
     let viewer_id = match required_viewer_id(&state, &headers).await {
@@ -4397,11 +4571,16 @@ async fn owned_bounties(
         Err(response) => return response,
     };
     let now = chrono::Utc::now().timestamp();
-    let query = format!(
-        "{} WHERE p.owner_user_id = $2 ORDER BY p.created_at DESC, p.id DESC",
+    let archive_filter = if query.archived() {
+        "p.archived_at > 0"
+    } else {
+        "p.archived_at = 0"
+    };
+    let sql = format!(
+        "{} WHERE p.owner_user_id = $2 AND {archive_filter} ORDER BY p.created_at DESC, p.id DESC",
         project_select()
     );
-    let rows = match sqlx::query(&query)
+    let rows = match sqlx::query(&sql)
         .bind(now - 7 * 24 * 60 * 60)
         .bind(viewer_id)
         .fetch_all(&state.pg)
@@ -4887,13 +5066,38 @@ async fn thank_tip(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use axum::{body::Body, http::Request};
     use base64::Engine;
+    use secrecy::SecretString;
+    use sqlx::postgres::PgPoolOptions;
+    use tower::ServiceExt;
 
     use super::{
         BountyFeeConfig, DEFAULT_PAGE_SIZE, DisputeListQuery, ListQuery, MAX_PAGE_SIZE,
-        NotificationQuery, challenge_priority, dashboard_token_candidate,
-        parse_fee_rate_basis_points,
+        NotificationQuery, OpenSourceBountyState, OwnedQuery, archive_status_is_final,
+        challenge_priority, dashboard_token_candidate, parse_fee_rate_basis_points, router,
     };
+    use crate::auth::{AuthConfig, PgValkeyDashboardAuth};
+
+    fn archive_test_router() -> axum::Router {
+        let pg = PgPoolOptions::new()
+            .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+            .expect("lazy PostgreSQL pool");
+        let valkey = redis::Client::open("redis://127.0.0.1:1").expect("lazy Valkey client");
+        let auth_config = AuthConfig {
+            session_secret: SecretString::from(
+                "open-source-bounty-archive-route-test-secret-012345678901234567890123456789",
+            ),
+            ..AuthConfig::default()
+        };
+        let auth = Arc::new(
+            PgValkeyDashboardAuth::new(pg.clone(), valkey, auth_config)
+                .expect("route-test auth adapter"),
+        );
+        router(OpenSourceBountyState::new(pg, auth))
+    }
 
     #[test]
     fn list_query_matches_go_defaults_and_bounds() {
@@ -5030,5 +5234,69 @@ mod tests {
                 "value={value}"
             );
         }
+    }
+
+    #[test]
+    fn archive_status_accepts_only_completed_and_closed_projects() {
+        assert!(archive_status_is_final("completed"));
+        assert!(archive_status_is_final("closed"));
+        for status in ["draft", "published", "paused", ""] {
+            assert!(!archive_status_is_final(status), "status={status}");
+        }
+    }
+
+    #[test]
+    fn owned_query_matches_go_parse_bool_truthy_values() {
+        for value in ["1", "t", "T", "TRUE", "true", "True"] {
+            assert!(
+                OwnedQuery {
+                    archived: Some(value.to_owned())
+                }
+                .archived(),
+                "value={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn owned_query_treats_invalid_or_false_values_as_active() {
+        for value in ["0", "f", "F", "FALSE", "false", "False", "yes", ""] {
+            assert!(
+                !OwnedQuery {
+                    archived: Some(value.to_owned())
+                }
+                .archived(),
+                "value={value}"
+            );
+        }
+        assert!(!OwnedQuery { archived: None }.archived());
+    }
+
+    #[tokio::test]
+    async fn archive_route_requires_auth_before_project_lookup() {
+        let response = archive_test_router()
+            .oneshot(
+                Request::post("/api/open-source-bounties/projects/7/archive")
+                    .body(Body::empty())
+                    .expect("route request"),
+            )
+            .await
+            .expect("route response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unarchive_route_requires_auth_before_project_lookup() {
+        let response = archive_test_router()
+            .oneshot(
+                Request::post("/api/open-source-bounties/projects/7/unarchive")
+                    .body(Body::empty())
+                    .expect("route request"),
+            )
+            .await
+            .expect("route response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 }

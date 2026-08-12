@@ -4,12 +4,17 @@
 //! slice does not make outbound calls until the listener installs configured
 //! production adapters.
 
-use crate::auth::{AuthErrorKind, DashboardAuth};
+use crate::migration_routes::verify_email::ValkeyVerificationCodeStore;
+use crate::{
+    ClientIpKey, RequestContext,
+    auth::{AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth},
+    legacy_empty_response,
+};
 use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::to_bytes,
-    extract::{Path, Query, Request, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -34,7 +39,10 @@ use std::{
 type HmacSha256 = Hmac<Sha256>;
 const OAUTH_FLOW_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_IDENTITY_BODY_BYTES: usize = 1024 * 1024;
+const OAUTH_STATE_PATH: &str = "/api/oauth/state";
+const OAUTH_EMAIL_BIND_PATH: &str = "/api/oauth/email/bind";
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const EMAIL_VERIFICATION_PURPOSE: &str = "v";
 
 /// Identity returned by a configured OAuth/OIDC adapter after it has verified
 /// the provider's token response and user-info (or ID-token) claims.
@@ -217,6 +225,39 @@ pub struct DisabledEmailCodeVerifier;
 impl EmailCodeVerifier for DisabledEmailCodeVerifier {
     async fn verify(&self, _: &str, _: &str) -> Result<bool, FederationError> {
         Ok(false)
+    }
+}
+
+/// Valkey-backed verifier for Go's reusable email-binding code (`purpose=v`).
+/// It intentionally performs a read-only comparison; the security-email
+/// route uses [`ValkeyVerificationCodeStore::verify_and_consume`] separately.
+#[derive(Clone)]
+pub struct ValkeyEmailCodeVerifier {
+    codes: ValkeyVerificationCodeStore,
+}
+
+impl ValkeyEmailCodeVerifier {
+    #[must_use]
+    pub fn new(valkey: redis::Client) -> Self {
+        Self {
+            codes: ValkeyVerificationCodeStore::new(valkey),
+        }
+    }
+
+    #[must_use]
+    pub fn with_dependency_timeout(mut self, dependency_timeout: Duration) -> Self {
+        self.codes = self.codes.with_dependency_timeout(dependency_timeout);
+        self
+    }
+}
+
+#[async_trait]
+impl EmailCodeVerifier for ValkeyEmailCodeVerifier {
+    async fn verify(&self, email: &str, code: &str) -> Result<bool, FederationError> {
+        self.codes
+            .verify_without_consuming(email, code, EMAIL_VERIFICATION_PURPOSE)
+            .await
+            .map_err(|_| FederationError::Internal)
     }
 }
 
@@ -585,6 +626,62 @@ impl FederationMutationPublisher for DisabledMutationPublisher {
     }
 }
 
+/// Invalidates the shared Go-compatible `user:{id}` hash after a durable
+/// identity mutation.  The PostgreSQL row remains authoritative; deleting
+/// the hash makes the next auth lookup refill it from that row instead of
+/// serving a stale email.
+#[derive(Clone)]
+pub struct ValkeyFederationMutationPublisher {
+    valkey: redis::Client,
+    dependency_timeout: Duration,
+}
+
+impl ValkeyFederationMutationPublisher {
+    #[must_use]
+    pub fn new(valkey: redis::Client) -> Self {
+        Self {
+            valkey,
+            dependency_timeout: Duration::from_secs(2),
+        }
+    }
+
+    #[must_use]
+    pub fn with_dependency_timeout(mut self, dependency_timeout: Duration) -> Self {
+        self.dependency_timeout = dependency_timeout;
+        self
+    }
+}
+
+#[async_trait]
+impl FederationMutationPublisher for ValkeyFederationMutationPublisher {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    async fn publish_user(&self, user_id: i64) -> Result<(), FederationError> {
+        if user_id <= 0 {
+            return Err(FederationError::Internal);
+        }
+        let result = tokio::time::timeout(self.dependency_timeout, async {
+            let mut connection = self
+                .valkey
+                .get_multiplexed_async_connection()
+                .await
+                .map_err(|_| FederationError::Internal)?;
+            redis::cmd("DEL")
+                .arg(format!("user:{user_id}"))
+                .query_async::<i64>(&mut connection)
+                .await
+                .map_err(|_| FederationError::Internal)
+        })
+        .await;
+        match result {
+            Ok(result) => result.map(|_| ()),
+            Err(_) => Err(FederationError::Internal),
+        }
+    }
+}
+
 impl FederationState {
     #[must_use]
     pub fn new(
@@ -653,6 +750,54 @@ pub fn provider_router(state: FederationState) -> Router {
         .route("/api/oauth/telegram/bind/start", post(telegram_bind_start))
         .route("/api/oauth/telegram/bind/{flow_token}", get(telegram_bind))
         .with_state(state)
+}
+
+#[derive(Clone)]
+struct OAuthStateRouteState {
+    federation: FederationState,
+    auth: Arc<dyn DashboardAuth>,
+    body_limit_bytes: usize,
+}
+
+#[derive(Clone)]
+struct OAuthEmailBindRouteState {
+    federation: FederationState,
+    auth: Arc<dyn DashboardAuth>,
+}
+
+/// Mounts only `POST /api/oauth/state` with the same route-local policy as
+/// the Go router. Critical rate limiting runs before optional authentication
+/// and body parsing; the cache headers are applied only after that gate has
+/// allowed the request. The provider callback remains on the candidate
+/// router until an external-provider adapter is configured and verified.
+pub fn oauth_state_router(
+    state: FederationState,
+    auth: Arc<dyn DashboardAuth>,
+    body_limit_bytes: usize,
+) -> Router {
+    let body_limit_bytes = body_limit_bytes.max(1);
+    Router::new()
+        .route(OAUTH_STATE_PATH, post(create_oauth_state_with_policy))
+        .layer(DefaultBodyLimit::max(body_limit_bytes))
+        .with_state(OAuthStateRouteState {
+            federation: state,
+            auth,
+            body_limit_bytes,
+        })
+}
+
+/// Mounts only `POST /api/oauth/email/bind` with Go's route-local order:
+/// UserAuth, then CriticalRateLimit, then controller body parsing.  The
+/// authenticated response always carries the legacy Auth-Version header,
+/// including the empty 429/500 responses emitted by the critical limiter.
+pub fn oauth_email_bind_router(state: FederationState, auth: Arc<dyn DashboardAuth>) -> Router {
+    Router::new()
+        .route(OAUTH_EMAIL_BIND_PATH, post(bind_email_with_policy))
+        .layer(DefaultBodyLimit::max(MAX_IDENTITY_BODY_BYTES))
+        .with_state(OAuthEmailBindRouteState {
+            federation: state,
+            auth,
+        })
 }
 
 /// Builds only the durable custom-OAuth binding management routes.
@@ -989,6 +1134,20 @@ fn with_auth_version(mut response: Response, authenticated: bool) -> Response {
     response
 }
 
+fn with_disable_cache(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
+    response
+}
+
 async fn principal(
     state: &FederationState,
     headers: &HeaderMap,
@@ -1021,16 +1180,24 @@ struct OAuthStateRequest {
     intent: String,
     #[serde(default)]
     aff: String,
+    #[serde(default)]
+    accepted_legal: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
 struct OAuthFlowPayload {
     #[serde(default)]
     affiliate_code: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    accepted_legal: bool,
     #[serde(default)]
     pkce_verifier: String,
     #[serde(default)]
     nonce: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn is_built_in_provider(provider: &str) -> bool {
@@ -1044,13 +1211,51 @@ fn random_urlsafe(bytes: usize) -> String {
 }
 
 async fn create_oauth_state(State(state): State<FederationState>, request: Request) -> Response {
+    create_oauth_state_request(&state, request, MAX_IDENTITY_BODY_BYTES).await
+}
+
+async fn create_oauth_state_with_policy(
+    State(route): State<OAuthStateRouteState>,
+    request: Request,
+) -> Response {
+    let client_ip = request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    match route.auth.check_critical_rate_limit(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => {}
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => {
+            return legacy_empty_response(StatusCode::TOO_MANY_REQUESTS, Some(retry_after_seconds));
+        }
+        Err(_) => return legacy_empty_response(StatusCode::INTERNAL_SERVER_ERROR, None),
+    }
+    with_disable_cache(
+        create_oauth_state_request(&route.federation, request, route.body_limit_bytes).await,
+    )
+}
+
+async fn create_oauth_state_request(
+    state: &FederationState,
+    request: Request,
+    body_limit_bytes: usize,
+) -> Response {
     let headers = request.headers().clone();
-    let actor = match optional_principal(&state, &headers).await {
+    let actor = match optional_principal(state, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
     };
     let authenticated = actor.is_some();
-    let body = match to_bytes(request.into_body(), MAX_IDENTITY_BODY_BYTES).await {
+    let body = match to_bytes(request.into_body(), body_limit_bytes).await {
         Ok(body) => body,
         Err(_) => {
             return with_auth_version(failure(StatusCode::OK, "Invalid parameters"), authenticated);
@@ -1062,7 +1267,7 @@ async fn create_oauth_state(State(state): State<FederationState>, request: Reque
             return with_auth_version(failure(StatusCode::OK, "Invalid parameters"), authenticated);
         }
     };
-    let response = create_oauth_state_inner(&state, actor, request).await;
+    let response = create_oauth_state_inner(state, actor, request).await;
     with_auth_version(response, authenticated)
 }
 
@@ -1117,6 +1322,7 @@ async fn create_oauth_state_inner(
     };
     let payload = match serde_json::to_string(&OAuthFlowPayload {
         affiliate_code: affiliate.to_owned(),
+        accepted_legal: intent == "login" && request.accepted_legal,
         // The frozen browser authorization builders do not advertise PKCE or
         // an OIDC nonce. Generating unused secrets would create a false
         // security contract, so those fields stay empty until both sides are
@@ -2292,6 +2498,58 @@ async fn bind_email(State(state): State<FederationState>, request: Request) -> R
         Ok(principal) => principal,
         Err(response) => return response,
     };
+    bind_email_after_auth(&state, actor, request).await
+}
+
+async fn bind_email_with_policy(
+    State(route): State<OAuthEmailBindRouteState>,
+    request: Request,
+) -> Response {
+    let headers = request.headers().clone();
+    let actor = match principal(&route.federation, &headers).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    let client_ip = request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    match route.auth.check_critical_rate_limit(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => {}
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => {
+            return with_auth_version(
+                legacy_empty_response(StatusCode::TOO_MANY_REQUESTS, Some(retry_after_seconds)),
+                true,
+            );
+        }
+        Err(_) => {
+            return with_auth_version(
+                legacy_empty_response(StatusCode::INTERNAL_SERVER_ERROR, None),
+                true,
+            );
+        }
+    }
+    with_auth_version(
+        bind_email_after_auth(&route.federation, actor, request).await,
+        true,
+    )
+}
+
+async fn bind_email_after_auth(
+    state: &FederationState,
+    actor: FederationPrincipal,
+    request: Request,
+) -> Response {
     if !state.mutation_publisher.configured() {
         return failure(StatusCode::INTERNAL_SERVER_ERROR, "internal server error");
     }
@@ -2627,8 +2885,102 @@ async fn record_oauth_unbind_audit(
 #[cfg(test)]
 mod adapter_tests {
     use super::*;
+    use crate::auth::{
+        AuthBundle, DashboardUser, LoginOutcome, LogoutRequest, LogoutResult, RequestMetadata,
+        TwoFactorLoginRequest,
+    };
+    use axum::body::Body;
+    use sqlx::postgres::PgPoolOptions;
+    use tower::ServiceExt;
 
     struct NoIssuer;
+
+    struct AnonymousIdentity;
+
+    #[async_trait]
+    impl FederationIdentity for AnonymousIdentity {
+        async fn principal(&self, _: &HeaderMap) -> Result<FederationPrincipal, FederationError> {
+            Err(FederationError::Unauthorized)
+        }
+
+        async fn verify_email_code(&self, _: &str, _: &str) -> Result<bool, FederationError> {
+            Ok(false)
+        }
+    }
+
+    struct AuthenticatedIdentity;
+
+    #[async_trait]
+    impl FederationIdentity for AuthenticatedIdentity {
+        async fn principal(&self, _: &HeaderMap) -> Result<FederationPrincipal, FederationError> {
+            Ok(FederationPrincipal {
+                user_id: 7,
+                role: 1,
+                session_id: "session-7".to_owned(),
+            })
+        }
+
+        async fn verify_email_code(&self, _: &str, _: &str) -> Result<bool, FederationError> {
+            Ok(false)
+        }
+    }
+
+    struct CriticalAuth {
+        outcome: CriticalRateLimitOutcome,
+    }
+
+    #[async_trait]
+    impl DashboardAuth for CriticalAuth {
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, crate::auth::AuthError> {
+            Ok(self.outcome)
+        }
+
+        async fn login(
+            &self,
+            _: crate::auth::LoginRequest,
+            _: RequestMetadata,
+        ) -> Result<LoginOutcome, crate::auth::AuthError> {
+            Err(crate::auth::AuthError::new(AuthErrorKind::Internal))
+        }
+
+        async fn login_2fa(
+            &self,
+            _: TwoFactorLoginRequest,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, crate::auth::AuthError> {
+            Err(crate::auth::AuthError::new(AuthErrorKind::Internal))
+        }
+
+        async fn refresh(
+            &self,
+            _: SecretString,
+            _: Option<String>,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, crate::auth::AuthError> {
+            Err(crate::auth::AuthError::new(AuthErrorKind::Internal))
+        }
+
+        async fn self_user(
+            &self,
+            _: SecretString,
+        ) -> Result<DashboardUser, crate::auth::AuthError> {
+            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, crate::auth::AuthError> {
+            Err(crate::auth::AuthError::new(AuthErrorKind::Internal))
+        }
+
+        async fn generate_personal_access_token(
+            &self,
+            _: SecretString,
+        ) -> Result<String, crate::auth::AuthError> {
+            Err(crate::auth::AuthError::new(AuthErrorKind::Internal))
+        }
+    }
 
     async fn fixture_token() -> Json<serde_json::Value> {
         Json(json!({"access_token": "fixture-token", "token_type": "Bearer"}))
@@ -2679,6 +3031,152 @@ mod adapter_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn oauth_login_flow_payload_preserves_accepted_legal_only_for_true() {
+        let accepted = serde_json::to_value(OAuthFlowPayload {
+            affiliate_code: "invite".to_owned(),
+            accepted_legal: true,
+            pkce_verifier: String::new(),
+            nonce: String::new(),
+        })
+        .expect("serialize accepted legal payload");
+        assert_eq!(accepted["accepted_legal"], true);
+        assert_eq!(accepted["affiliate_code"], "invite");
+
+        let omitted = serde_json::to_value(OAuthFlowPayload {
+            affiliate_code: String::new(),
+            accepted_legal: false,
+            pkce_verifier: String::new(),
+            nonce: String::new(),
+        })
+        .expect("serialize omitted legal payload");
+        assert!(omitted.get("accepted_legal").is_none());
+    }
+
+    #[tokio::test]
+    async fn oauth_state_critical_limit_runs_before_body_and_cache_policy() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .expect("a lazy test pool is valid");
+        let app = oauth_state_router(
+            FederationState::new(pool, Arc::new(AnonymousIdentity), "test-secret"),
+            Arc::new(CriticalAuth {
+                outcome: CriticalRateLimitOutcome::Rejected {
+                    retry_after_seconds: 7,
+                },
+            }),
+            8,
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::post(OAUTH_STATE_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from("not-json-but-the-limit-must-win"))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "7");
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+        assert!(
+            axum::body::to_bytes(response.into_body(), 128)
+                .await
+                .expect("body reads")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_state_allowed_response_has_go_disable_cache_headers() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .expect("a lazy test pool is valid");
+        let app = oauth_state_router(
+            FederationState::new(pool, Arc::new(AnonymousIdentity), "test-secret"),
+            Arc::new(CriticalAuth {
+                outcome: CriticalRateLimitOutcome::Allowed,
+            }),
+            1024,
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::post(OAUTH_STATE_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from("not-json"))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, no-cache, must-revalidate, private, max-age=0"
+        );
+        assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+        assert_eq!(response.headers()[header::EXPIRES], "0");
+    }
+
+    #[tokio::test]
+    async fn oauth_email_bind_authenticates_before_critical_limit_and_preserves_auth_version() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .expect("a lazy test pool is valid");
+        let app = oauth_email_bind_router(
+            FederationState::new(pool, Arc::new(AuthenticatedIdentity), "test-secret"),
+            Arc::new(CriticalAuth {
+                outcome: CriticalRateLimitOutcome::Rejected {
+                    retry_after_seconds: 11,
+                },
+            }),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::post(OAUTH_EMAIL_BIND_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from("not-json-but-the-limit-must-win"))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "11");
+        assert_eq!(response.headers()["auth-version"], AUTH_VERSION);
+        assert!(response.headers().get(header::CACHE_CONTROL).is_none());
+        assert!(
+            axum::body::to_bytes(response.into_body(), 128)
+                .await
+                .expect("body reads")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_email_bind_missing_auth_wins_before_critical_limit() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+            .expect("a lazy test pool is valid");
+        let app = oauth_email_bind_router(
+            FederationState::new(pool, Arc::new(AnonymousIdentity), "test-secret"),
+            Arc::new(CriticalAuth {
+                outcome: CriticalRateLimitOutcome::Rejected {
+                    retry_after_seconds: 11,
+                },
+            }),
+        );
+        let response = app
+            .oneshot(
+                axum::http::Request::post(OAUTH_EMAIL_BIND_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from("not-json"))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get("auth-version").is_none());
     }
 
     #[test]

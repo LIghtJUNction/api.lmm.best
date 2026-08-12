@@ -54,6 +54,33 @@ export async function login(payload: LoginPayload) {
   return res.data
 }
 
+export type AccountAppealResponse = {
+  id: number
+  status: 'pending' | 'approved' | 'rejected'
+  reason: string
+  created_at: number
+  reviewed_at: number
+  admin_note: string
+}
+
+export async function submitAccountAppeal(input: {
+  username: string
+  password: string
+  reason: string
+  turnstile?: string
+}): Promise<ApiResponse<AccountAppealResponse>> {
+  const res = await api.post<ApiResponse<AccountAppealResponse>>(
+    `/api/user/account-action-requests/appeal?turnstile=${encodeURIComponent(input.turnstile ?? '')}`,
+    {
+      username: input.username,
+      password: input.password,
+      reason: input.reason,
+    },
+    { skipAuthRefresh: true, skipErrorHandler: true }
+  )
+  return res.data
+}
+
 // Two-factor authentication login
 export async function login2fa(payload: TwoFAPayload) {
   const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload, {

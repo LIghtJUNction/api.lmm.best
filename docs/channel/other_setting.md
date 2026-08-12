@@ -1,26 +1,29 @@
-# 渠道额外设置说明
+# Channel Extra Settings
 
-该配置用于设置一些额外的渠道参数，可以通过 JSON 对象进行配置。主要包含以下三个设置项：
+This document defines optional channel parameters. It is configured as a JSON object and currently includes the following options.
 
 1. force_format
-    - 用于标识是否对数据进行强制格式化为 OpenAI 格式
-    - 类型为布尔值，设置为 true 时启用强制格式化
+   - Indicates whether output should be forced into OpenAI-compatible format.
+   - Boolean value.
+   - Set to `true` to enable forced formatting.
 
 2. proxy
-    - 用于配置网络代理
-    - 类型为字符串，支持 `http`、`https`、`socks5` 和 `socks5h` 协议
-    - 保存时必须包含协议和主机；仅允许空路径或根路径 `/`，不允许 query 或 fragment
-    - SOCKS 代理未填写端口时，运行时使用默认端口 `1080`
+   - Configures a network proxy.
+   - String value supporting `http`, `https`, `socks5`, and `socks5h` protocols.
+   - The saved value must include protocol and host. Only an empty path or `/` is allowed.
+   - Query strings and fragments are not allowed.
+   - If no port is provided for SOCKS, runtime defaults to port `1080`.
 
 3. thinking_to_content
-   - 用于标识是否将思考内容`reasoning_content`转换为`<think>`标签拼接到内容中返回
-   - 类型为布尔值，设置为 true 时启用思考内容转换
+   - Converts `reasoning_content` into a `<think>` wrapped segment and appends it to the returned content.
+   - Boolean value.
+   - Set to `true` to enable this behavior.
 
---------------------------------------------------------------
+---
 
-## JSON 格式示例
+## JSON Example
 
-以下是一个示例配置，启用强制格式化并设置了代理地址：
+Below is a sample configuration enabling forced formatting and setting a proxy URL:
 
 ```json
 {
@@ -30,12 +33,14 @@
 }
 ```
 
---------------------------------------------------------------
+---
 
-通过调整上述 JSON 配置中的值，可以灵活控制渠道的额外行为，比如是否进行格式化以及使用特定的网络代理。
+You can control channel behavior by adjusting the JSON values, including whether formatting is forced and which network proxy is used.
 
-## 升级兼容性
+## Upgrade Compatibility
 
-旧版本会忽略代理地址中的 path、query 和 fragment。为避免升级后中断已有渠道流量，运行时会继续剥离这些遗留后缀，并对同一代理地址每个进程记录一次不含凭证和后缀的警告。该兼容逻辑不会改写数据库；再次保存渠道时必须按上述严格规则修正代理地址。
+Legacy versions ignore path, query, and fragment in proxy URLs. To avoid breaking existing traffic after upgrade, runtime continues to strip those suffixes and logs a single warning once per unique proxy per process for entries without credentials and without suffixes. This compatibility layer does not rewrite any database records.
 
-代理连接使用 30 秒 TCP 拨号超时和 30 秒 KeepAlive；TLS 握手超时为 10 秒。这些超时同样适用于未配置渠道代理的中转请求。
+When saving an updated channel configuration, update the proxy URL to the strict format above.
+
+The proxy connection uses a 30-second TCP dial timeout, 30-second keep-alive timeout, and 10-second TLS handshake timeout. These timeouts also apply to relay requests when a channel proxy is not configured.

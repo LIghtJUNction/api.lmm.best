@@ -46,8 +46,10 @@ const STATUS_RELATED_KEYS = new Set([
   'AssistantCacheTTLMinutes',
   'AssistantPersona',
   'AssistantSystemPrompt',
+  'AssistantSearchProvider',
   'AssistantSearchURL',
   'AssistantSearchAPIKey',
+  'AssistantSearchMCPTool',
   'AssistantSkills',
 ])
 

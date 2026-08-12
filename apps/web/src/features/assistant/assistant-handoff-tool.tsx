@@ -81,8 +81,7 @@ export function AssistantHandoffTool() {
   const trimmedMessage = message.trim()
   const messageLength = Array.from(trimmedMessage).length
   const messageTooShort =
-    trimmedMessage.length > 0 &&
-    messageLength < minAssistantHandoffCharacters
+    trimmedMessage.length > 0 && messageLength < minAssistantHandoffCharacters
 
   const submit = async () => {
     if (submitting || messageLength < minAssistantHandoffCharacters) return
@@ -212,7 +211,7 @@ export function AssistantHandoffTool() {
             {messageTooShort ? (
               <p
                 id='assistant-handoff-message-hint'
-                className='text-sm text-destructive'
+                className='text-destructive text-sm'
                 role='alert'
               >
                 {t('Support message must contain at least 5 characters.')}

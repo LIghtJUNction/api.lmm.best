@@ -107,6 +107,11 @@ func SetApiRouter(router *gin.Engine) {
 			userRoute.POST("/login/2fa", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.Verify2FALogin)
 			userRoute.POST("/passkey/login/begin", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.PasskeyLoginBegin)
 			userRoute.POST("/passkey/login/finish", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.PasskeyLoginFinish)
+			// Appeal submission accepts either a valid browser session or the
+			// disabled-account password fallback. TryUserAuth is intentionally
+			// used instead of UserAuth so a disabled account can reach the
+			// password-verified path after all sessions were revoked.
+			userRoute.POST("/account-action-requests/appeal", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, middleware.TurnstileCheck(), middleware.TryUserAuth(), controller.SubmitAccountAppeal)
 			//userRoute.POST("/tokenlog", middleware.CriticalRateLimit(), controller.TokenLog)
 			userRoute.POST("/epay/notify", anonymousRequestBodyLimit, controller.EpayNotify)
 			userRoute.GET("/epay/notify", controller.EpayNotify)
@@ -127,6 +132,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/models", controller.GetUserModels)
 				selfRoute.GET("/developer-access/request", controller.GetDeveloperAccessRequest)
 				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), controller.SubmitDeveloperAccessRequest)
+				selfRoute.GET("/account-action-requests/appeal", middleware.DisableCache(), controller.GetAccountAppeal)
+				selfRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitAccountActionRequest)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
@@ -214,6 +221,14 @@ func SetApiRouter(router *gin.Engine) {
 			developerAccessRequestRoute.GET("", controller.ListDeveloperAccessRequests)
 			developerAccessRequestRoute.POST("/:id/approve", middleware.CriticalRateLimit(), controller.ApproveDeveloperAccessRequest)
 			developerAccessRequestRoute.POST("/:id/reject", middleware.CriticalRateLimit(), controller.RejectDeveloperAccessRequest)
+		}
+
+		accountActionRequestRoute := apiRouter.Group("/account-action-requests")
+		accountActionRequestRoute.Use(middleware.AdminAuth())
+		{
+			accountActionRequestRoute.GET("", middleware.DisableCache(), controller.ListAccountActionRequests)
+			accountActionRequestRoute.POST("/:id/approve", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ApproveAccountActionRequest)
+			accountActionRequestRoute.POST("/:id/reject", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RejectAccountActionRequest)
 		}
 
 		// Subscription billing (plans, purchase, admin management)

@@ -96,11 +96,6 @@ export function UserUsageLeaderboard(props: UserUsageLeaderboardProps) {
                     {row.anonymous ? t('Anonymous users') : row.name}
                   </p>
                 </div>
-                {row.anonymous && data.anonymous_participant_count > 0 && (
-                  <p className='text-muted-foreground mt-0.5 text-xs'>
-                    {data.anonymous_participant_count} {t('participants')}
-                  </p>
-                )}
               </div>
               <div className='text-right'>
                 <p className='font-mono text-sm font-semibold tabular-nums'>

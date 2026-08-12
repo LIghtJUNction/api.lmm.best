@@ -61,12 +61,56 @@ export type AssistantL1RecommendationAction = {
   confirmation_token: string
 }
 
+export type AssistantAccountDisableAction = {
+  type: 'account_disable_request'
+  target_user_id: number
+  target_username: string
+  reason: string
+  confirmation_token: string
+}
+
+export type AssistantAction =
+  | AssistantL1RecommendationAction
+  | AssistantAccountDisableAction
+
 export type AssistantCreatedKey = {
   id: number
   name: string
-  key: string
   group: string
   expired_time: number
+  private_card: AssistantPrivateCard
+}
+
+export type AssistantPrivateCard = {
+  id: string
+  label?: string
+}
+
+export type AssistantConversationHistoryMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: number
+  private_card?: {
+    label?: string
+  }
+}
+
+export type AssistantConversationHistoryItem = {
+  id: string
+  owner: {
+    label: string
+    is_current_user: boolean
+    access_level: number
+  }
+  created_at: number
+  updated_at: number
+  messages: AssistantConversationHistoryMessage[]
+}
+
+export type AssistantConversationHistory = {
+  conversations: AssistantConversationHistoryItem[]
+  scope: 'self' | 'lower_access'
 }
 
 export type AssistantHandoff = {
@@ -123,7 +167,7 @@ export type AssistantFundingSummary = {
 export type AssistantReply = {
   content: string
   intent?: AssistantIntent
-  action?: AssistantL1RecommendationAction
+  action?: AssistantAction
 }
 
 export type AssistantPlanOffers = {
@@ -188,27 +232,51 @@ export function parseAssistantIntent(
 
 export function parseAssistantAction(
   value: unknown
-): AssistantL1RecommendationAction | undefined {
+): AssistantAction | undefined {
   if (!value || typeof value !== 'object') return undefined
   const action = value as Record<string, unknown>
-  if (action.type !== 'l1_recommendation') return undefined
+  const confirmationToken =
+    typeof action.confirmation_token === 'string'
+      ? action.confirmation_token.trim()
+      : ''
+  if (!confirmationToken) return undefined
+
   if (
-    typeof action.user_statement !== 'string' ||
-    typeof action.recommendation !== 'string' ||
-    typeof action.confirmation_token !== 'string'
+    action.type === 'l1_recommendation' &&
+    typeof action.user_statement === 'string' &&
+    typeof action.recommendation === 'string'
   ) {
-    return undefined
+    const userStatement = action.user_statement.trim()
+    const recommendation = action.recommendation.trim()
+    if (!userStatement || !recommendation) return undefined
+    return {
+      type: 'l1_recommendation',
+      user_statement: userStatement,
+      recommendation,
+      confirmation_token: confirmationToken,
+    }
   }
-  const userStatement = action.user_statement.trim()
-  const recommendation = action.recommendation.trim()
-  const confirmationToken = action.confirmation_token.trim()
-  if (!userStatement || !recommendation || !confirmationToken) return undefined
-  return {
-    type: 'l1_recommendation',
-    user_statement: userStatement,
-    recommendation,
-    confirmation_token: confirmationToken,
+
+  if (
+    action.type === 'account_disable_request' &&
+    typeof action.target_user_id === 'number' &&
+    Number.isInteger(action.target_user_id) &&
+    action.target_user_id > 0 &&
+    typeof action.target_username === 'string' &&
+    typeof action.reason === 'string'
+  ) {
+    const targetUsername = action.target_username.trim()
+    const reason = action.reason.trim()
+    if (!targetUsername || !reason) return undefined
+    return {
+      type: 'account_disable_request',
+      target_user_id: action.target_user_id,
+      target_username: targetUsername,
+      reason,
+      confirmation_token: confirmationToken,
+    }
   }
+  return undefined
 }
 
 function normalizedAssistantHistoryMessage(
@@ -268,6 +336,22 @@ export async function sendAssistantMessage(
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
     action: parseAssistantAction(response.data.lmm_assistant_action),
   }
+}
+
+export async function submitAssistantAccountDisableRequest(input: {
+  target_user_id: number
+  reason: string
+  confirmation_token: string
+}): Promise<unknown> {
+  const response = await api.post<AssistantAPIResponse<unknown>>(
+    '/api/user/account-action-requests',
+    { ...input, confirmed: true },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return requireAssistantData(
+    response.data,
+    'Unable to submit the account safety request'
+  )
 }
 
 export async function getAssistantStatus(): Promise<AssistantStatus> {
@@ -351,6 +435,39 @@ export async function createAssistantDefaultKey(
     { skipBusinessError: true, skipErrorHandler: true }
   )
   return requireAssistantData(response.data, 'Unable to create API key')
+}
+
+export async function revealAssistantPrivateCard(id: string): Promise<string> {
+  const response = await api.post<
+    AssistantAPIResponse<{
+      value?: string
+    }>
+  >(
+    `/api/assistant/private-cards/${encodeURIComponent(id)}/reveal`,
+    {},
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  const data = requireAssistantData(
+    response.data,
+    'Unable to retrieve the private credential'
+  )
+  const value = data.value?.trim()
+  if (!value) throw new Error('Unable to retrieve the private credential')
+  return value
+}
+
+export async function getAssistantConversationHistory(): Promise<AssistantConversationHistory> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantConversationHistory>
+  >('/api/assistant/conversations', {
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(
+    response.data,
+    'Unable to load conversation history'
+  )
 }
 
 export async function getAssistantHandoff(): Promise<AssistantHandoff | null> {
