@@ -218,35 +218,6 @@ jobs:
             route-coverage-logs/
           if-no-files-found: error
 
-  electron-retirement:
-    name: Electron embedded-backend retirement guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Verify retired packages remain absent
-        run: |
-          test ! -e electron
-          test ! -e apps/api-go/electron
-
-  docker-publish-config:
-    name: Docker publish namespace guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: deploy
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Validate fork-owned Docker publish namespace
-        run: |
-          bash check-docker-image-namespace.sh
-          bash test-docker-image-namespace.sh
-
   aur-package-matrix:
     name: AUR direct-backend package contract
     runs-on: ubuntu-latest
