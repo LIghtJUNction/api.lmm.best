@@ -6,6 +6,10 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+- Added a per-context assistant cache gate so concurrent identical L0
+  questions do not fan out into duplicate upstream model calls before the
+  first deterministic response is stored; tool-backed and cross-context
+  responses remain isolated.
 - Extended the shell-only A–I persona suite to support isolated per-persona
   login credentials, optional per-persona 2FA/Turnstile values, and redacted
   L0/L1 boundary evidence without creating keys, payments or upstream calls.

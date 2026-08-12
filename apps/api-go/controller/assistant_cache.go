@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -24,7 +25,59 @@ type assistantCachedResponse struct {
 var (
 	assistantResponseCacheOnce sync.Once
 	assistantResponseCache     *cachex.HybridCache[assistantCachedResponse]
+	assistantCacheGates        = struct {
+		sync.Mutex
+		entries map[string]*assistantCacheGate
+	}{entries: make(map[string]*assistantCacheGate)}
 )
+
+// assistantCacheGate prevents a burst of identical, cache-eligible questions
+// from all reaching the upstream model before the first response is stored.
+// The gate is deliberately narrower than the response cache: it never shares
+// a tool result or a response between users, and callers re-check the cache
+// after waiting for the current owner.
+type assistantCacheGate struct {
+	done chan struct{}
+}
+
+// acquireAssistantCacheGate serializes only the same cache key. The returned
+// release function is idempotent so middleware error paths can safely defer it.
+func acquireAssistantCacheGate(ctx context.Context, key string) (func(), bool) {
+	if key == "" {
+		return func() {}, true
+	}
+	for {
+		assistantCacheGates.Lock()
+		entry, exists := assistantCacheGates.entries[key]
+		if !exists {
+			entry = &assistantCacheGate{done: make(chan struct{})}
+			assistantCacheGates.entries[key] = entry
+			assistantCacheGates.Unlock()
+
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					assistantCacheGates.Lock()
+					if current, ok := assistantCacheGates.entries[key]; ok && current == entry {
+						delete(assistantCacheGates.entries, key)
+						close(entry.done)
+					}
+					assistantCacheGates.Unlock()
+				})
+			}, true
+		}
+		wait := entry.done
+		assistantCacheGates.Unlock()
+
+		select {
+		case <-wait:
+			// The owner has finished. Re-check the map because another request
+			// may have become the next owner before this waiter woke up.
+		case <-ctx.Done():
+			return func() {}, false
+		}
+	}
+}
 
 func getAssistantResponseCache() *cachex.HybridCache[assistantCachedResponse] {
 	assistantResponseCacheOnce.Do(func() {

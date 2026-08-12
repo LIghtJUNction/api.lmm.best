@@ -258,6 +258,20 @@ func PrepareAssistantRequest(c *gin.Context) {
 			c.Data(cached.Status, "application/json; charset=utf-8", cached.Body)
 			return
 		}
+		// Hold the per-key gate through the downstream model call. A concurrent
+		// identical request waits here, then re-checks the cache so a burst does
+		// not multiply upstream spend before the first response is stored.
+		release, acquired := acquireAssistantCacheGate(c.Request.Context(), cacheKey)
+		if !acquired {
+			return
+		}
+		defer release()
+		if cached, found := getAssistantCachedResponse(cacheKey); found {
+			c.Header("X-LMM-Assistant-Cache", "HIT")
+			c.Abort()
+			c.Data(cached.Status, "application/json; charset=utf-8", cached.Body)
+			return
+		}
 	}
 	// A cache hit is not a model call. Avoid creating a duplicate analytics row
 	// for every repeated cached question; the first uncached turn still records
