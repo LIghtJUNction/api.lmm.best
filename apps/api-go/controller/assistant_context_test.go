@@ -79,6 +79,19 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			want:    assistantProfileAccessible,
 			signal:  "mobile_accessibility_language",
 		},
+		{
+			name:    "support seeker",
+			message: "我登录后遇到 502，页面访问不了，如何提交工单？",
+			want:    assistantProfileSupport,
+			signal:  "support_problem_language",
+		},
+		{
+			name:    "l0 applicant",
+			context: assistantUserContext{AccessLevel: "L0"},
+			message: "你好",
+			want:    assistantProfileL0Applicant,
+			signal:  "l0_access",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -186,8 +199,8 @@ func TestAssistantOperatorPersonasProduceIntentSpecificWelcomeStrategies(t *test
 		{
 			id:       "N",
 			message:  "我登录后经常遇到 502，请一步一步帮我确认账号状态，并告诉我如何联系管理员。",
-			want:     assistantProfileGuided,
-			strategy: "short numbered steps",
+			want:     assistantProfileSupport,
+			strategy: "request ID",
 		},
 	}
 

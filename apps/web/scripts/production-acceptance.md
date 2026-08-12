@@ -83,7 +83,7 @@ node apps/web/scripts/production-acceptance.test.mjs
 ## Local operator persona suite
 
 `operator-persona-suite.mjs` is a shell-only, read-mostly regression suite for
-the A–N user profiles used during iteration. It is intentionally local-only:
+the A–O user profiles used during iteration. It is intentionally local-only:
 the runner rejects every non-loopback URL, requires a marker-owned deployment
 workspace, bounds requests and response bodies, and writes a `0600` report
 without response text, cookies, tokens, balances, or API keys.
@@ -112,7 +112,7 @@ To exercise the deterministic assistant-cache, intent and profile checks,
 additionally set `PERSONA_RUN_ASSISTANT=1`. When a turn is cache-eligible, the
 suite requires the repeated answer to return `HIT` with identical response
 bytes; turns that invoke live tools are reported as non-cacheable rather than
-being cached. The full A–N set runs by default. For a lower-cost focused pass,
+being cached. The full A–O set runs by default. For a lower-cost focused pass,
 set `PERSONA_RUN_IDS=A,D` (comma-separated IDs); every selected persona still
 requires the expected deterministic intent and, where applicable, the
 security-refusal policy. The report records only whether a persona used an

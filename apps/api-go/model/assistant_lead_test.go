@@ -111,18 +111,24 @@ func TestAssistantProfileSummaryIsAggregateOnly(t *testing.T) {
 	require.NoError(t, RecordAssistantProfile("guided_buyer"))
 	require.NoError(t, RecordAssistantProfile("guided_buyer"))
 	require.NoError(t, RecordAssistantProfile("normal_user"))
+	require.NoError(t, RecordAssistantProfile("support_seeking"))
+	require.NoError(t, RecordAssistantProfile("l0_applicant"))
 
 	summary, err := ListAssistantProfileSummary(0)
 	require.NoError(t, err)
-	require.Len(t, summary, 2)
-	assert.Equal(t, "guided_buyer", summary[0].Profile)
-	assert.EqualValues(t, 2, summary[0].Count)
-	assert.Equal(t, "normal_user", summary[1].Profile)
-	assert.EqualValues(t, 1, summary[1].Count)
+	require.Len(t, summary, 4)
+	summaryCounts := map[string]int64{}
+	for _, item := range summary {
+		summaryCounts[item.Profile] = item.Count
+	}
+	assert.EqualValues(t, 2, summaryCounts["guided_buyer"])
+	assert.EqualValues(t, 1, summaryCounts["normal_user"])
+	assert.EqualValues(t, 1, summaryCounts["support_seeking"])
+	assert.EqualValues(t, 1, summaryCounts["l0_applicant"])
 
 	var buckets []AssistantProfileBucket
 	require.NoError(t, DB.Find(&buckets).Error)
-	require.Len(t, buckets, 2)
+	require.Len(t, buckets, 4)
 	counts := map[string]int64{}
 	for _, bucket := range buckets {
 		counts[bucket.Profile] = bucket.Count
@@ -130,5 +136,7 @@ func TestAssistantProfileSummaryIsAggregateOnly(t *testing.T) {
 	}
 	assert.EqualValues(t, 2, counts["guided_buyer"])
 	assert.EqualValues(t, 1, counts["normal_user"])
+	assert.EqualValues(t, 1, counts["support_seeking"])
+	assert.EqualValues(t, 1, counts["l0_applicant"])
 	assert.Error(t, RecordAssistantProfile("user@example.com"))
 }

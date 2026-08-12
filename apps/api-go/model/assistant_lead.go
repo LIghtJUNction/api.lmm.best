@@ -107,6 +107,8 @@ var assistantProfileNames = map[string]struct{}{
 	"privacy_conscious":        {},
 	"mobile_accessibility":     {},
 	"normal_user":              {},
+	"support_seeking":          {},
+	"l0_applicant":             {},
 }
 
 func assistantMessageContains(message string, terms ...string) bool {
