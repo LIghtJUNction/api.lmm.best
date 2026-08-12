@@ -31,7 +31,7 @@ contains_srcinfo_prefix() {
 for removed in lmm-api-bin lmm-api-git; do
   [[ ! -e $HERE/$removed/PKGBUILD ]] || die "removed core package still has a PKGBUILD: $removed"
 done
-for removed in lmm-api-launcher backend.conf lmm-api.install lmm-api-go.service lmm-api.env; do
+for removed in backend.conf lmm-api.install lmm-api-go.service lmm-api.env; do
   [[ ! -e $SHARED/$removed ]] || die "removed launcher/provider asset remains: $removed"
 done
 
@@ -88,14 +88,14 @@ contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-go_release_commit=cf1159ddb2c14db57a9e9b4073dc6b1b66f0bc4d
+go_release_commit=3cdab7e7f7c5c5788fa1f9b904671da5ce379c1a
 readonly go_release_commit
 grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
 # Pull requests are checked out shallowly without tag refs. Keep the reviewed
 # package version as the deterministic fallback, while still validating the
 # derived value whenever the local checkout has the tag history available.
-readonly reviewed_go_release_pkgver=0.1.1.r124.gcf1159ddb
+readonly reviewed_go_release_pkgver=0.1.1.r376.g3cdab7e7f
 if go_release_description=$(git -C "$ROOT" describe --long --tags --abbrev=9 "$go_release_commit" 2>/dev/null); then
   go_release_pkgver=$(printf '%s\n' "$go_release_description" | \
     sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g')
