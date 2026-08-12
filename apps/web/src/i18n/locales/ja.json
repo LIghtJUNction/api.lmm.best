@@ -6659,6 +6659,22 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Payment method enabled": "支払い方法を有効化",
+    "Disabled methods are hidden from users and rejected at checkout.": "無効な方法はユーザーに表示されず、決済時にも拒否されます。",
+    "User-facing payment description": "ユーザー向け支払い説明",
+    "Optional instructions or maintenance note": "任意の手順またはメンテナンス案内",
+    "Shown on the user payment button; do not put secrets here.": "ユーザーの支払いボタンに表示されます。秘密情報は入力しないでください。",
+    "Display color": "表示色",
+    "Description must be 240 characters or fewer": "説明は240文字以内で入力してください",
+    "Color must be a six-digit hex value": "色は6桁の16進数で指定してください",
+    "Minimum top-up must be a non-negative decimal number": "最低チャージ額は0以上の小数で指定してください",
+    "User group condition": "ユーザーグループ条件",
+    "Comma-separated user groups; matching is case-insensitive.": "ユーザーグループをカンマ区切りで入力します。大文字と小文字は区別しません。",
+    "Account role condition": "アカウントロール条件",
+    "No role condition": "ロールを制限しない",
+    "Root administrator": "ルート管理者",
+    "Select account role": "アカウントロールを選択",
+    "Search account roles...": "アカウントロールを検索..."
   }
 }

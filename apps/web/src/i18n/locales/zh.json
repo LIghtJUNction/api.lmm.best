@@ -6659,6 +6659,22 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Payment method enabled": "支付方式已启用",
+    "Disabled methods are hidden from users and rejected at checkout.": "停用后用户端不会显示，结算请求也会被拒绝。",
+    "User-facing payment description": "用户端支付说明",
+    "Optional instructions or maintenance note": "可选的使用说明或维护提示",
+    "Shown on the user payment button; do not put secrets here.": "显示在用户支付按钮中；请勿填写密钥等敏感信息。",
+    "Display color": "展示颜色",
+    "Description must be 240 characters or fewer": "说明不能超过 240 个字符",
+    "Color must be a six-digit hex value": "颜色必须是六位十六进制值",
+    "Minimum top-up must be a non-negative decimal number": "最低充值必须是非负数字",
+    "User group condition": "用户分组条件",
+    "Comma-separated user groups; matching is case-insensitive.": "填写逗号分隔的用户分组，匹配时不区分大小写。",
+    "Account role condition": "账号角色条件",
+    "No role condition": "不限制角色",
+    "Root administrator": "超级管理员",
+    "Select account role": "选择账号角色",
+    "Search account roles...": "搜索账号角色……"
   }
 }

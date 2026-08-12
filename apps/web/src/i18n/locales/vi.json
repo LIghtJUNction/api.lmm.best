@@ -6659,6 +6659,22 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Payment method enabled": "Đã bật phương thức thanh toán",
+    "Disabled methods are hidden from users and rejected at checkout.": "Phương thức đã tắt sẽ bị ẩn và bị từ chối khi thanh toán.",
+    "User-facing payment description": "Mô tả thanh toán cho người dùng",
+    "Optional instructions or maintenance note": "Hướng dẫn hoặc ghi chú bảo trì tùy chọn",
+    "Shown on the user payment button; do not put secrets here.": "Hiển thị trên nút thanh toán; không nhập thông tin bí mật ở đây.",
+    "Display color": "Màu hiển thị",
+    "Description must be 240 characters or fewer": "Mô tả phải có tối đa 240 ký tự",
+    "Color must be a six-digit hex value": "Màu phải là giá trị hex sáu chữ số",
+    "Minimum top-up must be a non-negative decimal number": "Mức nạp tối thiểu phải là số thập phân không âm",
+    "User group condition": "Điều kiện nhóm người dùng",
+    "Comma-separated user groups; matching is case-insensitive.": "Các nhóm cách nhau bằng dấu phẩy; không phân biệt hoa thường.",
+    "Account role condition": "Điều kiện vai trò tài khoản",
+    "No role condition": "Không giới hạn vai trò",
+    "Root administrator": "Quản trị viên cấp cao",
+    "Select account role": "Chọn vai trò tài khoản",
+    "Search account roles...": "Tìm vai trò tài khoản..."
   }
 }
