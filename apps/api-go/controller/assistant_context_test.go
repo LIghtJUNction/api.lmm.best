@@ -159,6 +159,24 @@ func TestAssistantOperatorPersonasProduceIntentSpecificWelcomeStrategies(t *test
 			want:     assistantProfileOperator,
 			strategy: "reliability",
 		},
+		{
+			id:       "L",
+			message:  "我刚注册还是 L0，不知道怎么申请 L1。请一步一步说明审核需要哪些真实使用信息。",
+			want:     assistantProfileGuided,
+			strategy: "short numbered steps",
+		},
+		{
+			id:       "M",
+			message:  "我要给一个小团队接入 API，想创建 API key、设置分组，并了解并发配置。",
+			want:     assistantProfileOperator,
+			strategy: "reliability",
+		},
+		{
+			id:       "N",
+			message:  "我登录后经常遇到 502，请一步一步帮我确认账号状态，并告诉我如何联系管理员。",
+			want:     assistantProfileGuided,
+			strategy: "short numbered steps",
+		},
 	}
 
 	strategies := make(map[assistantCustomerProfile]string, len(tests))

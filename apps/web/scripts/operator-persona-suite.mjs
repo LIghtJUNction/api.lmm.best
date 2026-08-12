@@ -387,6 +387,27 @@ const personas = [
     message: '我需要生产环境的稳定性、并发、延迟和监控告警，请说明限流配置。',
     expectedIntent: 'other',
   },
+  {
+    id: 'L',
+    label: 'new-l0-applicant',
+    message:
+      '我刚注册还是 L0，不知道怎么申请 L1。请一步一步说明审核需要哪些真实使用信息。',
+    expectedIntent: 'onboarding',
+  },
+  {
+    id: 'M',
+    label: 'team-integrator',
+    message:
+      '我要给一个小团队接入 API，想创建 API key、设置分组，并了解并发配置。',
+    expectedIntent: 'api_key',
+  },
+  {
+    id: 'N',
+    label: 'login-recovery',
+    message:
+      '我登录后经常遇到 502，请一步一步帮我确认账号状态，并告诉我如何联系管理员。',
+    expectedIntent: 'human_support',
+  },
 ]
 
 const requestedPersonaIds = new Set(

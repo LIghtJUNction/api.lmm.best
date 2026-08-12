@@ -37,7 +37,10 @@ func TestClassifyAssistantIntent(t *testing.T) {
 		"哪个套餐最划算，有优惠吗":                       AssistantIntentPlanPurchase,
 		"L0 审核多久能到 L1":                       AssistantIntentOnboarding,
 		"请管理员帮我审核 L1":                        AssistantIntentOnboarding,
-		"hello":                              AssistantIntentOther,
+		"我刚注册还是 L0，请一步一步说明如何申请 L1":           AssistantIntentOnboarding,
+		"我要给团队创建 API key 并设置分组":              AssistantIntentAPIKey,
+		"登录后遇到 502，如何联系管理员":                  AssistantIntentHumanSupport,
+		"hello": AssistantIntentOther,
 	}
 	for message, expected := range tests {
 		assert.Equal(t, expected, ClassifyAssistantIntent(message), message)
