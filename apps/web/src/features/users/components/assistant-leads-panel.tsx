@@ -54,6 +54,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { toIntlLocale } from '@/i18n/languages'
 import {
   getAssistantIntentSummary,
   getAssistantFundingSummary,
@@ -130,6 +131,7 @@ function HandoffsSkeleton() {
 
 export function AssistantLeadsPanel() {
   const { t, i18n } = useTranslation()
+  const intlLocale = toIntlLocale(i18n.language)
   const queryClient = useQueryClient()
   const [notes, setNotes] = useState<Record<number, string>>({})
 
@@ -170,17 +172,17 @@ export function AssistantLeadsPanel() {
   const profiles = profilesQuery.data ?? EMPTY_PROFILES
   const funding = fundingQuery.data
   const numberFormatter = useMemo(
-    () => new Intl.NumberFormat(i18n.language),
-    [i18n.language]
+    () => new Intl.NumberFormat(intlLocale),
+    [intlLocale]
   )
   const currencyFormatter = useMemo(
     () =>
-      new Intl.NumberFormat(i18n.language, {
+      new Intl.NumberFormat(intlLocale, {
         style: 'currency',
         currency: 'USD',
         maximumFractionDigits: 4,
       }),
-    [i18n.language]
+    [intlLocale]
   )
   const totalIntents = useMemo(
     () => intents.reduce((total, item) => total + item.count, 0),
@@ -192,11 +194,11 @@ export function AssistantLeadsPanel() {
   )
   const dateTimeFormatter = useMemo(
     () =>
-      new Intl.DateTimeFormat(i18n.language, {
+      new Intl.DateTimeFormat(intlLocale, {
         dateStyle: 'medium',
         timeStyle: 'short',
       }),
-    [i18n.language]
+    [intlLocale]
   )
 
   const resolveMutation = useMutation({

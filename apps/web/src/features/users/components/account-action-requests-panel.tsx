@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { toIntlLocale } from '@/i18n/languages'
 
 import { listAccountActionRequests, reviewAccountActionRequest } from '../api'
 import type { AccountActionRequestAdmin } from '../types'
@@ -116,7 +117,7 @@ export function AccountActionRequestsPanel() {
 
   if (!available) return null
 
-  const dateTimeFormatter = new Intl.DateTimeFormat(i18n.language, {
+  const dateTimeFormatter = new Intl.DateTimeFormat(toIntlLocale(i18n.language), {
     dateStyle: 'medium',
     timeStyle: 'short',
   })

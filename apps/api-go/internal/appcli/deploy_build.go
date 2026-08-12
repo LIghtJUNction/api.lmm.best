@@ -222,7 +222,7 @@ func validateBuildRepository(repo string) error {
 		"VERSION", "LICENSE", "NOTICE", "THIRD-PARTY-LICENSES.md",
 		"apps/api-go/go.mod", "apps/web/package.json",
 		"packaging/local/lmm-api-go/PKGBUILD",
-		"packaging/common/lmm-api/lmm-api-go.service",
+		"packaging/common/lmm-api/lmm-api.service",
 		"packaging/common/lmm-api/lmm-api-go.env",
 		"packaging/common/lmm-api/geoip2-country-update.service",
 		"packaging/common/lmm-api/geoip2-country-update.timer",
@@ -364,7 +364,7 @@ func (buildRuntime *buildDeployRuntime) buildPackage(
 	}{
 		{filepath.Join(options.Repo, "packaging/local/lmm-api-go/PKGBUILD"), filepath.Join(buildDir, "PKGBUILD"), 0o644},
 		{binary, filepath.Join(buildDir, ProgramName), 0o755},
-		{filepath.Join(options.Repo, "packaging/common/lmm-api/lmm-api-go.service"), filepath.Join(buildDir, "lmm-api-go.service"), 0o644},
+		{filepath.Join(options.Repo, "packaging/common/lmm-api/lmm-api.service"), filepath.Join(buildDir, "lmm-api.service"), 0o644},
 		{filepath.Join(options.Repo, "packaging/common/lmm-api/lmm-api-go.env"), filepath.Join(buildDir, "lmm-api-go.env"), 0o600},
 		{filepath.Join(options.Repo, "LICENSE"), filepath.Join(buildDir, "LICENSE"), 0o644},
 		{filepath.Join(options.Repo, "NOTICE"), filepath.Join(buildDir, "NOTICE"), 0o644},

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	productionServiceName          = "lmm-api-go.service"
+	productionServiceName          = "lmm-api.service"
 	productionExpectedHost         = "arch-dmit"
 	productionDefaultRollback      = 10 * time.Minute
 	productionDefaultObservation   = 3 * time.Minute
@@ -84,16 +84,15 @@ func defaultProductionPaths() productionPaths {
 		DropInDir:        defaultProductionDropInDir,
 		NginxRoot:        defaultNginxRoot,
 		EdgeAssetRoot:    defaultEdgeAssetRoot,
-		InstalledBinary:  "/usr/bin/lmm-api-go",
+		InstalledBinary:  "/usr/bin/lmm-api",
 		PackagedFrontend: "/usr/share/lmm-api-go/frontend-dist",
 		MigrationWorkdir: "/var/lib/lmm-api-go",
 		ReleasePackages:  "/var/lib/lmm-api-go/release-packages",
 		PackageCache:     "/var/cache/pacman/pkg",
 		RemovedPaths: []string{
-			"/usr/bin/lmm-api",
 			"/usr/bin/lmm-api-select",
 			"/usr/lib/lmm-api",
-			"/usr/lib/systemd/system/lmm-api.service",
+			"/usr/lib/systemd/system/lmm-api-go.service",
 		},
 		Service:       productionServiceName,
 		ExpectedHost:  productionExpectedHost,

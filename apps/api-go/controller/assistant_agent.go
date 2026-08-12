@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -968,7 +967,8 @@ func executeAssistantInvitationTool(userID int) map[string]any {
 	}
 	result := map[string]any{
 		"ok":                           true,
-		"affiliate_code":               user.AffCode,
+		"affiliate_code_available":     strings.TrimSpace(user.AffCode) != "",
+		"affiliate_code_path":          "/aff",
 		"invited_count":                user.AffCount,
 		"pending_reward_usd":           float64(user.AffQuota) / common.QuotaPerUnit,
 		"total_reward_usd":             float64(user.AffHistoryQuota) / common.QuotaPerUnit,
@@ -980,12 +980,6 @@ func executeAssistantInvitationTool(userID int) map[string]any {
 	}
 	if model.IsDisposableEmail(user.Email) {
 		result["message"] = "Known disposable email domains are not eligible for new-account or invitation promotional credits. Use a durable email for legitimate referrals; ordinary account access and administrator review remain available."
-	}
-	if user.AffCode != "" {
-		baseURL := strings.TrimRight(system_setting.ServerAddress, "/")
-		if baseURL != "" {
-			result["affiliate_link"] = baseURL + "/sign-up?aff=" + url.QueryEscape(user.AffCode)
-		}
 	}
 	if !operation_setting.IsPaymentComplianceConfirmed() {
 		result["message"] = "Reward configuration is shown for explanation only; payment-related rewards remain subject to the platform compliance setting."

@@ -622,6 +622,228 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('shows permitted history while redacting sensitive content and keeping private cards owner-only', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      if (url === '/api/assistant/conversations') {
+        return {
+          data: {
+            success: true,
+            data: {
+              privacy_notice: 'Conversations are not private.',
+              conversations: [
+                {
+                  id: 1,
+                  title: 'CC Switch setup',
+                  last_message_preview: 'How do I configure CC Switch?',
+                  owner: 'self',
+                  created_at: 1_786_400_000,
+                  updated_at: 1_786_400_001,
+                  privacy_notice: 'Conversations are not private.',
+                },
+                {
+                  id: 2,
+                  title: 'Credential support',
+                  last_message_preview:
+                    'email is private@example.test and API key: sk-history-secret-123456',
+                  owner: 'lower_level_user',
+                  created_at: 1_786_400_000,
+                  updated_at: 1_786_400_002,
+                  privacy_notice: 'Conversations are not private.',
+                },
+              ],
+            },
+          },
+        }
+      }
+      if (url === '/api/assistant/conversations/2') {
+        return {
+          data: {
+            success: true,
+            data: {
+              conversation: {
+                id: 2,
+                title: 'Credential support',
+                last_message_preview:
+                  'email is private@example.test and API key: sk-history-secret-123456',
+                owner: 'lower_level_user',
+                created_at: 1_786_400_000,
+                updated_at: 1_786_400_002,
+                privacy_notice: 'Conversations are not private.',
+              },
+              messages: [
+                {
+                  id: 2,
+                  role: 'user',
+                  content:
+                    'email is private@example.test and API key: sk-history-secret-123456',
+                  created_at: 1_786_400_002,
+                  cards: [
+                    {
+                      type: 'protected',
+                      label: 'Private credential',
+                      owner: 'protected',
+                      shield: true,
+                    },
+                  ],
+                },
+              ],
+              privacy_notice: 'Conversations are not private.',
+            },
+          },
+        }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+
+    const rendered = await renderPanel()
+    try {
+      assert.match(
+        document.body.textContent ?? '',
+        /Your assistant conversations are not private/
+      )
+      await act(async () => {
+        findButton('Conversation history').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Lower-access user conversation') ===
+            true,
+          'Assistant history did not render'
+        )
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /private@example\.test/)
+      assert.doesNotMatch(document.body.textContent ?? '', /sk-history-secret-123456/)
+
+      await act(async () => {
+        const viewButtons = [
+          ...document.querySelectorAll<HTMLButtonElement>('button'),
+        ].filter((button) => button.textContent?.trim() === 'View')
+        assert.equal(viewButtons.length, 2)
+        viewButtons[1]?.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Private cards remain visible only to their owner'
+            ) === true,
+          'Assistant history detail did not render'
+        )
+      )
+      assert.equal(
+        document.querySelector('[data-testid="assistant-private-card-value"]'),
+        null
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('handles forbidden conversation history without exposing an HTTP error', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/assistant/conversations')
+      throw { response: { status: 403 } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel()
+    try {
+      await act(async () => {
+        findButton('Conversation history').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Conversation history is not available to this account.'
+            ) === true,
+          'Forbidden history message did not render'
+        )
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /HTTP 403/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('handles a missing conversation history endpoint without exposing an HTTP error', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/assistant/conversations')
+      throw { response: { status: 404 } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel()
+    try {
+      await act(async () => {
+        findButton('Conversation history').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'This conversation no longer exists or is unavailable.'
+            ) === true,
+          'Missing history message did not render'
+        )
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /HTTP 404/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('does not place sensitive input into the chat transcript or send it to the assistant', async () => {
+    let posted = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async () => {
+      posted += 1
+      throw new Error('Sensitive input must not be sent')
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'my email is private@example.test')
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+      assert.equal(posted, 0)
+      assert.match(
+        document.body.textContent ?? '',
+        /Sensitive message was not sent/
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /private@example\.test/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('opens an explicit confirmation for an AI L1 recommendation', async () => {
     let submittedRecommendation: unknown
     api.get = (async (url: string) => {
@@ -814,5 +1036,61 @@ describe('AssistantPanel', () => {
 
     await act(async () => rendered.root.unmount())
     rendered.queryClient.clear()
+  })
+
+  test('renders assistant Markdown as safe structured content', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      return {
+        data: {
+          choices: [
+            {
+              message: {
+                content:
+                  '## Claude Code\n\n1. Install the client.\n2. Set the Base URL to `/v1`.\n\n**Keep your key private.**',
+              },
+            },
+          ],
+        },
+        headers: { 'x-lmm-assistant-intent': 'client_setup' },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder="Ask about plans, setup, keys, or costs..."]'
+      )
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'How do I configure Claude Code?')
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => document.body.textContent?.includes('Keep your key private.') === true,
+          'Markdown assistant answer did not render'
+        )
+      )
+
+      assert.ok(document.querySelector('h2'))
+      assert.equal(document.querySelectorAll('ol > li').length, 2)
+      assert.ok(document.querySelector('code'))
+      assert.ok(document.querySelector('strong'))
+      assert.equal(document.querySelector('script'), null)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
   })
 })

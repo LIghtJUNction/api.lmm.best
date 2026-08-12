@@ -36,6 +36,7 @@ import {
 } from '@/components/ai-elements/conversation'
 import { Loader } from '@/components/ai-elements/loader'
 import { Message, MessageContent } from '@/components/ai-elements/message'
+import { Response } from '@/components/ai-elements/response'
 import {
   PromptInput,
   PromptInputProvider,
@@ -71,6 +72,7 @@ import {
   getAssistantAvailableModels,
   getAssistantStatus,
   sendAssistantMessage,
+  type AssistantConversationHistoryItem,
   type AssistantChatMessage,
   type AssistantAccountDisableAction,
   type AssistantL1RecommendationAction,
@@ -87,8 +89,13 @@ import {
   type AssistantPresetId,
 } from './assistant-events'
 import { AssistantHandoffTool } from './assistant-handoff-tool'
+import {
+  AssistantHistory,
+  AssistantHistoryConversation,
+} from './assistant-history'
 import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
+import { redactAssistantMessageForDisplay } from './assistant-message-safety'
 import { AssistantModelsTool } from './assistant-models-tool'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { AssistantSetupTool } from './assistant-setup-tool'
@@ -274,6 +281,9 @@ function AssistantPromptInputSync(props: {
 function AssistantPanelHeader(props: {
   mode: AssistantPanelMode
   description: string
+  historyVisible: boolean
+  onOpenHistory: () => void
+  onCloseHistory: () => void
   onToggleCollapsed?: () => void
 }) {
   const { t } = useTranslation()
@@ -283,6 +293,17 @@ function AssistantPanelHeader(props: {
       <SheetHeader className={sideDrawerHeaderClassName('pr-12')}>
         <SheetTitle>{t('Service guide')}</SheetTitle>
         <SheetDescription>{props.description}</SheetDescription>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          className='mt-2 self-start'
+          onClick={
+            props.historyVisible ? props.onCloseHistory : props.onOpenHistory
+          }
+        >
+          {props.historyVisible ? t('Back to conversation') : t('Conversation history')}
+        </Button>
       </SheetHeader>
     )
   }
@@ -297,6 +318,17 @@ function AssistantPanelHeader(props: {
           {props.description}
         </p>
       </div>
+      <Button
+        type='button'
+        variant='ghost'
+        size='sm'
+        className='shrink-0'
+        onClick={
+          props.historyVisible ? props.onCloseHistory : props.onOpenHistory
+        }
+      >
+        {props.historyVisible ? t('Back') : t('Conversation history')}
+      </Button>
       <Button
         type='button'
         variant='ghost'
@@ -528,6 +560,9 @@ export function AssistantPanel(props: {
     useState<AssistantL1RecommendationAction | null>(null)
   const [accountDisableDraft, setAccountDisableDraft] =
     useState<AssistantAccountDisableAction | null>(null)
+  const [historyView, setHistoryView] = useState<
+    'list' | AssistantConversationHistoryItem | null
+  >(null)
   const [activeTool, setActiveTool] = useState<
     | 'activation'
     | 'key'
@@ -566,6 +601,7 @@ export function AssistantPanel(props: {
     retry: false,
   })
   const accountToolActive = activeTool !== null
+  const historyVisible = historyView !== null
   let visiblePresets: AssistantPreset[] = []
   if (accountAccessState === 'restricted') {
     visiblePresets = presets.filter((preset) => preset.id === 'onboarding')
@@ -652,6 +688,10 @@ export function AssistantPanel(props: {
     setSending(true)
     try {
       const reply = await sendAssistantMessage(message, history)
+      const safeReply = redactAssistantMessageForDisplay(
+        reply.content,
+        t('Sensitive content is hidden and can only be accessed from a private card.')
+      )
       const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
       const suggestedPreset = suggestedPresetId
         ? presets.find((preset) => preset.id === suggestedPresetId)
@@ -681,7 +721,7 @@ export function AssistantPanel(props: {
         {
           id: nanoid(),
           role: 'assistant',
-          content: reply.content,
+          content: safeReply.content,
           action: suggestedAction,
         },
       ])
@@ -714,14 +754,32 @@ export function AssistantPanel(props: {
   const submitMessage = async ({ text }: { text?: string }) => {
     const message = text?.trim()
     if (!message || sending) return
+    const safeMessage = redactAssistantMessageForDisplay(
+      message,
+      t('Sensitive content is hidden and can only be accessed from a private card.')
+    )
+    if (safeMessage.redacted) {
+      setEntries((current) => [
+        ...current,
+        {
+          id: nanoid(),
+          role: 'assistant',
+          content: t(
+            'Sensitive message was not sent. Use the secure private card for credentials.'
+          ),
+          error: true,
+        },
+      ])
+      return
+    }
     const history: AssistantChatMessage[] = entries
       .filter((entry) => !entry.error)
       .map((entry) => ({ role: entry.role, content: entry.content }))
     setEntries((current) => [
       ...current,
-      { id: nanoid(), role: 'user', content: message },
+      { id: nanoid(), role: 'user', content: safeMessage.content },
     ])
-    await requestAssistantReply(message, history)
+    await requestAssistantReply(safeMessage.content, history)
   }
 
   const retryMessage = async (entry: ConversationEntry) => {
@@ -735,9 +793,38 @@ export function AssistantPanel(props: {
       <AssistantPanelHeader
         mode={mode}
         description={assistantDescription}
+        historyVisible={historyVisible}
+        onOpenHistory={() => setHistoryView('list')}
+        onCloseHistory={() => setHistoryView(null)}
         onToggleCollapsed={props.onToggleCollapsed}
       />
-      <Conversation className='bg-muted/20'>
+      <Alert className='m-3 mb-0' variant='default'>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Conversation privacy notice')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'Your assistant conversations are not private. Authorized higher-access users may review them; never send personal information, passwords, API keys, or credentials.'
+          )}
+        </AlertDescription>
+      </Alert>
+      {historyVisible ? (
+        <Conversation className='bg-muted/20'>
+          <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
+            {historyView === 'list' ? (
+              <AssistantHistory
+                active={panelVisible}
+                onOpenConversation={(conversation) =>
+                  setHistoryView(conversation)
+                }
+              />
+            ) : (
+              <AssistantHistoryConversation conversation={historyView} />
+            )}
+          </ConversationContent>
+        </Conversation>
+      ) : (
+        <>
+          <Conversation className='bg-muted/20'>
         <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
           {entries.length === 0 ? (
             <div className='flex flex-1 flex-col gap-5'>
@@ -788,7 +875,13 @@ export function AssistantPanel(props: {
                         : 'gap-3 text-sm leading-6'
                     }
                   >
-                    <p className='whitespace-pre-wrap'>{entry.content}</p>
+                    {entry.role === 'assistant' ? (
+                      <Response className='leading-7' final>
+                        {entry.content}
+                      </Response>
+                    ) : (
+                      <p className='whitespace-pre-wrap'>{entry.content}</p>
+                    )}
                     {entry.retry || entry.action ? (
                       <div className='flex flex-wrap gap-2'>
                         {entry.retry ? (
@@ -930,9 +1023,9 @@ export function AssistantPanel(props: {
           )}
         </ConversationContent>
         <ConversationScrollButton />
-      </Conversation>
+          </Conversation>
 
-      <div className='bg-background'>
+          <div className='bg-background'>
         <Separator className='bg-border/70' />
         <div className='px-3 py-3 sm:px-4'>
           <PromptInputProvider initialInput={props.initialMessage}>
@@ -973,11 +1066,13 @@ export function AssistantPanel(props: {
           ) : null}
           <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
             {t(
-              'AI answers may be inaccurate. Never send passwords or API keys.'
+              'Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.'
             )}
           </p>
         </div>
-      </div>
+          </div>
+        </>
+      )}
     </>
   )
 

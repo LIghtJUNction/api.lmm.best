@@ -35,7 +35,7 @@ func containsString(values []string, expected string) bool {
 func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.T) {
 	root := t.TempDir()
 	envFile := filepath.Join(root, "etc", "lmm-api-go.env")
-	dropInDir := filepath.Join(root, "systemd", "lmm-api-go.service.d")
+	dropInDir := filepath.Join(root, "systemd", "lmm-api.service.d")
 	if err := os.MkdirAll(filepath.Dir(envFile), 0o700); err != nil {
 		t.Fatal(err)
 	}

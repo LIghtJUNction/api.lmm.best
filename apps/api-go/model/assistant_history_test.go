@@ -1,0 +1,174 @@
+package model
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func setupAssistantHistoryTestDB(t *testing.T) (*User, *User, *User, *User) {
+	t.Helper()
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&TopUp{},
+		&AssistantConversation{},
+		&AssistantHistoryMessage{},
+		&AssistantSecureCard{},
+	))
+	l0 := 0
+	l1 := 1
+	l2 := 2
+	users := []*User{
+		{Username: "history-l0", AffCode: "history-l0-aff", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, TrustLevelOverride: &l0},
+		{Username: "history-l1", AffCode: "history-l1-aff", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, TrustLevelOverride: &l1},
+		{Username: "history-l2", AffCode: "history-l2-aff", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, TrustLevelOverride: &l2},
+		{Username: "history-admin", AffCode: "history-admin-aff", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled},
+	}
+	for _, user := range users {
+		require.NoError(t, db.Create(user).Error)
+	}
+	return users[0], users[1], users[2], users[3]
+}
+
+func TestAssistantHistoryRedactsBeforePersistenceAndUsesStrictHierarchy(t *testing.T) {
+	l0, l1, l2, admin := setupAssistantHistoryTestDB(t)
+	conversation, err := PrepareAssistantConversation(l0.Id, 0, "帮我创建 key，邮箱 a.user@example.com")
+	require.NoError(t, err)
+	require.NoError(t, RecordAssistantConversationTurn(
+		l0.Id,
+		conversation.Id,
+		"我的 password: hunter2，Cookie: session-secret，key=sk_supersecret_123456，邮箱 a.user@example.com",
+		"请勿发送 Bearer abcdefghijkl，联系邮箱 support@example.com。",
+	))
+
+	view, messages, err := GetAssistantConversationHistory(l0.Id, conversation.Id, 100)
+	require.NoError(t, err)
+	assert.Equal(t, "self", view.Owner)
+	assert.Equal(t, AssistantHistoryPrivacyNotice, view.PrivacyNotice)
+	require.Len(t, messages, 2)
+	stored := messages[0].Content + "\n" + messages[1].Content
+	for _, secret := range []string{"hunter2", "session-secret", "sk_supersecret_123456", "a.user@example.com", "support@example.com", "abcdefghijkl"} {
+		assert.NotContains(t, stored, secret)
+	}
+	assert.Contains(t, stored, "[REDACTED]")
+	assert.Contains(t, stored, "[REDACTED_EMAIL]")
+	assert.Equal(t, AssistantHistoryPrivacyNotice, messages[0].PrivacyNotice)
+
+	// An L1 member can read an L0 transcript, but peers and lower-level
+	// accounts cannot read up.  Admin remains above every ordinary level.
+	_, _, err = GetAssistantConversationHistory(l1.Id, conversation.Id, 100)
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(l2.Id, conversation.Id, 100)
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(admin.Id, conversation.Id, 100)
+	require.NoError(t, err)
+
+	otherConversation, err := PrepareAssistantConversation(l1.Id, 0, "我的 L1 问题")
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(l0.Id, otherConversation.Id, 100)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
+	_, _, err = GetAssistantConversationHistory(l1.Id, otherConversation.Id, 100)
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(l1.Id, conversation.Id, 100)
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(l2.Id, otherConversation.Id, 100)
+	require.NoError(t, err)
+	l2Conversation, err := PrepareAssistantConversation(l2.Id, 0, "L2 only")
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(l1.Id, l2Conversation.Id, 100)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
+}
+
+func TestAssistantHistoryConversationContinuationRejectsForeignOwner(t *testing.T) {
+	l0, l1, _, _ := setupAssistantHistoryTestDB(t)
+	conversation, err := PrepareAssistantConversation(l0.Id, 0, "private support request")
+	require.NoError(t, err)
+	_, err = PrepareAssistantConversation(l1.Id, conversation.Id, "try to continue another user conversation")
+	assert.ErrorIs(t, err, ErrAssistantConversationNotFound)
+}
+
+func TestAssistantSecureCardIsOpaqueEncryptedOwnerOnlyAndOneTime(t *testing.T) {
+	l0, l1, _, _ := setupAssistantHistoryTestDB(t)
+	card, err := CreateAssistantSecureCard(
+		l0.Id,
+		0,
+		AssistantSecureCardTypeAPIKey,
+		"API credential ready",
+		`{"api_key":"sk_history_secret_123456"}`,
+	)
+	require.NoError(t, err)
+
+	var stored AssistantSecureCard
+	require.NoError(t, DB.First(&stored, "id = ?", card.Id).Error)
+	assert.NotContains(t, stored.Ciphertext, "sk_history_secret_123456")
+	assert.NotEqual(t, "sk_history_secret_123456", AssistantSecureCardViewForOwner(card).Label)
+
+	_, _, err = RevealAssistantSecureCard(l1.Id, card.Id)
+	assert.ErrorIs(t, err, ErrAssistantSecureCardNotFound)
+	revealed, view, err := RevealAssistantSecureCard(l0.Id, card.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "self", view.Owner)
+	payload, err := AssistantSecureCardPayload(revealed)
+	require.NoError(t, err)
+	assert.Equal(t, "sk_history_secret_123456", payload["api_key"])
+	_, _, err = RevealAssistantSecureCard(l0.Id, card.Id)
+	assert.ErrorIs(t, err, ErrAssistantSecureCardConsumed)
+}
+
+func TestAssistantKeySecureCardTransactionRollsBackCredentialOnCardFailure(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+	conversation, err := PrepareAssistantConversation(l0.Id, 0, "create a key")
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&Token{UserId: l0.Id, Name: "existing", Key: "duplicate-assistant-key"}).Error)
+
+	_, err = InsertAssistantTokenAndCreateSecureCard(
+		&Token{UserId: l0.Id, Name: "candidate", Key: "duplicate-assistant-key"},
+		l0.Id,
+		conversation.Id,
+		"API credential ready",
+		`{"api_key":"sk_duplicate-assistant-key"}`,
+	)
+	require.Error(t, err)
+	var tokens int64
+	require.NoError(t, DB.Model(&Token{}).Where("user_id = ?", l0.Id).Count(&tokens).Error)
+	assert.EqualValues(t, 1, tokens)
+	var cards int64
+	require.NoError(t, DB.Model(&AssistantSecureCard{}).Where("owner_user_id = ?", l0.Id).Count(&cards).Error)
+	assert.Zero(t, cards)
+	var messages int64
+	require.NoError(t, DB.Model(&AssistantHistoryMessage{}).Where("conversation_id = ?", conversation.Id).Count(&messages).Error)
+	assert.Zero(t, messages)
+}
+
+func TestRedactAssistantHistoryContentCoversCredentialsAndPersonalData(t *testing.T) {
+	redacted := RedactAssistantHistoryContent("email: alice@example.com cookie=session-abc token=eyJabcDEF012345.abcDEF012345.abcDEF012345 api_key=sk_example_secret_123456")
+	for _, value := range []string{"alice@example.com", "session-abc", "eyJabcDEF012345", "sk_example_secret_123456"} {
+		assert.NotContains(t, redacted, value)
+	}
+	assert.True(t, strings.Contains(redacted, "[REDACTED]") || strings.Contains(redacted, "[REDACTED_SECRET]"))
+}
+
+func TestAssistantHistoryPostgreSQLMigration(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN")) == "" || os.Getenv("TEST_POSTGRES_ISOLATED_SCHEMA") != "1" {
+		t.Skip("set TEST_POSTGRES_DSN and TEST_POSTGRES_ISOLATED_SCHEMA=1 to run PostgreSQL assistant history migration test")
+	}
+	previousDB, previousLogDB := DB, LOG_DB
+	db := openIsolatedPostgresCacheTestDB(t, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{})
+	DB, LOG_DB = db, db
+	usePostgresDatabaseType(t)
+	t.Cleanup(func() { DB, LOG_DB = previousDB, previousLogDB })
+	for _, record := range []any{&AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}} {
+		require.True(t, DB.Migrator().HasTable(record))
+	}
+
+	conversation := AssistantConversation{UserId: 7, Title: "safe", LastMessagePreview: "safe", CreatedAt: 1, UpdatedAt: 1}
+	require.NoError(t, DB.Create(&conversation).Error)
+	require.NoError(t, RecordAssistantConversationTurn(7, conversation.Id, "hello", "world"))
+	var messages []AssistantHistoryMessage
+	require.NoError(t, DB.Where("conversation_id = ?", conversation.Id).Find(&messages).Error)
+	require.Len(t, messages, 2)
+}

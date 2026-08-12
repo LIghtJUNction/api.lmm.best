@@ -105,7 +105,7 @@ func writeBuildSourceFixture(t *testing.T, root string) {
 		"apps/api-go/go.mod":                  "module fixture\n",
 		"apps/web/package.json":               "{}\n",
 		"packaging/local/lmm-api-go/PKGBUILD": "pkgname=lmm-api-go\n",
-		"packaging/common/lmm-api/lmm-api-go.service":            "[Service]\n",
+		"packaging/common/lmm-api/lmm-api.service":               "[Service]\nExecStart=/usr/bin/lmm-api serve\n",
 		"packaging/common/lmm-api/lmm-api-go.env":                "SQL_DSN=postgres://fixture\n",
 		"packaging/common/lmm-api/geoip2-country-update.service": "[Service]\nExecStart=/usr/bin/lmm-api-go geoip update\n",
 		"packaging/common/lmm-api/geoip2-country-update.timer":   "[Timer]\nUnit=geoip2-country-update.service\n",

@@ -59,7 +59,7 @@ mkdir -p -- "$build_dir/makepkg"
 
 install -Dm0644 "$SCRIPT_DIR/PKGBUILD" "$build_dir/PKGBUILD"
 install -Dm0755 "$GO_BINARY" "$build_dir/lmm-api-go"
-install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/lmm-api-go.service" "$build_dir/lmm-api-go.service"
+install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/lmm-api.service" "$build_dir/lmm-api.service"
 install -Dm0600 "$REPO_ROOT/packaging/common/lmm-api/lmm-api-go.env" "$build_dir/lmm-api-go.env"
 install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/geoip2-country-update.service" "$build_dir/geoip2-country-update.service"
 install -Dm0644 "$REPO_ROOT/packaging/common/lmm-api/geoip2-country-update.timer" "$build_dir/geoip2-country-update.timer"

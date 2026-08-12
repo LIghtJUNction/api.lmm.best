@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ForgePublicShell } from '@/features/forge/forge-public-shell'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber, formatTimestampToDate } from '@/lib/format'
 
 import {
@@ -79,7 +80,7 @@ const DETECTION_PRINCIPLES = [
 type Translate = ReturnType<typeof useTranslation>['t']
 
 function formatCount(value: number, language: string): string {
-  return formatNumber(value, language)
+  return formatNumber(value, toIntlLocale(language))
 }
 
 function formatFeeAmount(
@@ -88,7 +89,7 @@ function formatFeeAmount(
   language: string
 ): string {
   if (!Number.isFinite(fee.amount_usd)) return t('Not published')
-  return `$${formatNumber(fee.amount_usd, language)}`
+  return `$${formatNumber(fee.amount_usd, toIntlLocale(language))}`
 }
 
 function displayValue(value: string | undefined, t: Translate): string {

@@ -41,9 +41,6 @@ build_package() {
     bsdtar -tf "$archive" | grep -Fqx "$expected" ||
       die "$package archive is missing $expected"
   done
-  if bsdtar -tf "$archive" | grep -Eq '^usr/bin/lmm-api/?$'; then
-    die "$package archive exposes the removed unsuffixed command"
-  fi
 }
 
 go_work="$tmp/lmm-api-go-bin"
@@ -54,12 +51,13 @@ cp "$HERE/lmm-api-go-bin/PKGBUILD" "$go_work/"
 printf '#!/bin/sh\nexit 0\n' > "$go_bundle/lmm-api-go"
 chmod 0755 "$go_bundle/lmm-api-go"
 printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
-cp "$SHARED/lmm-api-go.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
+cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
 add_metadata "$go_bundle"
 create_archive "$go_work" "$go_artifact"
 build_package lmm-api-go-bin \
   usr/bin/lmm-api-go \
-  usr/lib/systemd/system/lmm-api-go.service \
+  usr/bin/lmm-api \
+  usr/lib/systemd/system/lmm-api.service \
   etc/lmm-api-go/lmm-api-go.env \
   usr/share/lmm-api-go/frontend-dist/index.html
 
