@@ -263,6 +263,7 @@ func PrepareAssistantRequest(c *gin.Context) {
 		// not multiply upstream spend before the first response is stored.
 		release, acquired := acquireAssistantCacheGate(c.Request.Context(), cacheKey)
 		if !acquired {
+			c.Abort()
 			return
 		}
 		defer release()
