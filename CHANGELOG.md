@@ -6,10 +6,14 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
-- Expanded the shell-only customer simulation set to a continuous A–N matrix,
+- Expanded the shell-only customer simulation set to a continuous A–O matrix,
   including open-source contributors, high-frequency API builders, new L0
-  applicants, team integrators, and login-recovery users; these profiles do
-  not write keys, payments, or upstream requests.
+  applicants, team integrators, login-recovery users, and frustrated support
+  users; these profiles do not write keys, payments, or upstream requests.
+- Added auditable support-seeking and L0-applicant assistant profiles. Login
+  errors such as 502 now receive an incident-triage welcome strategy, while
+  otherwise quiet L0 users receive an explicit assistant-only/L1-review path;
+  aggregate profile counters remain allow-listed and contain no user identity.
 - Added a per-context assistant cache gate so concurrent identical L0
   questions do not fan out into duplicate upstream model calls before the
   first deterministic response is stored; tool-backed and cross-context

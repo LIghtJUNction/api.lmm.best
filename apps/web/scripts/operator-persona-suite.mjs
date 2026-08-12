@@ -420,6 +420,13 @@ const personas = [
       '我登录后经常遇到 502，请一步一步帮我确认账号状态，并告诉我如何联系管理员。',
     expectedIntent: 'human_support',
   },
+  {
+    id: 'O',
+    label: 'frustrated-support',
+    message:
+      '我刚登录就遇到 502，页面打不开。请告诉我需要提供哪些请求 ID、时间和网络信息才能提交工单。',
+    expectedIntent: 'human_support',
+  },
 ]
 
 const requestedPersonaIds = new Set(

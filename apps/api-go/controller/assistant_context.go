@@ -23,6 +23,8 @@ const (
 	assistantProfilePrivacy      assistantCustomerProfile = "privacy_conscious"
 	assistantProfileAccessible   assistantCustomerProfile = "mobile_accessibility"
 	assistantProfileNormal       assistantCustomerProfile = "normal_user"
+	assistantProfileSupport      assistantCustomerProfile = "support_seeking"
+	assistantProfileL0Applicant  assistantCustomerProfile = "l0_applicant"
 )
 
 // assistantUserContext is deliberately a small, non-secret account summary.
@@ -242,12 +244,20 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if assistantTextContainsAny(text, "手机", "移动端", "无障碍", "屏幕阅读器", "大字体", "mobile", "accessibility", "screen reader", "keyboard navigation") {
 		signals = append(signals, "mobile_accessibility_language")
 	}
+	if assistantTextContainsAny(text, "502", "503", "504", "404", "429", "报错", "错误", "无法登录", "登录失败", "访问不了", "连不上", "故障", "工单", "人工客服", "support ticket", "login failed", "cannot access", "incident", "outage") {
+		signals = append(signals, "support_problem_language")
+	}
+	if context.AccessLevel == "L0" {
+		signals = append(signals, "l0_access")
+	}
 
 	switch {
 	case assistantTextContainsAnyValue(signals, "security_sensitive_language"):
 		return assistantProfileSecurityRisk, signals
 	case assistantTextContainsAnyValue(signals, "disposable_email", "promotion_language"):
 		return assistantProfilePromotion, signals
+	case assistantTextContainsAnyValue(signals, "support_problem_language"):
+		return assistantProfileSupport, signals
 	case assistantTextContainsAnyValue(signals, "operations_language"):
 		return assistantProfileOperator, signals
 	case assistantTextContainsAnyValue(signals, "mobile_accessibility_language"):
@@ -258,6 +268,8 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 		return assistantProfileGuided, signals
 	case assistantTextContainsAnyValue(signals, "cost_sensitive_technical_language"):
 		return assistantProfileTechnical, signals
+	case assistantTextContainsAnyValue(signals, "l0_access"):
+		return assistantProfileL0Applicant, signals
 	case len(signals) == 0:
 		return assistantProfileNormal, signals
 	default:
@@ -344,6 +356,10 @@ func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 		return "Explain data minimization, retention, authentication, and account controls plainly. Avoid requesting unnecessary personal data, distinguish public from private information, and point to the privacy policy for durable details."
 	case assistantProfileAccessible:
 		return "Use short, scannable steps with clear labels, keyboard and touch-friendly actions, and no color-only instructions. Ask whether the user needs larger text, screen-reader help, or a mobile-specific path."
+	case assistantProfileSupport:
+		return "Acknowledge the access problem first. Ask only for the affected URL, approximate time, request ID, browser/device and network region; guide the user through status and session checks, then offer a redacted administrator handoff without promising an unverified fix."
+	case assistantProfileL0Applicant:
+		return "Welcome the L0 user inside the assistant, explain that payment and write actions remain unavailable, ask one concrete question about their intended project and client, and guide them toward a truthful administrator L1 review request."
 	case assistantProfileNormal:
 		return "Use the normal helpful onboarding flow, answer the concrete question first, and offer the smallest next step."
 	default:
