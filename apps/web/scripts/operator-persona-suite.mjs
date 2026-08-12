@@ -388,6 +388,18 @@ const personas = [
     expectedIntent: 'other',
   },
   {
+    id: 'J',
+    label: 'open-source-contributor',
+    message: '我想通过开源悬赏贡献代码，如何发布挑战并提交真实 PR？',
+    expectedIntent: 'bounty',
+  },
+  {
+    id: 'K',
+    label: 'high-frequency-api-builder',
+    message: '我有高频 API 项目，关心稳定性、并发、延迟，想查看用量统计。',
+    expectedIntent: 'usage',
+  },
+  {
     id: 'L',
     label: 'new-l0-applicant',
     message:
