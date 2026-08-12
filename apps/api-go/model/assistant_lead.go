@@ -300,13 +300,21 @@ func RecordAssistantProfile(profile string) error {
 	now := common.GetTimestamp()
 	const bucketSeconds int64 = 60 * 60
 	bucketStart := now - now%bucketSeconds
+	countExpression := gorm.Expr("count + ?", 1)
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		// PostgreSQL resolves an unqualified column in an ON CONFLICT update
+		// against both the target row and the proposed row. Qualify the target
+		// table so profile counters are updated instead of being dropped with
+		// SQLSTATE 42702 (ambiguous column reference).
+		countExpression = gorm.Expr(`"assistant_profile_buckets"."count" + ?`, 1)
+	}
 	return DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "profile"},
 			{Name: "bucket_start"},
 		},
 		DoUpdates: clause.Assignments(map[string]any{
-			"count": gorm.Expr("count + ?", 1),
+			"count": countExpression,
 		}),
 	}).Create(&AssistantProfileBucket{
 		Profile:     profile,
