@@ -6,6 +6,9 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+- Fixed PostgreSQL assistant-profile UPSERTs by qualifying the aggregate
+  counter column; assistant chat requests no longer lose profile statistics
+  with SQLSTATE 42702.
 - Expanded the shell-only customer simulation set to a continuous A–O matrix,
   including open-source contributors, high-frequency API builders, new L0
   applicants, team integrators, login-recovery users, and frustrated support
