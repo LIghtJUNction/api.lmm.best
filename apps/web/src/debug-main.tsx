@@ -16,10 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/// <reference types="@rsbuild/core/types" />
+import { installPersonaDebugRuntime } from '@/features/debug/persona-runtime'
 
-declare const __LMM_PERSONA_DEBUG__: boolean
-
-declare module '@visactor/react-vchart' {
-  export const VChart: React.ComponentType<Record<string, unknown>>
-}
+installPersonaDebugRuntime()
+void import('./main')
