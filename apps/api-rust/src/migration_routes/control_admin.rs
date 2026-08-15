@@ -4,9 +4,7 @@
 //! these routes independent of a particular bearer-token implementation while
 //! preserving the legacy distinction between root-only and administrator APIs.
 
-use crate::auth::{
-    AuthErrorKind, DashboardAuth, UserAuthPolicyError, enforce_user_auth, user_auth_message,
-};
+use crate::auth::{DashboardAuth, UserAuthPolicyError, enforce_user_auth_view, user_auth_message};
 use secrecy::SecretString;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -30,6 +28,7 @@ use uuid::Uuid;
 
 const ROOT_ROLE: i64 = 100;
 const ADMIN_ROLE: i64 = 10;
+const CUSTOM_OAUTH_COLLECTION_PATH: &str = "/api/custom-oauth-provider/";
 const STALE_INSTANCE_AFTER_SECONDS: i64 = 90;
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
 const DISCOVERY_MAX_RESPONSE_BYTES: usize = 1 << 20;
@@ -43,6 +42,7 @@ const AUTH_TOKEN_EXPIRED: &str = "AUTH_TOKEN_EXPIRED";
 const AUTH_SESSION_REVOKED: &str = "AUTH_SESSION_REVOKED";
 const AUTH_INTERNAL_ERROR: &str = "AUTH_INTERNAL_ERROR";
 const AUTH_UNAUTHORIZED: &str = "AUTH_UNAUTHORIZED";
+const AUTH_CONSOLE_NOT_FOUND: &str = "AUTH_CONSOLE_NOT_FOUND";
 const INVALID_IDENTITY_SENTINEL: i64 = -1;
 
 #[derive(Clone, Debug)]
@@ -76,27 +76,20 @@ impl DashboardControlAdminAuthorizer {
 #[async_trait]
 impl ControlAdminAuthorizer for DashboardControlAdminAuthorizer {
     async fn authorize(&self, headers: &HeaderMap) -> Result<ControlAdminIdentity, &'static str> {
-        let token = dashboard_credential(headers).ok_or(AUTH_UNAUTHORIZED)?;
+        let token = dashboard_credential(headers).ok_or(AUTH_CONSOLE_NOT_FOUND)?;
         let user = self
             .auth
-            .self_user(SecretString::from(token.to_owned()))
+            .self_user_view_for_optional(SecretString::from(token.to_owned()))
             .await
-            .map_err(|error| match error.kind {
-                AuthErrorKind::TokenExpired => AUTH_TOKEN_EXPIRED,
-                AuthErrorKind::SessionRevoked => AUTH_SESSION_REVOKED,
-                AuthErrorKind::UserDisabled => AUTH_USER_DISABLED,
-                AuthErrorKind::Unauthorized => AUTH_UNAUTHORIZED,
-                _ => AUTH_INTERNAL_ERROR,
-            })?;
-        if user.status != 1 {
-            return Err(AUTH_USER_DISABLED);
+            .map_err(|_| AUTH_CONSOLE_NOT_FOUND)?;
+        if user.id <= 0 || user.status != 1 || !user.developer_access_granted {
+            return Err(AUTH_CONSOLE_NOT_FOUND);
         }
-        if matches!(
-            enforce_user_auth(&user),
-            Err(UserAuthPolicyError::InsufficientPrivilege)
-        ) {
-            return Err(AUTH_INSUFFICIENT_PRIVILEGE);
-        }
+        enforce_user_auth_view(&user).map_err(|error| match error {
+            UserAuthPolicyError::UserDisabled => AUTH_USER_DISABLED,
+            UserAuthPolicyError::InsufficientPrivilege => AUTH_INSUFFICIENT_PRIVILEGE,
+            UserAuthPolicyError::InvalidUserInfo => AUTH_USER_INVALID,
+        })?;
         // Root/AdminAuth compares the minimum role before validating the rest
         // of the user record. Preserve that observable order by carrying an
         // invalid-info marker to `root`/`admin` instead of rejecting here.
@@ -597,7 +590,7 @@ impl ControlAdminState {
 /// Routes migrated from `/api/custom-oauth-provider`, `/api/system-task`,
 /// `/api/system-info`, and the administrator half of `/api/task`.
 pub fn control_admin_router(state: ControlAdminState) -> Router {
-    Router::new()
+    control_admin_read_routes()
         .route(
             "/api/custom-oauth-provider/",
             get(list_oauth).post(create_oauth),
@@ -614,10 +607,6 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
             "/api/system-task/log-cleanup",
             post(create_log_cleanup_task),
         )
-        .route("/api/system-task/list", get(list_system_tasks))
-        .route("/api/system-task/current", get(current_system_task))
-        .route("/api/system-task/{task_id}", get(get_system_task))
-        .route("/api/system-info/instances", get(list_instances))
         .route(
             "/api/system-info/stale-instances",
             delete(delete_stale_instances),
@@ -628,6 +617,26 @@ pub fn control_admin_router(state: ControlAdminState) -> Router {
         )
         .route("/api/task", get(redirect_task_trailing_slash))
         .route("/api/task/", get(list_tasks))
+        .with_state(state)
+}
+
+fn control_admin_read_routes() -> Router<ControlAdminState> {
+    Router::new()
+        .route("/api/system-task/list", get(list_system_tasks))
+        .route("/api/system-task/current", get(current_system_task))
+        .route("/api/system-task/{task_id}", get(get_system_task))
+        .route("/api/system-info/instances", get(list_instances))
+}
+
+/// Mounts only the read-only control-admin views for the normal listener.
+///
+/// The broader control-admin router also contains OAuth discovery, task
+/// creation, and instance-management operations. Keeping this route separate
+/// makes the production candidate's PostgreSQL read boundary explicit and
+/// prevents an accidental write or outbound-discovery mount.
+pub fn control_admin_read_router(state: ControlAdminState) -> Router {
+    control_admin_read_routes()
+        .route(CUSTOM_OAUTH_COLLECTION_PATH, get(list_oauth))
         .with_state(state)
 }
 
@@ -841,6 +850,7 @@ fn localized_user_auth_message(headers: &HeaderMap, error: UserAuthPolicyError) 
 
 fn authorization_failure(headers: &HeaderMap, error: &'static str) -> Response {
     match error {
+        AUTH_CONSOLE_NOT_FOUND => console_not_found(),
         AUTH_USER_DISABLED => failure_code(
             StatusCode::UNAUTHORIZED,
             AUTH_USER_DISABLED,
@@ -878,6 +888,16 @@ fn authorization_failure(headers: &HeaderMap, error: &'static str) -> Response {
         ),
         message => failure_code(StatusCode::UNAUTHORIZED, AUTH_UNAUTHORIZED, message),
     }
+}
+
+fn console_not_found() -> Response {
+    let mut response =
+        (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
 }
 
 async fn audit_write(

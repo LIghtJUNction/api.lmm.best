@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -114,12 +113,12 @@ func fetchProjectUpdate(request *http.Request) (projectReleaseInfo, error) {
 		return projectReleaseInfo{}, fmt.Errorf("unexpected upstream status: %d", response.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxProjectCommitBody+1))
+	body, err := common.ReadAllLimit(response.Body, maxProjectCommitBody)
+	if errors.Is(err, common.ErrLimitExceeded) {
+		return projectReleaseInfo{}, errors.New("upstream response too large")
+	}
 	if err != nil {
 		return projectReleaseInfo{}, err
-	}
-	if len(body) > maxProjectCommitBody {
-		return projectReleaseInfo{}, errors.New("upstream response too large")
 	}
 
 	var commit githubProjectCommit

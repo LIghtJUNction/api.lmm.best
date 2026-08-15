@@ -29,6 +29,7 @@ import ReactDOM from 'react-dom/client'
 import { toast } from 'sonner'
 
 import { getStatus } from '@/lib/api'
+import { bindAuthCache } from '@/lib/auth-session'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { DEFAULT_LOGO } from '@/lib/constants'
 import { applyFaviconToDom } from '@/lib/dom-utils'
@@ -93,13 +94,16 @@ const queryClient = new QueryClient({
     },
   }),
 })
+bindAuthCache(queryClient)
 
 // Create a new router instance
 const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultPreload: 'intent',
-  defaultPreloadStaleTime: 0,
+  // Avoid re-running every hover preload while auth/session state is settling.
+  // The router-core update also handles an in-flight preload being evicted.
+  defaultPreloadStaleTime: 30_000,
 })
 
 // Register the router instance for type safety

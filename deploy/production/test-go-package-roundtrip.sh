@@ -10,7 +10,7 @@ here=$repo/deploy/production
   exit 1
 }
 
-for command in cc fakeroot makepkg pacman tar; do
+for command in cc fakeroot makepkg pacman stat tar; do
   command -v "$command" >/dev/null 2>&1 || {
     printf 'go-package-roundtrip: required command is unavailable: %s\n' "$command" >&2
     exit 1
@@ -27,11 +27,11 @@ frontend=$tmp/frontend
 pacman_root=$tmp/pacman-root
 install -d -m0700 "$workspace/tmp" "$payload_root/metadata" \
   "$payload_root/core-root/etc/lmm-api" \
-  "$payload_root/core-root/usr/bin" \
+  "$rollback_dir" "$candidate_dir" "$frontend"
+install -d -m0755 "$payload_root/core-root/usr/bin" \
   "$payload_root/core-root/usr/lib/systemd/system" \
   "$payload_root/core-root/usr/share/licenses/lmm-api" \
-  "$payload_root/go-root/usr/lib/lmm-api/backends/go" \
-  "$rollback_dir" "$candidate_dir" "$frontend"
+  "$payload_root/go-root/usr/lib/lmm-api/backends/go"
 printf 'format=1\nrole=test\n' >"$workspace/.lmm-deploy-workspace"
 
 old_core_version=0.1.0.r31.gfixture-1
@@ -39,6 +39,7 @@ old_go_version=0.1.0.r122.gfixture-1
 candidate_version=0.1.0.r999.gfixture
 printf 'lmm-api\t%s\n' "$old_core_version" >"$payload_root/metadata/packages.tsv"
 printf 'lmm-api-go\t%s\n' "$old_go_version" >>"$payload_root/metadata/packages.tsv"
+printf 'split\n' >"$payload_root/metadata/layout"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$payload_root/core-root/usr/bin/lmm-api"
 cp -- "$payload_root/core-root/usr/bin/lmm-api" "$payload_root/core-root/usr/bin/lmm-api-select"
 cp -- "$payload_root/core-root/usr/bin/lmm-api" "$payload_root/go-root/usr/lib/lmm-api/backends/go/lmm-api"
@@ -48,7 +49,11 @@ chmod 0755 "$payload_root/core-root/usr/bin/lmm-api" \
 printf '[Service]\nExecStart=/usr/bin/lmm-api\n' >"$payload_root/core-root/usr/lib/systemd/system/lmm-api.service"
 printf 'LMM_API_BACKEND=go\n' >"$payload_root/core-root/etc/lmm-api/backend.conf"
 : >"$payload_root/core-root/etc/lmm-api/lmm-api.env"
+chmod 0644 "$payload_root/core-root/usr/lib/systemd/system/lmm-api.service" \
+  "$payload_root/core-root/etc/lmm-api/backend.conf"
+chmod 0600 "$payload_root/core-root/etc/lmm-api/lmm-api.env"
 printf 'fixture\n' >"$payload_root/core-root/usr/share/licenses/lmm-api/LICENSE"
+chmod 0644 "$payload_root/core-root/usr/share/licenses/lmm-api/LICENSE"
 tar --sort=name --numeric-owner --owner=0 --group=0 -C "$payload_root" -cf "$tmp/precutover-payload.tar" .
 
 TMPDIR=$workspace/tmp "$here/build-precutover-packages.sh" \
@@ -74,11 +79,12 @@ new_go=$(find "$candidate_dir" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*
 
 install -d -m0755 "$pacman_root/etc" "$pacman_root/usr" \
   "$pacman_root/var/lib/pacman/local" "$pacman_root/var/cache/pacman/pkg" "$pacman_root/var/log"
-tar -C /var/lib/pacman/local --exclude='lmm-api-*' -cf - . | \
-  tar -C "$pacman_root/var/lib/pacman/local" -xf -
 common=(--root "$pacman_root" --dbpath "$pacman_root/var/lib/pacman" \
   --cachedir "$pacman_root/var/cache/pacman/pkg" --logfile "$pacman_root/var/log/pacman.log")
-install_args=(pacman "${common[@]}" --noconfirm --noscriptlet)
+# This fixture validates file ownership and conflict transitions, not dependency
+# resolution. Keeping the database empty avoids copying the host's entire local
+# pacman database into every test run.
+install_args=(pacman "${common[@]}" --noconfirm --noscriptlet --nodeps --nodeps)
 query_args=(pacman "${common[@]}")
 
 fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
@@ -87,9 +93,16 @@ fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 
 fakeroot -- "${install_args[@]}" -Rdd lmm-api >/dev/null
 fakeroot -- "${install_args[@]}" -U "$new_go" >/dev/null
-! "${query_args[@]}" -Q lmm-api >/dev/null 2>&1
+if "${query_args[@]}" -Q lmm-api >/dev/null 2>&1; then
+  printf 'go-package-roundtrip: old core package remains installed\n' >&2
+  exit 1
+fi
 [[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
-[[ -x $pacman_root/usr/bin/lmm-api-go && ! -e $pacman_root/usr/bin/lmm-api ]]
+[[ -x $pacman_root/usr/bin/lmm-api-go ]]
+[[ -L $pacman_root/usr/bin/lmm-api ]]
+[[ $(readlink -- "$pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
+[[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go") == 700 ]]
+[[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go/lmm-api-go.env") == 600 ]]
 
 fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 [[ $("${query_args[@]}" -Q lmm-api 2>/dev/null) == "lmm-api $old_core_version" ]]
@@ -97,4 +110,68 @@ fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 [[ -x $pacman_root/usr/bin/lmm-api && -x $pacman_root/usr/bin/lmm-api-select ]]
 [[ -x $pacman_root/usr/lib/lmm-api/backends/go/lmm-api && ! -e $pacman_root/usr/bin/lmm-api-go ]]
 
-printf 'direct lmm-api-go package transaction roundtrip verified\n'
+direct_payload_root=$tmp/direct-payload-root
+direct_rollback_dir=$tmp/direct-rollback
+direct_pacman_root=$tmp/direct-pacman-root
+install -d -m0700 "$direct_payload_root/metadata" "$direct_payload_root/go-root/etc/lmm-api-go" \
+  "$direct_rollback_dir"
+install -d -m0755 \
+  "$direct_payload_root/go-root/usr/bin" \
+  "$direct_payload_root/go-root/usr/lib/systemd/system" \
+  "$direct_payload_root/go-root/usr/share/doc/lmm-api-go" \
+  "$direct_payload_root/go-root/usr/share/licenses/lmm-api-go" \
+  "$direct_payload_root/go-root/usr/share/lmm-api-go/frontend-dist"
+printf 'direct\n' >"$direct_payload_root/metadata/layout"
+printf 'lmm-api-go\t%s\n' "$old_go_version" >"$direct_payload_root/metadata/packages.tsv"
+cat >"$tmp/old-direct.c" <<EOF
+#include <stdio.h>
+int main(void) { puts("${old_go_version%-1}"); return 0; }
+EOF
+cc -O2 -s -o "$direct_payload_root/go-root/usr/bin/lmm-api-go" "$tmp/old-direct.c"
+printf '[Service]\nExecStart=/usr/bin/lmm-api-go serve\n' \
+  >"$direct_payload_root/go-root/usr/lib/systemd/system/lmm-api-go.service"
+: >"$direct_payload_root/go-root/etc/lmm-api-go/lmm-api-go.env"
+printf 'fixture\n' >"$direct_payload_root/go-root/usr/share/doc/lmm-api-go/REVISION"
+for license_file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
+  printf 'fixture\n' >"$direct_payload_root/go-root/usr/share/licenses/lmm-api-go/$license_file"
+done
+printf 'old direct frontend\n' >"$direct_payload_root/go-root/usr/share/lmm-api-go/frontend-dist/index.html"
+find "$direct_payload_root/go-root/usr" -type f -exec chmod 0644 {} +
+chmod 0600 "$direct_payload_root/go-root/etc/lmm-api-go/lmm-api-go.env"
+chmod 0755 "$direct_payload_root/go-root/usr/bin/lmm-api-go"
+tar --sort=name --numeric-owner --owner=0 --group=0 -C "$direct_payload_root" \
+  -cf "$tmp/direct-precutover-payload.tar" .
+TMPDIR=$workspace/tmp "$here/build-precutover-packages.sh" \
+  --workspace "$workspace" --payload "$tmp/direct-precutover-payload.tar" \
+  --output-dir "$direct_rollback_dir" >/dev/null
+old_direct=$(find "$direct_rollback_dir" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*' \
+  ! -name '*.sha256' -print -quit)
+[[ -n $old_direct && -f $direct_rollback_dir/rollback-layout.direct ]] || {
+  printf 'go-package-roundtrip: direct rollback fixture is incomplete\n' >&2
+  exit 1
+}
+
+install -d -m0755 "$direct_pacman_root/etc" "$direct_pacman_root/usr" \
+  "$direct_pacman_root/var/lib/pacman/local" "$direct_pacman_root/var/cache/pacman/pkg" \
+  "$direct_pacman_root/var/log"
+direct_common=(--root "$direct_pacman_root" --dbpath "$direct_pacman_root/var/lib/pacman" \
+  --cachedir "$direct_pacman_root/var/cache/pacman/pkg" --logfile "$direct_pacman_root/var/log/pacman.log")
+direct_install=(pacman "${direct_common[@]}" --noconfirm --noscriptlet --nodeps --nodeps)
+direct_query=(pacman "${direct_common[@]}")
+
+fakeroot -- "${direct_install[@]}" -U "$old_direct" >/dev/null
+[[ $("${direct_query[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $old_go_version" ]]
+[[ $("$direct_pacman_root/usr/bin/lmm-api-go") == "${old_go_version%-1}" ]]
+fakeroot -- "${direct_install[@]}" -U "$new_go" >/dev/null
+[[ $("${direct_query[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
+[[ $("$direct_pacman_root/usr/bin/lmm-api-go") == "$candidate_version" ]]
+fakeroot -- "${direct_install[@]}" -U "$old_direct" >/dev/null
+[[ $("${direct_query[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $old_go_version" ]]
+if "${direct_query[@]}" -Q lmm-api >/dev/null 2>&1; then
+  printf 'go-package-roundtrip: direct rollback resurrected the split core package\n' >&2
+  exit 1
+fi
+[[ $("$direct_pacman_root/usr/bin/lmm-api-go") == "${old_go_version%-1}" ]]
+[[ -f $direct_pacman_root/usr/share/lmm-api-go/frontend-dist/index.html ]]
+
+printf 'split cutover and direct Go package transaction roundtrips verified\n'

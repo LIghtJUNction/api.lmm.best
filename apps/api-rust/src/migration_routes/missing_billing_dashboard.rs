@@ -201,13 +201,16 @@ impl BillingDashboardStore for PgBillingDashboardStore {
     async fn settings(&self) -> Result<BillingDashboardSettings, BillingDashboardStoreError> {
         let rows = sqlx::query(
             "SELECT key, value FROM options \
-             WHERE key IN ('QuotaPerUnit', 'USDExchangeRate', 'general_setting', \
+             WHERE key IN ('QuotaPerUnit', 'USDExchangeRate', \
+                           'general_setting.quota_display_type', 'general_setting', \
                            'DisplayTokenStatEnabled')",
         )
         .fetch_all(&self.pg)
         .await
         .map_err(|_| BillingDashboardStoreError::Unavailable)?;
         let mut settings = BillingDashboardSettings::default();
+        let mut dotted_display = None;
+        let mut aggregate_display = None;
         for row in rows {
             let key: String = row
                 .try_get("key")
@@ -230,18 +233,15 @@ impl BillingDashboardStore for PgBillingDashboardStore {
                     settings.display_token_stat_enabled =
                         value.eq_ignore_ascii_case("true") || value == "1";
                 }
-                "general_setting" => {
-                    if let Ok(setting) = serde_json::from_str::<Value>(&value) {
-                        settings.quota_display =
-                            match setting.get("quota_display_type").and_then(Value::as_str) {
-                                Some("CNY") => QuotaDisplay::Cny,
-                                Some("TOKENS") => QuotaDisplay::Tokens,
-                                _ => QuotaDisplay::Usd,
-                            };
-                    }
+                "general_setting.quota_display_type" => {
+                    dotted_display = parse_quota_display_type(&value);
                 }
+                "general_setting" => aggregate_display = parse_aggregate_display_type(&value),
                 _ => {}
             }
+        }
+        if let Some(display) = dotted_display.or(aggregate_display) {
+            settings.quota_display = display;
         }
         Ok(settings)
     }
@@ -361,6 +361,27 @@ fn display_amount(quota: i64, settings: BillingDashboardSettings) -> f64 {
     }
 }
 
+fn parse_quota_display_type(value: &str) -> Option<QuotaDisplay> {
+    match value.trim() {
+        "CNY" => Some(QuotaDisplay::Cny),
+        "TOKENS" => Some(QuotaDisplay::Tokens),
+        "USD" | "CUSTOM" => Some(QuotaDisplay::Usd),
+        _ => None,
+    }
+}
+
+fn parse_aggregate_display_type(value: &str) -> Option<QuotaDisplay> {
+    serde_json::from_str::<Value>(value)
+        .ok()
+        .and_then(|setting| {
+            setting
+                .get("quota_display_type")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|value| parse_quota_display_type(&value))
+}
+
 #[derive(Serialize)]
 struct OpenAiSubscription {
     object: &'static str,
@@ -391,8 +412,19 @@ fn auth_failure(error: BillingDashboardAuthError, request: &Request) -> Response
         || uuid::Uuid::new_v4().to_string(),
         |context| context.request_id.clone(),
     );
+    if matches!(error, BillingDashboardAuthError::Unauthorized) {
+        let mut response =
+            (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            "application/json; charset=utf-8"
+                .parse()
+                .expect("static content type is valid"),
+        );
+        return response;
+    }
     let (status, message, code) = match error {
-        BillingDashboardAuthError::Unauthorized => (StatusCode::UNAUTHORIZED, "Invalid token", ""),
+        BillingDashboardAuthError::Unauthorized => unreachable!("handled above"),
         BillingDashboardAuthError::Forbidden => (
             StatusCode::FORBIDDEN,
             "您的 IP 不在令牌允许访问的列表中",
@@ -638,6 +670,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn billing_display_type_prefers_registered_dotted_option() {
+        assert_eq!(
+            parse_quota_display_type("TOKENS"),
+            Some(QuotaDisplay::Tokens)
+        );
+        assert_eq!(
+            parse_aggregate_display_type(r#"{"quota_display_type":"CNY"}"#),
+            Some(QuotaDisplay::Cny)
+        );
+        assert_eq!(parse_quota_display_type("CUSTOM"), Some(QuotaDisplay::Usd));
+        assert_eq!(parse_quota_display_type("invalid"), None);
+    }
+
     #[tokio::test]
     async fn all_billing_aliases_return_legacy_token_auth_failure_before_store_reads() {
         let store = CountingStore::default();
@@ -661,15 +707,10 @@ mod tests {
             });
             let response = app.clone().oneshot(request).await.expect("response");
 
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
             assert_eq!(
                 response.headers()[header::CONTENT_TYPE],
                 "application/json; charset=utf-8",
-                "{path}"
-            );
-            assert_eq!(
-                response.headers()["x-oneapi-request-id"],
-                "billing-fixture-request-id",
                 "{path}"
             );
             let body = to_bytes(response.into_body(), usize::MAX)
@@ -677,11 +718,7 @@ mod tests {
                 .expect("body");
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).expect("json"),
-                json!({"error": {
-                    "message": "Invalid token (request id: billing-fixture-request-id)",
-                    "type": "new_api_error",
-                    "code": "",
-                }}),
+                json!({"message": "Not Found"}),
                 "{path}"
             );
         }

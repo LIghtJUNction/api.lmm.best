@@ -56,8 +56,8 @@ impl IdentityTopupState {
 /// Routes retained under the legacy `/api/user` namespace.
 pub fn router(state: IdentityTopupState) -> Router {
     topup_read_routes()
-        .route("/api/user/topup", get(all_topups).post(redeem))
-        .route("/api/user/topup/complete", post(complete_topup))
+        .merge(topup_admin_route())
+        .merge(topup_write_route())
         .with_state(state)
 }
 
@@ -65,6 +65,23 @@ pub fn router(state: IdentityTopupState) -> Router {
 /// isolated until their Go write-side transaction differential is complete.
 pub fn read_router(state: IdentityTopupState) -> Router {
     topup_read_routes().with_state(state)
+}
+
+/// Mounts only the administrator's read-only top-up history on a normal
+/// listener.  Redemption and manual completion remain isolated until their
+/// write-side transaction differential is complete.
+pub fn admin_read_router(state: IdentityTopupState) -> Router {
+    topup_admin_route().with_state(state)
+}
+
+fn topup_admin_route() -> Router<IdentityTopupState> {
+    Router::new().route("/api/user/topup", get(all_topups))
+}
+
+fn topup_write_route() -> Router<IdentityTopupState> {
+    Router::new()
+        .route("/api/user/topup", post(redeem))
+        .route("/api/user/topup/complete", post(complete_topup))
 }
 
 fn topup_read_routes() -> Router<IdentityTopupState> {
@@ -189,7 +206,7 @@ async fn actor_view(
     let Some(token) = bearer(headers) else {
         return Err(unauthorized());
     };
-    let view = state
+    let user = state
         .auth
         .self_user_view_for_optional(SecretString::from(token))
         .await
@@ -202,8 +219,8 @@ async fn actor_view(
             | AuthErrorKind::SessionRevoked => unauthorized(),
             _ => unauthorized(),
         })?;
-    enforce_user_auth_view(&view).map_err(|error| user_auth_error(headers, error))?;
-    Ok(view)
+    enforce_user_auth_view(&user).map_err(|error| user_auth_error(headers, error))?;
+    Ok(user)
 }
 
 async fn administrator(
@@ -321,10 +338,20 @@ struct TopupRecord {
     id: i64,
     user_id: i64,
     amount: i64,
+    credited_quota: i64,
+    expected_amount_micros: i64,
+    settled_amount_micros: i64,
+    settlement_currency: String,
     money: Value,
     trade_no: String,
     payment_method: String,
     payment_provider: String,
+    provider_product_id: String,
+    provider_store_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_transaction_id: Option<String>,
     create_time: i64,
     complete_time: i64,
     status: String,
@@ -338,7 +365,6 @@ struct TopupSelfRecord {
     money: Value,
     trade_no: String,
     payment_method: String,
-    payment_provider: String,
     create_time: i64,
     complete_time: i64,
     status: String,
@@ -353,7 +379,6 @@ impl From<TopupRecord> for TopupSelfRecord {
             money: record.money,
             trade_no: record.trade_no,
             payment_method: record.payment_method,
-            payment_provider: record.payment_provider,
             create_time: record.create_time,
             complete_time: record.complete_time,
             status: record.status,
@@ -363,30 +388,80 @@ impl From<TopupRecord> for TopupSelfRecord {
 
 fn topup_record(row: &sqlx::postgres::PgRow) -> Result<TopupRecord, sqlx::Error> {
     let money_text: String = row.try_get("money")?;
-    let money = money_text
-        .parse::<f64>()
-        .ok()
-        .and_then(Number::from_f64)
-        .map(Value::Number)
-        .unwrap_or_else(|| Value::String(money_text));
+    let money = money_value(&money_text);
+    let top_up_json: Value = row.try_get("top_up_json")?;
     Ok(TopupRecord {
         id: row.try_get("id")?,
         user_id: row.try_get("user_id")?,
         amount: row.try_get("amount")?,
+        credited_quota: json_i64(&top_up_json, "credited_quota"),
+        expected_amount_micros: json_i64(&top_up_json, "expected_amount_micros"),
+        settled_amount_micros: json_i64(&top_up_json, "settled_amount_micros"),
+        settlement_currency: json_string(&top_up_json, "settlement_currency"),
         money,
         trade_no: row.try_get("trade_no")?,
         payment_method: row.try_get("payment_method")?,
         payment_provider: row.try_get("payment_provider")?,
+        provider_product_id: json_string(&top_up_json, "provider_product_id"),
+        provider_store_id: json_string(&top_up_json, "provider_store_id"),
+        provider_event_id: json_optional_string(&top_up_json, "provider_event_id"),
+        provider_transaction_id: json_optional_string(&top_up_json, "provider_transaction_id"),
         create_time: row.try_get("create_time")?,
         complete_time: row.try_get("complete_time")?,
         status: row.try_get("status")?,
     })
 }
 
+fn json_i64(row: &Value, key: &str) -> i64 {
+    row.get(key)
+        .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+        .unwrap_or(0)
+}
+
+fn json_string(row: &Value, key: &str) -> String {
+    row.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn json_optional_string(row: &Value, key: &str) -> Option<String> {
+    row.get(key).and_then(|value| match value {
+        Value::Null => None,
+        Value::String(value) => Some(value.to_owned()),
+        _ => Some(value.to_string()),
+    })
+}
+
+/// Go's `encoding/json` emits integral `float64` values without a trailing
+/// `.0` (for example, `2`, not `2.0`).  PostgreSQL may return either spelling
+/// for a NUMERIC column, so normalize integral values before serializing the
+/// legacy response while retaining fractional amounts as JSON numbers.
+fn money_value(text: &str) -> Value {
+    if let Ok(integer) = text.parse::<i64>() {
+        return Value::Number(integer.into());
+    }
+    match text.parse::<f64>() {
+        Ok(value) if value.is_finite() && value.fract() == 0.0 => {
+            if value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+                return Value::Number((value as i64).into());
+            }
+            Number::from_f64(value)
+                .map(Value::Number)
+                .unwrap_or_else(|| Value::String(text.to_owned()))
+        }
+        Ok(value) => Number::from_f64(value)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(text.to_owned())),
+        Err(_) => Value::String(text.to_owned()),
+    }
+}
+
 const TOPUP_COLUMNS: &str = r#"id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount,
 COALESCE(money, 0)::text AS money, COALESCE(trade_no, '') AS trade_no,
 COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider,
-COALESCE(create_time, 0) AS create_time, COALESCE(complete_time, 0) AS complete_time, COALESCE(status, '') AS status"#;
+COALESCE(create_time, 0) AS create_time, COALESCE(complete_time, 0) AS complete_time,
+COALESCE(status, '') AS status, to_jsonb(top_ups) AS top_up_json"#;
 
 async fn all_topups(
     State(state): State<IdentityTopupState>,
@@ -674,7 +749,7 @@ async fn complete_topup(
             Ok(tx) => tx,
             Err(error) => return fail(legacy_database_error(&error)),
         };
-        let row = match sqlx::query("SELECT id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount, COALESCE(money, 0)::text AS money, COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider, COALESCE(status, '') AS status FROM top_ups WHERE trade_no = $1 FOR UPDATE")
+        let row = match sqlx::query("SELECT id, COALESCE(user_id, 0) AS user_id, COALESCE(amount, 0) AS amount, COALESCE(money, 0)::text AS money, COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider, COALESCE(status, '') AS status, to_jsonb(top_ups) AS top_up_json FROM top_ups WHERE trade_no = $1 FOR UPDATE")
             .bind(&request.trade_no).fetch_optional(&mut *tx).await { Ok(Some(row)) => row, Ok(None) => return fail("充值订单不存在"), Err(_) => return fail("系统错误") };
         let status: String = row.get("status");
         if status == TOPUP_SUCCESS {
@@ -705,19 +780,50 @@ async fn complete_topup(
             Ok(value) => value,
             Err(_) => return fail("系统错误"),
         };
-        let units = completed_quota(amount, &money, &provider, quota_per_unit).unwrap_or(0);
+        let units = manual_topup_quota(
+            amount,
+            &provider,
+            &money,
+            quota_per_unit,
+        )
+        .unwrap_or(0);
         if units <= 0 {
             return fail("无效的充值额度");
         }
-        match sqlx::query(
-            "UPDATE top_ups SET complete_time = $1, status = $2 WHERE id = $3 AND status = $4",
+        // Current Go persists the normalized credited amount on the order
+        // while completing it.  Keep the fallback update for older schemas
+        // that predate the settlement columns; those schemas remain readable
+        // during the staged migration, but current schemas get exact parity.
+        let has_credited_quota = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'top_ups' AND column_name = 'credited_quota')",
         )
-        .bind(unix_now())
-        .bind(TOPUP_SUCCESS)
-        .bind(id)
-        .bind(TOPUP_PENDING)
-        .execute(&mut *tx)
-        .await {
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_or(false);
+        let completed_at = unix_now();
+        let completion = if has_credited_quota {
+            sqlx::query(
+                "UPDATE top_ups SET credited_quota = $1, complete_time = $2, status = $3 WHERE id = $4 AND status = $5",
+            )
+            .bind(units)
+            .bind(completed_at)
+            .bind(TOPUP_SUCCESS)
+            .bind(id)
+            .bind(TOPUP_PENDING)
+            .execute(&mut *tx)
+            .await
+        } else {
+            sqlx::query(
+                "UPDATE top_ups SET complete_time = $1, status = $2 WHERE id = $3 AND status = $4",
+            )
+            .bind(completed_at)
+            .bind(TOPUP_SUCCESS)
+            .bind(id)
+            .bind(TOPUP_PENDING)
+            .execute(&mut *tx)
+            .await
+        };
+        match completion {
             Ok(result) if result.rows_affected() == 1 => {}
             Ok(_) => return fail("系统错误"),
             Err(error) => return fail(legacy_database_error(&error)),
@@ -851,16 +957,9 @@ async fn format_quota(pool: &PgPool, quota: i64, include_unit: bool) -> String {
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite())
         .unwrap_or(DEFAULT_QUOTA_PER_UNIT);
-    let general = options
-        .get("general_setting")
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .unwrap_or_else(|| json!({}));
-    let display_type = general
-        .get("quota_display_type")
-        .and_then(Value::as_str)
-        .unwrap_or("USD");
+    let (display_type, custom_symbol, custom_rate) = quota_display_settings(&options);
     let usd = quota as f64 / quota_per_unit;
-    match display_type {
+    match display_type.as_str() {
         "CNY" => {
             let exchange_rate = options
                 .get("USDExchangeRate")
@@ -874,19 +973,9 @@ async fn format_quota(pool: &PgPool, quota: i64, include_unit: bool) -> String {
             )
         }
         "CUSTOM" => {
-            let symbol = general
-                .get("custom_currency_symbol")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .unwrap_or("¤");
-            let rate = general
-                .get("custom_currency_exchange_rate")
-                .and_then(Value::as_f64)
-                .filter(|value| *value > 0.0)
-                .unwrap_or(1.0);
             format!(
-                "{symbol}{:.6}{}",
-                usd * rate,
+                "{custom_symbol}{:.6}{}",
+                usd * custom_rate,
                 if include_unit { " 额度" } else { "" }
             )
         }
@@ -894,6 +983,49 @@ async fn format_quota(pool: &PgPool, quota: i64, include_unit: bool) -> String {
         "TOKENS" => quota.to_string(),
         _ => format!("＄{usd:.6}{}", if include_unit { " 额度" } else { "" }),
     }
+}
+
+fn quota_display_settings(options: &HashMap<String, String>) -> (String, String, f64) {
+    let general = options
+        .get("general_setting")
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| json!({}));
+    let display_type = options
+        .get("general_setting.quota_display_type")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .or_else(|| {
+            general
+                .get("quota_display_type")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "USD".to_owned());
+    let custom_symbol = options
+        .get("general_setting.custom_currency_symbol")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or_else(|| {
+            general
+                .get("custom_currency_symbol")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "¤".to_owned());
+    let custom_rate = options
+        .get("general_setting.custom_currency_exchange_rate")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            general
+                .get("custom_currency_exchange_rate")
+                .and_then(Value::as_f64)
+                .filter(|value| value.is_finite() && *value > 0.0)
+        })
+        .unwrap_or(1.0);
+    (display_type, custom_symbol, custom_rate)
 }
 
 fn caller_ip(context: Option<Extension<RequestContext>>) -> String {
@@ -961,14 +1093,20 @@ async fn quota_per_unit(transaction: &mut Transaction<'_, Postgres>) -> Result<f
     })
 }
 
-/// Mirrors Go's `decimal.NewFromFloat(...).Mul(...).IntPart()` result for the
-/// positive values accepted by manual completion, while rejecting values that
-/// cannot be represented as the legacy integer quota.
-fn completed_quota(amount: i64, money: &str, provider: &str, quota_per_unit: f64) -> Option<i64> {
+/// Mirrors the frozen Go manual-completion path.  Stripe orders use their
+/// stored money amount; every other order uses the stored display amount.  The
+/// legacy endpoint intentionally does not gate this calculation on the
+/// payment-provider allowlist or on a newer credited-quota column.
+fn manual_topup_quota(
+    amount: i64,
+    provider: &str,
+    money: &str,
+    quota_per_unit: f64,
+) -> Option<i64> {
     if !quota_per_unit.is_finite() {
         return None;
     }
-    let quantity = if provider == "stripe" {
+    let quantity = if provider.trim() == "stripe" {
         money.parse::<f64>().ok()?
     } else {
         amount as f64
@@ -979,6 +1117,10 @@ fn completed_quota(amount: i64, money: &str, provider: &str, quota_per_unit: f64
 }
 
 async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap) -> Response {
+    // Frozen Go exposes the complete payment configuration to every ordinary
+    // UserAuth principal. Console activation is not part of this route's
+    // authorization contract; individual payment writes keep their own
+    // compliance and credential guards.
     let actor = match actor_view(&state, &headers).await {
         Ok(actor) => actor,
         Err(response) => return response,
@@ -987,11 +1129,8 @@ async fn topup_info(State(state): State<IdentityTopupState>, headers: HeaderMap)
         Ok(options) => options,
         Err(_) => return fail("系统错误"),
     };
-    ok(topup_info_data_for_user(
-        &options,
-        actor.developer_access_granted,
-        &actor.group,
-    ))
+    let data = topup_info_data_for_user(&options, actor.developer_access_granted, &actor.group);
+    ok(data)
 }
 
 #[cfg(test)]
@@ -1098,7 +1237,7 @@ fn topup_info_data_for_user(
             "developer_access_granted": false,
             "activation_required": true,
             "payment_available": payment_available,
-            "min_payment": min_payment,
+            "min_payment": legacy_number(min_payment),
             "amount_options": amount_options,
             "discount": discount,
             "payment_compliance_confirmed": compliant,
@@ -1115,7 +1254,7 @@ fn topup_info_data_for_user(
         "enable_redemption": compliant,
         "payment_compliance_confirmed": compliant,
         "payment_compliance_terms_version": "v1",
-        "waffo_pay_methods": if waffo { json_value(options, "WaffoPayMethods", Value::Null) } else { Value::Null },
+        "waffo_pay_methods": if waffo { waffo_pay_methods(options) } else { Value::Null },
         "creem_products": creem_products,
         "pay_methods": pay_methods,
         "topup_group_ratio": legacy_number(topup_group_ratio(options, group)),
@@ -1200,6 +1339,57 @@ fn default_pay_methods() -> Value {
     ])
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct WaffoPayMethod {
+    name: String,
+    icon: String,
+    #[serde(rename = "payMethodType")]
+    pay_method_type: String,
+    #[serde(rename = "payMethodName")]
+    pay_method_name: String,
+}
+
+fn default_waffo_pay_methods() -> Value {
+    json!([
+        {
+            "name": "Card",
+            "icon": "/pay-card.png",
+            "payMethodType": "CREDITCARD,DEBITCARD",
+            "payMethodName": ""
+        },
+        {
+            "name": "Apple Pay",
+            "icon": "/pay-apple.png",
+            "payMethodType": "APPLEPAY",
+            "payMethodName": "APPLEPAY"
+        },
+        {
+            "name": "Google Pay",
+            "icon": "/pay-google.png",
+            "payMethodType": "GOOGLEPAY",
+            "payMethodName": "GOOGLEPAY"
+        }
+    ])
+}
+
+/// Match Go's typed `GetWaffoPayMethods` loader: missing/blank/invalid JSON
+/// falls back to the built-in list, while a valid empty list remains empty.
+fn waffo_pay_methods(options: &HashMap<String, String>) -> Value {
+    let Some(raw) = options.get("WaffoPayMethods") else {
+        return default_waffo_pay_methods();
+    };
+    if raw.trim().is_empty() {
+        return default_waffo_pay_methods();
+    }
+    match serde_json::from_str::<Option<Vec<WaffoPayMethod>>>(raw) {
+        Ok(Some(methods)) => {
+            serde_json::to_value(methods).unwrap_or_else(|_| default_waffo_pay_methods())
+        }
+        Ok(None) => Value::Null,
+        Err(_) => default_waffo_pay_methods(),
+    }
+}
+
 fn append_payment_method(
     methods: &mut Vec<Value>,
     enabled: bool,
@@ -1265,9 +1455,8 @@ fn payment_compliance_values(options: &HashMap<String, String>) -> bool {
 }
 fn payment_field(options: &HashMap<String, String>, field: &str, default: Value) -> Value {
     options
-        .get("payment_setting")
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .and_then(|value| value.get(field).cloned())
+        .get(&format!("payment_setting.{field}"))
+        .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or(default)
 }
 fn json_value(options: &HashMap<String, String>, key: &str, default: Value) -> Value {
@@ -1581,13 +1770,20 @@ mod tests {
     }
 
     #[test]
-    fn completed_quota_keeps_the_legacy_default_and_rejects_malformed_values() {
+    fn manual_topup_quota_matches_the_frozen_provider_switch() {
         assert_eq!(
-            completed_quota(2, "0", "epay", DEFAULT_QUOTA_PER_UNIT),
+            manual_topup_quota(2, "epay", "2", DEFAULT_QUOTA_PER_UNIT),
             Some(1_000_000)
         );
-        assert_eq!(completed_quota(2, "0", "epay", 0.0), Some(0));
-        assert_eq!(completed_quota(2, "0", "epay", f64::NAN), None);
+        assert_eq!(
+            manual_topup_quota(2, "", "2", DEFAULT_QUOTA_PER_UNIT),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            manual_topup_quota(2, "stripe", "3.5", DEFAULT_QUOTA_PER_UNIT),
+            Some(1_750_000)
+        );
+        assert_eq!(manual_topup_quota(2, "epay", "2", f64::NAN), None);
     }
 
     #[test]
@@ -1764,15 +1960,91 @@ mod tests {
     }
 
     #[test]
+    fn quota_display_settings_prefer_go_dotted_options_and_keep_legacy_fallback() {
+        let mut options = HashMap::from([(
+            "general_setting".into(),
+            r#"{"quota_display_type":"CNY","custom_currency_symbol":"X","custom_currency_exchange_rate":2}"#.into(),
+        )]);
+        assert_eq!(
+            quota_display_settings(&options),
+            ("CNY".into(), "X".into(), 2.0)
+        );
+        options.insert("general_setting.quota_display_type".into(), "CUSTOM".into());
+        options.insert("general_setting.custom_currency_symbol".into(), "¤¤".into());
+        options.insert(
+            "general_setting.custom_currency_exchange_rate".into(),
+            "3.5".into(),
+        );
+        assert_eq!(
+            quota_display_settings(&options),
+            ("CUSTOM".into(), "¤¤".into(), 3.5)
+        );
+    }
+
+    #[test]
+    fn waffo_pay_methods_keep_go_defaults_and_typed_fallbacks() {
+        let mut options = HashMap::new();
+        let defaults = json!([
+            {
+                "name": "Card",
+                "icon": "/pay-card.png",
+                "payMethodType": "CREDITCARD,DEBITCARD",
+                "payMethodName": ""
+            },
+            {
+                "name": "Apple Pay",
+                "icon": "/pay-apple.png",
+                "payMethodType": "APPLEPAY",
+                "payMethodName": "APPLEPAY"
+            },
+            {
+                "name": "Google Pay",
+                "icon": "/pay-google.png",
+                "payMethodType": "GOOGLEPAY",
+                "payMethodName": "GOOGLEPAY"
+            }
+        ]);
+        assert_eq!(waffo_pay_methods(&options), defaults);
+
+        options.insert("WaffoPayMethods".into(), "not-json".into());
+        assert_eq!(waffo_pay_methods(&options), defaults);
+        options.insert("WaffoPayMethods".into(), "[]".into());
+        assert_eq!(waffo_pay_methods(&options), json!([]));
+        options.insert(
+            "WaffoPayMethods".into(),
+            r#"[{"name":"Custom","icon":"/custom.png","payMethodType":"CUSTOM","payMethodName":""}]"#.into(),
+        );
+        assert_eq!(
+            waffo_pay_methods(&options),
+            json!([{
+                "name": "Custom",
+                "icon": "/custom.png",
+                "payMethodType": "CUSTOM",
+                "payMethodName": ""
+            }])
+        );
+        options.insert("WaffoPayMethods".into(), r#"[{"name":1}]"#.into());
+        assert_eq!(waffo_pay_methods(&options), defaults);
+    }
+
+    #[test]
     fn self_topup_record_keeps_the_go_public_shape() {
         let value = serde_json::to_value(TopupSelfRecord::from(TopupRecord {
             id: 7,
             user_id: 11,
             amount: 20,
+            credited_quota: 0,
+            expected_amount_micros: 0,
+            settled_amount_micros: 0,
+            settlement_currency: String::new(),
             money: json!(20.0),
             trade_no: "trade-7".into(),
             payment_method: "stripe".into(),
             payment_provider: "stripe".into(),
+            provider_product_id: String::new(),
+            provider_store_id: String::new(),
+            provider_event_id: None,
+            provider_transaction_id: None,
             create_time: 100,
             complete_time: 200,
             status: "success".into(),
@@ -1781,7 +2053,17 @@ mod tests {
         assert_eq!(value["id"], 7);
         assert_eq!(value["money"], 20.0);
         assert_eq!(value["payment_method"], "stripe");
-        assert_eq!(value["payment_provider"], "stripe");
+        assert!(value.get("payment_provider").is_none());
+    }
+
+    #[test]
+    fn money_value_matches_go_integral_float_wire_shape() {
+        assert_eq!(serde_json::to_string(&money_value("2.000")).unwrap(), "2");
+        assert_eq!(serde_json::to_string(&money_value("2.5")).unwrap(), "2.5");
+        assert_eq!(
+            serde_json::to_string(&money_value("not-a-number")).unwrap(),
+            "\"not-a-number\""
+        );
     }
 
     #[tokio::test]

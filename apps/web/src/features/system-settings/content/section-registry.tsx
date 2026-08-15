@@ -20,10 +20,12 @@ import type { ContentSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { AnnouncementsSection } from './announcements-section'
 import { ApiInfoSection } from './api-info-section'
+import { AssistantSettingsSection } from './assistant-settings-section'
 import { ChatSettingsSection } from './chat-settings-section'
 import { DashboardSection } from './dashboard-section'
 import { DrawingSettingsSection } from './drawing-settings-section'
 import { FAQSection } from './faq-section'
+import { ReleaseNotesSection } from './release-notes-section'
 import { UptimeKumaSection } from './uptime-kuma-section'
 
 /**
@@ -64,6 +66,11 @@ const CONTENT_SECTIONS = [
     ),
   },
   {
+    id: 'release-notes',
+    titleKey: 'Version updates',
+    build: () => <ReleaseNotesSection />,
+  },
+  {
     id: 'api-info',
     titleKey: 'API Addresses',
     build: (settings: ContentSettings) => (
@@ -90,6 +97,42 @@ const CONTENT_SECTIONS = [
       <UptimeKumaSection
         enabled={settings['console_setting.uptime_kuma_enabled']}
         data={settings['console_setting.uptime_kuma_groups']}
+      />
+    ),
+  },
+  {
+    id: 'assistant',
+    titleKey: 'AI assistant',
+    build: (settings: ContentSettings) => (
+      <AssistantSettingsSection
+        defaultValues={{
+          AssistantEnabled: settings.AssistantEnabled,
+          AssistantModel: settings.AssistantModel,
+          AssistantAgentLoopEnabled: settings.AssistantAgentLoopEnabled,
+          AssistantMaxSteps: settings.AssistantMaxSteps,
+          AssistantTimeoutSeconds: settings.AssistantTimeoutSeconds,
+          AssistantCacheEnabled: settings.AssistantCacheEnabled,
+          AssistantCacheTTLMinutes: settings.AssistantCacheTTLMinutes,
+          AssistantPersona: settings.AssistantPersona,
+          AssistantSystemPrompt: settings.AssistantSystemPrompt,
+          AssistantSearchProvider: settings.AssistantSearchProvider,
+          AssistantSearchURL: settings.AssistantSearchURL,
+          AssistantSearchAPIKey: settings.AssistantSearchAPIKey,
+          AssistantSearchMCPTool: settings.AssistantSearchMCPTool,
+          AssistantSkills: settings.AssistantSkills,
+          AssistantSkillFiles: settings.AssistantSkillFiles,
+          AssistantReviewEnabled: settings.AssistantReviewEnabled,
+          AssistantReviewWindowDays: settings.AssistantReviewWindowDays,
+          AssistantReviewIntervalHours: settings.AssistantReviewIntervalHours,
+          AssistantRetentionEnabled: settings.AssistantRetentionEnabled,
+          AssistantActiveRetentionDays: settings.AssistantActiveRetentionDays,
+          AssistantArchivedRetentionDays:
+            settings.AssistantArchivedRetentionDays,
+          AssistantSecurityRetentionDays:
+            settings.AssistantSecurityRetentionDays,
+          AssistantRetentionIntervalHours:
+            settings.AssistantRetentionIntervalHours,
+        }}
       />
     ),
   },

@@ -29,6 +29,15 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+export interface PersonalAccessIPPolicy {
+  ip: string
+  current_ip: string
+  current_ip_allowed: boolean
+  eligible: boolean
+  minimum_trust_level: number
+  production_cn_linkage: boolean
+}
+
 /**
  * User profile data
  */
@@ -81,12 +90,16 @@ export interface UserProfile {
   telegram_id?: string
   /** LinuxDO ID (OAuth) */
   linux_do_id?: string
+  /** Effective trust level returned by the authenticated self endpoint */
+  trust_level_info?: import('@/stores/auth-store').TrustLevelInfo
 }
 
 /**
  * Notification type
  */
 export type NotifyType = 'email' | 'webhook' | 'bark' | 'gotify'
+
+export type UsageLeaderboardVisibility = 'public' | 'anonymous' | 'hidden'
 
 /**
  * Parsed user settings
@@ -118,6 +131,8 @@ export interface UserSettings {
   upstream_model_update_notify_enabled?: boolean
   /** Preferred interface/API response language */
   language?: string
+  /** How this user's usage appears on the public leaderboard */
+  usage_leaderboard_visibility?: UsageLeaderboardVisibility
 }
 
 /**
@@ -145,6 +160,7 @@ export interface UpdateUserSettingsRequest {
   accept_unset_model_ratio_model?: boolean
   record_ip_log?: boolean
   upstream_model_update_notify_enabled?: boolean
+  usage_leaderboard_visibility?: UsageLeaderboardVisibility
 }
 
 /**
@@ -187,6 +203,46 @@ export interface TwoFASetupData {
 }
 
 // ============================================================================
+// Compensation Gift Type Definitions
+// ============================================================================
+
+/**
+ * A time-boxed compensation gift as shown to the current user.
+ */
+export interface GiftItem {
+  id: number
+  title: string
+  description: string
+  quota: number
+  start_at: number
+  end_at: number
+  min_used_quota: number
+  min_account_age_days: number
+  enabled: boolean
+  created_at: number
+  /** Whether the current user already claimed this gift */
+  claimed: boolean
+  /** Claim unix timestamp when `claimed` is true */
+  claimed_at?: number
+  /** Whether the current user meets all eligibility gates right now */
+  eligible: boolean
+  /** Human-readable reason when `eligible` is false */
+  reason?: string
+}
+
+/** Payload returned by POST /api/user/gift/:id/claim */
+export interface GiftClaimResponse {
+  claim: {
+    id: number
+    gift_id: number
+    user_id: number
+    quota: number
+    created_at: number
+  }
+  already_claimed: boolean
+}
+
+// ============================================================================
 // Checkin Type Definitions
 // ============================================================================
 
@@ -222,6 +278,15 @@ export interface CheckinStats {
 export interface CheckinStatusResponse {
   /** Whether check-in feature is enabled */
   enabled: boolean
+  /** Effective reward range for the current user's trust level */
+  min_quota?: number
+  max_quota?: number
+  /** Configured base range before trust-level scaling */
+  base_min_quota?: number
+  base_max_quota?: number
+  /** Effective trust level and multiplier used for this user */
+  trust_level?: number
+  reward_multiplier?: number
   /** Check-in statistics */
   stats: CheckinStats
 }

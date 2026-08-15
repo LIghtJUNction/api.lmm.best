@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +38,24 @@ func TestGetTrustLevelTiersMatchesEvaluationPolicy(t *testing.T) {
 		assert.Equal(t, tier.Level, info.Level)
 		assert.InDelta(t, tier.DiscountPercent, info.DiscountPercent, 0.0001)
 	}
-	assert.True(t, tiers[TrustLevelMinUser+1].RequiresSuccessfulTopUp)
+	assert.False(t, tiers[TrustLevelMinUser+1].RequiresSuccessfulTopUp)
+	assert.Contains(t, tiers[TrustLevelMinUser+1].Benefits, "personal_ip_allowlist")
+}
+
+func TestGetTrustLevelTierViewsHideHigherBenefits(t *testing.T) {
+	viewer := GetTrustLevelTierViews(TrustLevelMinUser)
+	require.Len(t, viewer, TrustLevelMaxUser+1)
+	assert.NotEmpty(t, viewer[TrustLevelMinUser].Benefits)
+	assert.False(t, viewer[TrustLevelMinUser].BenefitsHidden)
+	assert.Empty(t, viewer[TrustLevelMinUser+1].Benefits)
+	assert.Equal(t, 2, viewer[TrustLevelMinUser+1].BenefitCount)
+	assert.True(t, viewer[TrustLevelMinUser+1].BenefitsHidden)
+	assert.True(t, viewer[TrustLevelMinUser+1].DiscountHidden)
+
+	admin := GetTrustLevelTierViews(TrustLevelAdmin)
+	assert.NotEmpty(t, admin[TrustLevelMaxUser].Benefits)
+	assert.False(t, admin[TrustLevelMaxUser].BenefitsHidden)
+	assert.False(t, admin[TrustLevelMaxUser].DiscountHidden)
 }
 
 func TestEvaluateTrustLevelPaidActivationThresholdsAndDiscounts(t *testing.T) {
@@ -136,7 +153,7 @@ func TestGetTrustLevelInfoUsesCompletedExternalTopUps(t *testing.T) {
 	info, err := GetTrustLevelInfoForUser(&user)
 	require.NoError(t, err)
 	assert.Equal(t, 1, info.Level)
-	assert.InDelta(t, 0.01, info.PaidAmount, 0.0001)
+	assert.InDelta(t, 1, info.PaidAmount, 0.0001)
 }
 
 type topUpQueryCounter struct {
@@ -209,11 +226,11 @@ func TestLocalAcceptanceDeveloperAccessPreservesPaidActivationFact(t *testing.T)
 		SetLocalAcceptanceDeveloperAccess(previousCapability)
 	})
 
-	state := ordinaryDeveloperAccessState(false)
+	state := ordinaryDeveloperAccessState(false, false)
 	assert.True(t, state.Granted)
 	assert.False(t, state.PaidActivationComplete)
 
-	paidState := ordinaryDeveloperAccessState(true)
+	paidState := ordinaryDeveloperAccessState(true, false)
 	assert.True(t, paidState.Granted)
 	assert.True(t, paidState.PaidActivationComplete)
 }
@@ -245,6 +262,30 @@ func TestFreshUserAccessSnapshotUsesOneBoundedAggregateQuery(t *testing.T) {
 	assert.Equal(t, 1, counter.queries)
 	assert.Contains(t, strings.ToLower(counter.countSQL), "sum(")
 	assert.NotContains(t, strings.ToLower(counter.countSQL), "select *")
+}
+
+func TestManualConsoleActivationUnlocksL1WithoutPaidTopUp(t *testing.T) {
+	previousDB := DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	require.NoError(t, db.AutoMigrate(&TopUp{}))
+	t.Cleanup(func() {
+		DB = previousDB
+		sqlDB, _ := db.DB()
+		_ = sqlDB.Close()
+	})
+
+	user := &User{Id: 42, Role: common.RoleCommonUser, ConsoleActivatedAt: 1}
+	snapshot, err := GetFreshUserAccessSnapshot(user)
+	require.NoError(t, err)
+	assert.Equal(t, TrustLevelMinUser+1, snapshot.TrustLevel.Level)
+	assert.True(t, snapshot.DeveloperAccess.Granted)
+	assert.False(t, snapshot.DeveloperAccess.PaidActivationComplete)
+
+	info, err := GetTrustLevelInfoForUser(user)
+	require.NoError(t, err)
+	assert.Equal(t, TrustLevelMinUser+1, info.Level)
 }
 
 func TestEnrichUsersTrustLevelsQueriesOnlyOrdinaryUsersWithoutOverrides(t *testing.T) {
@@ -286,4 +327,23 @@ func TestEnrichUsersTrustLevelsQueriesOnlyOrdinaryUsersWithoutOverrides(t *testi
 	assert.NotContains(t, counter.countSQL, "31,32")
 	assert.NotContains(t, counter.countSQL, "34")
 	assert.NotContains(t, counter.countSQL, "35")
+}
+
+func TestEnrichUsersTrustLevelsHonorsConsoleActivation(t *testing.T) {
+	previousDB := DB
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	require.NoError(t, db.AutoMigrate(&TopUp{}))
+	t.Cleanup(func() {
+		DB = previousDB
+		sqlDB, _ := db.DB()
+		_ = sqlDB.Close()
+	})
+
+	users := []*User{{Id: 36, Role: common.RoleCommonUser, ConsoleActivatedAt: 1}}
+	require.NoError(t, EnrichUsersTrustLevels(users))
+	require.NotNil(t, users[0].TrustLevelInfo)
+	assert.Equal(t, TrustLevelMinUser+1, users[0].TrustLevelInfo.Level)
+	assert.Equal(t, TrustLevelMinUser+1, users[0].TrustLevelInfo.AutomaticLevel)
 }

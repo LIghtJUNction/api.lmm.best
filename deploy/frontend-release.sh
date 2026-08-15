@@ -35,7 +35,7 @@ validate_tree() {
     path=$tree/$ref
     [[ -f $path ]] || die "index.html references missing file: $ref"
     case $(realpath -m -- "$path") in "$tree"/*) ;; *) die "reference escapes release: $ref";; esac
-  done < <(grep -oE "(src|href)=[\"'][^\"']+[\"']" "$tree/index.html" | sed -E "s/^[^=]+=[\"'](.*)[\"']$/\\1/")
+  done < <(grep -oE "(src|href)=[\"'][^\"']+[\"']" "$tree/index.html" | sed -E "s/^[^=]+=[\"'](.*)[\"']$/\1/")
 }
 
 root=$DEFAULT_ROOT keep=$DEFAULT_KEEP source='' release='' dry_run=0

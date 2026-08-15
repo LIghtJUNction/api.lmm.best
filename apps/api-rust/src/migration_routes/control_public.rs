@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -222,7 +222,14 @@ async fn privacy_policy(State(state): State<ControlPublicHttpState>) -> Response
 
 async fn legal_document(state: ControlPublicHttpState, key: &str) -> Response {
     match state.repository.option(key).await {
-        Ok(value) => legacy_success(value.unwrap_or_default()).into_response(),
+        Ok(value) => {
+            let mut response = legacy_success(value.unwrap_or_default()).into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+            response
+        }
         Err(error) => {
             tracing::error!(%error, option = key, "public legal document read failed");
             legacy_dependency_error()
@@ -242,7 +249,7 @@ async fn uptime_status(State(state): State<ControlPublicHttpState>) -> Response 
     // This exact empty Vec (rather than `null`) is observable in the legacy
     // response when no group configuration exists or it is malformed.
     if groups.is_empty() {
-        return legacy_success(Vec::<UptimeGroupResult>::new()).into_response();
+        return legacy_success(Vec::<UptimeGroupResult>::new());
     }
 
     let mut tasks = tokio::task::JoinSet::new();
@@ -268,7 +275,7 @@ async fn uptime_status(State(state): State<ControlPublicHttpState>) -> Response 
     {
         tasks.abort_all();
     }
-    legacy_success(results).into_response()
+    legacy_success(results)
 }
 
 async fn fetch_group(
@@ -378,23 +385,36 @@ struct LegacySuccess<T> {
     data: T,
 }
 
-fn legacy_success<T>(data: T) -> Json<LegacySuccess<T>> {
-    Json(LegacySuccess {
+fn legacy_success<T: Serialize>(data: T) -> Response {
+    let mut response = Json(LegacySuccess {
         success: true,
         message: "",
         data,
     })
+    .into_response();
+    // Gin's JSON writer includes the charset parameter on these public API
+    // envelopes; preserve that observable legacy wire contract.
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
 }
 
 fn legacy_dependency_error() -> Response {
-    (
+    let mut response = (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(LegacyFailure {
             success: false,
             message: "public control-plane data is temporarily unavailable",
         }),
     )
-        .into_response()
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
 }
 
 #[derive(Serialize)]

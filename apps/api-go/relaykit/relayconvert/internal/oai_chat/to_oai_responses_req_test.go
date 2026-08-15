@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,6 +82,24 @@ func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testi
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "n>1")
+}
+
+func TestChatCompletionsRequestToResponsesRequestPreservesPenalties(t *testing.T) {
+	frequency, presence := 0.5, 0.0
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:            "gpt-test",
+		Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+		FrequencyPenalty: &frequency,
+		PresencePenalty:  &presence,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, json.RawMessage(`0.5`), got.FrequencyPenalty)
+	assert.Equal(t, json.RawMessage(`0`), got.PresencePenalty)
+
+	encoded, err := kitutil.Marshal(got)
+	require.NoError(t, err)
+	assert.Equal(t, float64(0.5), gjson.GetBytes(encoded, "frequency_penalty").Float())
+	assert.Equal(t, float64(0), gjson.GetBytes(encoded, "presence_penalty").Float())
 }
 
 func assistantMessageWithTool(content string, id string, name string, args string) dto.Message {

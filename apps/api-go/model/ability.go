@@ -3,12 +3,13 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -40,17 +41,62 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	return abilities, err
 }
 
-func GetGroupEnabledModels(group string) []string {
+// GetGroupEnabledModelsWithError returns the distinct enabled model IDs for a
+// group and preserves database failures for callers that must not turn an
+// unavailable catalog into a successful empty response.
+func GetGroupEnabledModelsWithError(group string) ([]string, error) {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	err := DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models).Error
+	return models, err
+}
+
+// GetGroupEnabledModels preserves the historical best-effort API used by
+// routing paths that intentionally tolerate a missing catalog. New user-facing
+// catalog endpoints should use GetGroupEnabledModelsWithError instead.
+func GetGroupEnabledModels(group string) []string {
+	models, err := GetGroupEnabledModelsWithError(group)
+	if err != nil {
+		return nil
+	}
 	return models
 }
 
-func GetEnabledModels() []string {
+// IsModelEnabledForGroup is the cheap, write-time guard used by settings
+// endpoints. Assistant configuration is global, but ordinary users are
+// routed through the default group; accepting a model that exists only in a
+// private group would persist a setting that can never serve those users.
+func IsModelEnabledForGroup(group, model string) bool {
+	group = strings.TrimSpace(group)
+	model = strings.TrimSpace(model)
+	if group == "" || model == "" {
+		return false
+	}
+	var count int64
+	err := DB.Model(&Ability{}).
+		Where(commonGroupCol+" = ? AND model = ? AND enabled = ?", group, model, true).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+// GetEnabledModelsWithError returns the distinct model IDs referenced by
+// enabled abilities. Callers that use the result to make an availability or
+// synchronization decision should keep the database error instead of
+// treating an unavailable table as an empty catalog.
+func GetEnabledModelsWithError() ([]string, error) {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
+	err := DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models).Error
+	return models, err
+}
+
+// GetEnabledModels preserves the historical best-effort API used by read-only
+// endpoints. New decision-making code should use GetEnabledModelsWithError.
+func GetEnabledModels() []string {
+	models, err := GetEnabledModelsWithError()
+	if err != nil {
+		return nil
+	}
 	return models
 }
 
@@ -106,22 +152,79 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 }
 
 func GetChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetChannelExcluding(group, model, retry, requestPath, nil)
+}
+
+// GetChannelExcluding selects from the database-backed channel list while
+// omitting request-scoped failed channels. It mirrors the cache selector's
+// priority and weighted selection semantics without changing persisted state.
+func GetChannelExcluding(group string, model string, retry int, requestPath string, excluded map[int]struct{}, preferred ...[]int) (*Channel, error) {
 	var abilities []Ability
 
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
-	if err != nil {
-		return nil, err
-	}
-	if common.UsingMainDatabase(common.DatabaseTypeSQLite) || common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
+	var err error
+	if len(excluded) == 0 {
+		channelQuery, queryErr := getChannelQuery(group, model, retry)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		channelQuery = channelQuery.Order("weight DESC")
+		err = channelQuery.Find(&abilities).Error
 	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
+		excludedIDs := make([]int, 0, len(excluded))
+		for channelID := range excluded {
+			excludedIDs = append(excludedIDs, channelID)
+		}
+		query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+			Where("channel_id NOT IN ?", excludedIDs)
+		err = query.Order("priority DESC, weight DESC").Find(&abilities).Error
 	}
 	if err != nil {
 		return nil, err
 	}
 	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, model)
+	if len(excluded) > 0 && len(abilities) > 0 {
+		priorities := make([]int64, 0)
+		seenPriorities := make(map[int64]struct{})
+		for _, ability := range abilities {
+			priority := int64(0)
+			if ability.Priority != nil {
+				priority = *ability.Priority
+			}
+			if _, seen := seenPriorities[priority]; !seen {
+				seenPriorities[priority] = struct{}{}
+				priorities = append(priorities, priority)
+			}
+		}
+		sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+		if retry >= len(priorities) {
+			retry = len(priorities) - 1
+		}
+		targetPriority := priorities[retry]
+		filtered := abilities[:0]
+		for _, ability := range abilities {
+			priority := int64(0)
+			if ability.Priority != nil {
+				priority = *ability.Priority
+			}
+			if priority == targetPriority {
+				filtered = append(filtered, ability)
+			}
+		}
+		abilities = filtered
+	}
+	if len(preferred) > 0 {
+		for _, preferredID := range preferred[0] {
+			for _, ability := range abilities {
+				if ability.ChannelId == preferredID {
+					channel := Channel{Id: preferredID}
+					if err := DB.First(&channel, "id = ?", preferredID).Error; err != nil {
+						return nil, err
+					}
+					return &channel, nil
+				}
+			}
+		}
+	}
 	channel := Channel{}
 	if len(abilities) > 0 {
 		// Randomly choose one

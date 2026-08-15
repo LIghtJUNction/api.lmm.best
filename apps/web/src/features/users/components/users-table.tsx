@@ -29,6 +29,8 @@ import {
   DataTablePage,
   useDataTable,
 } from '@/components/data-table'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 
@@ -53,6 +55,7 @@ const USER_SORTABLE_COLUMNS = new Set<UserSortBy>([
   'group',
   'created_at',
   'last_login_at',
+  'topup_quota',
 ])
 
 function isDisabledUserRow(user: User) {
@@ -65,6 +68,9 @@ export function UsersTable() {
   const { refreshTrigger } = useUsers()
   const isMobile = useMediaQuery('(max-width: 640px)')
   const [sorting, setSorting] = useState<SortingState>([])
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const l0Only = search.l0Only
 
   const {
     globalFilter,
@@ -75,8 +81,8 @@ export function UsersTable() {
     onPaginationChange,
     ensurePageInRange,
   } = useTableUrlState({
-    search: route.useSearch(),
-    navigate: route.useNavigate(),
+    search,
+    navigate,
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
     globalFilter: { enabled: true, key: 'filter' },
     columnFilters: [
@@ -129,6 +135,7 @@ export function UsersTable() {
       statusFilter,
       roleFilter,
       groupFilter,
+      l0Only,
       sortParams,
       refreshTrigger,
     ],
@@ -139,6 +146,7 @@ export function UsersTable() {
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
+        trust_level: l0Only ? 0 : undefined,
         ...sortParams,
       }
 
@@ -169,6 +177,16 @@ export function UsersTable() {
   })
 
   const users = data?.items || []
+
+  const handleL0OnlyChange = (checked: boolean) => {
+    navigate({
+      search: (previous) => ({
+        ...previous,
+        page: undefined,
+        l0Only: checked,
+      }),
+    })
+  }
 
   const { table } = useDataTable({
     data: users,
@@ -217,6 +235,22 @@ export function UsersTable() {
       toolbarProps={{
         searchPlaceholder: t('Filter by username, name or email...'),
         searchDebounceMs: 500,
+        additionalSearch: (
+          <div className='border-input flex h-9 items-center gap-2 rounded-md border px-3'>
+            <Switch
+              id='users-l0-only'
+              size='sm'
+              checked={l0Only}
+              onCheckedChange={handleL0OnlyChange}
+            />
+            <Label
+              htmlFor='users-l0-only'
+              className='cursor-pointer whitespace-nowrap'
+            >
+              {t('Only show L0 users')}
+            </Label>
+          </div>
+        ),
         filters: [
           {
             columnId: 'status',

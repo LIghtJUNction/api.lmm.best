@@ -28,8 +28,10 @@ import {
   ModelsSection,
   PulseSection,
   RankingsHero,
+  UserUsageLeaderboard,
 } from './components'
 import { useRankings } from './hooks/use-rankings'
+import { useUserUsageRankings } from './hooks/use-user-usage-rankings'
 import type { RankingPeriod } from './types'
 
 const VALID_PERIODS = new Set<RankingPeriod>(['today', 'week', 'month', 'year'])
@@ -46,6 +48,7 @@ export function Rankings() {
     : 'week'
 
   const rankingsQuery = useRankings(period)
+  const userUsageRankingsQuery = useUserUsageRankings(period)
   const snapshot = rankingsQuery.data?.data
 
   const handlePeriodChange = (next: RankingPeriod) => {
@@ -60,6 +63,12 @@ export function Rankings() {
       <main className='forge-ranking-surface'>
         <PageTransition className='relative mx-auto w-full max-w-[1280px] space-y-10 px-5 pt-32 pb-24 md:px-10 md:pt-40'>
           <RankingsHero period={period} onPeriodChange={handlePeriodChange} />
+
+          <UserUsageLeaderboard
+            data={userUsageRankingsQuery.data?.data}
+            isLoading={userUsageRankingsQuery.isLoading}
+            error={userUsageRankingsQuery.error}
+          />
 
           {rankingsQuery.isLoading ? (
             <RankingsLoading />

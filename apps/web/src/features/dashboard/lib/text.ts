@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import DOMPurify from 'dompurify'
+
 /**
  * Get plain text preview (strip HTML tags and Markdown formatting)
  */
@@ -24,11 +26,13 @@ export function getPreviewText(
   maxLength: number = 60
 ): string {
   if (!content) return ''
-  const plainText = content
-    .replaceAll(/<[^>]*>/g, '') // Remove HTML tags
+  const plainText = DOMPurify.sanitize(content, {
+    ALLOWED_TAGS: [],
+    ALLOWED_ATTR: [],
+  })
     .replaceAll(/[#*_]/g, '') // Remove Markdown formatting symbols
     .trim()
   return plainText.length > maxLength
-    ? `${plainText.substring(0, maxLength)}...`
+    ? `${plainText.slice(0, maxLength)}...`
     : plainText
 }

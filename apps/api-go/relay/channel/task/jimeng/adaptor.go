@@ -14,20 +14,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 
-	"github.com/QuantumNous/new-api/constant"
-	taskdto "github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	taskdto "github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel"
+	taskcommon "github.com/LIghtJUNction/api.lmm.best/relay/channel/task/taskcommon"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 )
 
 // ============================
@@ -149,12 +149,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 					return nil, fmt.Errorf("文件 %s 大小超过限制，最大允许 %d MB", fileHeader.Filename, MaxFileSize/(1024*1024))
 				}
 
-				file, err := fileHeader.Open()
-				if err != nil {
-					continue
-				}
-				fileBytes, err := io.ReadAll(file)
-				file.Close()
+				fileBytes, err := common.ReadUpload(fileHeader, MaxFileSize)
 				if err != nil {
 					continue
 				}
@@ -184,7 +179,7 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 
 // DoResponse handles upstream response, returns taskID etc.
 func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *taskdto.TaskError) {
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 		return
@@ -270,22 +265,10 @@ func (a *TaskAdaptor) GetChannelName() string {
 }
 
 func (a *TaskAdaptor) signRequest(req *http.Request, accessKey, secretKey string) error {
-	var bodyBytes []byte
-	var err error
-
-	if req.Body != nil {
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			return errors.Wrap(err, "read request body failed")
-		}
-		_ = req.Body.Close()
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Rewind
-	} else {
-		bodyBytes = []byte{}
+	hexPayloadHash, err := common.SHA256RequestBody(req, common.ResponseBodyLimit())
+	if err != nil {
+		return errors.Wrap(err, "hash request body failed")
 	}
-
-	payloadHash := sha256.Sum256(bodyBytes)
-	hexPayloadHash := hex.EncodeToString(payloadHash[:])
 
 	t := time.Now().UTC()
 	xDate := t.Format("20060102T150405Z")

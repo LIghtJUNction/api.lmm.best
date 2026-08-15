@@ -136,3 +136,24 @@ export type RankingsSnapshot = {
   /** 100%-stacked area history of token share by vendor over the period. */
   vendor_share_history: VendorShareSeries
 }
+
+export type UserUsageRanking = {
+  rank: number
+  /** Empty when the participant chose to hide their name. */
+  name?: string
+  anonymous: boolean
+  total_tokens: number
+  requests: number
+  /** Share of all visible users' token usage (0..1). */
+  share: number
+}
+
+export type UserUsageRankingsSnapshot = {
+  period: RankingPeriod
+  updated_at: number
+  total_tokens: number
+  total_requests: number
+  participant_count: number
+  anonymous_participant_count: number
+  users: UserUsageRanking[]
+}

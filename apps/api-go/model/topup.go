@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -27,6 +27,8 @@ type TopUp struct {
 	TradeNo               string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod         string  `json:"payment_method" gorm:"type:varchar(50)"`
 	PaymentProvider       string  `json:"payment_provider" gorm:"type:varchar(50);default:'';uniqueIndex:idx_topup_provider_event,priority:1;uniqueIndex:idx_topup_provider_transaction,priority:1"`
+	DiscountCodeId        int     `json:"discount_code_id,omitempty" gorm:"index"`
+	DiscountPercent       int     `json:"discount_percent,omitempty"`
 	ProviderProductId     string  `json:"provider_product_id" gorm:"type:varchar(255);not null;default:''"`
 	ProviderStoreId       string  `json:"provider_store_id" gorm:"type:varchar(255);not null;default:''"`
 	ProviderEventId       *string `json:"provider_event_id,omitempty" gorm:"type:varchar(255);uniqueIndex:idx_topup_provider_event,priority:2"`
@@ -437,6 +439,16 @@ func completeExternalTopUpOnDB(db *gorm.DB, settlement ExternalTopUpSettlement) 
 			if result.RowsAffected != 1 {
 				return gorm.ErrRecordNotFound
 			}
+			if completed.DiscountCodeId > 0 {
+				// Usage is counted only after the payment and quota credit have
+				// committed. A deleted/legacy code does not invalidate a valid
+				// payment, but any database error remains transactional.
+				if err := tx.Model(&DiscountCode{}).
+					Where("id = ?", completed.DiscountCodeId).
+					UpdateColumn("used_count", gorm.Expr("used_count + ?", 1)).Error; err != nil {
+					return err
+				}
+			}
 			return nil
 		})
 		if err == nil {
@@ -475,6 +487,18 @@ const (
 	PaymentProviderBalance      = "balance"
 	PaymentProviderFastPay      = "fastpay"
 )
+
+// LinuxDO Credit is not a fiat payment. The current ePay adapter persists it
+// as provider=epay, method=epay; a few older imports used the descriptive
+// aliases below. None of these rows may unlock paid-only access or contribute
+// to the trust-level USD total.
+var linuxDOCreditPaymentMethods = []string{
+	"epay",
+	"ldc",
+	"linuxdo",
+	"linux_do",
+	"linuxdo_credit",
+}
 
 var (
 	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
@@ -563,7 +587,12 @@ func successfulExternalPaidTopUpQuery(query *gorm.DB) *gorm.DB {
 		Where("status = ?", common.TopUpStatusSuccess).
 		Where("(settled_amount_micros > 0 OR (settled_amount_micros = 0 AND money > 0))").
 		Where("(payment_method IS NULL OR payment_method <> ?)", PaymentMethodBalance).
-		Where("(payment_provider IS NULL OR payment_provider <> ?)", PaymentProviderBalance)
+		Where("(payment_provider IS NULL OR payment_provider <> ?)", PaymentProviderBalance).
+		Where(
+			"NOT (LOWER(COALESCE(payment_provider, '')) = ? AND LOWER(COALESCE(payment_method, '')) IN ?)",
+			PaymentProviderEpay,
+			linuxDOCreditPaymentMethods,
+		)
 }
 
 func topUpPaidAmountMicros(topUp *TopUp) int64 {

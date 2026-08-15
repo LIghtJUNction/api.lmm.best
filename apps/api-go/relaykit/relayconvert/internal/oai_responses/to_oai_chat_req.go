@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
 )
 
 const (
@@ -74,6 +74,15 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		PromptCacheRetention: req.PromptCacheRetention,
 		EnableThinking:       req.EnableThinking,
 		ThinkingBudget:       req.ThinkingBudget,
+	}
+
+	out.FrequencyPenalty, err = responsesRawFloat(req.FrequencyPenalty)
+	if err != nil {
+		return nil, fmt.Errorf("invalid frequency_penalty: %w", err)
+	}
+	out.PresencePenalty, err = responsesRawFloat(req.PresencePenalty)
+	if err != nil {
+		return nil, fmt.Errorf("invalid presence_penalty: %w", err)
 	}
 
 	if req.Reasoning != nil {
@@ -525,6 +534,17 @@ func responseToolOutputToChatContent(value any) any {
 		}
 		return string(raw)
 	}
+}
+
+func responsesRawFloat(raw json.RawMessage) (*float64, error) {
+	if !rawJSONPresent(raw) {
+		return nil, nil
+	}
+	var value float64
+	if err := kitutil.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	return &value, nil
 }
 
 func responsesJSONString(raw json.RawMessage) (string, error) {

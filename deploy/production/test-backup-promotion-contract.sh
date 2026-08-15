@@ -5,7 +5,10 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repo=$(cd -- "$here/../.." && pwd -P)
 promoter="$here/promote-production-backups.sh"
 verifier="$repo/.agents/skills/lmm-deploy-safely/scripts/verify-backup-set.sh"
-tmp=$(mktemp -d "$repo/.backup-promotion-test.XXXXXXXX")
+test_root=${TMPDIR:-$HOME/.local/state/lmm-api/deploy-work/backup-promotion-contract}
+mkdir -p -- "$test_root"
+chmod 0700 -- "$test_root"
+tmp=$(mktemp -d "$test_root/backup-promotion-test.XXXXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/controller-work/staging"
 
@@ -25,8 +28,11 @@ case " $* " in
 esac
 if [[ $* == *' bash -s -- '* ]]; then
   script=$(cat)
+  if [[ $script == *'backup transaction lock ownership changed'* ]]; then
+    printf 'failed-backup-lock-release %s\n' "$*" >>"$FAKE_SSH_LOG"
+  fi
   if [[ $script == *'required backup command is unavailable:'* ]]; then
-    [[ $script == *' pg_dump pg_restore '* ]] || exit 94
+    [[ $script == *pg_dump* && $script == *pg_restore* ]] || exit 94
     if [[ ${FAKE_MISSING_TARGET_COMMAND:-} == pg_restore ]]; then
       printf 'required backup command is unavailable: pg_restore\n' >&2
       exit 2
@@ -110,7 +116,7 @@ printf 'rollback core\n' >"$tmp/rollback-core.pkg.tar.zst"
 printf 'rollback go\n' >"$tmp/rollback-go.pkg.tar.zst"
 
 run_promoter() {
-  local deployment_id=$1 controller_output=$2 offhost_output=$3
+  local deployment_id=$1 controller_output=$2 offhost_output=$3 layout=${4:-split}
   FAKE_DEPLOYMENT_ID=$deployment_id FAKE_CONTROLLER_OUTPUT=$controller_output \
     "$promoter" --target-host ArchDmit --jump-host archczy --ssh-config "$ssh_config" \
     --deployment-id "$deployment_id" --controller-workspace "$tmp/controller-work" \
@@ -122,7 +128,8 @@ run_promoter() {
     --copy-script "$here/create-backup-copy.sh" --verify-script "$verifier" \
     --precutover-payload "$tmp/precutover-payload.tar" \
     --rollback-core-package "$tmp/rollback-core.pkg.tar.zst" \
-    --rollback-go-package "$tmp/rollback-go.pkg.tar.zst"
+    --rollback-go-package "$tmp/rollback-go.pkg.tar.zst" \
+    --rollback-layout "$layout"
 }
 
 # The remote prerequisite gate must reject a missing pg_restore before it
@@ -152,17 +159,38 @@ run_promoter promotion-test "$controller_output" "$offhost_output" >/dev/null
   fail 'controller backup was not promoted'
 [[ -f $tmp/controller-work/staging/backup-off-host-promotion-test/configuration.age ]] || fail 'off-host mirror is missing'
 [[ -f $tmp/controller-work/staging/backup-target-promotion-test/configuration.archive ]] || fail 'target mirror is missing'
-grep -Fq -- "-F $ssh_config -J archczy -p 222 root@45.59.187.63" "$FAKE_SSH_LOG" || \
-  fail 'target SSH transport does not use the controlled config/jump/port/endpoint'
-grep -Fq -- "-F $ssh_config -o ProxyJump=archczy -P 222" "$FAKE_SCP_LOG" || \
-  fail 'target SCP transport does not use the controlled config/jump/port'
+control_prefix="/run/user/$(id -u)/lmm-api-"
+grep -Fq -- "-F $ssh_config -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$control_prefix" \
+  "$FAKE_SSH_LOG" || fail 'target SSH transport does not use an isolated control socket'
+grep -Fq -- "ProxyCommand=exec $LMM_DEPLOY_SSH_BIN -F $ssh_config -o BatchMode=yes -o ControlMaster=auto" \
+  "$FAKE_SSH_LOG" || fail 'target SSH transport does not use the isolated jump proxy'
+grep -Fq -- "-p 222 root@45.59.187.63" "$FAKE_SSH_LOG" || \
+  fail 'target SSH transport does not use the controlled port and endpoint'
+grep -Fq -- "-F $ssh_config -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$control_prefix" \
+  "$FAKE_SCP_LOG" || fail 'target SCP transport does not use an isolated control socket'
+grep -Fq -- "ProxyCommand=exec $LMM_DEPLOY_SSH_BIN -F $ssh_config -o BatchMode=yes -o ControlMaster=auto" \
+  "$FAKE_SCP_LOG" || fail 'target SCP transport does not use the isolated jump proxy'
 grep -Fq 'root@45.59.187.63:' "$FAKE_SCP_LOG" || fail 'target SCP endpoint is not explicit'
+grep -Fq -- "-p -r root@45.59.187.63:" "$FAKE_SCP_LOG" || \
+  fail 'target backup downloads do not preserve manifest timestamps'
+grep -Fq -- "-F $ssh_config -p -r $tmp/controller-work/staging/backup-off-host-promotion-test archczy:$offhost_output" \
+  "$FAKE_SCP_LOG" || fail 'off-host publication does not preserve manifest timestamps'
 if grep -Eq 'StrictHostKeyChecking=no|UserKnownHostsFile=/dev/null|-F /dev/null' "$FAKE_SSH_LOG" "$FAKE_SCP_LOG"; then
   fail 'transport bypassed SSH host-key or user configuration controls'
 fi
 
 rm -rf -- "$tmp/controller-work/staging/backup-target-promotion-test" \
   "$tmp/controller-work/staging/backup-off-host-promotion-test" "$controller_output"
+
+: >"$FAKE_SSH_LOG"
+: >"$FAKE_SCP_LOG"
+direct_controller="$tmp/controller-direct"
+direct_offhost=/var/backups/lmm-api/promotion-direct
+run_promoter promotion-direct "$direct_controller" "$direct_offhost" direct >/dev/null
+grep -Fq -- '--rollback-layout direct' "$FAKE_SSH_LOG" || \
+  fail 'direct rollback layout was not forwarded to target backup preparation'
+rm -rf -- "$tmp/controller-work/staging/backup-target-promotion-direct" \
+  "$tmp/controller-work/staging/backup-off-host-promotion-direct" "$direct_controller"
 
 # Each pre-existing destination must fail before ownership is claimed, so the
 # cleanup trap must never issue a removal for that destination.
@@ -212,5 +240,7 @@ grep -Fq "rm -rf -- $failure_offhost" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned off-host partial was not removed'
 grep -Fq "rm -rf -- /var/lib/lmm-api-go-deploy/work/$failure_id/staging/controller-copy" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned target-side controller partial was not removed'
+grep -Fq "failed-backup-lock-release" "$FAKE_SSH_LOG" || \
+  fail 'failed backup promotion did not release its transaction lock'
 
 printf 'backup promotion contract verified\n'

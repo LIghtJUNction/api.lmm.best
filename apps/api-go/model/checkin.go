@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"gorm.io/gorm"
 )
 
@@ -23,6 +23,18 @@ type Checkin struct {
 type CheckinRecord struct {
 	CheckinDate  string `json:"checkin_date"`
 	QuotaAwarded int    `json:"quota_awarded"`
+}
+
+// CheckinRewardRange is the effective range for one user's trust level. The
+// base range remains configurable globally, while the returned range is what
+// the user can actually receive.
+type CheckinRewardRange struct {
+	TrustLevel   int     `json:"trust_level"`
+	Multiplier   float64 `json:"reward_multiplier"`
+	BaseMinQuota int     `json:"base_min_quota"`
+	BaseMaxQuota int     `json:"base_max_quota"`
+	MinQuota     int     `json:"min_quota"`
+	MaxQuota     int     `json:"max_quota"`
 }
 
 func (Checkin) TableName() string {
@@ -49,6 +61,26 @@ func HasCheckedInToday(userId int) (bool, error) {
 	return count > 0, err
 }
 
+// GetUserCheckinRewardRange resolves the current trust level before a reward
+// is shown or awarded. Keeping this in the model makes the status and write
+// paths use the same scaling policy.
+func GetUserCheckinRewardRange(userId int) (CheckinRewardRange, error) {
+	trustLevel, err := GetTrustLevelInfoByUserID(userId)
+	if err != nil {
+		return CheckinRewardRange{}, err
+	}
+	setting := operation_setting.GetCheckinSetting()
+	min, max, multiplier := operation_setting.GetCheckinQuotaRangeForLevel(trustLevel.Level)
+	return CheckinRewardRange{
+		TrustLevel:   trustLevel.Level,
+		Multiplier:   multiplier,
+		BaseMinQuota: setting.MinQuota,
+		BaseMaxQuota: setting.MaxQuota,
+		MinQuota:     min,
+		MaxQuota:     max,
+	}, nil
+}
+
 // UserCheckin 执行用户签到
 // MySQL 和 PostgreSQL 使用事务保证原子性
 // SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
@@ -56,6 +88,10 @@ func UserCheckin(userId int) (*Checkin, error) {
 	setting := operation_setting.GetCheckinSetting()
 	if !setting.Enabled {
 		return nil, errors.New("签到功能未启用")
+	}
+	rewardRange, err := GetUserCheckinRewardRange(userId)
+	if err != nil {
+		return nil, errors.New("签到失败：无法读取用户等级")
 	}
 
 	// 检查今天是否已签到
@@ -68,9 +104,9 @@ func UserCheckin(userId int) (*Checkin, error) {
 	}
 
 	// 计算随机额度奖励
-	quotaAwarded := setting.MinQuota
-	if setting.MaxQuota > setting.MinQuota {
-		quotaAwarded = setting.MinQuota + rand.Intn(setting.MaxQuota-setting.MinQuota+1)
+	quotaAwarded := rewardRange.MinQuota
+	if rewardRange.MaxQuota > rewardRange.MinQuota {
+		quotaAwarded = rewardRange.MinQuota + rand.Intn(rewardRange.MaxQuota-rewardRange.MinQuota+1)
 	}
 
 	today := time.Now().Format("2006-01-02")

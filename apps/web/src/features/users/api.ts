@@ -29,7 +29,98 @@ import type {
   ManageUserQuotaPayload,
   ManageUserTrustLevelPayload,
   ApiResponse,
+  AccountActionRequestAdmin,
+  AccountActionRequestStatus,
 } from './types'
+
+export type DeveloperAccessRequestAdmin = {
+  id: number
+  user_id: number
+  status: 'pending' | 'approved' | 'rejected'
+  reason: string
+  source:
+    | 'assistant_recommendation'
+    | 'user_edited'
+    | 'assistant_request'
+    | 'legacy'
+  ai_recommendation: string
+  admin_user_id: number
+  admin_note: string
+  created_at: number
+  reviewed_at: number
+  username: string
+  email: string
+}
+
+export type DeveloperAccessRecommendationArchive = {
+  id: number
+  user_id: number
+  request_id: number
+  source:
+    | 'assistant_recommendation'
+    | 'user_edited'
+    | 'assistant_request'
+    | 'legacy'
+  reason: string
+  recommendation: string
+  admin_user_id: number
+  admin_note: string
+  approved_at: number
+  created_at: number
+}
+
+type DeveloperAccessRequestListResponse = ApiResponse<
+  DeveloperAccessRequestAdmin[]
+>
+
+export async function listDeveloperAccessRequests(
+  status: 'pending' | 'approved' | 'rejected' = 'pending'
+): Promise<DeveloperAccessRequestListResponse> {
+  const res = await api.get('/api/developer-access/requests', {
+    params: { status },
+  })
+  return res.data
+}
+
+export async function reviewDeveloperAccessRequest(
+  id: number,
+  action: 'approve' | 'reject',
+  note = ''
+): Promise<ApiResponse<DeveloperAccessRequestAdmin>> {
+  const res = await api.post(`/api/developer-access/requests/${id}/${action}`, {
+    note,
+  })
+  return res.data
+}
+
+export async function listDeveloperAccessRecommendationArchives(
+  userId: number
+): Promise<ApiResponse<DeveloperAccessRecommendationArchive[]>> {
+  const res = await api.get(`/api/user/${userId}/developer-access/archives`, {
+    params: { limit: 50 },
+  })
+  return res.data
+}
+
+export async function listAccountActionRequests(
+  status: AccountActionRequestStatus = 'pending'
+): Promise<ApiResponse<AccountActionRequestAdmin[]>> {
+  const res = await api.get('/api/account-action-requests', {
+    params: { status },
+  })
+  return res.data
+}
+
+export async function reviewAccountActionRequest(
+  id: number,
+  action: 'approve' | 'reject',
+  note = ''
+): Promise<ApiResponse<AccountActionRequestAdmin>> {
+  const res = await api.post(`/api/account-action-requests/${id}/${action}`, {
+    note,
+  })
+  return res.data
+}
 
 // ============================================================================
 // User Management APIs
@@ -41,11 +132,12 @@ import type {
 export async function getUsers(
   params: GetUsersParams = {}
 ): Promise<GetUsersResponse> {
-  const { p = 1, page_size = 10, sort_by, sort_order } = params
+  const { p = 1, page_size = 10, trust_level, sort_by, sort_order } = params
   const res = await api.get('/api/user/', {
     params: {
       p,
       page_size,
+      trust_level,
       sort_by,
       sort_order,
     },
@@ -64,6 +156,7 @@ export async function searchUsers(
     group = '',
     role = '',
     status = '',
+    trust_level,
     p = 1,
     page_size = 10,
     sort_by,
@@ -74,6 +167,9 @@ export async function searchUsers(
   queryParams.set('group', group)
   if (role) queryParams.set('role', role)
   if (status) queryParams.set('status', status)
+  if (trust_level !== undefined) {
+    queryParams.set('trust_level', String(trust_level))
+  }
   queryParams.set('p', String(p))
   queryParams.set('page_size', String(page_size))
   if (sort_by) queryParams.set('sort_by', sort_by)
@@ -87,6 +183,32 @@ export async function searchUsers(
  */
 export async function getUser(id: number): Promise<ApiResponse<User>> {
   const res = await api.get(`/api/user/${id}`)
+  return res.data
+}
+
+export type AssistantUserProfile = {
+  profile_key: string
+  tags: string[]
+  strategy: string
+  enabled: boolean
+  updated_at: number
+}
+
+export async function getAssistantUserProfile(
+  id: number
+): Promise<ApiResponse<AssistantUserProfile>> {
+  const res = await api.get(`/api/user/${id}/assistant-profile`)
+  return res.data
+}
+
+export async function updateAssistantUserProfile(
+  id: number,
+  profile: Pick<
+    AssistantUserProfile,
+    'profile_key' | 'tags' | 'strategy' | 'enabled'
+  >
+): Promise<ApiResponse<AssistantUserProfile>> {
+  const res = await api.put(`/api/user/${id}/assistant-profile`, profile)
   return res.data
 }
 

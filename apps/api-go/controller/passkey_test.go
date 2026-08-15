@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -53,7 +53,7 @@ func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TwoFA{}, &model.AuthFlow{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TwoFA{}, &model.AuthFlow{}, &model.PasskeyCredential{}))
 	model.DB = db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
@@ -127,4 +127,78 @@ func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *
 			assert.Nil(t, flow.ConsumedAt)
 		})
 	}
+}
+
+func TestUniversalVerifyAcceptsBoundEmailAndConsumesCode(t *testing.T) {
+	db := setupUserOnboardingTestDB(t)
+	previousLogDB := model.LOG_DB
+	model.LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	t.Cleanup(func() { model.LOG_DB = previousLogDB })
+	previousSecret := common.SessionSecret
+	common.SessionSecret = "email-proof-test-secret"
+	t.Cleanup(func() { common.SessionSecret = previousSecret })
+
+	user := &model.User{
+		Username: "email-proof-user", Password: "password-placeholder",
+		Email: "owner@example.com", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, AuthVersion: 1,
+	}
+	require.NoError(t, db.Create(user).Error)
+	common.RegisterVerificationCodeWithKey(
+		user.Email,
+		"123456",
+		common.SecurityEmailVerificationPurpose,
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/verify", strings.NewReader(`{
+		"method":"email","code":"123456","scope":"channel.key.read"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = request
+	context.Set("id", user.Id)
+	context.Set("session_id", "email-proof-session")
+	context.Set("auth_version", int64(1))
+	context.Set("session_version", int64(1))
+
+	UniversalVerify(context)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), `"method":"email"`)
+
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/verify", strings.NewReader(`{
+		"method":"email","code":"123456","scope":"channel.key.read"
+	}`))
+	secondRequest.Header.Set("Content-Type", "application/json")
+	secondResponse := httptest.NewRecorder()
+	secondContext, _ := gin.CreateTestContext(secondResponse)
+	secondContext.Request = secondRequest
+	secondContext.Set("id", user.Id)
+	secondContext.Set("session_id", "email-proof-session")
+	secondContext.Set("auth_version", int64(1))
+	secondContext.Set("session_version", int64(1))
+
+	UniversalVerify(secondContext)
+
+	assert.Equal(t, http.StatusOK, secondResponse.Code)
+	assert.Contains(t, secondResponse.Body.String(), "验证失败")
+
+	legacyRequest := httptest.NewRequest(http.MethodPost, "/api/verify", strings.NewReader(`{
+		"method":"2fa","code":"123456","scope":"channel.key.read"
+	}`))
+	legacyRequest.Header.Set("Content-Type", "application/json")
+	legacyResponse := httptest.NewRecorder()
+	legacyContext, _ := gin.CreateTestContext(legacyResponse)
+	legacyContext.Request = legacyRequest
+	legacyContext.Set("id", user.Id)
+	legacyContext.Set("session_id", "email-proof-session")
+	legacyContext.Set("auth_version", int64(1))
+	legacyContext.Set("session_version", int64(1))
+
+	UniversalVerify(legacyContext)
+
+	assert.Equal(t, http.StatusOK, legacyResponse.Code)
+	assert.Contains(t, legacyResponse.Body.String(), "请绑定邮箱后使用邮箱验证")
 }

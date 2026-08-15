@@ -79,3 +79,49 @@ Run the offline contract tests with:
 ```sh
 node apps/web/scripts/production-acceptance.test.mjs
 ```
+
+## Local operator persona suite
+
+`operator-persona-suite.mjs` is a shell-only, read-mostly regression suite for
+the A–O user profiles used during iteration. It is intentionally local-only:
+the runner rejects every non-loopback URL, requires a marker-owned deployment
+workspace, bounds requests and response bodies, and writes a `0600` report
+without response text, cookies, tokens, balances, or API keys.
+
+Run it against a local preview or isolated deployment workspace, never against
+production:
+
+```sh
+PERSONA_REVIEW_URL=http://127.0.0.1:4174 \
+PERSONA_DEPLOY_WORKSPACE=/absolute/path/to/marker-owned-workspace \
+PERSONA_OUTPUT_DIR=/absolute/path/to/marker-owned-workspace/artifacts/personas \
+node apps/web/scripts/operator-persona-suite.mjs
+```
+
+For an authenticated L0/L1 check, provide a separate `0600` JSON credential
+file through `PERSONA_CREDENTIAL_FILE`. To model genuinely separate users,
+set `PERSONA_CREDENTIAL_FILE_A`, `PERSONA_CREDENTIAL_FILE_B`, and so on for
+selected persona IDs; each override must be an independent regular file with
+mode `0600` or stricter. If no base file is supplied, the first selected
+persona override is used for the shared authenticated checks. Optional
+`PERSONA_2FA_CODE_A` and `PERSONA_TURNSTILE_TOKEN_A` variables override the
+corresponding shared values for that persona. Credentials and tokens never
+enter the report.
+
+To exercise the deterministic assistant-cache, intent and profile checks,
+additionally set `PERSONA_RUN_ASSISTANT=1`. When a turn is cache-eligible, the
+suite requires the repeated answer to return `HIT` with identical response
+bytes; turns that invoke live tools are reported as non-cacheable rather than
+being cached. The full A–O set runs by default. For a lower-cost focused pass,
+set `PERSONA_RUN_IDS=A,D` (comma-separated IDs); every selected persona still
+requires the expected deterministic intent and, where applicable, the
+security-refusal policy. The report records only whether a persona used an
+isolated account and its L0/L1 boundary result.
+The suite does not create keys, make payments, publish bounties, or call a
+provider; L0 key creation is tested only as a required authorization denial.
+
+Run its offline safety-contract tests with:
+
+```sh
+node apps/web/scripts/operator-persona-suite.test.mjs
+```

@@ -65,6 +65,35 @@ export const userSchema = z.object({
     .optional(),
   trust_level_override: z.number().nullable().optional(),
   trust_level_info: z.any().optional(),
+  payment_restriction_flags: z.number().optional(),
+  disposable_email: z.boolean().optional(),
+  linux_do_gamification_score: z.number().optional(),
+  linux_do_score_updated_at: z.number().optional(),
+  assistant_conversation_count: z.number().optional(),
+  assistant_profile: z
+    .object({
+      profile_key: z.string(),
+      tags: z.array(z.string()),
+      source: z.string(),
+      updated_at: z.number(),
+    })
+    .optional(),
+  topup_summary: z
+    .object({
+      quota: z.number(),
+      money_micros: z.number(),
+      orders: z.number(),
+      methods: z.array(
+        z.object({
+          method: z.string(),
+          provider: z.string().optional(),
+          quota: z.number(),
+          money_micros: z.number(),
+          orders: z.number(),
+        })
+      ),
+    })
+    .optional(),
 })
 export type User = z.infer<typeof userSchema>
 
@@ -88,12 +117,14 @@ export type UserSortBy =
   | 'group'
   | 'created_at'
   | 'last_login_at'
+  | 'topup_quota'
 
 export type UserSortOrder = 'asc' | 'desc'
 
 export interface GetUsersParams {
   p?: number
   page_size?: number
+  trust_level?: number
   sort_by?: UserSortBy
   sort_order?: UserSortOrder
 }
@@ -114,6 +145,7 @@ export interface SearchUsersParams {
   group?: string
   role?: string
   status?: string
+  trust_level?: number
   p?: number
   page_size?: number
   sort_by?: UserSortBy
@@ -140,6 +172,7 @@ export type ManageUserAction =
   | 'delete'
   | 'add_quota'
   | 'set_trust_level'
+  | 'reset_onboarding'
 
 export type QuotaAdjustMode = 'add' | 'subtract' | 'override'
 
@@ -154,6 +187,26 @@ export interface ManageUserTrustLevelPayload {
   id: number
   action: 'set_trust_level'
   value: number
+}
+
+export type AccountActionRequestKind = 'disable' | 'appeal'
+export type AccountActionRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface AccountActionRequestAdmin {
+  id: number
+  target_user_id: number
+  requested_by_user_id: number
+  kind: AccountActionRequestKind
+  status: AccountActionRequestStatus
+  reason: string
+  admin_user_id: number
+  admin_note: string
+  created_at: number
+  reviewed_at: number
+  target_username: string
+  target_email: string
+  requested_by_username: string
+  requested_by_email: string
 }
 
 export type UserTrustLevelInfo = TrustLevelInfo

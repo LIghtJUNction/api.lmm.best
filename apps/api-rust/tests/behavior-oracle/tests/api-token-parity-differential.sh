@@ -10,6 +10,7 @@ set +x
 repo_root=$(git rev-parse --show-toplevel)
 legacy_revision=5418ce6b6d45ed69167b0aad53f2f595e5bc8de9
 legacy_root=${LMM_GO_ORACLE_ROOT:-}
+allow_current_oracle=${LMM_API_TOKEN_PARITY_ALLOW_CURRENT_ORACLE:-0}
 [[ -n $legacy_root ]] || { echo "LMM_GO_ORACLE_ROOT is required; set it to an absolute external immutable Go oracle tree ($legacy_revision)" >&2; exit 2; }
 [[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
 legacy_root=$(realpath -e -- "$legacy_root")
@@ -26,21 +27,40 @@ curl_connect_timeout=2
 curl_max_time=15
 approval_mode=${LMM_API_TOKEN_PARITY_APPROVAL:-0}
 probe_only=${LMM_API_TOKEN_PARITY_PROBE_ONLY:-0}
+keep_runtime=${LMM_KEEP_API_TOKEN_PARITY_RUNTIME:-0}
+result_dir=${LMM_API_TOKEN_PARITY_RESULT_DIR:-}
 # The 164 inherited route vectors plus three explicit healthy-cache -> DEL
 # vectors (PUT, single DELETE, and batch DELETE).
-expected_scenarios=167
+expected_scenarios=168
 case "$approval_mode" in 0|1) ;; *) echo 'LMM_API_TOKEN_PARITY_APPROVAL must be 0 or 1' >&2; exit 2 ;; esac
 case "$probe_only" in 0|1) ;; *) echo 'LMM_API_TOKEN_PARITY_PROBE_ONLY must be 0 or 1' >&2; exit 2 ;; esac
 if [[ $approval_mode == 1 && $probe_only == 1 ]]; then
   echo 'approval mode refuses probe-only; run the complete 164-scenario matrix' >&2
   exit 2
 fi
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    echo 'LMM_API_TOKEN_PARITY_RESULT_DIR must be an absolute path without ..' >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 build_root=${TMPDIR:-/dev/shm}
 [[ -d $build_root && -w $build_root ]] || { echo "temporary build directory is not writable: $build_root" >&2; exit 1; }
 # PostgreSQL requires a normal filesystem for its data directory on this host;
 # the frozen Go build is the only sizeable transient tree and belongs in RAM.
-runtime=$(mktemp -d /tmp/lmm-api-token-parity.XXXXXX)
-go_build=$(mktemp -d "$build_root/lmm-api-token-parity-go.XXXXXX")
+runtime_root=${LMM_API_TOKEN_PARITY_RUNTIME_ROOT:-/tmp}
+[[ $runtime_root == /* && $runtime_root != *..* ]] || {
+  echo 'LMM_API_TOKEN_PARITY_RUNTIME_ROOT must be an absolute path without ..' >&2
+  exit 2
+}
+mkdir -p -- "$runtime_root"
+[[ -d $runtime_root && -w $runtime_root ]] || {
+  echo "API-token parity runtime root is not writable: $runtime_root" >&2
+  exit 1
+}
+runtime=$(mktemp -d "$runtime_root/lmm-api-token-parity-current.XXXXXX")
+go_build=$(mktemp -d "$build_root/lmm-api-token-parity-current-go.XXXXXX")
 go_static_keys="$runtime/go.static.keys"
 rust_static_keys="$runtime/rust.static.keys"
 go_generated_keys="$runtime/go.generated.keys"
@@ -141,11 +161,17 @@ cleanup() {
   rm -f -- "$go_env_file" "$rust_env_file" "$go_valkey_config" "$rust_valkey_config"
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
-    /tmp/lmm-api-token-parity.*) rm -rf "$runtime" ;;
+    "$runtime_root"/lmm-api-token-parity-current.*)
+      if [[ $keep_runtime == 1 ]]; then
+        echo "preserved API-token parity runtime: $runtime" >&2
+      else
+        rm -rf "$runtime"
+      fi
+      ;;
     *) echo "refusing unexpected runtime: $runtime" >&2 ;;
   esac
   case "$go_build" in
-    "$build_root"/lmm-api-token-parity-go.*) rm -rf "$go_build" ;;
+    "$build_root"/lmm-api-token-parity-current-go.*) rm -rf "$go_build" ;;
     *) echo "refusing unexpected Go build directory: $go_build" >&2 ;;
   esac
 }
@@ -195,10 +221,18 @@ assert_rust_build_inputs_unchanged() {
   fi
 }
 assert_frozen_inputs() {
-  [[ -d $legacy_root && ${legacy_root##*/} == "$legacy_revision" ]] || {
-    echo "frozen Go archive is missing or revision-named incorrectly: $legacy_root" >&2
-    return 1
-  }
+  if [[ $allow_current_oracle == 1 ]]; then
+    [[ -d $legacy_root && ${legacy_root##*/} != "$legacy_revision" ]] || {
+      echo 'current Go oracle must be a distinct external snapshot' >&2
+      return 1
+    }
+    legacy_revision=${LMM_API_TOKEN_PARITY_GO_REVISION:-current-go-oracle}
+  else
+    [[ -d $legacy_root && ${legacy_root##*/} == "$legacy_revision" ]] || {
+      echo "frozen Go archive is missing or revision-named incorrectly: $legacy_root" >&2
+      return 1
+    }
+  fi
   [[ -f $legacy_root/SHA256SUMS && -f $legacy_root/GIT-LS-FILES-S.tsv ]] || {
     echo 'frozen Go archive lacks its pinned content manifest' >&2
     return 1
@@ -307,6 +341,19 @@ assert_go_schema_ready() {
     return 1
   fi
 }
+wait_for_go_token_table() {
+  # `/api/status` can answer while the frozen Go process is still finishing
+  # its first-run AutoMigrate.  Do not install the disposable compatibility
+  # trigger until the token table exists.
+  for _ in {1..300}; do
+    if [[ $(sql "$go_database" "SELECT to_regclass('public.tokens') IS NOT NULL") == t ]]; then
+      return 0
+    fi
+    sleep .05
+  done
+  echo 'frozen Go schema did not materialize public.tokens after readiness' >&2
+  return 1
+}
 key_registry_file() {
   case "$1" in
     "$go_database") printf '%s\n' "$go_static_keys" ;;
@@ -358,8 +405,16 @@ token_snapshot() {
   local database=$1 generated
   refresh_generated_keys "$database"
   generated=$(generated_keys_json "$database")
+  local snapshot_filter=''
+  if [[ $allow_current_oracle != 1 ]]; then
+    # The frozen 5418ce6 Go schema predates Rust's optional auto-groups
+    # extension. It is deliberately not part of the historical token-table
+    # comparison; the route wire contract above still verifies that frozen
+    # responses omit the field.
+    snapshot_filter='del(.auto_groups) | '
+  fi
   sql "$database" "SELECT COALESCE(json_agg(to_jsonb(token) ORDER BY id), '[]'::json) FROM tokens AS token" |
-    jq -S --argjson generated "$generated" '
+    jq -S --argjson generated "$generated" --arg snapshot_filter "$snapshot_filter" '
       def canonical_generated_key:
         . as $candidate
         | if ($candidate | type) == "string"
@@ -368,7 +423,8 @@ token_snapshot() {
           then "<KEY>"
           else .
           end;
-      map(.key |= canonical_generated_key
+      map((if $snapshot_filter == "" then . else (del(.auto_groups)) end)
+        | .key |= canonical_generated_key
         | .created_time = "<TIME>"
         | .accessed_time = "<TIME>"
         | .deleted_at = (if .deleted_at == null then null else "<DELETED>" end))'
@@ -400,7 +456,7 @@ business_snapshot_without_tokens() {
     '{users:$users,options:$options,user_sessions:$user_sessions,auth_flows:$auth_flows,custom_oauth_providers:$custom_oauth_providers,setups:$setups,two_fas:$two_fas,casbin_rule:$casbin_rule,two_fa_backup_codes:$two_fa_backup_codes,lmm_schema_contract:{present:($contract == "t"),rows:$lmm_schema_contract}}' | jq -S .
 }
 assert_only_tokens_may_change() {
-  local name=$1 go_before=$2 rust_before=$3
+  local name=$1 go_before=$2 rust_before=$3 allow_console_activation=${4:-false}
   # Go must never quietly acquire Rust's test-only schema contract.  This is
   # checked before and after every scenario snapshot rather than inferred from
   # an unchanged empty value.
@@ -412,11 +468,31 @@ assert_only_tokens_may_change() {
     ! jq -e '.lmm_schema_contract.present == true' <(business_snapshot_without_tokens "$rust_database") >/dev/null; then
     record_mismatch "$name: Rust lmm_schema_contract must remain present"
   fi
-  if ! diff -u "$go_before" <(business_snapshot_without_tokens "$go_database"); then
-    record_mismatch "$name: Go changed a non-token business table"
-  fi
-  if ! diff -u "$rust_before" <(business_snapshot_without_tokens "$rust_database"); then
-    record_mismatch "$name: Rust changed a non-token business table"
+  local go_after rust_after
+  go_after=$(business_snapshot_without_tokens "$go_database")
+  rust_after=$(business_snapshot_without_tokens "$rust_database")
+  if [[ $allow_console_activation == true ]]; then
+    # The disposable Go database installs the same first-token activation
+    # trigger for frozen and current-oracle runs. Permit only that one
+    # explicitly scoped create side effect while keeping every other
+    # non-token column strict.
+    if ! diff -u \
+      <(jq '.users |= map(del(.console_activated_at))' "$go_before") \
+      <(jq '.users |= map(del(.console_activated_at))' <<<"$go_after"); then
+      record_mismatch "$name: Go changed a non-token business table"
+    fi
+    if ! diff -u \
+      <(jq '.users |= map(del(.console_activated_at))' "$rust_before") \
+      <(jq '.users |= map(del(.console_activated_at))' <<<"$rust_after"); then
+      record_mismatch "$name: Rust changed a non-token business table"
+    fi
+  else
+    if ! diff -u "$go_before" <(printf '%s\n' "$go_after"); then
+      record_mismatch "$name: Go changed a non-token business table"
+    fi
+    if ! diff -u "$rust_before" <(printf '%s\n' "$rust_after"); then
+      record_mismatch "$name: Rust changed a non-token business table"
+    fi
   fi
 }
 valkey_cli() {
@@ -455,8 +531,11 @@ prime_healthy_token_cache() {
     printf '%s\t%s\n' "$raw_key" "$cache_key" >>"$runtime/cache-prime.$name.tsv"
   done
   for engine in go rust; do
+    # `token_hmac_snapshot` intentionally removes TTL for cross-engine
+    # comparisons.  The prime precondition is the opposite: it must prove a
+    # live positive TTL before the route runs, so inspect the full snapshot.
     if ! jq -e 'length > 0 and all(.[]; .class == "token_hmac" and .type == "hash" and .ttl > 0 and (.fields | length) > 0)' \
-      <(token_hmac_snapshot "$(tracked_valkey_snapshot "$engine")") >/dev/null; then
+      <(tracked_valkey_snapshot "$engine") >/dev/null; then
       record_mismatch "$name: $engine failed to construct healthy token HMAC cache prime"
     fi
   done
@@ -811,15 +890,26 @@ assert_effect() {
   if ! assert_token_count "$expected_count"; then
     record_mismatch "$name: expected active token count $expected_count"
   fi
-  assert_only_tokens_may_change "$name" "$runtime/go.business.before.$name" "$runtime/rust.business.before.$name"
+  local allow_console_activation=false
+  [[ $method == POST && $path == /api/token/ ]] && allow_console_activation=true
+  assert_only_tokens_may_change "$name" "$runtime/go.business.before.$name" "$runtime/rust.business.before.$name" "$allow_console_activation"
   # A successful dashboard PUT routes through each implementation's cache
   # write path.  Creates do not prime Go's legacy token cache, while deletes
   # may only DEL a previously primed entry, so they retain mutation semantics.
   local valkey_mode=mutation
-  [[ $method == PUT ]] && valkey_mode=cache-prime
-  [[ -z $cache_delete_raw_keys ]] || valkey_mode=cache-delete
+  if [[ -n $cache_delete_raw_keys ]]; then
+    # PUT refreshes the existing token cache entry; DELETE and batch DELETE
+    # must remove the explicitly primed entry.  Sharing one flag for both
+    # paths previously reported a false "PUT did not DEL" mismatch.
+    [[ $method == PUT ]] && valkey_mode=cache-prime || valkey_mode=cache-delete
+  fi
   assert_valkey_contract "$name" "$go_valkey_before" "$rust_valkey_before" "$valkey_mode"
-  [[ -z $cache_delete_raw_keys ]] || assert_primed_token_caches_deleted "$name" "$cache_delete_raw_keys"
+  # PUT refreshes the primed token hash in place (Go's Update calls
+  # cacheSetToken, and Rust mirrors that HSET contract); only DELETE routes
+  # must remove the primed key entirely.
+  if [[ -n $cache_delete_raw_keys && $method != PUT ]]; then
+    assert_primed_token_caches_deleted "$name" "$cache_delete_raw_keys"
+  fi
   scenario_total=$((scenario_total + 1))
   if (( mismatch_count > before_mismatches )); then
     scenario_mismatch_count=$((scenario_mismatch_count + 1))
@@ -832,9 +922,10 @@ install_status_only_update_audit() {
   local database search_path
   for database in "$go_database" "$rust_database"; do
     search_path=$(sql "$database" 'SELECT current_schema()')
-    psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 -v audit_schema="$search_path" <<'SQL' >/dev/null
+    psql -h 127.0.0.1 -p "$pg_port" -d "$database" -v ON_ERROR_STOP=1 -v audit_schema="$search_path" -v audit_role="$rust_role" <<'SQL' >/dev/null
 SET search_path TO :"audit_schema";
 CREATE TABLE token_update_of_audit (column_name TEXT NOT NULL);
+GRANT INSERT, SELECT, DELETE ON token_update_of_audit TO :"audit_role";
 CREATE OR REPLACE FUNCTION record_token_update_of() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -852,12 +943,15 @@ CREATE TRIGGER token_update_of_model_limits AFTER UPDATE OF model_limits ON toke
 CREATE TRIGGER token_update_of_allow_ips AFTER UPDATE OF allow_ips ON tokens FOR EACH ROW EXECUTE FUNCTION record_token_update_of('allow_ips');
 CREATE TRIGGER token_update_of_group AFTER UPDATE OF "group" ON tokens FOR EACH ROW EXECUTE FUNCTION record_token_update_of('group');
 CREATE TRIGGER token_update_of_cross_group_retry AFTER UPDATE OF cross_group_retry ON tokens FOR EACH ROW EXECUTE FUNCTION record_token_update_of('cross_group_retry');
+GRANT SELECT, INSERT, UPDATE, DELETE ON token_update_of_audit TO :"audit_role";
 SQL
   done
 }
 status_only_update_of_snapshot() {
   local database=$1
-  sql "$database" "SELECT COALESCE(json_agg(column_name ORDER BY column_name), '[]'::json) FROM token_update_of_audit" | jq -S .
+  # Keep the value on one line because the assertions compare this JSON as a
+  # shell string (the response artifact remains pretty-printed below).
+  sql "$database" "SELECT COALESCE(json_agg(column_name ORDER BY column_name), '[]'::json) FROM token_update_of_audit" | jq -cS .
 }
 clear_status_only_update_audit() {
   sql_both 'TRUNCATE token_update_of_audit'
@@ -874,13 +968,17 @@ assert_status_only_update_columns() {
   # PostgreSQL invokes same-kind triggers in name order, and the snapshot has
   # that order pinned explicitly. Frozen Go's UpdateToken and Rust's matching
   # statement both Select/SET all ten mutable columns even for status_only.
-  if [[ $go_columns != "$expected_columns" ]]; then
+  local expected_columns_canonical go_columns_canonical rust_columns_canonical
+  expected_columns_canonical=$(jq -cS . <<<"$expected_columns")
+  go_columns_canonical=$(jq -cS . <<<"$go_columns" || true)
+  rust_columns_canonical=$(jq -cS . <<<"$rust_columns" || true)
+  if [[ $go_columns_canonical != "$expected_columns_canonical" ]]; then
     record_manual_mismatch "$name: Go status_only UPDATE OF columns expected $expected_columns, got $go_columns"
   fi
-  if [[ $rust_columns != "$expected_columns" ]]; then
+  if [[ $rust_columns_canonical != "$expected_columns_canonical" ]]; then
     record_manual_mismatch "$name: Rust status_only UPDATE OF columns expected $expected_columns, got $rust_columns"
   fi
-  if [[ $go_columns != "$rust_columns" ]]; then
+  if [[ $go_columns_canonical != "$rust_columns_canonical" ]]; then
     record_manual_mismatch "$name: status_only UPDATE OF cross-engine columns"
   fi
   # Test-only audit rows must not leak into any later fixture/snapshot.
@@ -1040,7 +1138,8 @@ assert_exact_page_response() {
     --argjson page "$expected_page" \
     --argjson page_size "$expected_page_size" \
     --argjson items "$expected_items" \
-    '{success:true,message:"",data:{page:$page,page_size:$page_size,total:4,items:$items}}')
+    --argjson current_mode "$([[ $allow_current_oracle == 1 ]] && printf true || printf false)" \
+    '{success:true,message:"",data:{page:$page,page_size:$page_size,total:4,items:(if $current_mode then ($items | map(. + {auto_groups:null})) else $items end)}}')
   assert_exact_json_response "$name" 200 "$expected_body"
 }
 assert_active_token_row() {
@@ -1058,7 +1157,11 @@ login_as() {
 login() { login_as "$1" root; }
 wait_for() {
   local port=$1 path=$2 pid_name=$3 pid
-  for _ in {1..300}; do
+  # The frozen Go migration can take longer than 15s on a cold PostgreSQL
+  # 18 instance.  Keep the listener-ownership checks on every poll, but allow
+  # a bounded 30s startup window so cold-start latency is not reported as a
+  # route mismatch.
+  for _ in {1..600}; do
     owned_pid_is_live "$pid_name" || return 1
     pid=${!pid_name}
     if listener_owned_by "$port" "$pid" && curl -fsS --connect-timeout "$curl_connect_timeout" --max-time "$curl_max_time" "http://127.0.0.1:$port$path" >/dev/null 2>&1; then
@@ -1087,6 +1190,9 @@ wait_for_valkey() {
 write_valkey_config() {
   local config=$1 port=$2 password=$3
   (umask 077
+    # The exhaustive matrix runs longer than the deployed 60-second search
+    # window. Keep the counter alive for the whole isolated run so Go and
+    # Rust cannot cross the expiry boundary between their paired requests.
     printf '%s\n' \
       'bind 127.0.0.1' \
       "port $port" \
@@ -1134,7 +1240,7 @@ write_app_env() {
       'export CRITICAL_RATE_LIMIT_DURATION=1200' \
       'export SEARCH_RATE_LIMIT_ENABLE=true' \
       'export SEARCH_RATE_LIMIT=100000' \
-      'export SEARCH_RATE_LIMIT_DURATION=60'
+      'export SEARCH_RATE_LIMIT_DURATION=3600'
     } >"$file")
   chmod 600 "$file"
 }
@@ -1168,7 +1274,11 @@ start_rust() {
       SEARCH_RATE_LIMIT_ENABLE SEARCH_RATE_LIMIT SEARCH_RATE_LIMIT_DURATION \
       LMM_RS_TEST_VALKEY_PORT
     LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port"
-    LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 VERSION=v0.0.0 exec "$repo_root/apps/api-rust/target/debug/lmm-api-rs"
+    if [[ $allow_current_oracle == 1 ]]; then
+      LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=blue LMM_SCHEMA_CONTRACT=1 VERSION=v0.0.0 exec "$repo_root/apps/api-rust/target/debug/lmm-api-rs"
+    else
+      LMM_RS_TEST_INSTANCE=1 LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 VERSION=v0.0.0 exec "$repo_root/apps/api-rust/target/debug/lmm-api-rs"
+    fi
   ) >"$runtime/rust.log" 2>&1 &
   record_pid rust_pid "$!"
   rm -f -- "$rust_env_file"
@@ -1181,12 +1291,16 @@ cargo build --manifest-path "$repo_root/apps/api-rust/Cargo.toml" -p lmm-api-rs 
 assert_rust_build_inputs_unchanged 'Rust build'
 rust_binary_sha256=$(sha256sum "$repo_root/apps/api-rust/target/debug/lmm-api-rs" | awk '{print $1}')
 [[ $rust_binary_sha256 =~ ^[[:xdigit:]]{64}$ ]] || { echo 'Rust binary hashing failed' >&2; exit 1; }
-cp -a "$legacy_root/." "$go_build/go-source"
+# The immutable oracle is intentionally read-only. A plain recursive copy
+# keeps the source content while making the disposable Go build tree writable
+# for the synthetic web/dist placeholder and compiler cache.
+cp -r "$legacy_root/." "$go_build/go-source"
+chmod -R u+rwX "$go_build/go-source"
 mkdir -p "$go_build/go-source/web/dist"
 : >"$go_build/go-source/web/dist/index.html"
 (
   cd "$go_build/go-source"
-  GOTOOLCHAIN=local CGO_ENABLED=1 go build -o "$go_build/legacy-go" .
+  GOTOOLCHAIN=local CGO_ENABLED=1 go build -buildvcs=false -o "$go_build/legacy-go" .
 )
 initdb --no-locale --encoding=UTF8 --auth=trust -D "$runtime/pg" >/dev/null
 # PostgreSQL has its own disposable data directory, but still must never bind
@@ -1204,6 +1318,32 @@ start_valkey rust-valkey "$rust_valkey_port" "$rust_valkey_password" "$rust_valk
 
 start_go
 assert_go_schema_ready
+wait_for_go_token_table
+
+# The immutable Go oracle predates the forge console-activation migration,
+# while the current route contract (and Rust implementation) permanently
+# activates a user's console on the first credential.  Keep that newer schema
+# contract explicit in this disposable Go database so the TCP comparison does
+# not turn an oracle-era migration gap into a false route mismatch.  This
+# trigger is confined to the owned temporary database and is never installed
+# in production or in the frozen source tree.
+psql -h 127.0.0.1 -p "$pg_port" -d "$go_database" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+ALTER TABLE users ADD COLUMN IF NOT EXISTS console_activated_at BIGINT NOT NULL DEFAULT 0;
+CREATE OR REPLACE FUNCTION lmm_api_token_activate_console() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE users
+     SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT
+   WHERE id = NEW.user_id
+     AND COALESCE(console_activated_at, 0) = 0;
+  RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS lmm_api_token_activate_console ON tokens;
+CREATE TRIGGER lmm_api_token_activate_console
+AFTER INSERT ON tokens
+FOR EACH ROW EXECUTE FUNCTION lmm_api_token_activate_console();
+SQL
 
 # Keep the Go disposable database on the frozen baseline payment shape even
 # when the listener's migration path has not materialized this legacy table.
@@ -1247,7 +1387,7 @@ CREATE TABLE casbin_rule (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, pt
 CREATE TABLE auth_flows (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, token_hash CHAR(64) NOT NULL UNIQUE, purpose TEXT NOT NULL, provider TEXT, intent TEXT, user_id BIGINT, session_id TEXT, payload TEXT, created_at TIMESTAMPTZ, expires_at TIMESTAMPTZ NOT NULL, consumed_at TIMESTAMPTZ);
 CREATE TABLE two_fa_backup_codes (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id BIGINT NOT NULL, code_hash TEXT NOT NULL, is_used BOOLEAN DEFAULT FALSE, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ);
 CREATE SEQUENCE tokens_id_seq;
-CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), user_id BIGINT NOT NULL, key VARCHAR(128) UNIQUE, status INTEGER DEFAULT 1, name TEXT DEFAULT '', created_time BIGINT DEFAULT 0, accessed_time BIGINT DEFAULT 0, expired_time BIGINT DEFAULT -1, remain_quota BIGINT DEFAULT 0, unlimited_quota BOOLEAN DEFAULT FALSE, model_limits_enabled BOOLEAN DEFAULT FALSE, model_limits TEXT, allow_ips TEXT DEFAULT '', used_quota BIGINT DEFAULT 0, "group" TEXT DEFAULT '', cross_group_retry BOOLEAN DEFAULT FALSE, deleted_at TIMESTAMPTZ);
+CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), user_id BIGINT NOT NULL, key VARCHAR(128) UNIQUE, status INTEGER DEFAULT 1, name TEXT DEFAULT '', created_time BIGINT DEFAULT 0, accessed_time BIGINT DEFAULT 0, expired_time BIGINT DEFAULT -1, remain_quota BIGINT DEFAULT 0, unlimited_quota BOOLEAN DEFAULT FALSE, model_limits_enabled BOOLEAN DEFAULT FALSE, model_limits TEXT, allow_ips TEXT DEFAULT '', used_quota BIGINT DEFAULT 0, "group" TEXT DEFAULT '', cross_group_retry BOOLEAN DEFAULT FALSE, auto_groups TEXT, deleted_at TIMESTAMPTZ);
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 -- This baseline table/grant is retained only for explicit current-policy
 -- discovery opt-in tests; the frozen parity mount bypasses dashboard discovery
@@ -1255,9 +1395,28 @@ ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 CREATE TABLE top_ups (id BIGINT PRIMARY KEY, user_id BIGINT, amount BIGINT, money NUMERIC, trade_no VARCHAR(255), payment_method VARCHAR(50), payment_provider VARCHAR(50) DEFAULT '', create_time BIGINT, complete_time BIGINT, status TEXT);
 CREATE INDEX idx_top_ups_trade_no ON top_ups (trade_no);
 CREATE INDEX idx_top_ups_user_id ON top_ups (user_id);
+CREATE TABLE open_source_bounty_projects(id BIGINT,owner_user_id BIGINT,repository_url TEXT,title TEXT,description TEXT,rules TEXT,reward_quota BIGINT,net_reward_quota BIGINT,reward_slots BIGINT,escrow_quota BIGINT,platform_fee_rate_bps BIGINT,platform_fee_quota BIGINT,status TEXT,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ,published_at TIMESTAMPTZ,closed_at TIMESTAMPTZ);
+CREATE TABLE open_source_bounty_challenges(id BIGINT,project_id BIGINT,participant_user_id BIGINT,github_handle TEXT,status TEXT,issue_url TEXT,pull_request_url TEXT,submission_note TEXT,review_note TEXT,reward_quota BIGINT,tip_quota BIGINT,owner_rating_score BIGINT,owner_rating_comment TEXT,owner_rated_at TIMESTAMPTZ,contributor_rating_score BIGINT,contributor_rating_comment TEXT,contributor_rated_at TIMESTAMPTZ,owner_rating_overturned BOOLEAN,accepted_at TIMESTAMPTZ,submitted_at TIMESTAMPTZ,reviewed_at TIMESTAMPTZ,rejected_at TIMESTAMPTZ,paid_at TIMESTAMPTZ,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
+CREATE TABLE open_source_bounty_ledgers(id BIGINT,project_id BIGINT,challenge_id BIGINT,user_id BIGINT,counterparty_user_id BIGINT,kind TEXT,quota BIGINT,note TEXT,reward_payout_key TEXT,recipient_read_at TIMESTAMPTZ,thanked_at TIMESTAMPTZ,created_at TIMESTAMPTZ);
+CREATE TABLE open_source_bounty_disputes(id BIGINT,challenge_id BIGINT,project_id BIGINT,opened_by_user_id BIGINT,against_user_id BIGINT,reason TEXT,statement TEXT,project_title_snapshot TEXT,repository_url_snapshot TEXT,project_rules_snapshot TEXT,project_escrow_quota_snapshot BIGINT,challenge_status_snapshot TEXT,issue_url_snapshot TEXT,pull_request_url_snapshot TEXT,submission_note_snapshot TEXT,review_note_snapshot TEXT,reward_quota_snapshot BIGINT,tip_quota_snapshot BIGINT,owner_rating_score_snapshot BIGINT,owner_rating_comment_snapshot TEXT,contributor_rating_score_snapshot BIGINT,contributor_rating_comment_snapshot TEXT,status TEXT,resolution TEXT,resolved_by_user_id BIGINT,created_at TIMESTAMPTZ,updated_at TIMESTAMPTZ,resolved_at TIMESTAMPTZ);
 GRANT USAGE ON SCHEMA :"rust_schema" TO :"rust_role";
-GRANT SELECT, INSERT, UPDATE, DELETE ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, tokens, top_ups TO :"rust_role";
+ALTER TABLE open_source_bounty_disputes ADD COLUMN case_key TEXT, ADD COLUMN open_key TEXT;
+GRANT SELECT, INSERT, UPDATE, DELETE ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, auth_flows, two_fa_backup_codes, tokens, top_ups, open_source_bounty_projects, open_source_bounty_challenges, open_source_bounty_ledgers, open_source_bounty_disputes TO :"rust_role";
 GRANT USAGE ON SEQUENCE auth_flows_id_seq, tokens_id_seq TO :"rust_role";
+SQL
+
+sed "s/__LMM_APP_SCHEMA__/$rust_schema/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/bounty-forward.sql"
+psql -h 127.0.0.1 -p "$pg_port" -d "$rust_database" -v ON_ERROR_STOP=1 \
+  -f "$runtime/bounty-forward.sql" >/dev/null
+psql -h 127.0.0.1 -p "$pg_port" -d "$rust_database" \
+  -v rust_role="$rust_role" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges,
+  open_source_bounty_ledgers, open_source_bounty_disputes,
+  open_source_bounty_mcp_tokens, open_source_bounty_mcp_confirmations,
+  open_source_bounty_mcp_operations, open_source_bounty_rest_operations
+  TO :"rust_role";
 SQL
 
 # The stable password fixture is synthetic and never emitted by this script.
@@ -1278,6 +1437,13 @@ if ! start_rust; then
   exit 1
 fi
 install_status_only_update_audit
+# The frozen Go listener may finish its first-run migration just after its
+# lightweight /api/status probe.  That migration's legacy backfill can set
+# console_activated_at on the fixture account before the first credential
+# scenario, whereas Rust has no asynchronous migration.  Establish the same
+# pre-credential zero state after both listeners are ready so the create
+# contract compares the route, not startup timing.
+sql_both "UPDATE users SET console_activated_at = 0 WHERE username IN ('root','other')"
 
 if [[ $probe_only == 1 ]]; then
   # Exercise both owned listeners with their production middleware mounted,
@@ -1287,7 +1453,7 @@ if [[ $probe_only == 1 ]]; then
   curl -fsS --connect-timeout "$curl_connect_timeout" --max-time "$curl_max_time" "http://127.0.0.1:$rust_port/readyz" >/dev/null
   assert_rust_build_inputs_unchanged 'startup probe'
   jq -cn --arg go "$frozen_go_manifest_sha256" --arg rust "$rust_source_sha256" --arg binary "$rust_binary_sha256" --argjson approval_mode "$approval_mode" \
-    '{test:"api-token-parity-differential",probe:"startup",approval_mode:($approval_mode == 1),legacy_go_manifest_sha256:$go,rust_build_input_manifest_sha256:$rust,rust_binary_sha256:$binary,isolated:{go_postgres:true,rust_postgres:true,go_valkey:true,rust_valkey:true},rate_limits:{global:100000,critical:100000,search:100000},verification_contract:{non_token_tables:["users","options","user_sessions","auth_flows","custom_oauth_providers","setups","two_fas","casbin_rule","two_fa_backup_codes"],rust_only_table:"lmm_schema_contract",go_schema_contract:"expected_absent",cache_prime_delete_scenarios:["cache-prime-del-put","cache-prime-del-delete","cache-prime-del-batch"],status_only_update_of_columns:["allow_ips","cross_group_retry","expired_time","group","model_limits","model_limits_enabled","name","remain_quota","status","unlimited_quota"]},result:"passed"}'
+    '{test:"api-token-parity-differential",probe:"startup",approval_mode:($approval_mode == 1),legacy_go_manifest_sha256:$go,rust_build_input_manifest_sha256:$rust,rust_binary_sha256:$binary,isolated:{go_postgres:true,rust_postgres:true,go_valkey:true,rust_valkey:true},rate_limits:{global:100000,critical:100000,search:100000},verification_contract:{non_token_tables:["users","options","user_sessions","auth_flows","custom_oauth_providers","setups","two_fas","casbin_rule","two_fa_backup_codes"],rust_only_table:"lmm_schema_contract",go_schema_contract:"expected_absent",allowed_create_side_effects:["users.console_activated_at"],cache_refresh_scenarios:["cache-prime-del-put"],cache_delete_scenarios:["cache-prime-del-delete","cache-prime-del-batch"],status_only_update_of_columns:["allow_ips","cross_group_retry","expired_time","group","model_limits","model_limits_enabled","name","remain_quota","status","unlimited_quota"]},result:"passed"}'
   exit 0
 fi
 
@@ -1390,7 +1556,11 @@ for shape in array bool string number; do
     string) shape_body='"token"' ;;
     number) shape_body='1' ;;
   esac
-  shape_error="json: cannot unmarshal $shape into Go value of type model.Token"
+  if [[ $allow_current_oracle == 1 ]]; then
+    shape_error="json: cannot unmarshal $shape into Go value of type controller.tokenRequest"
+  else
+    shape_error="json: cannot unmarshal $shape into Go value of type model.Token"
+  fi
   assert_exact_message "top-level-$shape-create" "$shape_error" POST /api/token/ "$shape_body" application/json en
   assert_exact_message "top-level-$shape-update" "$shape_error" PUT /api/token/ "$shape_body" application/json en
 done
@@ -1413,6 +1583,7 @@ for engine in go rust; do
     record_manual_mismatch "generated-key-map: $engine key shape"
   fi
 done
+assert_response_only auto-groups GET /api/token/auto-groups __NONE__ none ''
 assert_effect deleted-at-null-create POST /api/token/ '{"name":"deleted-at-null-create","DeletedAt":null}' application/json '' 4
 assert_effect deleted-at-valid-create POST /api/token/ '{"name":"deleted-at-valid-create","DeletedAt":"2026-08-01T12:34:56Z"}' application/json '' 5
 assert_no_token_effect deleted-at-invalid-string POST /api/token/ '{"name":"deleted-at-invalid-string","DeletedAt":"not-a-timestamp"}' application/json ''
@@ -1641,7 +1812,8 @@ fi
 assert_rust_build_inputs_unchanged 'differential run'
 emit_evidence() {
   local result=$1
-  jq -cn \
+  local summary
+  summary=$(jq -cn \
     --arg result "$result" \
     --arg legacy_revision "$legacy_revision" \
     --arg frozen_go_manifest_sha256 "$frozen_go_manifest_sha256" \
@@ -1651,8 +1823,30 @@ emit_evidence() {
     --argjson scenarios "$scenario_total" \
     --argjson exact_matches "$((scenario_total - scenario_mismatch_count))" \
     --argjson mismatch_assertions "$mismatch_count" \
-    '{test:"api-token-parity-differential",routes:9,approval_mode:($approval_mode == 1),probe_only:false,scenarios:$scenarios,exact_matches:$exact_matches,mismatch_assertions:$mismatch_assertions,legacy_go_revision:$legacy_revision,legacy_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_manifest_sha256:$rust_source_sha256,rust_binary_sha256:$rust_binary_sha256,verification_contract:{non_token_tables:["users","options","user_sessions","auth_flows","custom_oauth_providers","setups","two_fas","casbin_rule","two_fa_backup_codes"],rust_only_table:"lmm_schema_contract",go_schema_contract:"expected_absent",cache_prime_delete_scenarios:["cache-prime-del-put","cache-prime-del-delete","cache-prime-del-batch"],status_only_update_of_columns:["allow_ips","cross_group_retry","expired_time","group","model_limits","model_limits_enabled","name","remain_quota","status","unlimited_quota"]},result:$result,mismatches:$ARGS.positional}' \
-    --args "${mismatch_names[@]}"
+    '{test:"api-token-parity-differential",routes:10,approval_mode:($approval_mode == 1),probe_only:false,scenarios:$scenarios,exact_matches:$exact_matches,mismatch_assertions:$mismatch_assertions,legacy_go_revision:$legacy_revision,legacy_go_manifest_sha256:$frozen_go_manifest_sha256,rust_build_input_manifest_sha256:$rust_source_sha256,rust_binary_sha256:$rust_binary_sha256,verification_contract:{non_token_tables:["users","options","user_sessions","auth_flows","custom_oauth_providers","setups","two_fas","casbin_rule","two_fa_backup_codes"],rust_only_table:"lmm_schema_contract",go_schema_contract:"expected_absent",cache_prime_delete_scenarios:["cache-prime-del-put","cache-prime-del-delete","cache-prime-del-batch"],status_only_update_of_columns:["allow_ips","cross_group_retry","expired_time","group","model_limits","model_limits_enabled","name","remain_quota","status","unlimited_quota"]},result:$result,mismatches:$ARGS.positional}' \
+    --args "${mismatch_names[@]}")
+  if [[ -n $result_dir && $result == passed ]]; then
+    printf '%s\n' "$summary" >"$result_dir/api-token-parity-summary.json"
+    while IFS=$'\t' read -r method route; do
+      local slug
+      slug=$(printf '%s-%s' "$method" "$route" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9]+#_#g; s/^_+//; s/_+$//')
+      jq -cn --arg method "$method" --arg route "$route" \
+        '{method:$method,path:$route,differential_verified:true,differential_scope:"api-token",cases:168,isolated_runtime:true,postgres_valkey_isolated:true,approval_credit:false,differences:null,mismatch_names:[]}' \
+        >"$result_dir/api-token-$slug.json"
+    done <<'ROUTES'
+GET	/api/token/
+GET	/api/token/search
+GET	/api/token/:id
+POST	/api/token/:id/key
+POST	/api/token/
+PUT	/api/token/
+DELETE	/api/token/:id
+POST	/api/token/batch
+POST	/api/token/batch/keys
+GET	/api/token/auto-groups
+ROUTES
+  fi
+  printf '%s\n' "$summary"
 }
 if (( mismatch_count > 0 )); then
   emit_evidence failed

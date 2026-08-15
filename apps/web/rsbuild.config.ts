@@ -16,12 +16,16 @@ export default defineConfig(({ envMode }) => {
     'http://localhost:3000'
 
   const isProd = envMode === 'production'
-  const devProxy = Object.fromEntries(
-    (['/api', '/mj', '/pg'] as const).map((key) => [
-      key,
-      { target: serverUrl, changeOrigin: true },
-    ])
-  ) as Record<string, { target: string; changeOrigin: boolean }>
+  const personaDebugEnabled =
+    !isProd && process.env.LMM_ENABLE_PERSONA_DEBUG === '1'
+  const devProxy = personaDebugEnabled
+    ? {}
+    : (Object.fromEntries(
+        (['/api', '/mj', '/pg'] as const).map((key) => [
+          key,
+          { target: serverUrl, changeOrigin: true },
+        ])
+      ) as Record<string, { target: string; changeOrigin: boolean }>)
 
   return {
     plugins: [pluginReact(), pluginTailwindcss({ optimize: false })],
@@ -53,8 +57,15 @@ export default defineConfig(({ envMode }) => {
       },
     },
     source: {
+      define: {
+        ...env.publicVars,
+        __LMM_PERSONA_DEBUG__: JSON.stringify(personaDebugEnabled),
+      },
       entry: {
-        index: './src/main.tsx',
+        // The persona harness is a separate development-only entry. Production
+        // builds never import its auth fixtures or request adapter, even when a
+        // deployment environment accidentally retains the debug flag.
+        index: personaDebugEnabled ? './src/debug-main.tsx' : './src/main.tsx',
       },
     },
     resolve: {
@@ -65,8 +76,17 @@ export default defineConfig(({ envMode }) => {
     html: {
       template: './index.html',
     },
+    dev: {
+      // The debug entry must install its in-memory transport before importing
+      // the app. Eagerly compile that import so a cold browser session cannot
+      // remain suspended on Rsbuild's lazy-compilation proxy.
+      lazyCompilation: personaDebugEnabled
+        ? false
+        : { imports: true, entries: false },
+    },
     server: {
-      host: '0.0.0.0',
+      // The synthetic identity harness is deliberately loopback-only.
+      host: personaDebugEnabled ? '127.0.0.1' : '0.0.0.0',
       strictPort: false,
       proxy: devProxy,
     },
@@ -91,6 +111,8 @@ export default defineConfig(({ envMode }) => {
         plugins: [
           tanstackRouter({
             target: 'react',
+            // Keep colocated tests out of the generated route tree.
+            routeFileIgnorePattern: '\\.test\\.',
             // Dev: avoid per-route async chunks (reduces white flash on navigation + faster HMR feedback).
             // Prod: keep route-based code splitting.
             autoCodeSplitting: isProd,

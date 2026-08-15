@@ -58,14 +58,17 @@ use lmm_api_rs::{
         },
         identity_admin::IdentityAdminState,
         identity_federation::{
-            FederationError, FederationIdentity, FederationPrincipal, FederationState,
+            DashboardFederationIdentity, DisabledEmailCodeVerifier, FederationError,
+            FederationIdentity, FederationPrincipal, FederationState,
+            bindings_router as identity_federation_bindings_router,
+            provider_router as identity_federation_provider_router,
         },
         identity_profile::ProfileState,
         identity_security::{IdentitySecurityState, PgValkeySecurityProvider},
         media_midjourney::{
             BufferedJsonReply, ImageReply, MidjourneyBackend, MidjourneyChannel, MidjourneyFailure,
             MidjourneyHttpState, MidjourneyIdentity, PgMidjourneyBackend, StoredImage, SubmitReply,
-            TaskEffect, media_midjourney_router,
+            TaskEffect, media_midjourney_dynamic_router,
         },
         media_tasks::{MediaTaskHttpState, MidjourneyMediaTaskService, media_task_router},
         missing_billing_dashboard::{
@@ -119,8 +122,8 @@ use lmm_api_rs::{
         },
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityState, PgObservabilityStore,
-            PgReadOnlyObservabilityTokenAuthorizer, UnavailableObservabilityMaintenance,
-            UnavailableObservabilityMetrics, observability_router,
+            PgReadOnlyObservabilityTokenAuthorizer, PostgresObservabilityMetrics,
+            UnavailableObservabilityMaintenance, observability_router,
         },
         open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
         relay_anthropic_gemini::{
@@ -130,7 +133,7 @@ use lmm_api_rs::{
         relay_media::{RelayMediaHttpState, RelayMediaService, relay_media_router},
         relay_misc::{
             RelayAuth, RelayMiscHttpState, RelayMiscService, RelayProtocol as RelayMiscProtocol,
-            routes as relay_misc_routes,
+            RelayRequestContext, routes as relay_misc_routes,
         },
         relay_openai::{
             OpenAiRelayAuthorization, OpenAiRelayFailure, OpenAiRelayHttpState, OpenAiRelayRequest,
@@ -200,6 +203,25 @@ pub fn safe_control_public_surface(pg: PgPool) -> Router {
         Arc::new(PgControlPublicRepository::new(pg)),
         Arc::new(DenyUptimeKuma),
     ))
+}
+
+/// Builds the PostgreSQL-backed dashboard/public control reads for a normal
+/// listener.  This slice has no outbound provider boundary: pricing,
+/// rankings, group discovery, ratio exposure, and token-usage reads all use
+/// the durable store plus the listener's shared dashboard session authority.
+/// Keep the constructor here shared with the isolated candidate surface so
+/// the two listeners cannot silently drift in their database/query contract.
+pub fn durable_missing_control_public_surface(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Router {
+    missing_control_public_router(
+        MissingControlPublicState::new(
+            Arc::new(PgMissingControlStore::new(pg)),
+            Arc::new(DashboardMissingControlAuthorizer::new(Arc::clone(&auth))),
+        )
+        .with_critical_rate_limiter(Arc::new(DashboardMissingControlRateLimiter::new(
+            Arc::clone(&auth),
+        )))
+        .with_console_access_gate(auth),
+    )
 }
 
 /// Builds the loopback-only system-config slice used by local acceptance.
@@ -277,25 +299,47 @@ pub fn safe_candidate_surface(
             IdentitySecurityState::new(
                 Arc::new(PgValkeySecurityProvider::new(pg.clone(), valkey.clone())),
                 Arc::new(lmm_api_rs::migration_routes::identity_security::DashboardSecurityAuthorizer::new(Arc::clone(&auth))),
-            ),
+            )
+            .with_passkey_enabled(false),
         ))
         .merge(lmm_api_rs::migration_routes::identity_2fa::router(
             Identity2FAState::new(pg.clone(), valkey.clone(), Arc::new(DenySessionRotator)),
         ))
-        .merge(lmm_api_rs::migration_routes::identity_federation::router(
-            FederationState::new(pg.clone(), Arc::new(DenyFederationIdentity), b"test-federation-flow-key"),
-        ))
-        .merge(observability_router(ObservabilityState::new(
-            Arc::new(PgObservabilityStore::new(
-                pg.clone(),
-                Arc::new(UnavailableObservabilityMetrics),
-                Arc::new(UnavailableObservabilityMaintenance),
-            )),
-            Arc::new(DashboardObservabilityAuthorizer::new(
-                Arc::clone(&auth),
-                Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
-            )),
+        .merge(identity_federation_provider_router(FederationState::new(
+            pg.clone(),
+            Arc::new(DenyFederationIdentity),
+            b"test-federation-flow-key",
         )))
+        .merge(identity_federation_bindings_router(FederationState::new(
+            pg.clone(),
+            Arc::new(
+                DashboardFederationIdentity::new(
+                    Arc::clone(&auth),
+                    pg.clone(),
+                    &SecretString::from("test-federation-session-secret"),
+                    Arc::new(DisabledEmailCodeVerifier),
+                )
+                .expect("test federation identity secret"),
+            ),
+            b"test-federation-flow-key",
+        )))
+        .merge(observability_router(
+            ObservabilityState::new(
+                Arc::new(PgObservabilityStore::new(
+                    pg.clone(),
+                    Arc::new(
+                        PostgresObservabilityMetrics::new(pg.clone())
+                            .with_valkey(valkey.clone()),
+                    ),
+                    Arc::new(UnavailableObservabilityMaintenance),
+                )),
+                Arc::new(DashboardObservabilityAuthorizer::new(
+                    Arc::clone(&auth),
+                    Arc::new(PgReadOnlyObservabilityTokenAuthorizer::new(pg.clone())),
+                )),
+            )
+            .with_console_access_gate(Arc::clone(&auth)),
+        ))
         .merge(open_source_bounty_router(OpenSourceBountyState::new(
             pg.clone(),
             Arc::clone(&auth),
@@ -340,14 +384,9 @@ pub fn safe_candidate_surface(
         // The remainder of the candidate surface uses the same PostgreSQL and
         // dashboard-session authorities. Provider and relay boundaries remain
         // deliberately fail-closed on the isolated test instance.
-        .merge(missing_control_public_router(
-            MissingControlPublicState::new(
-                Arc::new(PgMissingControlStore::new(pg.clone())),
-                Arc::new(DashboardMissingControlAuthorizer::new(Arc::clone(&auth))),
-            )
-            .with_critical_rate_limiter(Arc::new(DashboardMissingControlRateLimiter::new(
-                Arc::clone(&auth),
-            ))),
+        .merge(durable_missing_control_public_surface(
+            pg.clone(),
+            Arc::clone(&auth),
         ))
         .merge(ratio_sync_router(RatioSyncHttpState::new(
             Arc::new(PgRatioSyncRepository::new(pg.clone())),
@@ -425,7 +464,7 @@ pub fn safe_candidate_surface(
         // test adapter denies every provider protocol after authentication, so
         // an imported snapshot can exercise route/auth compatibility without
         // contacting a selected production channel.
-        .merge(media_midjourney_router(MidjourneyHttpState::new(Arc::new(
+        .merge(media_midjourney_dynamic_router(MidjourneyHttpState::new(Arc::new(
             TestInstanceMidjourneyBackend::new(pg.clone()),
         ))))
         .merge(media_task_router(MediaTaskHttpState::new(Arc::new(
@@ -1881,7 +1920,7 @@ impl PgTestStatusProbe {
 #[async_trait]
 impl ControlTaskStatusProbe for PgTestStatusProbe {
     async fn test_status(&self) -> Result<Value, ControlTaskStatusError> {
-        sqlx::query_scalar::<_, i64>("SELECT 1")
+        sqlx::query_scalar::<_, i32>("SELECT 1")
             .fetch_one(&self.pg)
             .await
             .map_err(|_| ControlTaskStatusError::DatabaseUnavailable)?;
@@ -1919,6 +1958,16 @@ impl TopupAuthorizer for DashboardTopupAuthorizer {
         (user.id > 0 && user.status == 1)
             .then_some(user.id)
             .ok_or(TopupError::Unauthorized)
+    }
+
+    async fn check_critical_rate_limit(
+        &self,
+        client_ip: &str,
+    ) -> Result<lmm_api_rs::auth::CriticalRateLimitOutcome, TopupError> {
+        self.auth
+            .check_critical_rate_limit(client_ip)
+            .await
+            .map_err(|_| TopupError::Storage)
     }
 }
 
@@ -2076,9 +2125,21 @@ struct DenyRelayMiscV1;
 
 #[async_trait]
 impl RelayMiscService for DenyRelayMiscV1 {
+    async fn system_performance(&self, _: &Request) -> RelayAuth {
+        RelayAuth::Authorized
+    }
+
     async fn authorize(&self, _: &Request) -> RelayAuth {
         // The enclosing test-only middleware has already accepted exactly the
         // fixture credential before this async boundary receives a request.
+        RelayAuth::Authorized
+    }
+
+    async fn model_rate_limit(&self, _: &Request) -> RelayAuth {
+        RelayAuth::Authorized
+    }
+
+    async fn distribute(&self, _: &RelayRequestContext, _: &Request) -> RelayAuth {
         RelayAuth::Authorized
     }
 
@@ -2358,7 +2419,8 @@ mod tests {
         admin_catalog::CatalogUpstream,
         control_public::UptimeKumaClient,
         media_midjourney::{
-            MidjourneyBackend, MidjourneyFailure, MidjourneyHttpState, media_midjourney_router,
+            MidjourneyBackend, MidjourneyFailure, MidjourneyHttpState,
+            media_midjourney_dynamic_router,
         },
         media_tasks::{MediaTaskHttpState, MidjourneyMediaTaskService, media_task_router},
         relay_anthropic_gemini::{RelayHttpState, router as relay_anthropic_gemini_router},
@@ -2799,7 +2861,7 @@ mod tests {
         let dynamic_backend: Arc<dyn MidjourneyBackend> = backend.clone();
         // Building the combined surface also detects duplicate Axum route
         // registrations before a test instance can start.
-        let app = media_midjourney_router(MidjourneyHttpState::new(dynamic_backend)).merge(
+        let app = media_midjourney_dynamic_router(MidjourneyHttpState::new(dynamic_backend)).merge(
             media_task_router(MediaTaskHttpState::new(Arc::new(
                 MidjourneyMediaTaskService::new(backend),
             ))),
@@ -2860,9 +2922,9 @@ mod tests {
             .expect("router is infallible");
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-        // The test instance intentionally wires the production-shaped Missing
-        // adapter, so even authenticated frozen routes stay fail-closed until
-        // the real performance/rate/distribution gates exist.
+        // Frozen Go routes owned by RelayNotImplemented return 501 only after
+        // the fixture credential passes every relay gate. They never select an
+        // upstream or enter the fail-closed provider adapter.
         let frozen = app
             .clone()
             .oneshot(
@@ -2873,7 +2935,7 @@ mod tests {
             )
             .await
             .expect("router is infallible");
-        assert_eq!(frozen.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(frozen.status(), StatusCode::NOT_IMPLEMENTED);
 
         let model_delete = app
             .oneshot(
@@ -2985,6 +3047,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_test_surface_mounts_checkin_read_route_before_authentication() {
+        let pg = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("a lazy PostgreSQL URL is valid");
+        let valkey =
+            redis::Client::open("redis://127.0.0.1:1/").expect("a lazy Valkey URL is valid");
+        let auth: Arc<dyn DashboardAuth> = Arc::new(
+            PgValkeyDashboardAuth::new(
+                pg.clone(),
+                valkey.clone(),
+                AuthConfig {
+                    session_secret: SecretString::from("TestR5!session-secret-with-entropy-123456"),
+                    ..AuthConfig::default()
+                },
+            )
+            .expect("test auth config is valid"),
+        );
+        let response = safe_candidate_surface(pg, valkey, auth)
+            .oneshot(
+                Request::get("/api/user/checkin?month=2026-08")
+                    .body(Body::empty())
+                    .expect("request is valid"),
+            )
+            .await
+            .expect("router is infallible");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     #[ignore = "requires an isolated PostgreSQL database; set LMM_RANKINGS_TEST_DATABASE_URL"]
     async fn rankings_pg_snapshot_keeps_history_previous_rank_and_vendor_metadata() {
         let database_url = env::var("LMM_RANKINGS_TEST_DATABASE_URL").expect(
@@ -3044,7 +3136,7 @@ mod tests {
             for (model, created_at, token_used) in [
                 (&models[0], now - 900, 200_i64),
                 (&models[1], now - 10_800, 100_i64),
-                (&models[2], now - 10_800, 50_i64),
+                (&models[2], now - 2 * 86_400, 50_i64),
                 (&models[0], now - 7 * 86_400 - 3_600, 10_i64),
                 (&models[1], now - 7 * 86_400 - 3_600, 300_i64),
             ] {
@@ -3154,7 +3246,10 @@ mod tests {
             )
             .await
             .expect("router is infallible");
-        assert_eq!(anonymous_post.status(), StatusCode::UNAUTHORIZED);
+        // The production Go compatibility boundary conceals missing relay
+        // credentials behind the generic public 404 response.  Keep the
+        // isolated candidate surface aligned with that contract.
+        assert_eq!(anonymous_post.status(), StatusCode::NOT_FOUND);
 
         let frozen_delete = app
             .oneshot(

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -1140,7 +1140,9 @@ func resolveHeaderOverrideValueByMapping(context map[string]interface{}, headerN
 	}
 
 	wildcardValue, hasWildcard := mapping["*"]
-	resultTokens := make([]string, 0, len(sourceTokens)+len(appendTokens))
+	// Grow from the values that are actually retained. Adding two
+	// request-derived lengths here could overflow before make is called.
+	resultTokens := make([]string, 0)
 	for _, token := range sourceTokens {
 		replacementRaw, hasReplacement := mapping[token]
 		if !hasReplacement && hasWildcard && !keepOnlyDeclared {

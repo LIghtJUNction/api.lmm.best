@@ -1,9 +1,11 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
+	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 
 	"gorm.io/gorm"
 )
@@ -16,14 +18,22 @@ const (
 	SystemTaskStatusSucceeded SystemTaskStatus = "succeeded"
 	SystemTaskStatusFailed    SystemTaskStatus = "failed"
 
-	SystemTaskTypeLogCleanup     = "log_cleanup"
-	SystemTaskTypeChannelTest    = "channel_test"
-	SystemTaskTypeModelUpdate    = "model_update"
-	SystemTaskTypeMidjourneyPoll = "midjourney_poll"
-	SystemTaskTypeAsyncTaskPoll  = "async_task_poll"
+	SystemTaskTypeLogCleanup         = "log_cleanup"
+	SystemTaskTypeChannelTest        = "channel_test"
+	SystemTaskTypeModelUpdate        = "model_update"
+	SystemTaskTypeMidjourneyPoll     = "midjourney_poll"
+	SystemTaskTypeAsyncTaskPoll      = "async_task_poll"
+	SystemTaskTypeAssistantRetention = "assistant_retention"
+	SystemTaskTypeAssistantPresets   = "assistant_pre_conversation_presets"
+	SystemTaskTypeAssistantReview    = "assistant_review"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
+
+const (
+	systemTaskJSONMaxBytes  = 1 << 20
+	systemTaskErrorMaxBytes = 4 << 10
+)
 
 type SystemTask struct {
 	ID        int64            `json:"id" gorm:"primary_key"`
@@ -57,6 +67,25 @@ type SystemTaskResponse struct {
 	Payload   any              `json:"payload"`
 	State     any              `json:"state"`
 	Result    any              `json:"result"`
+	Error     string           `json:"error"`
+	LockedBy  string           `json:"locked_by"`
+	CreatedAt int64            `json:"created_at"`
+	UpdatedAt int64            `json:"updated_at"`
+}
+
+// SystemTaskSummaryResponse is the bounded representation used by the task
+// history list. Payloads and results are implementation details of individual
+// handlers and may each be as large as systemTaskJSONMaxBytes. Returning them
+// for every row lets an otherwise harmless list request retain tens of
+// megabytes of JSON in the Go heap. The list only needs progress, so expose a
+// small state projection and leave the full representation to GetSystemTask.
+type SystemTaskSummaryResponse struct {
+	ID        int64            `json:"id"`
+	TaskID    string           `json:"task_id"`
+	Type      string           `json:"type"`
+	Status    SystemTaskStatus `json:"status"`
+	ActiveKey *string          `json:"active_key,omitempty"`
+	State     any              `json:"state,omitempty"`
 	Error     string           `json:"error"`
 	LockedBy  string           `json:"locked_by"`
 	CreatedAt int64            `json:"created_at"`
@@ -185,6 +214,42 @@ func ListSystemTasks(limit int) ([]*SystemTask, error) {
 	var tasks []*SystemTask
 	err := DB.Order("id desc").Limit(limit).Find(&tasks).Error
 	return tasks, err
+}
+
+// ListSystemTaskSummaries loads only fields needed by the root task history
+// panel. Keeping payload/result out of the SELECT is important because both
+// are bounded per row, not per list response.
+func ListSystemTaskSummaries(limit int) ([]*SystemTask, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var tasks []*SystemTask
+	err := DB.Select("id, task_id, type, status, active_key, CASE WHEN LENGTH(state) <= ? THEN state ELSE '' END AS state, error, locked_by, created_at, updated_at", systemTaskSummaryStateMaxBytes).
+		Order("id desc").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
+// PruneTaskHistory bounds terminal task history without touching work that can
+// still run. Keeping this policy in the model prevents each scheduled task
+// from growing its own unbounded table history.
+func PruneTaskHistory(taskType string, keep int) error {
+	if taskType == "" || keep < 0 {
+		return gorm.ErrInvalidData
+	}
+	terminal := []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}
+	query := DB.Where("type = ? AND status IN ?", taskType, terminal)
+	if keep > 0 {
+		retained := DB.Model(&SystemTask{}).
+			Select("id").
+			Where("type = ? AND status IN ?", taskType, terminal).
+			Order("id DESC").
+			Limit(keep)
+		query = query.Where("id NOT IN (?)", retained)
+	}
+	return query.Delete(&SystemTask{}).Error
 }
 
 // GetLatestSystemTask returns the most recent task row of the given type
@@ -383,8 +448,14 @@ func ReleaseSystemTaskLock(taskID string, lockedBy string) error {
 func FinishSystemTask(taskID string, lockedBy string, status SystemTaskStatus, resultPayload any, errorMessage string) error {
 	resultText, err := marshalSystemTaskJSON(resultPayload)
 	if err != nil {
-		return err
+		if !errors.Is(err, common.ErrLimitExceeded) {
+			return err
+		}
+		status = SystemTaskStatusFailed
+		resultText = ""
+		errorMessage = "system task result exceeded byte limit"
 	}
+	errorMessage = limitSystemTaskError(errorMessage)
 	now := common.GetTimestamp()
 	result := DB.Model(&SystemTask{}).
 		Where("task_id = ? AND status = ? AND locked_by = ?", taskID, SystemTaskStatusRunning, lockedBy).
@@ -430,6 +501,33 @@ func (task *SystemTask) ToResponse() SystemTaskResponse {
 	}
 }
 
+// ToSummaryResponse intentionally projects state to progress only. A handler
+// may write arbitrary bounded JSON state, but the list endpoint must not
+// deserialize that entire value for every historical row.
+func (task *SystemTask) ToSummaryResponse() SystemTaskSummaryResponse {
+	return SystemTaskSummaryResponse{
+		ID: task.ID, TaskID: task.TaskID, Type: task.Type, Status: task.Status,
+		ActiveKey: task.ActiveKey, State: decodeSystemTaskProgress(task.State),
+		Error: task.Error, LockedBy: task.LockedBy,
+		CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
+	}
+}
+
+const systemTaskSummaryStateMaxBytes = 16 << 10
+
+func decodeSystemTaskProgress(data string) any {
+	if len(data) == 0 || len(data) > systemTaskSummaryStateMaxBytes {
+		return nil
+	}
+	var state struct {
+		Progress *int `json:"progress"`
+	}
+	if err := json.Unmarshal([]byte(data), &state); err != nil || state.Progress == nil {
+		return nil
+	}
+	return map[string]int{"progress": *state.Progress}
+}
+
 func activeSystemTaskStatuses() []string {
 	return []string{string(SystemTaskStatusPending), string(SystemTaskStatusRunning)}
 }
@@ -438,11 +536,22 @@ func marshalSystemTaskJSON(v any) (string, error) {
 	if v == nil {
 		return "", nil
 	}
-	data, err := common.Marshal(v)
+	data, err := common.MarshalLimit(v, systemTaskJSONMaxBytes)
 	if err != nil {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func limitSystemTaskError(message string) string {
+	if len(message) <= systemTaskErrorMaxBytes {
+		return message
+	}
+	message = message[:systemTaskErrorMaxBytes]
+	for len(message) > 0 && !utf8.ValidString(message) {
+		message = message[:len(message)-1]
+	}
+	return message
 }
 
 func decodeSystemTaskJSONString(data string, v any) error {

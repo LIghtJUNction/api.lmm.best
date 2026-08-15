@@ -90,6 +90,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import type { User } from '../types'
+import { AssistantUserProfileEditor } from './assistant-user-profile-editor'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -110,7 +111,6 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
-  const [trustOverride, setTrustOverride] = useState<number | null>(null)
 
   // Fetch groups
   const { data: groupsData } = useQuery({
@@ -141,14 +141,12 @@ export function UsersMutateDrawer({
         .then((result) => {
           if (result.success && result.data) {
             form.reset(transformUserToFormDefaults(result.data))
-            setTrustOverride(result.data.trust_level_override ?? null)
           }
         })
         .catch(() => {})
     } else if (open && !isUpdate) {
       // For create, reset to defaults
       form.reset(USER_FORM_DEFAULT_VALUES)
-      setTrustOverride(null)
     }
   }, [open, isUpdate, currentRow, form])
 
@@ -184,8 +182,6 @@ export function UsersMutateDrawer({
         ? await updateUser({
             ...payload,
             id: currentRow.id,
-            trust_level_override:
-              currentRow.role < ROLE.ADMIN ? trustOverride : undefined,
           })
         : await createUser(payload)
 
@@ -217,7 +213,6 @@ export function UsersMutateDrawer({
     const result = await getUser(currentRow.id)
     if (result.success && result.data) {
       form.reset(transformUserToFormDefaults(result.data))
-      setTrustOverride(result.data.trust_level_override ?? null)
     }
     triggerRefresh()
   }
@@ -230,7 +225,6 @@ export function UsersMutateDrawer({
           onOpenChange(v)
           if (!v) {
             form.reset()
-            setTrustOverride(null)
           }
         }}
       >
@@ -461,50 +455,6 @@ export function UsersMutateDrawer({
                 </SideDrawerSection>
               )}
 
-              {isUpdate && (currentRow?.role ?? 0) < ROLE.ADMIN && (
-                <SideDrawerSection>
-                  <h3 className='text-sm font-medium'>{t('Trust level')}</h3>
-                  <p className='text-muted-foreground text-xs'>
-                    {t(
-                      'Automatic follows successful paid top-ups and inactivity. An override stays fixed until reset.'
-                    )}
-                  </p>
-                  <Select
-                    items={[
-                      { value: 'auto', label: t('Automatic') },
-                      ...[0, 1, 2, 3, 4].map((level) => ({
-                        value: String(level),
-                        label: `L${level}`,
-                      })),
-                    ]}
-                    value={
-                      trustOverride === null ? 'auto' : String(trustOverride)
-                    }
-                    onValueChange={(value) =>
-                      setTrustOverride(
-                        value === 'auto' || value === null
-                          ? null
-                          : Number(value)
-                      )
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={t('Select trust level')} />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        <SelectItem value='auto'>{t('Automatic')}</SelectItem>
-                        {[0, 1, 2, 3, 4].map((level) => (
-                          <SelectItem key={level} value={String(level)}>
-                            L{level}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </SideDrawerSection>
-              )}
-
               {canEditAdminPermissions &&
                 targetIsAdmin &&
                 permissionCatalog.resources.length > 0 && (
@@ -595,6 +545,13 @@ export function UsersMutateDrawer({
                     )}
                   </SideDrawerSection>
                 )}
+
+              {isUpdate && currentRow && (
+                <AssistantUserProfileEditor
+                  userId={currentRow.id}
+                  open={open}
+                />
+              )}
 
               {/* Binding Information (Read-only) */}
               {isUpdate && (

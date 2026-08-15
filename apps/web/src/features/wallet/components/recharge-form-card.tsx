@@ -45,6 +45,14 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TitledCard } from '@/components/ui/titled-card'
@@ -56,9 +64,14 @@ import {
 } from '@/components/ui/tooltip'
 import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
 import { cn } from '@/lib/utils'
+import {
+  getDefaultWaffoPancakeCheckoutRegion,
+  type WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
 
 import {
   getPaymentIcon,
+  getPaymentMaxTopup,
   getPaymentTopupRatio,
   getDefaultPaymentType,
   getTopupAvailability,
@@ -100,6 +113,11 @@ interface RechargeFormCardProps {
   onRedemptionCodeChange: (code: string) => void
   onRedeem: () => void
   redeeming: boolean
+  discountCode?: string
+  onDiscountCodeChange?: (code: string) => void
+  onApplyDiscount?: () => void
+  discountApplying?: boolean
+  discountPercent?: number | null
   topupLink?: string
   loading?: boolean
   error?: Error | null
@@ -107,6 +125,10 @@ interface RechargeFormCardProps {
   onOpenBilling?: () => void
   onCreemProductSelect?: (product: CreemProduct) => void
   onWaffoMethodSelect?: (method: WaffoPayMethod, index: number) => void
+  waffoPancakeCheckoutRegion?: WaffoPancakeCheckoutRegion
+  onWaffoPancakeCheckoutRegionChange?: (
+    region: WaffoPancakeCheckoutRegion
+  ) => void
   neutralMode?: boolean
 }
 
@@ -127,6 +149,11 @@ export function RechargeFormCard({
   onRedemptionCodeChange,
   onRedeem,
   redeeming,
+  discountCode = '',
+  onDiscountCodeChange,
+  onApplyDiscount,
+  discountApplying = false,
+  discountPercent,
   topupLink,
   loading,
   error,
@@ -134,10 +161,14 @@ export function RechargeFormCard({
   onOpenBilling,
   onCreemProductSelect,
   onWaffoMethodSelect,
+  waffoPancakeCheckoutRegion,
+  onWaffoPancakeCheckoutRegionChange,
   neutralMode = false,
 }: RechargeFormCardProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [localAmount, setLocalAmount] = useState(topupAmount.toString())
+  const [localWaffoPancakeRegionOverride, setLocalWaffoPancakeRegion] =
+    useState<WaffoPancakeCheckoutRegion | null>(null)
 
   useEffect(() => {
     // Empty string must survive, otherwise the field can never be cleared
@@ -202,9 +233,25 @@ export function RechargeFormCard({
       ? formatSettlementAmount(amount, settlementUnit.label)
       : formatPaymentAmount(amount)
   const pancakeCurrencySupported = isWaffoPancakeCurrencySupported()
+  const interfaceLanguage = i18n.resolvedLanguage || i18n.language
+  const effectiveWaffoPancakeCheckoutRegion =
+    waffoPancakeCheckoutRegion ??
+    localWaffoPancakeRegionOverride ??
+    getDefaultWaffoPancakeCheckoutRegion(interfaceLanguage)
   const hasConfiguredPancakeMethod = (topupInfo?.pay_methods ?? []).some(
     (method) => isWaffoPancakePayment(method.type)
   )
+  const canChooseWaffoPancakeRegion =
+    topupInfo?.enable_waffo_pancake_topup === true &&
+    hasConfiguredPancakeMethod &&
+    pancakeCurrencySupported &&
+    !!onWaffoPancakeCheckoutRegionChange
+
+  const handleWaffoPancakeCheckoutRegionChange = (value: string | null) => {
+    if (value !== 'china' && value !== 'global') return
+    setLocalWaffoPancakeRegion(value)
+    onWaffoPancakeCheckoutRegionChange?.(value)
+  }
   const selectedPresetPricing = (() => {
     if (selectedPreset === null) return null
     const preset = presetAmounts.find((item) => item.value === selectedPreset)
@@ -554,15 +601,31 @@ export function RechargeFormCard({
                           method.min_topup || 0,
                           getMinTopupAmount(topupInfo)
                         )
-                        const disabled = minTopup > topupAmount
-                        const disabledReason = disabled
-                          ? t('Minimum topup amount: {{amount}}', {
+                        const maxTopup = getPaymentMaxTopup(method)
+                        const belowMinimum = minTopup > topupAmount
+                        const aboveMaximum =
+                          maxTopup !== null && topupAmount > maxTopup
+                        const disabled = belowMinimum || aboveMaximum
+                        let disabledReason: string | undefined
+                        let disabledLabel: string | undefined
+                        if (belowMinimum) {
+                          disabledReason = t(
+                            'Minimum topup amount: {{amount}}',
+                            {
                               amount: minTopup,
-                            })
-                          : undefined
-                        const disabledLabel = disabled
-                          ? `${t('Minimum:')} ${minTopup}`
-                          : undefined
+                            }
+                          )
+                          disabledLabel = `${t('Minimum:')} ${minTopup}`
+                        } else if (aboveMaximum) {
+                          disabledReason = t(
+                            'Maximum top-up amount: {{amount}} USD credited',
+                            { amount: maxTopup }
+                          )
+                          disabledLabel = t(
+                            'Maximum: {{amount}} USD credited',
+                            { amount: maxTopup }
+                          )
+                        }
                         const settlementRule = shouldShowSettlementRule(method)
                           ? getSettlementRule(method)
                           : null
@@ -598,7 +661,8 @@ export function RechargeFormCard({
                                 method.type,
                                 'h-4 w-4',
                                 method.icon,
-                                paymentMethodLabel
+                                paymentMethodLabel,
+                                method.color
                               )
                             )}
                             <span className='flex min-w-0 flex-col items-start gap-0.5'>
@@ -613,6 +677,11 @@ export function RechargeFormCard({
                               {settlementRule && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
                                   {settlementRule}
+                                </span>
+                              )}
+                              {method.description && (
+                                <span className='text-muted-foreground line-clamp-2 max-w-full text-[11px] leading-4 font-normal'>
+                                  {method.description}
                                 </span>
                               )}
                               {!neutralMode && methodTopupRatio !== 1 && (
@@ -647,6 +716,48 @@ export function RechargeFormCard({
                         )}
                       </AlertDescription>
                     </Alert>
+                  )}
+                  {canChooseWaffoPancakeRegion && (
+                    <div className='mt-3 max-w-[320px] min-w-0 space-y-1.5 sm:mt-4'>
+                      <Label
+                        htmlFor='waffo-pancake-checkout-region'
+                        className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+                      >
+                        {t('Waffo Pancake checkout region')}
+                      </Label>
+                      <p className='text-muted-foreground text-xs leading-5'>
+                        {t(
+                          'China locks the checkout to the China billing market. Global lets you choose your billing region in checkout.'
+                        )}
+                      </p>
+                      <Select
+                        items={[
+                          { value: 'china', label: t('China') },
+                          { value: 'global', label: t('Global') },
+                        ]}
+                        value={effectiveWaffoPancakeCheckoutRegion}
+                        onValueChange={handleWaffoPancakeCheckoutRegionChange}
+                      >
+                        <SelectTrigger
+                          id='waffo-pancake-checkout-region'
+                          className='w-full max-w-[320px] min-w-0'
+                        >
+                          <SelectValue>
+                            {effectiveWaffoPancakeCheckoutRegion === 'china'
+                              ? t('China')
+                              : t('Global')}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            <SelectItem value='china'>{t('China')}</SelectItem>
+                            <SelectItem value='global'>
+                              {t('Global')}
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   )}
                   {topupInfo?.enable_waffo_pancake_topup &&
                     hasConfiguredPancakeMethod &&
@@ -840,6 +951,62 @@ export function RechargeFormCard({
             )}
           </AlertDescription>
         </Alert>
+      ) : null}
+
+      {!neutralMode && hasConfigurableTopup ? (
+        <div className='flex flex-col gap-3 pt-4 sm:pt-6'>
+          <Separator />
+          <div className='flex items-center gap-2'>
+            <IconBadge tone='success' size='xs'>
+              <HugeiconsIcon icon={GiftIcon} strokeWidth={2} />
+            </IconBadge>
+            <Label
+              htmlFor='discount-code'
+              className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+            >
+              {t('Discount code')}
+            </Label>
+          </div>
+          <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'>
+            <Input
+              id='discount-code'
+              value={discountCode}
+              onChange={(e) => onDiscountCodeChange?.(e.target.value)}
+              placeholder={t('Enter your discount code')}
+              className='h-9 min-w-0 uppercase'
+              autoComplete='off'
+              maxLength={64}
+            />
+            <Button
+              onClick={onApplyDiscount}
+              disabled={discountApplying || !discountCode.trim()}
+              variant='outline'
+              className='h-9 px-4'
+            >
+              {discountApplying && (
+                <HugeiconsIcon
+                  icon={Loading03Icon}
+                  className='animate-spin'
+                  data-icon='inline-start'
+                />
+              )}
+              {t('Apply')}
+            </Button>
+          </div>
+          {discountPercent !== null && discountPercent !== undefined ? (
+            <p className='text-success text-xs'>
+              {t('Discount applied: {{percent}}% off', {
+                percent: discountPercent,
+              })}
+            </p>
+          ) : (
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'A valid discount code is applied at checkout and cannot be combined with another code.'
+              )}
+            </p>
+          )}
+        </div>
       ) : null}
     </TitledCard>
   )

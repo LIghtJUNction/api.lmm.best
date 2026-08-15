@@ -6,15 +6,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	appconstant "github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/middleware"
-	appmodel "github.com/QuantumNous/new-api/model"
-	relaychannel "github.com/QuantumNous/new-api/relay/channel"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	appconstant "github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	appmodel "github.com/LIghtJUNction/api.lmm.best/model"
+	relaychannel "github.com/LIghtJUNction/api.lmm.best/relay/channel"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -165,6 +165,28 @@ func TestResponsesWSDisconnectAfterOutputSettlesPartialUsage(t *testing.T) {
 	assert.Nil(t, session.getCurrent())
 	assert.Equal(t, []bool{true}, commits)
 	assert.True(t, posted)
+}
+
+func TestResponsesWSOutputTextBufferHonorsResponseBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, appconstant.ContextKeyResponseByteLimit, 4)
+	state := &responsesWSCallState{
+		info:  &relaycommon.RelayInfo{},
+		usage: &dto.Usage{},
+	}
+	session := &responsesWSSession{c: c, current: state}
+
+	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"abcdef"}`))
+	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"gh"}`))
+
+	assert.Equal(t, 4, state.outputText.Len())
+	assert.Equal(t, "abcd", state.outputText.String())
+
+	unicodeState := &responsesWSCallState{info: &relaycommon.RelayInfo{}, usage: &dto.Usage{}}
+	unicodeSession := &responsesWSSession{c: c, current: unicodeState}
+	unicodeSession.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"ab€"}`))
+	assert.Equal(t, "ab", unicodeState.outputText.String())
 }
 
 func TestBuildResponsesWSErrorPayload(t *testing.T) {

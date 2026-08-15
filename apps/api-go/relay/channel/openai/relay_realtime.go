@@ -2,14 +2,15 @@ package openai
 
 import (
 	"fmt"
+	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,8 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	info.IsStream = true
 	clientConn := info.ClientWs
 	targetConn := info.TargetWs
+	common.SetWebSocketReadLimit(clientConn)
+	common.SetWebSocketReadLimit(targetConn)
 
 	clientClosed := make(chan struct{})
 	targetClosed := make(chan struct{})
@@ -60,6 +63,22 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				if err != nil {
 					errChan <- fmt.Errorf("error unmarshalling message: %v", err)
 					return
+				}
+
+				securityText := dto.SecurityTextFromRealtimeJSON(message)
+				evaluation := service.EvaluateAdvancedSecurityText(c, info, securityText)
+				if len(evaluation.Matches) > 0 {
+					matchIDs := make([]string, 0, len(evaluation.Matches))
+					for _, match := range evaluation.Matches {
+						matchIDs = append(matchIDs, match.RuleID)
+					}
+					logger.LogWarn(c, fmt.Sprintf("advanced security rules matched in realtime event: %s", strings.Join(matchIDs, ", ")))
+				}
+				if evaluation.Blocked() {
+					apiErr := service.NewAdvancedSecurityAPIError()
+					apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), info.RequestId))
+					helper.WssError(c, clientConn, apiErr.ToOpenAIError())
+					continue
 				}
 
 				if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdate {

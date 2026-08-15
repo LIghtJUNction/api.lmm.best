@@ -98,6 +98,12 @@ export interface BackendCapabilities {
   responses_websocket: boolean
 }
 
+export interface AssistantStatus {
+  enabled?: boolean
+  model?: string
+  funding_mode?: 'super_administrator'
+}
+
 export interface SystemStatus {
   success?: boolean
   message?: string
@@ -140,11 +146,13 @@ export interface SystemStatus {
     user_agreement_enabled?: boolean
     privacy_policy_enabled?: boolean
     oauth_register_enabled?: boolean
+    oauth_registration_disabled_methods?: string[]
     register_enabled?: boolean
     password_login_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
     backend_capabilities?: Partial<BackendCapabilities>
+    assistant?: AssistantStatus
     [key: string]: unknown
   }
   // Allow direct access to common properties
@@ -186,11 +194,13 @@ export interface SystemStatus {
   user_agreement_enabled?: boolean
   privacy_policy_enabled?: boolean
   oauth_register_enabled?: boolean
+  oauth_registration_disabled_methods?: string[]
   register_enabled?: boolean
   password_login_enabled?: boolean
   password_register_enabled?: boolean
   custom_oauth_providers?: CustomOAuthProviderInfo[]
   backend_capabilities?: Partial<BackendCapabilities>
+  assistant?: AssistantStatus
   [key: string]: unknown
 }
 

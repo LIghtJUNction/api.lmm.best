@@ -11,15 +11,19 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use axum::{
     Json, Router,
-    extract::{RawQuery, State},
-    http::{HeaderMap, StatusCode},
+    extract::{RawQuery, Request, State},
+    http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
+use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
+
+use crate::auth::DashboardAuth;
 
 use super::observability::{ObservabilityAccess, ObservabilityAuthorizer, ObservabilityPrincipal};
 
@@ -141,12 +145,12 @@ impl PgControlTaskStore {
                 'fail_reason', COALESCE(fail_reason, ''), 'channel_id', COALESCE(channel_id, 0),\
                 'quota', COALESCE(quota, 0), 'buttons', COALESCE(buttons, ''),\
                 'properties', COALESCE(properties, '')\
-             ) FROM midjourneys\
-             WHERE ($1::bigint IS NULL OR user_id = $1)\
-               AND ($2::bigint IS NULL OR channel_id = $2)\
-               AND ($3 = '' OR mj_id = $3)\
-               AND ($4::bigint IS NULL OR submit_time >= $4)\
-               AND ($5::bigint IS NULL OR submit_time <= $5)\
+             ) FROM midjourneys \
+             WHERE ($1::bigint IS NULL OR user_id = $1) \
+               AND ($2::bigint IS NULL OR channel_id = $2) \
+               AND ($3 = '' OR mj_id = $3) \
+               AND ($4::bigint IS NULL OR submit_time >= $4) \
+               AND ($5::bigint IS NULL OR submit_time <= $5) \
              ORDER BY id DESC LIMIT $6 OFFSET $7",
         )
         .bind(self_user)
@@ -158,13 +162,16 @@ impl PgControlTaskStore {
         .bind(offset)
         .fetch_all(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "midjourney-list", "control task query failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM midjourneys\
-             WHERE ($1::bigint IS NULL OR user_id = $1)\
-               AND ($2::bigint IS NULL OR channel_id = $2)\
-               AND ($3 = '' OR mj_id = $3)\
-               AND ($4::bigint IS NULL OR submit_time >= $4)\
+            "SELECT COUNT(*) FROM midjourneys \
+             WHERE ($1::bigint IS NULL OR user_id = $1) \
+               AND ($2::bigint IS NULL OR channel_id = $2) \
+               AND ($3 = '' OR mj_id = $3) \
+               AND ($4::bigint IS NULL OR submit_time >= $4) \
                AND ($5::bigint IS NULL OR submit_time <= $5)",
         )
         .bind(self_user)
@@ -174,7 +181,10 @@ impl PgControlTaskStore {
         .bind(end)
         .fetch_one(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "midjourney-count", "control task count failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         Ok(page_payload(call.query, rows_to_values(rows)?, total))
     }
 
@@ -201,12 +211,12 @@ impl PgControlTaskStore {
                 'fail_reason', COALESCE(fail_reason, ''), 'submit_time', COALESCE(submit_time, 0),\
                 'start_time', COALESCE(start_time, 0), 'finish_time', COALESCE(finish_time, 0),\
                 'progress', COALESCE(progress, ''), 'properties', properties, 'data', data\
-             ) FROM tasks\
-             WHERE user_id = $1 AND ($2 = '' OR platform = $2)\
-               AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4)\
-               AND ($5 = '' OR action = $5)\
-               AND ($6::bigint IS NULL OR submit_time >= $6)\
-               AND ($7::bigint IS NULL OR submit_time <= $7)\
+             ) FROM tasks \
+             WHERE user_id = $1 AND ($2 = '' OR platform = $2) \
+               AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4) \
+               AND ($5 = '' OR action = $5) \
+               AND ($6::bigint IS NULL OR submit_time >= $6) \
+               AND ($7::bigint IS NULL OR submit_time <= $7) \
              ORDER BY id DESC LIMIT $8 OFFSET $9",
         )
         .bind(user_id)
@@ -220,12 +230,15 @@ impl PgControlTaskStore {
         .bind(offset)
         .fetch_all(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "task-list", "control task query failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND ($2 = '' OR platform = $2)\
-             AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4)\
-             AND ($5 = '' OR action = $5)\
-             AND ($6::bigint IS NULL OR submit_time >= $6)\
+            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND ($2 = '' OR platform = $2) \
+             AND ($3 = '' OR task_id = $3) AND ($4 = '' OR status = $4) \
+             AND ($5 = '' OR action = $5) \
+             AND ($6::bigint IS NULL OR submit_time >= $6) \
              AND ($7::bigint IS NULL OR submit_time <= $7)",
         )
         .bind(user_id)
@@ -237,7 +250,10 @@ impl PgControlTaskStore {
         .bind(end)
         .fetch_one(&self.pg)
         .await
-        .map_err(|_| ControlTaskStoreError::Unavailable)?;
+        .map_err(|error| {
+            tracing::warn!(%error, operation = "task-count", "control task count failed");
+            ControlTaskStoreError::Unavailable
+        })?;
         Ok(page_payload(call.query, rows_to_values(rows)?, total))
     }
 }
@@ -267,6 +283,7 @@ pub struct MissingControlTasksState {
     store: Arc<dyn ControlTaskStore>,
     authorizer: Arc<dyn ObservabilityAuthorizer>,
     status: Arc<dyn ControlTaskStatusProbe>,
+    console_access_auth: Option<Arc<dyn DashboardAuth>>,
 }
 
 impl MissingControlTasksState {
@@ -282,7 +299,16 @@ impl MissingControlTasksState {
             store,
             authorizer,
             status,
+            console_access_auth: None,
         }
+    }
+
+    /// Enables the Go `ConsoleAccessGate` for the normal listener. Candidate
+    /// tests leave this disabled so they can exercise direct route auth.
+    #[must_use]
+    pub fn with_console_access_gate(mut self, auth: Arc<dyn DashboardAuth>) -> Self {
+        self.console_access_auth = Some(auth);
+        self
     }
 }
 
@@ -291,12 +317,79 @@ impl MissingControlTasksState {
 /// The caller should merge this only into the migration test root until its
 /// concrete status counter adapter is accepted for production ownership.
 pub fn missing_control_tasks_router(state: MissingControlTasksState) -> Router {
-    Router::new()
+    let routes = Router::new()
         .route("/api/mj/", get(all_midjourney))
         .route("/api/mj/self", get(self_midjourney))
         .route("/api/task/self", get(self_tasks))
-        .route("/api/status/test", get(test_status))
-        .with_state(state)
+        .route("/api/status/test", get(test_status));
+    let routes = if state.console_access_auth.is_some() {
+        routes.layer(middleware::from_fn_with_state(
+            state.clone(),
+            console_access_boundary,
+        ))
+    } else {
+        routes
+    };
+    routes.with_state(state)
+}
+
+async fn console_access_boundary(
+    State(state): State<MissingControlTasksState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !control_task_discovery_route(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let Some(auth) = state.console_access_auth.as_ref() else {
+        return next.run(request).await;
+    };
+    let Some(token) = dashboard_credential(request.headers()) else {
+        return console_not_found();
+    };
+    let user = match auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+    {
+        Ok(user) => user,
+        Err(_) => return console_not_found(),
+    };
+    if !user.developer_access_granted {
+        return console_not_found();
+    }
+    next.run(request).await
+}
+
+fn control_task_discovery_route(path: &str) -> bool {
+    ["/api/mj", "/api/task", "/api/status/test"]
+        .iter()
+        .any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        })
+}
+
+fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
+    let mut fields = value.split_whitespace();
+    let first = fields.next()?;
+    let second = fields.next();
+    if fields.next().is_some() {
+        return None;
+    }
+    match second {
+        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
+            Some(token.to_owned())
+        }
+        None if !first.is_empty() => Some(first.to_owned()),
+        _ => None,
+    }
+}
+
+fn console_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response()
 }
 
 async fn all_midjourney(
@@ -571,6 +664,11 @@ fn forbidden() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::{
+        AuthBundle, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardUser,
+        LoginOutcome, LoginRequest, LogoutRequest, LogoutResult, RequestMetadata,
+        TwoFactorLoginRequest,
+    };
     use crate::migration_routes::observability::ObservabilityAuthError;
     use axum::{
         body::{Body, to_bytes},
@@ -602,6 +700,90 @@ mod tests {
             _: ObservabilityAccess,
         ) -> Result<ObservabilityPrincipal, ObservabilityAuthError> {
             Err(ObservabilityAuthError::Unauthorized)
+        }
+    }
+
+    struct GateAuth {
+        user: DashboardUser,
+    }
+
+    #[async_trait]
+    impl DashboardAuth for GateAuth {
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, AuthError> {
+            Ok(CriticalRateLimitOutcome::Allowed)
+        }
+
+        async fn login(
+            &self,
+            _: LoginRequest,
+            _: RequestMetadata,
+        ) -> Result<LoginOutcome, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn login_2fa(
+            &self,
+            _: TwoFactorLoginRequest,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn refresh(
+            &self,
+            _: SecretString,
+            _: Option<String>,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn self_user(&self, _: SecretString) -> Result<DashboardUser, AuthError> {
+            Ok(self.user.clone())
+        }
+
+        async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn generate_personal_access_token(
+            &self,
+            _: SecretString,
+        ) -> Result<String, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+    }
+
+    fn dashboard_user(role: i64) -> DashboardUser {
+        DashboardUser {
+            id: 7,
+            username: "member".to_owned(),
+            display_name: String::new(),
+            role,
+            status: 1,
+            email: String::new(),
+            github_id: String::new(),
+            discord_id: String::new(),
+            oidc_id: String::new(),
+            wechat_id: String::new(),
+            telegram_id: String::new(),
+            group: String::new(),
+            quota: 0,
+            used_quota: 0,
+            request_count: 0,
+            aff_code: String::new(),
+            aff_count: 0,
+            aff_quota: 0,
+            aff_history_quota: 0,
+            inviter_id: 0,
+            linux_do_id: String::new(),
+            setting: String::new(),
+            stripe_customer: String::new(),
+            sidebar_modules: Value::Null,
+            permissions: Value::Null,
         }
     }
 
@@ -752,6 +934,68 @@ mod tests {
         }
         assert_eq!(store.0.load(Ordering::Relaxed), 0);
         assert_eq!(status.0.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn console_gate_hides_task_discovery_from_anonymous_and_l0() {
+        let store = Arc::new(CountingStore(AtomicUsize::new(0)));
+        let status = Arc::new(CountingStatus(AtomicUsize::new(0)));
+        let l0_auth: Arc<dyn DashboardAuth> = Arc::new(GateAuth {
+            user: dashboard_user(USER_ROLE),
+        });
+        let app = missing_control_tasks_router(
+            MissingControlTasksState::new(
+                store.clone(),
+                Arc::new(StaticAuthorizer(member())),
+                status.clone(),
+            )
+            .with_console_access_gate(l0_auth),
+        );
+
+        for request in [
+            Request::get("/api/mj/").body(Body::empty()).unwrap(),
+            Request::get("/api/task/self")
+                .header("authorization", "Bearer dashboard")
+                .body(Body::empty())
+                .unwrap(),
+            Request::get("/api/status/test")
+                .header("authorization", "Bearer dashboard")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(body(response).await["message"], "Not Found");
+        }
+        assert_eq!(store.0.load(Ordering::Relaxed), 0);
+        assert_eq!(status.0.load(Ordering::Relaxed), 0);
+
+        let root_auth: Arc<dyn DashboardAuth> = Arc::new(GateAuth {
+            user: dashboard_user(ROOT_ROLE),
+        });
+        let root = missing_control_tasks_router(
+            MissingControlTasksState::new(
+                store.clone(),
+                Arc::new(StaticAuthorizer(ObservabilityPrincipal::User {
+                    user_id: 1,
+                    username: "root".to_owned(),
+                    role: ROOT_ROLE,
+                })),
+                status.clone(),
+            )
+            .with_console_access_gate(root_auth),
+        );
+        let response = root
+            .oneshot(
+                Request::get("/api/status/test")
+                    .header("authorization", "Bearer dashboard")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(status.0.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

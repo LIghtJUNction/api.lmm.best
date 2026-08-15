@@ -30,7 +30,7 @@ done
 [[ $(realpath -e -- "$WORKSPACE") == "$WORKSPACE" ]] || die 'workspace must be canonical'
 [[ $PAYLOAD == /* && -s $PAYLOAD && -f $PAYLOAD && ! -L $PAYLOAD ]] || die 'payload must be a safe regular file'
 [[ $OUTPUT_DIR == /* && $OUTPUT_DIR != / ]] || die 'output directory must be a safe absolute path'
-for command in bsdtar install makepkg pacman realpath sha256sum tar; do
+for command in bsdtar install makepkg pacman realpath sha256sum tar wc; do
   command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
 done
 
@@ -42,21 +42,35 @@ build_root=$(mktemp -d "$WORKSPACE/tmp/precutover-build.XXXXXXXX")
 pkgdest=$(mktemp -d "$WORKSPACE/tmp/precutover-pkgdest.XXXXXXXX")
 cleanup() { rm -rf -- "$extract_dir" "$build_root" "$pkgdest"; }
 trap cleanup EXIT
-bsdtar -xf "$PAYLOAD" -C "$extract_dir"
+# libarchive applies the process umask while extracting archived modes. Keep the
+# surrounding workspace private, but preserve the payload's deliberate 0755 and
+# 0644 runtime modes inside this already-private extraction directory.
+(umask 022; bsdtar -xf "$PAYLOAD" -C "$extract_dir")
 
 metadata=$extract_dir/metadata/packages.tsv
+layout_file=$extract_dir/metadata/layout
 [[ -f $metadata && ! -L $metadata ]] || die 'payload package metadata is missing'
+[[ -f $layout_file && ! -L $layout_file && $(wc -l <"$layout_file") == 1 ]] || \
+  die 'payload rollback layout is missing or ambiguous'
+IFS= read -r layout <"$layout_file"
+case $layout in split|direct) ;; *) die 'payload rollback layout is invalid' ;; esac
 core_record=$(awk -F '\t' '$1 == "lmm-api" { print $2 }' "$metadata")
 go_record=$(awk -F '\t' '$1 == "lmm-api-go" { print $2 }' "$metadata")
-[[ -n $core_record && -n $go_record && $core_record != *$'\n'* && $go_record != *$'\n'* ]] || \
-  die 'payload package metadata is ambiguous'
+[[ -n $go_record && $go_record != *$'\n'* ]] || die 'payload Go package metadata is ambiguous'
+if [[ $layout == split ]]; then
+  [[ -n $core_record && $core_record != *$'\n'* ]] || die 'payload core package metadata is ambiguous'
+else
+  [[ -z $core_record ]] || die 'direct payload unexpectedly contains core package metadata'
+fi
 
-core_pkgver=${core_record%-*}
-core_pkgrel=${core_record##*-}
 go_pkgver=${go_record%-*}
 go_pkgrel=${go_record##*-}
-if ! is_pkgver "$core_pkgver" || ! is_pkgrel "$core_pkgrel"; then
-  die 'invalid pre-cutover core version'
+if [[ $layout == split ]]; then
+  core_pkgver=${core_record%-*}
+  core_pkgrel=${core_record##*-}
+  if ! is_pkgver "$core_pkgver" || ! is_pkgrel "$core_pkgrel"; then
+    die 'invalid pre-cutover core version'
+  fi
 fi
 if ! is_pkgver "$go_pkgver" || ! is_pkgrel "$go_pkgrel"; then
   die 'invalid pre-cutover Go version'
@@ -64,17 +78,41 @@ fi
 
 core_root=$extract_dir/core-root
 go_root=$extract_dir/go-root
-for required in \
-  "$core_root/usr/bin/lmm-api" \
-  "$core_root/usr/bin/lmm-api-select" \
-  "$core_root/usr/lib/systemd/system/lmm-api.service" \
-  "$core_root/etc/lmm-api/backend.conf" \
-  "$core_root/etc/lmm-api/lmm-api.env" \
-  "$go_root/usr/lib/lmm-api/backends/go/lmm-api"; do
+required_files=()
+if [[ $layout == split ]]; then
+  required_files=(
+    "$core_root/usr/bin/lmm-api"
+    "$core_root/usr/bin/lmm-api-select"
+    "$core_root/usr/lib/systemd/system/lmm-api.service"
+    "$core_root/etc/lmm-api/backend.conf"
+    "$core_root/etc/lmm-api/lmm-api.env"
+    "$core_root/usr/share/licenses/lmm-api/LICENSE"
+    "$go_root/usr/lib/lmm-api/backends/go/lmm-api"
+  )
+else
+  required_files=(
+    "$go_root/etc/lmm-api-go/lmm-api-go.env"
+    "$go_root/usr/bin/lmm-api-go"
+    "$go_root/usr/lib/systemd/system/lmm-api-go.service"
+    "$go_root/usr/share/doc/lmm-api-go/REVISION"
+    "$go_root/usr/share/licenses/lmm-api-go/LICENSE"
+    "$go_root/usr/share/licenses/lmm-api-go/NOTICE"
+    "$go_root/usr/share/licenses/lmm-api-go/THIRD-PARTY-LICENSES.md"
+    "$go_root/usr/share/lmm-api-go/frontend-dist/index.html"
+  )
+fi
+for required in "${required_files[@]}"; do
   [[ -f $required && ! -L $required ]] || die "captured payload is incomplete: ${required#"$extract_dir/"}"
 done
-[[ ! -s $core_root/etc/lmm-api/lmm-api.env ]] || die 'captured rollback package must not embed production secrets'
-if find "$core_root" "$go_root" -type l -print -quit | grep -q .; then
+if [[ $layout == split ]]; then
+  secret_stub=$core_root/etc/lmm-api/lmm-api.env
+else
+  secret_stub=$go_root/etc/lmm-api-go/lmm-api-go.env
+fi
+[[ ! -s $secret_stub ]] || die 'captured rollback package must not embed production secrets'
+roots=("$go_root")
+[[ $layout == direct ]] || roots+=("$core_root")
+if find "${roots[@]}" -type l -print -quit | grep -q .; then
   die 'captured package roots must not contain symlinks'
 fi
 
@@ -92,24 +130,85 @@ build_one() {
   rm -rf -- "$build_dir/root"
   (
     cd -- "$build_dir"
+    # makepkg inherits this script's private umask. The captured payload already
+    # carries deliberate per-file modes, so use the normal packaging umask while
+    # extracting it or executable paths become root-only in the rollback package.
+    umask 022
     BUILDDIR="$build_dir/makepkg" PKGDEST="$pkgdest" \
       LMM_PRECUTOVER_PKGVER="$pkgver" LMM_PRECUTOVER_PKGREL="$pkgrel" \
       makepkg --force --nodeps --noconfirm --cleanbuild
   )
 }
 
-build_one core "$core_pkgver" "$core_pkgrel" "$SCRIPT_DIR/precutover-lmm-api.PKGBUILD" "$core_root"
-build_one go "$go_pkgver" "$go_pkgrel" "$SCRIPT_DIR/precutover-lmm-api-go.PKGBUILD" "$go_root"
+if [[ $layout == split ]]; then
+  build_one core "$core_pkgver" "$core_pkgrel" "$SCRIPT_DIR/precutover-lmm-api.PKGBUILD" "$core_root"
+  build_one go "$go_pkgver" "$go_pkgrel" "$SCRIPT_DIR/precutover-lmm-api-go.PKGBUILD" "$go_root"
+else
+  build_one go "$go_pkgver" "$go_pkgrel" "$SCRIPT_DIR/precutover-lmm-api-go-direct.PKGBUILD" "$go_root"
+fi
 
-core_matches=("$pkgdest/lmm-api-$core_pkgver-$core_pkgrel-x86_64.pkg.tar."*)
 go_matches=("$pkgdest/lmm-api-go-$go_pkgver-$go_pkgrel-x86_64.pkg.tar."*)
-[[ ${#core_matches[@]} -eq 1 && -f ${core_matches[0]} ]] || die 'core rollback package was not produced exactly once'
 [[ ${#go_matches[@]} -eq 1 && -f ${go_matches[0]} ]] || die 'Go rollback package was not produced exactly once'
-for archive in "${core_matches[0]}" "${go_matches[0]}"; do
+if [[ $layout == split ]]; then
+  core_matches=("$pkgdest/lmm-api-$core_pkgver-$core_pkgrel-x86_64.pkg.tar."*)
+  [[ ${#core_matches[@]} -eq 1 && -f ${core_matches[0]} ]] || die 'core rollback package was not produced exactly once'
+fi
+archive_mode() {
+  local archive=$1 entry=$2
+  bsdtar -tvf "$archive" "$entry" | awk -v entry="$entry" \
+    '$NF == entry { count += 1; mode = $1 } END { if (count == 1) print mode; else exit 2 }'
+}
+mode_records=()
+if [[ $layout == split ]]; then
+  mode_records=(
+    "${core_matches[0]}:etc/lmm-api/:drwx------"
+    "${core_matches[0]}:etc/lmm-api/backend.conf:-rw-r--r--"
+    "${core_matches[0]}:usr/bin/:drwxr-xr-x"
+    "${core_matches[0]}:usr/bin/lmm-api:-rwxr-xr-x"
+    "${core_matches[0]}:usr/bin/lmm-api-select:-rwxr-xr-x"
+    "${core_matches[0]}:usr/lib/systemd/system/:drwxr-xr-x"
+    "${core_matches[0]}:usr/lib/systemd/system/lmm-api.service:-rw-r--r--"
+    "${core_matches[0]}:etc/lmm-api/lmm-api.env:-rw-------"
+    "${core_matches[0]}:usr/share/licenses/lmm-api/:drwxr-xr-x"
+    "${core_matches[0]}:usr/share/licenses/lmm-api/LICENSE:-rw-r--r--"
+    "${go_matches[0]}:usr/lib/lmm-api/:drwxr-xr-x"
+    "${go_matches[0]}:usr/lib/lmm-api/backends/:drwxr-xr-x"
+    "${go_matches[0]}:usr/lib/lmm-api/backends/go/:drwxr-xr-x"
+    "${go_matches[0]}:usr/lib/lmm-api/backends/go/lmm-api:-rwxr-xr-x"
+  )
+else
+  mode_records=(
+    "${go_matches[0]}:etc/lmm-api-go/:drwx------"
+    "${go_matches[0]}:etc/lmm-api-go/lmm-api-go.env:-rw-------"
+    "${go_matches[0]}:usr/bin/lmm-api-go:-rwxr-xr-x"
+    "${go_matches[0]}:usr/lib/systemd/system/lmm-api-go.service:-rw-r--r--"
+    "${go_matches[0]}:usr/share/lmm-api-go/frontend-dist/:drwxr-xr-x"
+    "${go_matches[0]}:usr/share/lmm-api-go/frontend-dist/index.html:-rw-r--r--"
+  )
+fi
+for record in "${mode_records[@]}"; do
+  archive=${record%%:*}
+  remainder=${record#*:}
+  entry=${remainder%%:*}
+  expected_mode=${remainder##*:}
+  actual_mode=$(archive_mode "$archive" "$entry")
+  [[ $actual_mode == "$expected_mode" ]] || \
+    die "rollback package mode is unsafe: $entry ($actual_mode, expected $expected_mode)"
+done
+archives=("${go_matches[0]}")
+[[ $layout == direct ]] || archives=("${core_matches[0]}" "${go_matches[0]}")
+for archive in "${archives[@]}"; do
   destination=$OUTPUT_DIR/${archive##*/}
   install -Dm0600 "$archive" "$destination"
   sha256sum "$destination" >"$destination.sha256"
   pacman -Qip "$destination" >/dev/null
 done
-printf 'core_package=%s\ngo_package=%s\n' \
-  "$OUTPUT_DIR/${core_matches[0]##*/}" "$OUTPUT_DIR/${go_matches[0]##*/}"
+if [[ $layout == split ]]; then
+  printf 'layout=split\ncore_package=%s\ngo_package=%s\n' \
+    "$OUTPUT_DIR/${core_matches[0]##*/}" "$OUTPUT_DIR/${go_matches[0]##*/}"
+else
+  install -Dm0600 /dev/null "$OUTPUT_DIR/rollback-layout.direct"
+  printf 'direct\n' >"$OUTPUT_DIR/rollback-layout.direct"
+  printf 'layout=direct\ncore_package=%s\ngo_package=%s\n' \
+    "$OUTPUT_DIR/rollback-layout.direct" "$OUTPUT_DIR/${go_matches[0]##*/}"
+fi

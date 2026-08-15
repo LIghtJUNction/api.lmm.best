@@ -284,6 +284,7 @@ impl StripeCreemStore for PgStripeCreemStore {
                 "general_setting.quota_display_type",
                 "QuotaPerUnit",
                 "TopupGroupRatio",
+                "payment_setting.amount_discount",
                 "payment_setting",
             ])
             .fetch_all(&self.pg)
@@ -339,11 +340,18 @@ fn stripe_settings_from_options(
         .get("TopupGroupRatio")
         .and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default();
-    let amount_discounts = options
-        .get("payment_setting")
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .and_then(|value| value.get("amount_discount").cloned())
-        .and_then(|value| serde_json::from_value(value).ok())
+    let amount_discounts: BTreeMap<i64, f64> = options
+        .get("payment_setting.amount_discount")
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        // Keep accepting the aggregate shape used by an older Rust fixture;
+        // Go's registered config is authoritative at the dotted key above.
+        .or_else(|| {
+            options
+                .get("payment_setting")
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| value.get("amount_discount").cloned())
+                .and_then(|value| serde_json::from_value(value).ok())
+        })
         .unwrap_or_default();
     StripeSettings {
         min_topup: parsed_i64(options.get("StripeMinTopUp"), 1),
@@ -600,11 +608,22 @@ pub fn router(state: IdentityStripeCreemState) -> Router {
     // checkout routes also pass through CriticalRateLimit.  This isolated
     // slice cannot attach those shared listener policies, so it remains
     // candidate-only until the root listener owns that integration.
-    Router::new()
-        .route("/api/user/stripe/amount", post(stripe_amount))
+    amount_routes()
         .route("/api/user/stripe/pay", post(stripe_pay))
         .route("/api/user/creem/pay", post(creem_pay))
         .with_state(state)
+}
+
+/// Mounts only the deterministic Stripe amount quote.  The checkout routes
+/// additionally require the listener's critical-rate-limit and external
+/// gateway boundaries, so the normal listener can adopt this read-only
+/// calculation without exposing an incomplete payment path.
+pub fn amount_router(state: IdentityStripeCreemState) -> Router {
+    amount_routes().with_state(state)
+}
+
+fn amount_routes() -> Router<IdentityStripeCreemState> {
+    Router::new().route("/api/user/stripe/amount", post(stripe_amount))
 }
 
 #[derive(Default, Deserialize)]
@@ -1385,12 +1404,27 @@ mod tests {
             ("QuotaDisplayType".into(), "TOKENS".into()),
             ("general_setting.quota_display_type".into(), "CNY".into()),
             ("QuotaPerUnit".into(), "12.5".into()),
+            (
+                "payment_setting.amount_discount".into(),
+                r#"{"100":0.8}"#.into(),
+            ),
         ]);
 
         let settings = stripe_settings_from_options(&options, Vec::new());
 
         assert_eq!(settings.quota_display_type, "CNY");
         assert_eq!(settings.quota_per_unit, 12.5);
+        assert_eq!(settings.amount_discounts.get(&100), Some(&0.8));
+    }
+
+    #[test]
+    fn stripe_settings_keep_legacy_aggregate_discount_fallback() {
+        let options = BTreeMap::from([(
+            "payment_setting".into(),
+            r#"{"amount_discount":{"100":0.75}}"#.into(),
+        )]);
+        let settings = stripe_settings_from_options(&options, Vec::new());
+        assert_eq!(settings.amount_discounts.get(&100), Some(&0.75));
     }
     #[tokio::test]
     async fn stripe_quote_http_seam_preserves_usd_cny_and_tokens_display_rules() {

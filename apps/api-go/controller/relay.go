@@ -8,22 +8,22 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	taskdto "github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	"github.com/QuantumNous/new-api/relay"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	taskdto "github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	perfmetrics "github.com/LIghtJUNction/api.lmm.best/pkg/perf_metrics"
+	"github.com/LIghtJUNction/api.lmm.best/relay"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	relayconstant "github.com/LIghtJUNction/api.lmm.best/relay/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
@@ -115,6 +115,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					"type":  "error",
 					"error": newAPIError.ToClaudeError(),
 				})
+			case types.RelayFormatGemini:
+				c.JSON(newAPIError.StatusCode, newAPIError.ToGeminiError())
 			default:
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"error": newAPIError.ToOpenAIError(),
@@ -141,6 +143,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
+	needAdvancedSecurityCheck := setting.ShouldCheckAdvancedSecurityPrompt()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
@@ -154,8 +157,32 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		contains, words := service.CheckSensitiveText(meta.CombineText)
 		if contains {
 			logger.LogWarn(c, fmt.Sprintf("user sensitive words detected: %s", strings.Join(words, ", ")))
-			newAPIError = types.NewError(err, types.ErrorCodeSensitiveWordsDetected)
+			// `err` is nil here because request validation succeeded. Passing it
+			// through made the local rejection look like an internal error with no
+			// useful message, and some clients treated it as a retryable failure.
+			newAPIError = types.NewError(
+				errors.New("user sensitive words detected"),
+				types.ErrorCodeSensitiveWordsDetected,
+				types.ErrOptionWithStatusCode(http.StatusBadRequest),
+				types.ErrOptionWithSkipRetry(),
+			)
 			return
+		}
+	}
+
+	if needAdvancedSecurityCheck {
+		securityText := dto.SecurityTextForRequest(request)
+		evaluation := service.EvaluateAdvancedSecurityText(c, relayInfo, securityText)
+		if len(evaluation.Matches) > 0 {
+			matchIDs := make([]string, 0, len(evaluation.Matches))
+			for _, match := range evaluation.Matches {
+				matchIDs = append(matchIDs, match.RuleID)
+			}
+			logger.LogWarn(c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
+			if evaluation.Blocked() {
+				newAPIError = service.NewAdvancedSecurityAPIError()
+				return
+			}
 		}
 	}
 
@@ -207,6 +234,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		common.SetContextKey(c, constant.ContextKeyUpstreamChannelFailure, false)
+		common.SetContextKey(c, constant.ContextKeyUpstreamCapabilityMismatch, false)
+		common.SetContextKey(c, constant.ContextKeyUpstreamUnsupportedParameter, false)
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -214,6 +244,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		addUsedChannel(c, channel.Id)
+		if pricingErr := service.PrepareDynamicPricingForSelectedChannel(relayInfo, channel.Id); pricingErr != nil {
+			newAPIError = types.NewErrorWithStatusCode(
+				pricingErr,
+				types.ErrorCodeModelPriceError,
+				http.StatusServiceUnavailable,
+				types.ErrOptionWithSkipRetry(),
+			)
+			break
+		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break
@@ -249,6 +288,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		if service.ShouldExcludeChannelForRetry(c, newAPIError) {
+			retryParam.ExcludeChannel(channel.Id)
+		}
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
@@ -379,15 +421,23 @@ func RelayMidjourney(c *gin.Context) {
 	log.Println(mjErr)
 	if mjErr != nil {
 		statusCode := http.StatusBadRequest
+		errorType := "upstream_error"
 		if mjErr.Code == 30 {
 			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
 			statusCode = http.StatusTooManyRequests
 		}
-		c.JSON(statusCode, gin.H{
+		if mjErr.Description == string(types.ErrorCodeAdvancedSecurity) {
+			errorType = "new_api_error"
+		}
+		response := gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
-			"type":        "upstream_error",
+			"type":        errorType,
 			"code":        mjErr.Code,
-		})
+		}
+		if mjErr.Description == string(types.ErrorCodeAdvancedSecurity) {
+			response["error_code"] = mjErr.Description
+		}
+		c.JSON(statusCode, response)
 		channelId := c.GetInt("channel_id")
 		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
@@ -478,6 +528,10 @@ func RelayTask(c *gin.Context) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		if pricingErr := service.PrepareDynamicPricingForSelectedChannel(relayInfo, channel.Id); pricingErr != nil {
+			taskErr = service.TaskErrorWrapperLocal(pricingErr, "dynamic_pricing_not_ready", http.StatusServiceUnavailable)
+			break
+		}
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {

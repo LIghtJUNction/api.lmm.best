@@ -5,264 +5,520 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
 import {
-  ArrowRight,
-  Check,
-  Circle,
-  KeyRound,
-  LayoutDashboard,
-  LifeBuoy,
-  Send,
-  Wallet,
-} from 'lucide-react'
+  AiChat02Icon,
+  ArrowRight01Icon,
+  CheckmarkCircle02Icon,
+  DashboardSquare01Icon,
+  Key01Icon,
+} from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { type FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
+import {
+  peekQueuedAssistantRequest,
+  requestAssistantOpen,
+} from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
-import { useTopupInfo } from '@/features/wallet/hooks/use-topup-info'
-import { getTopupAvailability } from '@/features/wallet/lib/payment'
-import { getOnboardingState } from '@/lib/console-activation'
-import { cn } from '@/lib/utils'
+import {
+  getAuthenticatedLandingRoute,
+  getOnboardingState,
+} from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { getDeveloperAccessRequest, type DeveloperAccessRequest } from './api'
+import { claimOnboardingAssistantPrompt } from './pending-review-assistant'
 import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
   const { t } = useTranslation()
-  useAuthUserRefresh()
+  const navigate = useNavigate()
+  const { refreshUser } = useAuthUserRefresh()
   const user = useAuthStore((state) => state.auth.user)
   const onboarding = getOnboardingState(user)
   const trustLevel = user?.trust_level_info?.level ?? 0
-  const { topupInfo, loading: topupLoading, error: topupError } = useTopupInfo()
-  const topupAvailability = getTopupAvailability(topupInfo)
-  const activationMessage = topupLoading
-    ? t('Checking payment availability...')
-    : topupError
-      ? t(
-          'Payment availability could not be verified. Contact support before attempting to add funds.'
-        )
-      : !topupAvailability.hasPaymentMethod
-        ? t(
-            'Online payment is temporarily unavailable. Contact support before attempting to add funds.'
-          )
-        : t('Any successful external top-up activates access.')
-  const activationCommand = topupLoading
-    ? null
-    : topupError || !topupAvailability.hasPaymentMethod
-      ? {
-          to: '/support' as const,
-          label: t('Contact support'),
-          icon: LifeBuoy,
-        }
-      : {
-          to: '/wallet' as const,
-          label: t('Add funds'),
-          icon: Wallet,
-        }
+  const [prompt, setPrompt] = useState('')
+  const [accessRequest, setAccessRequest] =
+    useState<DeveloperAccessRequest | null>(null)
+  const [requestLoaded, setRequestLoaded] = useState(false)
 
-  const primaryCommand =
-    onboarding.stage === 'activate'
-      ? activationCommand
-      : onboarding.stage === 'credential'
-        ? {
-            to: '/keys' as const,
-            label: t('Create credential'),
-            icon: KeyRound,
-          }
-        : onboarding.stage === 'first_request'
-          ? {
-              to: '/playground' as const,
-              label: t('Open playground'),
-              icon: Send,
-            }
-          : {
-              to: '/dashboard' as const,
-              label: t('Open dashboard'),
-              icon: LayoutDashboard,
-            }
-  const PrimaryIcon = primaryCommand?.icon
-  const steps = [
+  useEffect(() => {
+    if (onboarding.stage !== 'activate') {
+      setRequestLoaded(true)
+      return
+    }
+    let cancelled = false
+    void getDeveloperAccessRequest()
+      .then((request) => {
+        if (!cancelled) setAccessRequest(request)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setRequestLoaded(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [onboarding.stage])
+
+  const pendingRequestId =
+    accessRequest?.status === 'pending' ? accessRequest.id : 0
+  const userId = user?.id ?? 0
+  useEffect(() => {
+    if (!requestLoaded || onboarding.stage !== 'activate') return
+    if (!claimOnboardingAssistantPrompt(userId, pendingRequestId)) return
+    if (peekQueuedAssistantRequest()?.autoSend) return
+    requestAssistantOpen('onboarding')
+  }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
+
+  useEffect(() => {
+    if (
+      !requestLoaded ||
+      accessRequest?.status !== 'approved' ||
+      onboarding.activationComplete
+    ) {
+      return
+    }
+
+    let cancelled = false
+    void refreshUser().then((refreshedUser) => {
+      if (cancelled || refreshedUser?.developer_access_granted !== true) {
+        return
+      }
+      void navigate({ to: getAuthenticatedLandingRoute(refreshedUser) })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    accessRequest?.status,
+    navigate,
+    onboarding.activationComplete,
+    refreshUser,
+    requestLoaded,
+  ])
+
+  const submitPrompt = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const message = prompt.trim()
+    if (!message) return
+    requestAssistantOpen('onboarding', message)
+  }
+
+  const continueAfterApproval = async () => {
+    const refreshedUser = await refreshUser()
+    if (refreshedUser?.developer_access_granted !== true) return
+    await navigate({ to: getAuthenticatedLandingRoute(refreshedUser) })
+  }
+
+  if (!onboarding.activationComplete) {
+    let assistantAction = t('Start with AI assistant')
+    if (accessRequest?.status === 'pending') assistantAction = t('Continue')
+    if (accessRequest?.status === 'rejected') assistantAction = t('Revise')
+
+    return (
+      <SectionPageLayout>
+        <SectionPageLayout.Title>
+          {t('Getting started')}
+        </SectionPageLayout.Title>
+        <SectionPageLayout.Content>
+          <div className='mx-auto flex w-full max-w-2xl flex-col pb-12 sm:pb-16'>
+            <section
+              className='px-1 py-8 sm:px-2 sm:py-12'
+              data-testid='l0-conversation'
+            >
+              <div className='grid gap-3' role='log' aria-live='polite'>
+                <h2 className='text-2xl font-medium'>{t('How can I help?')}</h2>
+                <p className='text-muted-foreground text-sm leading-6'>
+                  {t(
+                    'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+                  )}
+                </p>
+              </div>
+
+              <Separator className='my-8' />
+              <div className='grid gap-3 text-sm leading-6'>
+                {accessRequest?.status === 'pending' ? (
+                  <div className='grid gap-1' data-testid='l0-pending-request'>
+                    <p className='font-medium'>
+                      {accessRequest.ai_recommendation
+                        ? t('AI recommendation submitted')
+                        : t('Access request submitted')}
+                    </p>
+                    <p className='text-muted-foreground text-xs'>
+                      {t('Pending review')}
+                    </p>
+                  </div>
+                ) : null}
+                {accessRequest?.status === 'rejected' ? (
+                  <div className='grid gap-1'>
+                    <p className='text-destructive font-medium'>
+                      {t('Access request rejected')}
+                    </p>
+                    {accessRequest.admin_note ? (
+                      <p className='text-muted-foreground whitespace-pre-wrap'>
+                        {accessRequest.admin_note}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {accessRequest?.status === 'approved' ? (
+                  <div className='grid gap-1'>
+                    <p className='font-medium'>
+                      {t('Access request approved')}
+                    </p>
+                    <p className='text-muted-foreground'>
+                      {t(
+                        'Your developer access is active. Continue setup to create a key and connect your client.'
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+                {requestLoaded && accessRequest?.status === 'approved' ? (
+                  <Button
+                    type='button'
+                    size='sm'
+                    className='w-fit'
+                    onClick={() => void continueAfterApproval()}
+                  >
+                    {t('Continue setup')}
+                  </Button>
+                ) : (
+                  <Button
+                    type='button'
+                    variant='link'
+                    size='sm'
+                    className='w-fit px-0'
+                    onClick={() => requestAssistantOpen('onboarding')}
+                  >
+                    {assistantAction}
+                  </Button>
+                )}
+              </div>
+            </section>
+          </div>
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
+    )
+  }
+
+  const stageLabel =
+    onboarding.stage === 'complete' ? t('Setup complete') : t('Continue setup')
+
+  const tutorialSteps = [
     {
-      id: 'account',
-      title: t('Account created'),
-      description: t('Your account is ready.'),
-      complete: true,
-      icon: Check,
-    },
-    {
-      id: 'activate',
-      title: t('Activate access'),
-      description: activationMessage,
       complete: onboarding.activationComplete,
-      icon: Wallet,
+      title: t('Unlock L1 access'),
+      description: t(
+        'Discuss your use case with the AI assistant, confirm its recommendation, and wait for administrator approval.'
+      ),
+      preset: 'onboarding' as const,
     },
     {
-      id: 'credential',
-      title: t('Create credential'),
-      description: t('Set up a credential for your account.'),
       complete: onboarding.credentialComplete,
-      icon: KeyRound,
+      title: t('Create API key'),
+      description: t('Create your first developer credential.'),
+      preset: 'api-key' as const,
     },
     {
-      id: 'first_request',
-      title: t('Send first request'),
-      description: t('Complete one request to finish setup.'),
       complete: onboarding.firstRequestComplete,
-      icon: Send,
+      title: t('Send first request'),
+      description: t('Send one request to complete setup.'),
+      preset: 'client-setup' as const,
     },
-  ] as const
+  ]
+  const completedTutorialSteps = tutorialSteps.filter(
+    (step) => step.complete
+  ).length
+  const currentTutorialStep = tutorialSteps.findIndex((step) => !step.complete)
+  const tutorialProgress = (completedTutorialSteps / tutorialSteps.length) * 100
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('Getting started')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='mx-auto flex w-full max-w-5xl flex-col gap-6 pb-10 sm:gap-8 sm:pb-14'>
-          <section className='bg-muted/30 border-y px-5 py-7 sm:px-8 sm:py-10'>
-            <div className='flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between'>
+        <div className='mx-auto flex w-full max-w-4xl flex-col gap-6 pb-10 sm:gap-8 sm:pb-14'>
+          <section className='bg-muted/30 border-y px-5 py-8 sm:px-8 sm:py-12'>
+            <div className='flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between'>
               <div className='max-w-2xl'>
                 <p className='text-muted-foreground text-sm font-medium'>
-                  {t('Account setup')}
+                  {t('One conversation to get started')}
                 </p>
                 <h3 className='mt-2 text-2xl font-semibold sm:text-3xl'>
-                  {onboarding.stage === 'complete'
-                    ? t('Your account is ready.')
-                    : t('Complete your account setup')}
+                  {t('Tell the AI assistant what you want to do')}
                 </h3>
-                <p className='text-muted-foreground mt-3 max-w-xl text-sm leading-6'>
-                  {activationMessage}
+                <p className='text-muted-foreground mt-3 text-sm leading-6'>
+                  {t(
+                    'Ask for a setup guide, model ID, API key, usage report, plan comparison, or any other next step. The assistant can guide the action from here.'
+                  )}
                 </p>
               </div>
-              <div className='flex shrink-0 flex-wrap items-center gap-2'>
+              <div className='flex shrink-0 flex-wrap gap-2'>
                 <Badge variant='outline'>
-                  {t('Level {{level}}', { level: trustLevel })}
+                  {t('L{{level}}', { level: trustLevel })}
                 </Badge>
-                <Badge
-                  variant={
-                    onboarding.activationComplete ? 'secondary' : 'outline'
-                  }
-                >
-                  {onboarding.activationComplete
-                    ? t('Access activated')
-                    : t('Activation pending')}
-                </Badge>
+                <Badge variant='secondary'>{stageLabel}</Badge>
               </div>
             </div>
+
+            <form
+              className='mt-7 flex flex-col gap-3 sm:flex-row'
+              onSubmit={submitPrompt}
+            >
+              <Input
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                maxLength={4000}
+                className='h-12 flex-1'
+                placeholder={t(
+                  'For example: help me activate L1 and configure CC Switch'
+                )}
+                aria-label={t('Tell the AI assistant what you need')}
+              />
+              <Button type='submit' size='lg' disabled={!prompt.trim()}>
+                <HugeiconsIcon
+                  icon={AiChat02Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
+                {t('Start with AI assistant')}
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-end'
+                  aria-hidden='true'
+                />
+              </Button>
+            </form>
+            <div
+              className='mt-3 flex flex-wrap gap-2'
+              aria-label={t(
+                'Choose a common question or ask anything about using LMM.'
+              )}
+            >
+              {[
+                t('What can I do while access is under review?'),
+                t('Which option is the best value?'),
+                t('What are my Base URL, model ID, and API key?'),
+                t('How do I set up Claude Code or CC Switch?'),
+              ].map((question) => (
+                <Button
+                  key={question}
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  className='h-auto min-h-9 whitespace-normal'
+                  onClick={() => requestAssistantOpen(undefined, question)}
+                >
+                  {question}
+                </Button>
+              ))}
+            </div>
+            <p className='text-muted-foreground mt-3 text-xs leading-5'>
+              {t(
+                'Never paste a password, API key, session cookie, or other secret into the conversation.'
+              )}
+            </p>
           </section>
 
-          <section className='border'>
-            <div className='flex flex-wrap items-center justify-between gap-3 px-5 py-4 sm:px-6'>
+          <section
+            className='border px-5 py-6 sm:px-8'
+            aria-labelledby='getting-started-tutorial-title'
+          >
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
               <div>
-                <h3 className='text-sm font-semibold'>{t('Setup progress')}</h3>
-                <p className='text-muted-foreground mt-1 text-sm'>
-                  {t('Follow the account milestones below.')}
+                <h3
+                  id='getting-started-tutorial-title'
+                  className='text-sm font-semibold'
+                >
+                  {t('Three steps to get started')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Complete these steps to finish the initial installation.'
+                  )}
                 </p>
               </div>
-              <Badge variant='outline'>
-                {onboarding.stage === 'complete'
-                  ? t('Complete')
-                  : t('Current step: {{step}}', {
-                      step: steps.find((step) => step.id === onboarding.stage)
-                        ?.title,
-                    })}
+              <Badge
+                variant={
+                  onboarding.stage === 'complete' ? 'secondary' : 'outline'
+                }
+              >
+                {completedTutorialSteps}/{tutorialSteps.length}
               </Badge>
             </div>
-            <Separator />
-            <ol className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'>
-              {steps.map((step) => {
-                const StepIcon = step.icon
-                const current = step.id === onboarding.stage
 
+            <div className='mt-5 flex items-center gap-3'>
+              <Progress
+                value={tutorialProgress}
+                aria-label={t('Three steps to get started')}
+                className='flex-1'
+              />
+              <span className='text-muted-foreground shrink-0 text-xs tabular-nums'>
+                {Math.round(tutorialProgress)}%
+              </span>
+            </div>
+
+            <ol className='mt-6 grid gap-3 lg:grid-cols-3'>
+              {tutorialSteps.map((step, index) => {
+                const isCurrent = index === currentTutorialStep
+                let markerClass =
+                  'text-muted-foreground border-muted-foreground/40 flex size-7 shrink-0 items-center justify-center rounded-full border text-sm font-semibold'
+                let statusLabel = t('Pending')
+                if (isCurrent) {
+                  markerClass =
+                    'border-primary text-primary flex size-7 shrink-0 items-center justify-center rounded-full border text-sm font-semibold'
+                  statusLabel = t('Current step')
+                }
+                if (step.complete) {
+                  markerClass =
+                    'bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-full'
+                  statusLabel = t('Completed')
+                }
                 return (
                   <li
-                    key={step.id}
-                    aria-current={current ? 'step' : undefined}
-                    className={cn(
-                      'min-h-36 border-b px-5 py-5 sm:px-6 lg:border-b-0 lg:border-r last:border-b-0 lg:last:border-r-0',
-                      current && 'bg-muted/50'
-                    )}
+                    key={step.title}
+                    className={
+                      isCurrent
+                        ? 'border-primary/50 bg-primary/5 flex min-h-40 flex-col gap-4 border p-4'
+                        : 'bg-muted/20 flex min-h-40 flex-col gap-4 border p-4'
+                    }
                   >
                     <div className='flex items-start gap-3'>
-                      <div
-                        className={cn(
-                          'flex size-8 shrink-0 items-center justify-center rounded-full border',
-                          step.complete &&
-                            'bg-primary text-primary-foreground border-primary'
-                        )}
-                      >
+                      <span className={markerClass} aria-hidden='true'>
                         {step.complete ? (
-                          <Check aria-hidden='true' className='size-4' />
-                        ) : (
-                          <Circle aria-hidden='true' className='size-3' />
-                        )}
-                      </div>
-                      <div className='min-w-0'>
-                        <div className='flex items-center gap-2'>
-                          <StepIcon
-                            aria-hidden='true'
-                            className='size-4 shrink-0'
+                          <HugeiconsIcon
+                            icon={CheckmarkCircle02Icon}
+                            className='size-4'
+                            strokeWidth={2}
                           />
-                          <p className='text-sm font-semibold'>{step.title}</p>
-                        </div>
-                        <p className='text-muted-foreground mt-2 text-sm leading-5'>
+                        ) : (
+                          index + 1
+                        )}
+                      </span>
+                      <div className='min-w-0 flex-1'>
+                        <p className='text-sm font-medium'>{step.title}</p>
+                        <p className='text-muted-foreground mt-1 text-xs leading-5'>
                           {step.description}
                         </p>
-                        <span className='sr-only'>
-                          {step.complete ? t('Completed') : t('Pending')}
-                        </span>
                       </div>
                     </div>
-                    {current && (
-                      <Badge className='mt-4' variant='secondary'>
-                        {t('Current step')}
+                    <div className='mt-auto flex items-center justify-between gap-2'>
+                      <Badge variant={step.complete ? 'secondary' : 'outline'}>
+                        {statusLabel}
                       </Badge>
-                    )}
+                      {isCurrent ? (
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          onClick={() => requestAssistantOpen(step.preset)}
+                        >
+                          {t('Continue')}
+                          <HugeiconsIcon
+                            icon={ArrowRight01Icon}
+                            strokeWidth={2}
+                            data-icon='inline-end'
+                            aria-hidden='true'
+                          />
+                        </Button>
+                      ) : null}
+                    </div>
                   </li>
                 )
               })}
             </ol>
           </section>
 
-          <section className='flex flex-col gap-4 border-y px-5 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-7'>
-            <div className='max-w-2xl'>
-              <p className='text-sm font-semibold'>{t('Next step')}</p>
-              <p className='text-muted-foreground mt-1 text-sm leading-6'>
-                {onboarding.stage === 'activate'
-                  ? activationMessage
-                  : onboarding.stage === 'credential'
-                    ? t('Create a credential to continue setup.')
-                    : onboarding.stage === 'first_request'
-                      ? t('Send one request to complete setup.')
-                      : t('Go to your dashboard to continue.')}
-              </p>
+          <section className='border px-5 py-5 sm:px-8'>
+            <div className='flex items-start gap-3'>
+              <span className='bg-primary text-primary-foreground flex size-9 shrink-0 items-center justify-center rounded-full'>
+                <HugeiconsIcon
+                  icon={AiChat02Icon}
+                  className='size-5'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
+              </span>
+              <div className='min-w-0'>
+                <h3 className='text-sm font-semibold'>
+                  {t('What the assistant can do')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'It can compare packages and discounts, calculate cost, show model IDs and Base URL, create a key after confirmation, teach Claude/Codex/CC Switch setup, analyze historical calls, explain invitations and bounties, or forward a free request to an administrator.'
+                  )}
+                </p>
+              </div>
             </div>
-            {primaryCommand && PrimaryIcon ? (
-              <Button
-                className='w-full sm:w-auto'
-                size='lg'
-                render={<Link to={primaryCommand.to} />}
-              >
-                <PrimaryIcon data-icon='inline-start' aria-hidden='true' />
-                {primaryCommand.label}
-                <ArrowRight data-icon='inline-end' aria-hidden='true' />
-              </Button>
-            ) : null}
           </section>
 
+          <section className='border px-5 py-6 sm:px-8'>
+            <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+              <div>
+                <h3 className='text-sm font-semibold'>
+                  {t('Continue with your first integration')}
+                </h3>
+                <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                  {t(
+                    'Ask the assistant to create a key, configure a client, or send a first test request.'
+                  )}
+                </p>
+              </div>
+              <Button
+                variant='outline'
+                onClick={() => requestAssistantOpen('client-setup')}
+              >
+                <HugeiconsIcon
+                  icon={Key01Icon}
+                  strokeWidth={2}
+                  data-icon='inline-start'
+                  aria-hidden='true'
+                />
+                {t('Open setup guide')}
+              </Button>
+            </div>
+          </section>
+
+          <section className='border-y px-5 py-5 sm:px-8'>
+            <div className='flex flex-wrap items-center justify-between gap-3'>
+              <div>
+                <h3 className='text-sm font-semibold'>{t('Quick links')}</h3>
+                <p className='text-muted-foreground mt-1 text-sm'>
+                  {t('You can return to this guided conversation at any time.')}
+                </p>
+              </div>
+              <div className='flex flex-wrap gap-2'>
+                <Button variant='outline' render={<Link to='/dashboard' />}>
+                  <HugeiconsIcon
+                    icon={DashboardSquare01Icon}
+                    strokeWidth={2}
+                    data-icon='inline-start'
+                    aria-hidden='true'
+                  />
+                  {t('Dashboard')}
+                </Button>
+                <Button
+                  variant='outline'
+                  render={<Link to='/open-source-bounties' />}
+                >
+                  {t('Open-source bounties')}
+                </Button>
+              </div>
+            </div>
+          </section>
+
+          <Separator />
           <ChallengeList
             limit={3}
             hideWhenUnavailable

@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	commonRelay "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	commonRelay "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 )
 
 type TaskStatus string
@@ -311,12 +311,23 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
+	limit = normalizeTaskQueryLimit(limit)
 	// get all tasks progress is not 100%
 	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
 	return tasks
+}
+
+func normalizeTaskQueryLimit(limit int) int {
+	if limit <= 0 {
+		return constant.DefaultTaskQueryLimit
+	}
+	if limit > constant.MaxTaskQueryLimit {
+		return constant.MaxTaskQueryLimit
+	}
+	return limit
 }
 
 // HasUnfinishedSyncTasks reports whether at least one async (Suno/video) task is

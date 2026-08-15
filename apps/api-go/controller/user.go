@@ -7,21 +7,21 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/authz"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/syncx"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/service/authz"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -297,6 +297,9 @@ func Register(c *gin.Context) {
 	}
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
+		if model.IsLinuxDOEmail(cleanUser.Email) {
+			cleanUser.PaymentRestrictionFlags = model.PaymentRestrictionLinuxDOEmail
+		}
 	}
 	if err := cleanUser.Insert(inviterId); err != nil {
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
@@ -352,8 +355,22 @@ func Register(c *gin.Context) {
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
+	onlyL0 := c.Query("trust_level") == strconv.Itoa(model.TrustLevelMinUser)
+	users, total, err := model.GetAllUsers(pageInfo, onlyL0, sortOptions)
 	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.PopulateAdminPaymentRestrictions(users)
+	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateAssistantUserProfiles(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateUserTopups(users); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -382,8 +399,22 @@ func SearchUsers(c *gin.Context) {
 	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	onlyL0 := c.Query("trust_level") == strconv.Itoa(model.TrustLevelMinUser)
+	users, total, err := model.SearchUsers(keyword, group, role, status, onlyL0, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.PopulateAdminPaymentRestrictions(users)
+	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateAssistantUserProfiles(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateUserTopups(users); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -421,6 +452,11 @@ func GetUser(c *gin.Context) {
 	}
 	user.TrustLevelInfo = &trustLevel
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	model.PopulateAdminPaymentRestriction(user)
+	if err := model.PopulateAssistantUserProfiles([]*model.User{user}, c.GetInt("id"), myRole); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -577,7 +613,7 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"setting":                  user.Setting,
 		"stripe_customer":          user.StripeCustomer,
 		"trust_level_info":         accessSnapshot.TrustLevel,
-		"trust_level_tiers":        model.GetTrustLevelTiers(),
+		"trust_level_tiers":        model.GetTrustLevelTierViews(accessSnapshot.TrustLevel.Level),
 		"onboarding": gin.H{
 			"activation_complete":      onboarding.ActivationComplete,
 			"paid_activation_complete": onboarding.PaidActivationComplete,
@@ -624,9 +660,8 @@ func generateDefaultSidebarConfig(userRole int) string {
 
 	// 聊天区域 - 所有用户都可以访问
 	defaultConfig["chat"] = map[string]interface{}{
-		"enabled":    true,
-		"playground": true,
-		"chat":       true,
+		"enabled": true,
+		"chat":    true,
 	}
 
 	// 控制台区域 - 所有用户都可以访问
@@ -707,10 +742,15 @@ func GetUserModels(c *gin.Context) {
 			groupsToQuery = []string{group}
 		}
 	}
+	models, err := service.GetGroupsEnabledModelsWithError(groupsToQuery)
+	if err != nil {
+		common.ApiErrorMsg(c, "available models are temporarily unavailable")
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    service.GetGroupsEnabledModels(groupsToQuery),
+		"data":    models,
 	})
 }
 
@@ -773,7 +813,9 @@ func UpdateUser(c *gin.Context) {
 		}
 		if trustLevelSpecified {
 			if err := tx.Model(&model.User{}).Where("id = ?", updatedUser.Id).
-				Update("trust_level_override", trustLevelOverride).Error; err != nil {
+				// Trust levels are automatic; accept the legacy field only to clear
+				// stale overrides without allowing a manual freeze.
+				Update("trust_level_override", nil).Error; err != nil {
 				return err
 			}
 		}
@@ -1127,6 +1169,18 @@ func CreateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
+	// Give administrators a useful validation error instead of exposing a
+	// database-specific users_username_key violation. The unique index remains
+	// the final race-safe guard inside the transaction below.
+	exists, err := model.CheckUserExistOrDeleted(user.Username, "")
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+		return
+	}
+	if exists {
+		common.ApiErrorI18n(c, i18n.MsgUserExists)
+		return
+	}
 	// Even for admin users, we cannot fully trust them!
 	cleanUser := model.User{
 		Username:    user.Username,
@@ -1143,6 +1197,10 @@ func CreateUser(c *gin.Context) {
 		authzTouched = touched
 		return err
 	}); err != nil {
+		if isUsernameConflictError(err) {
+			common.ApiErrorI18n(c, i18n.MsgUserExists)
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
@@ -1163,6 +1221,16 @@ func CreateUser(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func isUsernameConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "users_username_key") ||
+		strings.Contains(message, "username") &&
+			(strings.Contains(message, "unique") || strings.Contains(message, "duplicate"))
 }
 
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {
@@ -1283,6 +1351,21 @@ func ManageUser(c *gin.Context) {
 		}
 		recordManageAuditFor(c, user.Id, "user.trust_level_override", map[string]interface{}{
 			"level": req.Value,
+		})
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
+	case "reset_onboarding":
+		if user.Role >= common.RoleAdminUser {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		if err := model.ResetUserToL0(user.Id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordManageAuditFor(c, user.Id, "user.reset_onboarding", map[string]interface{}{
+			"username": user.Username,
+			"level":    0,
 		})
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return
@@ -1437,46 +1520,16 @@ type topUpRequest struct {
 	Key string `json:"key"`
 }
 
-var topUpLocks sync.Map
-var topUpCreateLock sync.Mutex
-
-type topUpTryLock struct {
-	ch chan struct{}
-}
-
-func newTopUpTryLock() *topUpTryLock {
-	return &topUpTryLock{ch: make(chan struct{}, 1)}
-}
-
-func (l *topUpTryLock) TryLock() bool {
-	select {
-	case l.ch <- struct{}{}:
-		return true
-	default:
-		return false
+func redeemFailureLog(userID int, err error) string {
+	if err == nil {
+		return fmt.Sprintf("failed to redeem key for user %d", userID)
 	}
+	// Keep the error type for diagnostics without copying provider/database
+	// messages that could accidentally contain the submitted redemption key.
+	return fmt.Sprintf("failed to redeem key for user %d error_type=%T", userID, err)
 }
 
-func (l *topUpTryLock) Unlock() {
-	select {
-	case <-l.ch:
-	default:
-	}
-}
-
-func getTopUpLock(userID int) *topUpTryLock {
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
-	topUpCreateLock.Lock()
-	defer topUpCreateLock.Unlock()
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
-	l := newTopUpTryLock()
-	topUpLocks.Store(userID, l)
-	return l
-}
+var topUpLocks = syncx.NewKeyedTryLocker[int]()
 
 func TopUp(c *gin.Context) {
 	if !operation_setting.IsPaymentComplianceConfirmed() {
@@ -1485,12 +1538,12 @@ func TopUp(c *gin.Context) {
 	}
 
 	id := c.GetInt("id")
-	lock := getTopUpLock(id)
-	if !lock.TryLock() {
+	release, locked := topUpLocks.TryLock(id)
+	if !locked {
 		common.ApiErrorI18n(c, i18n.MsgUserTopUpProcessing)
 		return
 	}
-	defer lock.Unlock()
+	defer release()
 	req := topUpRequest{}
 	err := c.ShouldBindJSON(&req)
 	if err != nil {
@@ -1501,7 +1554,7 @@ func TopUp(c *gin.Context) {
 	if err != nil {
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
-		logger.LogError(c, fmt.Sprintf("failed to redeem key %s for user %d: %s", req.Key, id, err.Error()))
+		logger.LogError(c, redeemFailureLog(id, err))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1524,6 +1577,7 @@ type UpdateUserSettingRequest struct {
 	UpstreamModelUpdateNotifyEnabled *bool   `json:"upstream_model_update_notify_enabled,omitempty"`
 	AcceptUnsetModelRatioModel       bool    `json:"accept_unset_model_ratio_model"`
 	RecordIpLog                      bool    `json:"record_ip_log"`
+	UsageLeaderboardVisibility       string  `json:"usage_leaderboard_visibility,omitempty"`
 }
 
 func UpdateUserSetting(c *gin.Context) {
@@ -1542,6 +1596,10 @@ func UpdateUserSetting(c *gin.Context) {
 	// 验证预警阈值
 	if req.QuotaWarningThreshold <= 0 {
 		common.ApiErrorI18n(c, i18n.MsgQuotaThresholdGtZero)
+		return
+	}
+	if req.UsageLeaderboardVisibility != "" && !dto.IsValidUsageLeaderboardVisibility(req.UsageLeaderboardVisibility) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 
@@ -1618,6 +1676,10 @@ func UpdateUserSetting(c *gin.Context) {
 	if user.Role >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
+	usageLeaderboardVisibility := dto.NormalizeUsageLeaderboardVisibility(existingSettings.UsageLeaderboardVisibility)
+	if req.UsageLeaderboardVisibility != "" {
+		usageLeaderboardVisibility = dto.NormalizeUsageLeaderboardVisibility(req.UsageLeaderboardVisibility)
+	}
 
 	// 构建设置
 	settings := dto.UserSetting{
@@ -1626,6 +1688,7 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+		UsageLeaderboardVisibility:       usageLeaderboardVisibility,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -21,25 +21,26 @@ import (
 )
 
 type Channel struct {
-	Id                 int     `json:"id"`
-	Type               int     `json:"type" gorm:"default:0"`
-	Key                string  `json:"key" gorm:"not null"`
-	OpenAIOrganization *string `json:"openai_organization"`
-	TestModel          *string `json:"test_model"`
-	Status             int     `json:"status" gorm:"default:1"`
-	Name               string  `json:"name" gorm:"index"`
-	Weight             *uint   `json:"weight" gorm:"default:0"`
-	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
-	TestTime           int64   `json:"test_time" gorm:"bigint"`
-	ResponseTime       int     `json:"response_time"` // in milliseconds
-	BaseURL            *string `json:"base_url" gorm:"column:base_url;default:''"`
-	Other              string  `json:"other"`
-	Balance            float64 `json:"balance"` // in USD
-	BalanceUpdatedTime int64   `json:"balance_updated_time" gorm:"bigint"`
-	Models             string  `json:"models"`
-	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
-	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
-	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
+	Id                        int     `json:"id"`
+	Type                      int     `json:"type" gorm:"default:0"`
+	Key                       string  `json:"key" gorm:"not null"`
+	OpenAIOrganization        *string `json:"openai_organization"`
+	TestModel                 *string `json:"test_model"`
+	Status                    int     `json:"status" gorm:"default:1"`
+	Name                      string  `json:"name" gorm:"index"`
+	Weight                    *uint   `json:"weight" gorm:"default:0"`
+	CreatedTime               int64   `json:"created_time" gorm:"bigint"`
+	TestTime                  int64   `json:"test_time" gorm:"bigint"`
+	ResponseTime              int     `json:"response_time"` // in milliseconds
+	BaseURL                   *string `json:"base_url" gorm:"column:base_url;default:''"`
+	Other                     string  `json:"other"`
+	Balance                   float64 `json:"balance"` // in USD
+	BalanceUpdatedTime        int64   `json:"balance_updated_time" gorm:"bigint"`
+	Models                    string  `json:"models"`
+	Group                     string  `json:"group" gorm:"type:varchar(64);default:'default'"`
+	PublicRelayContributionId int     `json:"public_relay_contribution_id,omitempty" gorm:"index"`
+	UsedQuota                 int64   `json:"used_quota" gorm:"bigint;default:0"`
+	ModelMapping              *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
@@ -296,25 +297,22 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		return common.ChannelStatusEnabled
 	}
 
-	// Collect indexes of enabled keys
-	enabledIdx := make([]int, 0, len(keys))
-	for i := range keys {
-		if getStatus(i) == common.ChannelStatusEnabled {
-			enabledIdx = append(enabledIdx, i)
-		}
-	}
-	// If no specific status list or none enabled, return an explicit error so caller can
-	// properly handle a channel with no available keys (e.g. mark channel disabled).
-	// Returning the first key here caused requests to keep using an already-disabled key.
-	if len(enabledIdx) == 0 {
-		return "", 0, types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
-	}
-
 	switch channel.ChannelInfo.MultiKeyMode {
 	case constant.MultiKeyModeRandom:
-		// Randomly pick one enabled key
-		selectedIdx := enabledIdx[rand.Intn(len(enabledIdx))]
-		return keys[selectedIdx], selectedIdx, nil
+		selected := -1
+		seen := 0
+		for index := range keys {
+			if getStatus(index) != common.ChannelStatusEnabled {
+				continue
+			}
+			seen++
+			if rand.Intn(seen) == 0 {
+				selected = index
+			}
+		}
+		if selected >= 0 {
+			return keys[selected], selected, nil
+		}
 	case constant.MultiKeyModePolling:
 		// Start from the saved polling index and look for the next enabled key
 		start := runtimeState.pollingIndex
@@ -336,12 +334,14 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 				return keys[idx], idx, nil
 			}
 		}
-		// Fallback – should not happen, but return first enabled key
-		return keys[enabledIdx[0]], enabledIdx[0], nil
 	default:
-		// Unknown mode, default to first enabled key (or original key string)
-		return keys[enabledIdx[0]], enabledIdx[0], nil
+		for index := range keys {
+			if getStatus(index) == common.ChannelStatusEnabled {
+				return keys[index], index, nil
+			}
+		}
 	}
+	return "", 0, types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
 }
 
 func (channel *Channel) SaveChannelInfo() error {
@@ -617,6 +617,13 @@ func (channel *Channel) GetWeight() int {
 	if channel.Weight == nil {
 		return 0
 	}
+	// Weight is persisted as uint for compatibility with the database schema,
+	// while the routing and cache APIs use int. Guard the narrowing conversion
+	// so a corrupted or externally imported value cannot wrap on any platform.
+	maxInt := uint(^uint(0) >> 1)
+	if *channel.Weight > maxInt {
+		return int(maxInt)
+	}
 	return int(*channel.Weight)
 }
 
@@ -733,6 +740,7 @@ func (channel *Channel) Delete() error {
 	// The database deletion is already committed. Remove the channel from route
 	// selection before a later failed refresh can retain stale routing.
 	cacheDeleteChannels([]int{channel.Id})
+	channelRuntimeStates.Delete(channel.Id)
 	err = channel.DeleteAbilities()
 	return err
 }
@@ -747,6 +755,9 @@ type channelRuntimeState struct {
 var channelRuntimeStates sync.Map
 
 func getChannelRuntimeState(channelID int, initialPollingIndex int) *channelRuntimeState {
+	if state, ok := channelRuntimeStates.Load(channelID); ok {
+		return state.(*channelRuntimeState)
+	}
 	state := &channelRuntimeState{pollingIndex: initialPollingIndex}
 	actual, _ := channelRuntimeStates.LoadOrStore(channelID, state)
 	return actual.(*channelRuntimeState)
@@ -757,24 +768,22 @@ func GetChannelPollingLock(channelId int) *sync.Mutex {
 	return &getChannelRuntimeState(channelId, 0).mu
 }
 
-// CleanupChannelPollingLocks removes locks for channels that no longer exist
-// This is optional and can be called periodically to prevent memory leaks
-func CleanupChannelPollingLocks() {
-	var activeChannelIds []int
-	DB.Model(&Channel{}).Pluck("id", &activeChannelIds)
-
-	activeChannelSet := make(map[int]bool)
-	for _, id := range activeChannelIds {
-		activeChannelSet[id] = true
-	}
-
-	channelRuntimeStates.Range(func(key, value interface{}) bool {
-		channelId := key.(int)
-		if !activeChannelSet[channelId] {
-			channelRuntimeStates.Delete(channelId)
+func pruneChannelRuntimeStates(active map[int]*Channel) {
+	channelRuntimeStates.Range(func(key, _ any) bool {
+		channelID, ok := key.(int)
+		if !ok || active[channelID] == nil {
+			channelRuntimeStates.Delete(key)
 		}
 		return true
 	})
+}
+
+// CleanupChannelPollingLocks removes runtime state for channels outside the
+// active immutable cache snapshot. Full cache refreshes call the same helper.
+func CleanupChannelPollingLocks() {
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	pruneChannelRuntimeStates(channelsIDM)
 }
 
 func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) {

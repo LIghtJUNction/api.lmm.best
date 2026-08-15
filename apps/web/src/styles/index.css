@@ -133,164 +133,10 @@ For commercial licensing, please contact support@quantumnous.com
     outline-offset: 3px;
   }
 
-  .auth-art-surface svg path[data-field] {
-    pointer-events: stroke;
-    cursor: crosshair;
-    transition:
-      stroke 160ms ease,
-      opacity 160ms ease;
-  }
-
-  .auth-art-surface svg path[data-field]:hover {
-    stroke: var(--art-clay) !important;
-    opacity: 1;
-  }
-
-  /* The visible auth artwork is a flat editorial handoff. The old field stays
-   * mounted, but is hidden so its pointer contract remains testable without
-   * returning the technical network language to the surface. */
-  .auth-art-editorial {
-    pointer-events: none;
-  }
-
-  .auth-art-carrier {
-    fill: var(--art-field);
-  }
-
-  .auth-art-left-gesture,
-  .auth-art-right-gesture,
-  .auth-art-core {
-    fill: var(--art-foundation);
-  }
-
-  .auth-art-contour,
-  .auth-art-paper-line {
-    fill: none;
-    stroke: var(--art-foundation);
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
-  .auth-art-contour {
-    stroke-width: 7;
-  }
-
-  .auth-art-paper-line {
-    opacity: 0.82;
-    stroke-width: 5;
-  }
-
-  .auth-art-clay {
-    fill: var(--art-clay);
-  }
-
-  .auth-art-foundation {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  .auth-art-surface svg > :not(.auth-art-editorial) {
-    opacity: 1;
-    pointer-events: none;
-  }
-
-  .auth-art-surface svg > .auth-art-foundation {
-    opacity: 0;
-  }
-
-  .auth-art-overlay {
-    position: absolute;
-    inset: 1.25rem;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    gap: 0.75rem;
-    pointer-events: none;
-  }
-
-  .auth-art-overlay-card {
-    width: min(100%, 22rem);
-    padding: 1rem 1.1rem;
-    border: 1px solid var(--art-border);
-    background: var(--art-surface);
-    color: var(--art-ink);
-    pointer-events: auto;
-    transform: translateY(-4.25rem);
-  }
-
-  .auth-art-overlay-index {
-    color: var(--art-clay);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.66rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-  }
-
-  .auth-art-overlay-title {
-    margin-top: 0.45rem;
-    font-family: var(--font-serif);
-    font-size: clamp(1.45rem, 2vw, 2.2rem);
-    line-height: 1.04;
-    letter-spacing: -0.04em;
-  }
-
-  .auth-art-overlay-copy {
-    margin-top: 0.5rem;
-    max-width: 28rem;
-    color: var(--art-muted);
-    font-size: 0.82rem;
-    line-height: 1.5;
-  }
-
-  .auth-art-tabs {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.5rem;
-    pointer-events: auto;
-  }
-
-  .auth-art-tab {
-    display: flex;
-    min-height: 3rem;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-    gap: 0.18rem;
-    border: 1px solid var(--art-border);
-    padding: 0.55rem 0.65rem;
-    background: color-mix(in oklch, var(--art-surface) 82%, transparent);
-    color: var(--art-muted);
-    text-align: start;
-    transition:
-      border-color 160ms ease,
-      background-color 160ms ease,
-      color 160ms ease;
-  }
-
-  .auth-art-tab:hover,
-  .auth-art-tab:focus-visible,
-  .auth-art-tab[data-active='true'] {
-    border-color: var(--art-clay);
-    background: color-mix(in oklch, var(--art-clay) 16%, var(--art-surface));
-    color: var(--art-ink);
-  }
-
-  .auth-art-tab-number {
-    color: var(--art-clay);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-  }
-
-  .auth-art-tab-label {
-    overflow: hidden;
-    max-width: 100%;
-    font-size: 0.72rem;
-    line-height: 1.15;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .auth-editorial .auth-field:focus-visible {
+    border-color: color-mix(in oklch, var(--art-clay) 62%, var(--input));
+    outline: 0;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--art-clay) 18%, transparent);
   }
 
   .shiki span {
@@ -862,6 +708,57 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 /* ── Hero terminal demo animations ── */
+@keyframes auth-art-request-sweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  18%,
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.auth-art-request-sweep {
+  animation: auth-art-request-sweep 3.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes auth-art-request-value {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-art-request-value {
+  animation: auth-art-request-value 420ms ease-out both;
+}
+
+@keyframes auth-art-request-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+.auth-art-request-pulse {
+  animation: auth-art-request-pulse 1.6s ease-in-out infinite;
+}
+
 @keyframes terminal-demo-blink {
   0%,
   100% {
@@ -898,6 +795,9 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .auth-art-request-sweep,
+  .auth-art-request-value,
+  .auth-art-request-pulse,
   .terminal-demo-blink,
   .terminal-demo-spin,
   .terminal-demo-pulse {

@@ -8,21 +8,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/common"
-	appconstant "github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/middleware"
-	appmodel "github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/wsmanager"
-	relaychannel "github.com/QuantumNous/new-api/relay/channel"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	appconstant "github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	appmodel "github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/wsmanager"
+	relaychannel "github.com/LIghtJUNction/api.lmm.best/relay/channel"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -54,11 +55,58 @@ type responsesWSErrorEvent struct {
 type responsesWSCallState struct {
 	info       *relaycommon.RelayInfo
 	usage      *dto.Usage
-	outputText strings.Builder
+	outputText responsesWSOutputTextBuffer
 	images     relaycommon.ImageGenerationCallCounter
 	commitRate middleware.ModelRequestRateLimitCommit
 	dataMu     sync.Mutex
 	finishing  bool
+}
+
+type responsesWSOutputTextBuffer struct {
+	builder strings.Builder
+	limit   int
+}
+
+func newResponsesWSOutputTextBuffer(c *gin.Context) responsesWSOutputTextBuffer {
+	limit := 0
+	if c != nil {
+		limit = common.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit)
+	}
+	if limit <= 0 {
+		limit = int(common.ResponseBodyLimit())
+	}
+	return responsesWSOutputTextBuffer{limit: limit}
+}
+
+func (b *responsesWSOutputTextBuffer) WriteString(c *gin.Context, value string) {
+	if b.limit <= 0 {
+		*b = newResponsesWSOutputTextBuffer(c)
+	}
+	if b.limit <= b.builder.Len() {
+		return
+	}
+	remaining := b.limit - b.builder.Len()
+	if len(value) > remaining {
+		for remaining > 0 && !utf8.RuneStart(value[remaining]) {
+			remaining--
+		}
+		value = value[:remaining]
+	}
+	b.builder.WriteString(value)
+}
+
+func (b *responsesWSOutputTextBuffer) Len() int {
+	if b == nil {
+		return 0
+	}
+	return b.builder.Len()
+}
+
+func (b *responsesWSOutputTextBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	return b.builder.String()
 }
 
 type responsesWSSession struct {
@@ -84,6 +132,7 @@ var isResponsesWSChannelAvailable = appmodel.IsChannelEnabledForGroupModel
 var postResponsesWSConsumeQuota = service.PostTextConsumeQuota
 
 func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.NewAPIError {
+	common.SetWebSocketReadLimit(client)
 	session := &responsesWSSession{c: c, client: client}
 	defer session.closeTarget()
 	defer session.failCurrent()
@@ -409,6 +458,22 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 			return nil, nil, types.NewError(fmt.Errorf("user sensitive words detected: %s", strings.Join(words, ", ")), types.ErrorCodeSensitiveWordsDetected, types.ErrOptionWithSkipRetry())
 		}
 	}
+	if setting.ShouldCheckAdvancedSecurityPrompt() {
+		securityText := dto.SecurityTextForRequest(&req)
+		evaluation := service.EvaluateAdvancedSecurityText(s.c, relayInfo, securityText)
+		if len(evaluation.Matches) > 0 {
+			matchIDs := make([]string, 0, len(evaluation.Matches))
+			for _, match := range evaluation.Matches {
+				matchIDs = append(matchIDs, match.RuleID)
+			}
+			logger.LogWarn(s.c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
+			if evaluation.Blocked() {
+				apiErr := service.NewAdvancedSecurityAPIError()
+				apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), relayInfo.RequestId))
+				return nil, nil, apiErr
+			}
+		}
+	}
 	tokens, err := service.EstimateRequestToken(s.c, meta, relayInfo)
 	if err != nil {
 		return nil, nil, types.NewError(err, types.ErrorCodeCountTokenFailed)
@@ -431,7 +496,12 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 		}
 		return nil, nil, apiErr
 	}
-	return &responsesWSCallState{info: relayInfo, usage: &dto.Usage{}, commitRate: commitRate}, payload, nil
+	return &responsesWSCallState{
+		info:       relayInfo,
+		usage:      &dto.Usage{},
+		outputText: newResponsesWSOutputTextBuffer(s.c),
+		commitRate: commitRate,
+	}, payload, nil
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate common.RawMessage) ([]byte, *types.NewAPIError) {
@@ -538,6 +608,7 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 		}
 		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", relaycommon.SanitizeURLForLog(fullRequestURL), err), types.ErrorCodeDoRequestFailed, statusCode)
 	}
+	common.SetWebSocketReadLimit(targetConn)
 	return targetConn, nil
 }
 
@@ -675,7 +746,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
 		terminal = true
 		success = responsesWSHasBillablePartialLocked(state)
 	case "response.output_text.delta":
-		state.outputText.WriteString(streamResponse.Delta)
+		state.outputText.WriteString(s.c, streamResponse.Delta)
 	case dto.ResponsesOutputTypeItemDone:
 		if streamResponse.Item != nil {
 			switch streamResponse.Item.Type {

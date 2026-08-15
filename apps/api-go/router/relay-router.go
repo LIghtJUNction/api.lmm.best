@@ -1,13 +1,18 @@
 package router
 
 import (
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/controller"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/relay"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	assistantRequestMaxBytes         = 64 << 10
+	assistantMutationRequestMaxBytes = 16 << 10
 )
 
 func SetRelayRouter(router *gin.Engine) {
@@ -25,7 +30,10 @@ func SetRelayRouter(router *gin.Engine) {
 			case c.GetHeader("x-api-key") != "" && c.GetHeader("anthropic-version") != "":
 				controller.ListModels(c, constant.ChannelTypeAnthropic)
 			case c.GetHeader("x-goog-api-key") != "" || c.Query("key") != "": // 单独的适配
-				controller.RetrieveModel(c, constant.ChannelTypeGemini)
+				// Gemini's OpenAI-compatible model catalog is a collection endpoint;
+				// RetrieveModel expects a :model path parameter and returned an empty
+				// error-shaped response for `/v1/models`.
+				controller.ListModels(c, constant.ChannelTypeGemini)
 			default:
 				controller.ListModels(c, constant.ChannelTypeOpenAI)
 			}
@@ -65,6 +73,67 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter.Use(middleware.UserAuth(), middleware.Distribute())
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
+	}
+	// Keep the image body ceiling before Distribute reads the model/group
+	// envelope; image responses are still relayed through the normal billing
+	// path after the controller validates the dynamic catalog.
+	playgroundImageRouter := router.Group("/pg/images")
+	playgroundImageRouter.Use(middleware.RouteTag("relay"))
+	playgroundImageRouter.Use(middleware.SystemPerformanceCheck())
+	playgroundImageRouter.Use(middleware.UserAuth(), middleware.RequestBodyLimit(32<<10), middleware.Distribute())
+	playgroundImageRouter.POST("/generations", controller.PlaygroundImage)
+	assistantPresetRouter := router.Group("/api/assistant/pre-conversation-presets")
+	assistantPresetRouter.Use(middleware.RouteTag("api"))
+	assistantPresetRouter.Use(middleware.SystemPerformanceCheck())
+	assistantPresetRouter.Use(middleware.TryUserAuth())
+	{
+		assistantPresetRouter.GET("", controller.GetPromptPresets)
+		assistantPresetRouter.POST("/:id/click", middleware.CriticalRateLimit(), controller.CountPromptPresetClick)
+	}
+	assistantRouter := router.Group("/api/assistant")
+	assistantRouter.Use(middleware.RouteTag("relay"))
+	assistantRouter.Use(middleware.SystemPerformanceCheck())
+	assistantRouter.Use(middleware.UserAuth())
+	{
+		assistantRouter.GET("/status", controller.GetAssistantStatus)
+		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
+		assistantRouter.GET("/journey", middleware.DisableCache(), controller.GetAssistantJourney)
+		assistantRouter.GET("/new-user-gift", middleware.DisableCache(), controller.GetAssistantNewUserGift)
+		assistantRouter.POST("/new-user-gift/claim", middleware.UserCriticalRateLimit("assistant-new-user-gift"), middleware.DisableCache(), controller.ClaimAssistantNewUserGift)
+		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), middleware.RequestBodyLimit(assistantRequestMaxBytes), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
+		assistantRouter.GET("/conversations", middleware.DisableCache(), controller.ListAssistantConversations)
+		assistantRouter.GET("/conversations/:id", middleware.DisableCache(), controller.GetAssistantConversationHistory)
+		assistantRouter.POST("/conversations/:id/archive", middleware.DisableCache(), controller.ArchiveAssistantConversation)
+		assistantRouter.POST("/conversations/:id/unarchive", middleware.DisableCache(), controller.UnarchiveAssistantConversation)
+		assistantRouter.GET("/cards/:id/reveal", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevealAssistantSecureCard)
+		assistantRouter.GET("/handoffs/self", middleware.DisableCache(), controller.GetAssistantHandoff)
+		assistantRouter.POST("/handoffs", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), middleware.UserCriticalRateLimit("assistant-handoff"), middleware.DisableCache(), controller.SubmitAssistantHandoff)
+		assistantRouter.POST("/tools/create-key", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), middleware.ConsoleAccessGate(), middleware.UserCriticalRateLimit("assistant-create-key"), middleware.DisableCache(), controller.CreateAssistantDefaultKey)
+		assistantRouter.POST("/drawing/generate", middleware.UserCriticalRateLimit("assistant-drawing"), middleware.RequestBodyLimit(8<<10), middleware.DisableCache(), controller.GenerateAssistantDrawing)
+	}
+	// Model prices include group ratios and therefore can disclose the same
+	// discounted console inventory as /api/pricing.  Keep this read behind the
+	// developer-access boundary before UserAuth so anonymous and L0 callers
+	// receive the generic 404 instead of a pricing response.
+	assistantPricingRouter := router.Group("/api/assistant")
+	assistantPricingRouter.Use(middleware.RouteTag("relay"))
+	assistantPricingRouter.Use(middleware.SystemPerformanceCheck())
+	assistantPricingRouter.Use(middleware.ConsoleAccessGate())
+	assistantPricingRouter.Use(middleware.UserAuth())
+	assistantPricingRouter.GET("/pricing", controller.GetAssistantPricing)
+	assistantAdminRouter := router.Group("/api/assistant/admin")
+	assistantAdminRouter.Use(middleware.RouteTag("api"))
+	assistantAdminRouter.Use(middleware.AdminAuth())
+	{
+		assistantAdminRouter.POST("/apply", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ApplyAssistantAdminChange)
+		assistantAdminRouter.GET("/handoffs", controller.AdminListAssistantHandoffs)
+		assistantAdminRouter.POST("/handoffs/:id/resolve", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), middleware.CriticalRateLimit(), controller.AdminResolveAssistantHandoff)
+		assistantAdminRouter.GET("/intents", controller.AdminGetAssistantIntentSummary)
+		assistantAdminRouter.GET("/first-questions", middleware.DisableCache(), controller.AdminGetAssistantFirstQuestionSummary)
+		assistantAdminRouter.GET("/profiles", controller.AdminGetAssistantProfileSummary)
+		assistantAdminRouter.GET("/funding", controller.AdminGetAssistantFundingSummary)
+		assistantAdminRouter.GET("/review", middleware.DisableCache(), controller.AdminGetAssistantReview)
+		assistantAdminRouter.POST("/review/run", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.AdminRunAssistantReview)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

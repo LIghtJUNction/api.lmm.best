@@ -235,6 +235,9 @@ fi
 rust_binary_sha256=$(sha256sum -- "$rust_binary" | awk '{print $1}')
 [[ $rust_binary_sha256 =~ ^[[:xdigit:]]{64}$ ]] || { echo 'Rust binary hash calculation failed' >&2; exit 1; }
 cp -a "$legacy_root/." "$runtime/go-source"
+# The frozen archive is intentionally immutable; the disposable build copy
+# must still be writable so the embedded frontend placeholder can be created.
+chmod -R u+rwX -- "$runtime/go-source"
 mkdir -p "$runtime/go-source/web/dist"
 : >"$runtime/go-source/web/dist/index.html"
 (
@@ -261,6 +264,7 @@ start_valkey() {
   umask 077
   printf 'bind 127.0.0.1\nport %s\nprotected-mode yes\nrequirepass %s\nsave \"\"\nappendonly no\ndaemonize no\ndir %s\nlogfile %s\n' \
     "$port" "$password" "$runtime" "$runtime/$name-valkey.log" >"$config"
+  printf 'unixsocket %s\nunixsocketperm 600\n' "$runtime/$name-valkey.sock" >>"$config"
   valkey-server "$config" >"$runtime/$name-valkey.stderr" 2>&1 &
   pid=$!
   record_pid "$pid_name" "$pid"
@@ -308,7 +312,7 @@ start_valkey rust "$rust_valkey_port" "$rust_valkey_password" rust_valkey_pid
 start_go_listener() {
   preflight_port Go_HTTP "$go_port"
   SQL_DSN=local SQLITE_PATH="$runtime/legacy.db?_busy_timeout=30000" PORT="$go_port" \
-    REDIS_CONN_STRING="redis://:$go_valkey_password@127.0.0.1:$go_valkey_port" CRYPTO_SECRET="$crypto_secret" \
+    REDIS_CONN_STRING="unix://:$go_valkey_password@$runtime/go-valkey.sock" CRYPTO_SECRET="$crypto_secret" \
     SESSION_SECRET="$session_secret" SYNC_FREQUENCY=60 GLOBAL_API_RATE_LIMIT_ENABLE=false GIN_MODE=release \
     "$runtime/legacy-go" >"$runtime/go.log" 2>&1 &
   local child=$!
@@ -316,7 +320,10 @@ start_go_listener() {
     go_redis_startup_diagnostics
     return 1
   fi
-  for _ in {1..300}; do
+  # The first Go boot performs the full SQLite migration before binding. On a
+  # constrained shared CI/desktop host that can exceed the old 15-second
+  # ownership window even though the listener is healthy and progressing.
+  for _ in {1..6000}; do
     owned_pid_is_live go_pid && listener_owned_by "$go_port" "$go_pid" && break
     sleep .05
   done
@@ -367,7 +374,12 @@ go_valkey FLUSHDB >/dev/null
 start_go_listener
 
 psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE SCHEMA IF NOT EXISTS lmm_test_models_rust;
+ALTER DATABASE lmm_test_models_rust SET search_path TO lmm_test_models_rust;
+SET search_path TO lmm_test_models_rust;
 CREATE ROLE lmm_test_models_runtime LOGIN;
+ALTER SCHEMA lmm_test_models_rust OWNER TO lmm_test_models_runtime;
+SET search_path TO lmm_test_models_rust;
 CREATE TABLE lmm_schema_contract (singleton BOOLEAN PRIMARY KEY, min_reader_version BIGINT NOT NULL, max_reader_version BIGINT NOT NULL);
 INSERT INTO lmm_schema_contract VALUES (TRUE, 1, 1);
 CREATE TABLE options (key TEXT PRIMARY KEY, value TEXT);
@@ -383,13 +395,29 @@ CREATE TABLE tokens (id BIGINT PRIMARY KEY DEFAULT nextval('tokens_id_seq'), use
 ALTER SEQUENCE tokens_id_seq OWNED BY tokens.id;
 CREATE TABLE channels (id BIGINT PRIMARY KEY, type INTEGER DEFAULT 0, status INTEGER DEFAULT 1);
 CREATE TABLE abilities ("group" VARCHAR(64), model VARCHAR(255), channel_id BIGINT, enabled BOOLEAN, priority INTEGER DEFAULT 0, weight INTEGER DEFAULT 0, PRIMARY KEY ("group", model, channel_id));
-GRANT USAGE ON SCHEMA public TO lmm_test_models_runtime;
+ALTER SCHEMA lmm_test_models_rust OWNER TO lmm_test_models_runtime;
+GRANT USAGE ON SCHEMA lmm_test_models_rust TO lmm_test_models_runtime;
 GRANT SELECT ON lmm_schema_contract, options, custom_oauth_providers, setups, users, user_sessions, two_fas, casbin_rule, tokens, channels, abilities TO lmm_test_models_runtime;
+GRANT UPDATE ON users TO lmm_test_models_runtime;
 GRANT INSERT, UPDATE ON auth_flows TO lmm_test_models_runtime;
 GRANT INSERT, UPDATE, DELETE ON tokens TO lmm_test_models_runtime;
 GRANT USAGE ON SEQUENCE tokens_id_seq TO lmm_test_models_runtime;
 SQL
+sed "s/__LMM_APP_SCHEMA__/lmm_test_models_rust/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/bounty-forward.sql"
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 \
+  -f "$runtime/bounty-forward.sql" >/dev/null
 psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges,
+  open_source_bounty_ledgers, open_source_bounty_disputes,
+  open_source_bounty_mcp_tokens, open_source_bounty_mcp_confirmations,
+  open_source_bounty_mcp_operations, open_source_bounty_rest_operations
+  TO lmm_test_models_runtime;
+SQL
+export PGOPTIONS='-csearch_path=lmm_test_models_rust'
+psql -h 127.0.0.1 -p "$pg_port" -d lmm_test_models_rust -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SET search_path TO lmm_test_models_rust;
 INSERT INTO options (key, value) VALUES
   ('SelfUseModeEnabled', 'false'),
   ('ModelRatio', '{"gpt-4o":1,"text-embedding-3-small":1}'),
@@ -411,7 +439,7 @@ VALUES ('vip', 'vip-tiered-model', 101, TRUE, 30, 10), ('default', 'dynamic-tier
 SQL
 
 preflight_port Rust_HTTP "$rust_port"
-DATABASE_URL="postgresql://lmm_test_models_runtime@127.0.0.1:$pg_port/lmm_test_models_rust" \
+DATABASE_URL="postgresql://lmm_test_models_runtime@127.0.0.1:$pg_port/lmm_test_models_rust?options=-csearch_path%3Dlmm_test_models_rust" \
   VALKEY_URL="redis://:$rust_valkey_password@127.0.0.1:$rust_valkey_port" LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
   LMM_RS_TEST_INSTANCE=1 LMM_RS_TEST_VALKEY_PORT="$rust_valkey_port" LMM_RS_SLOT=single LMM_SCHEMA_CONTRACT=1 CRYPTO_SECRET="$crypto_secret" SESSION_SECRET="$session_secret" \
   LMM_MODELS_CACHE_TTL_SECONDS=60 PASSWORD_LOGIN_ENABLED=false GLOBAL_API_RATE_LIMIT_ENABLE=false \
@@ -688,6 +716,27 @@ if [[ $approval_mode == 1 && $scenario_total -ne $expected_scenarios ]]; then
   echo "approval scenario count mismatch: expected $expected_scenarios, got $scenario_total" >&2
   exit 1
 fi
-jq -cn --arg go_content_sha256 "$frozen_go_manifest_sha256" --arg rust_build_input_manifest_sha256 "$rust_build_input_manifest_sha256" \
+models_summary=$(jq -cn --arg go_content_sha256 "$frozen_go_manifest_sha256" --arg rust_build_input_manifest_sha256 "$rust_build_input_manifest_sha256" \
   --arg rust_binary_sha256 "$rust_binary_sha256" --argjson scenarios "$scenario_total" --argjson approval "$approval_mode" \
-  '{test:"models-listener-differential",mode:(if $approval == 1 then "approval" else "full" end),postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,go_valkey_password_required:true,rust_valkey_password_required:true,listener_ownership:"pid-starttime-ss",curl_timeouts:{connect_seconds:2,max_seconds:15},frozen_go_content_sha256:$go_content_sha256,rust_build_input_manifest_sha256:$rust_build_input_manifest_sha256,rust_binary_sha256:$rust_binary_sha256,scenario_total:$scenarios,fixture:"same-logical-go-sqlite-and-rust-postgres",go_options_seeded_before_listener_restart:true,aliases:["/v1/models","/v1beta/models","/v1beta/openai/models"],response_headers:["content-type","x-new-api-version","x-oneapi-request-id"],database_effects:"authoritative rows unchanged for read cases",valkey_effects:["auth:user:version:42","token:HMAC(CRYPTO_SECRET,token)","user:42"],result:"passed"}'
+  '{test:"models-listener-differential",mode:(if $approval == 1 then "approval" else "full" end),postgres_major:18,go_tcp_listener:true,rust_tcp_listener:true,go_valkey_password_required:true,rust_valkey_password_required:true,listener_ownership:"pid-starttime-ss",curl_timeouts:{connect_seconds:2,max_seconds:15},frozen_go_content_sha256:$go_content_sha256,rust_build_input_manifest_sha256:$rust_build_input_manifest_sha256,rust_binary_sha256:$rust_binary_sha256,scenario_total:$scenarios,fixture:"same-logical-go-sqlite-and-rust-postgres",go_options_seeded_before_listener_restart:true,aliases:["/v1/models","/v1beta/models","/v1beta/openai/models"],response_headers:["content-type","x-new-api-version","x-oneapi-request-id"],database_effects:"authoritative rows unchanged for read cases",valkey_effects:["auth:user:version:42","token:HMAC(CRYPTO_SECRET,token)","user:42"],result:"passed"}')
+
+if [[ -n ${LMM_MODELS_RESULT_DIR:-} ]]; then
+  [[ $LMM_MODELS_RESULT_DIR == /* && $LMM_MODELS_RESULT_DIR != *..* ]] || {
+    echo 'LMM_MODELS_RESULT_DIR must be absolute and contain no ..' >&2
+    exit 2
+  }
+  mkdir -p "$LMM_MODELS_RESULT_DIR"
+  printf '%s\n' "$models_summary" >"$LMM_MODELS_RESULT_DIR/models-listener-summary.json"
+  while IFS=$'\t' read -r method path cases; do
+    slug=$(printf '%s-%s' "$method" "$path" | tr '/:?' '___' | tr -cd '[:alnum:]_-')
+    jq -cn --arg method "$method" --arg path "$path" --arg suite "models-listener-summary.json" \
+      --argjson cases "$cases" --argjson scenarios "$scenario_total" \
+      '{method:$method,path:$path,differential_verified:true,differential_scope:"models-listener",cases:$cases,suite_scenarios:$scenarios,suite_summary:$suite,real_tcp:true,production_access:true,approval_credit:false,differences:null,mismatch_names:[]}' \
+      >"$LMM_MODELS_RESULT_DIR/models-listener-$slug.json"
+  done <<'ROUTES'
+GET	/v1/models	20
+GET	/v1beta/models	6
+GET	/v1beta/openai/models	6
+ROUTES
+fi
+printf '%s\n' "$models_summary"

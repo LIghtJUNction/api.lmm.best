@@ -31,6 +31,7 @@ import type { BountyNotification } from '@/features/open-source-bounties/types'
 import { useStatus } from '@/hooks/use-status'
 import { getNotice } from '@/lib/api'
 import { getBackendCapabilities } from '@/lib/backend-capabilities'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 import { useNotificationStore } from '@/stores/notification-store'
 
@@ -76,7 +77,8 @@ function getAnnouncementKey(item: Record<string, unknown>): string {
 export function useNotifications() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const userId = useAuthStore((state) => state.auth.user?.id ?? 0)
+  const authUser = useAuthStore((state) => state.auth.user)
+  const userId = authUser?.id ?? 0
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<NotificationTab>('notice')
   const [thankingTipId, setThankingTipId] = useState(0)
@@ -108,7 +110,10 @@ export function useNotifications() {
     [announcementsEnabled, statusAnnouncements]
   )
   const bountyNotificationsEnabled =
-    userId > 0 && capabilitiesReady && backendCapabilities.bounty_notifications
+    userId > 0 &&
+    isConsoleActivated(authUser) &&
+    capabilitiesReady &&
+    backendCapabilities.bounty_notifications
   const bountyNotificationsQueryKey = [
     'open-source-bounties',
     'notifications',

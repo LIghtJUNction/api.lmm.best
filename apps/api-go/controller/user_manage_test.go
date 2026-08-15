@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service/authz"
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -33,6 +34,12 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.AutoMigrate(
 		&model.User{}, &model.UserSession{}, &model.Log{}, &model.CasbinRule{}, &model.AuthzRole{},
+		&model.TopUp{}, &model.DeveloperAccessRequest{}, &model.DeveloperAccessRecommendationArchive{}, &model.UnifiedTodoRead{},
+		&model.AccountActionRequest{}, &model.L1OnboardingTodo{}, &model.AdvancedSecurityEvent{},
+		&model.AssistantLead{}, &model.AssistantUserProfile{}, &model.AssistantUserProfileAudit{}, &model.AssistantMemory{},
+		&model.PromptConversionRef{}, &model.PromptConversationRef{}, &model.AssistantConversation{}, &model.AssistantHistoryMessage{},
+		&model.AssistantSecureCard{}, &model.AssistantSecurityIncident{},
+		&model.AssistantNewUserGift{},
 	))
 
 	t.Cleanup(func() {
@@ -65,7 +72,49 @@ func performManageUserRequestAsRole(t *testing.T, body string, role int) *httpte
 	return recorder
 }
 
-func TestManageUserTrustLevelOverrideValidation(t *testing.T) {
+func performSelfUserRequest(t *testing.T, userID int) map[string]interface{} {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/user/self", nil)
+	c.Set("id", userID)
+	GetSelf(c)
+	var payload struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	return payload.Data
+}
+
+func performAssistantStatusRequest(t *testing.T, userID int) map[string]interface{} {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/assistant/status", nil)
+	c.Set("id", userID)
+	GetAssistantStatus(c)
+	var payload struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	return payload.Data
+}
+
+func performDeveloperAccessRequest(t *testing.T, userID int) map[string]interface{} {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/user/developer-access/request", nil)
+	c.Set("id", userID)
+	GetDeveloperAccessRequest(c)
+	var payload struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+	return payload.Data
+}
+
+func TestManageUserTrustLevelPersistsOverrideAndCanRestoreAutomatic(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	user := model.User{
 		Username: "managed-trust-user", Password: "password", Role: common.RoleCommonUser,
@@ -73,18 +122,21 @@ func TestManageUserTrustLevelOverrideValidation(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&user).Error)
 
-	for _, value := range []int{0, 1, 2, 3, 4, -1} {
+	for _, value := range []int{0, 1, 2, 3, 4} {
 		recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":%d}`, user.Id, value))
 		assert.Contains(t, recorder.Body.String(), `"success":true`, "value %d", value)
 
 		var updated model.User
 		require.NoError(t, db.First(&updated, user.Id).Error)
-		if value == -1 {
-			assert.Nil(t, updated.TrustLevelOverride)
-		} else if assert.NotNil(t, updated.TrustLevelOverride) {
-			assert.Equal(t, value, *updated.TrustLevelOverride)
-		}
+		require.NotNil(t, updated.TrustLevelOverride)
+		assert.Equal(t, value, *updated.TrustLevelOverride)
 	}
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":-1}`, user.Id))
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.Id).Error)
+	assert.Nil(t, updated.TrustLevelOverride)
 
 	for _, value := range []int{-2, 5} {
 		recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":%d}`, user.Id, value))
@@ -105,6 +157,168 @@ func TestManageUserTrustLevelRejectsAdministratorsAndPeerTargets(t *testing.T) {
 
 	peerRecorder := performManageUserRequestAsRole(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":4}`, admin.Id), common.RoleAdminUser)
 	assert.Contains(t, peerRecorder.Body.String(), `"success":false`)
+}
+
+func TestManageUserTrustLevelL0ClearsApprovedDeveloperAccessAndAllowsReapproval(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	now := time.Now().Unix()
+	user := model.User{
+		Username: "managed-l0-downgrade-user", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 3,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	request, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I need access for the managed downgrade test",
+		"Recommend L1 because the user supplied a concrete integration purpose for the test.",
+	)
+	require.NoError(t, err)
+	approved, err := model.ReviewDeveloperAccessRequest(9999, request.Id, true, "approved for the downgrade test")
+	require.NoError(t, err)
+	assert.Equal(t, model.DeveloperAccessRequestApproved, approved.Status)
+
+	var activated model.User
+	require.NoError(t, db.First(&activated, user.Id).Error)
+	require.Positive(t, activated.ConsoleActivatedAt)
+	require.NoError(t, db.Create(&model.UserSession{
+		SID: "managed-l0-downgrade-session", UserID: user.Id, Version: 1, UserAuthVersion: activated.AuthVersion,
+		Status: model.UserSessionStatusActive, RefreshHash: "managed-l0-refresh-hash", LoginMethod: "password",
+		LastActiveAt: now, ExpiresAt: now + 3600,
+	}).Error)
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"set_trust_level","value":0}`, user.Id))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var downgraded model.User
+	require.NoError(t, db.First(&downgraded, user.Id).Error)
+	assert.EqualValues(t, 0, downgraded.ConsoleActivatedAt)
+	require.NotNil(t, downgraded.TrustLevelOverride)
+	assert.Equal(t, model.TrustLevelMinUser, *downgraded.TrustLevelOverride)
+	assert.EqualValues(t, activated.AuthVersion+1, downgraded.AuthVersion)
+	var session model.UserSession
+	require.NoError(t, db.First(&session, "sid = ?", "managed-l0-downgrade-session").Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+
+	self := performSelfUserRequest(t, user.Id)
+	assert.Equal(t, false, self["developer_access_granted"])
+	trust, ok := self["trust_level_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, float64(model.TrustLevelMinUser), trust["level"])
+	assistantStatus := performAssistantStatusRequest(t, user.Id)
+	assert.Equal(t, false, assistantStatus["developer_access_granted"])
+	assert.Equal(t, "L0", assistantStatus["access_level"])
+
+	latestRequest := performDeveloperAccessRequest(t, user.Id)
+	assert.Equal(t, model.DeveloperAccessRequestPending, latestRequest["status"])
+	assert.NotEqual(t, model.DeveloperAccessRequestApproved, latestRequest["status"])
+	assert.Equal(t, approved.Id, int(latestRequest["id"].(float64)))
+	var requestCount int64
+	require.NoError(t, db.Model(&model.DeveloperAccessRequest{}).Where("user_id = ?", user.Id).Count(&requestCount).Error)
+	assert.EqualValues(t, 1, requestCount)
+
+	reopened, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I need access again after the administrator reset the account",
+		"Recommend L1 because the user supplied a concrete integration purpose for the test.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int(latestRequest["id"].(float64)), reopened.Id)
+	approvedAgain, err := model.ReviewDeveloperAccessRequest(9999, reopened.Id, true, "approved again after the explicit L0 reset")
+	require.NoError(t, err)
+	assert.Equal(t, model.DeveloperAccessRequestApproved, approvedAgain.Status)
+
+	self = performSelfUserRequest(t, user.Id)
+	assert.Equal(t, true, self["developer_access_granted"])
+	trust, ok = self["trust_level_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, float64(model.TrustLevelMinUser+1), trust["level"])
+	assistantStatus = performAssistantStatusRequest(t, user.Id)
+	assert.Equal(t, true, assistantStatus["developer_access_granted"])
+	assert.Equal(t, "L1", assistantStatus["access_level"])
+}
+
+func TestManageUserResetOnboardingToL0(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	now := time.Now().Unix()
+	user := model.User{
+		Username: "managed-reset-user", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", ConsoleActivatedAt: now - 3600,
+		AuthVersion: 4,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	// A completed external payment is a durable L1 fact. The explicit L0
+	// override must take precedence over it until a later administrator action
+	// deliberately clears the reset.
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId: user.Id, TradeNo: "managed-reset-paid", Amount: 1,
+		CreditedQuota: int64(common.QuotaPerUnit), Money: 1,
+		Status: common.TopUpStatusSuccess, PaymentProvider: model.PaymentProviderStripe,
+		CompleteTime: now,
+	}).Error)
+	approvedRequest, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I need access for the managed reset test",
+		"Recommend L1 because the user supplied a concrete integration purpose for the test.",
+	)
+	require.NoError(t, err)
+	approvedRequest, err = model.ReviewDeveloperAccessRequest(9999, approvedRequest.Id, true, "approved before the managed reset")
+	require.NoError(t, err)
+	assert.Equal(t, model.DeveloperAccessRequestApproved, approvedRequest.Status)
+	require.NoError(t, db.Create(&model.UserSession{
+		SID: "managed-reset-session", UserID: user.Id, Version: 4, UserAuthVersion: 4,
+		Status: model.UserSessionStatusActive, RefreshHash: "reset-refresh-hash", LoginMethod: "password",
+		LastActiveAt: now, ExpiresAt: now + 3600,
+	}).Error)
+
+	recorder := performManageUserRequest(t, fmt.Sprintf(`{"id":%d,"action":"reset_onboarding"}`, user.Id))
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.Id).Error)
+	assert.EqualValues(t, 0, updated.ConsoleActivatedAt)
+	require.NotNil(t, updated.TrustLevelOverride)
+	assert.Equal(t, 0, *updated.TrustLevelOverride)
+	assert.EqualValues(t, 5, updated.AuthVersion)
+	access, err := model.GetDeveloperAccessStateForUser(&updated)
+	require.NoError(t, err)
+	assert.False(t, access.Granted)
+	latestRequest, err := model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, latestRequest)
+	assert.Equal(t, model.DeveloperAccessRequestPending, latestRequest.Status)
+	assert.Equal(t, approvedRequest.Id, latestRequest.Id)
+	var requestCount int64
+	require.NoError(t, db.Model(&model.DeveloperAccessRequest{}).Where("user_id = ?", user.Id).Count(&requestCount).Error)
+	assert.EqualValues(t, 1, requestCount)
+	trust, err := model.GetTrustLevelInfoForUser(&updated)
+	require.NoError(t, err)
+	assert.Equal(t, model.TrustLevelMinUser, trust.Level)
+
+	var session model.UserSession
+	require.NoError(t, db.First(&session, "sid = ?", "managed-reset-session").Error)
+	assert.Equal(t, model.UserSessionStatusRevoked, session.Status)
+
+	// The reset is a temporary, administrator-controlled floor rather than a
+	// permanent lock. A fresh AI recommendation approved by an administrator
+	// must clear the override and restore L1 access.
+	request, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I need access for the managed integration test",
+		"Recommend L1 because the user supplied a concrete integration purpose for the test.",
+	)
+	require.NoError(t, err)
+	_, err = model.ReviewDeveloperAccessRequest(9999, request.Id, true, "approved for the managed test")
+	require.NoError(t, err)
+	var upgraded model.User
+	require.NoError(t, db.First(&upgraded, user.Id).Error)
+	assert.Nil(t, upgraded.TrustLevelOverride)
+	assert.Positive(t, upgraded.ConsoleActivatedAt)
+	access, err = model.GetDeveloperAccessStateForUser(&upgraded)
+	require.NoError(t, err)
+	assert.True(t, access.Granted)
 }
 
 func TestManageUserDisableAdvancesAuthVersionOnceAndRevokesSession(t *testing.T) {

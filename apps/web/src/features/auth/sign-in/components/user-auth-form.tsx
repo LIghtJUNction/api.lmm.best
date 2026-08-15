@@ -59,6 +59,8 @@ import { getServerErrorMessageKey } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { AccountAppealForm } from './account-appeal-form'
+
 export function UserAuthForm({
   className,
   redirectTo,
@@ -306,14 +308,26 @@ export function UserAuthForm({
 
   const alternativeLoginMethods = (
     <>
+      {/* The configured Google custom OAuth provider is promoted into the
+          familiar branded entry point; all other providers stay secondary. */}
+      <OAuthProviders
+        status={status}
+        redirectTo={redirectTo}
+        acceptedLegal={agreedToLegal}
+        disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+        onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
+        isWeChatLoading={isWeChatSubmitting}
+        featureGoogle
+      />
+
       {passkeyLoginEnabled && (
-        <div className='mt-2 space-y-1'>
+        <div className='space-y-1'>
           <Button
             type='button'
-            variant='outline'
+            variant='ghost'
             disabled={passkeyButtonDisabled}
             onClick={handlePasskeyLogin}
-            className='h-11 w-full justify-center gap-2 rounded-lg'
+            className='text-muted-foreground hover:text-foreground h-10 w-full justify-center gap-2 rounded-xl'
           >
             {isPasskeyLoading ? (
               <Loader2 className='h-4 w-4 animate-spin' />
@@ -329,15 +343,6 @@ export function UserAuthForm({
           )}
         </div>
       )}
-
-      {/* OAuth Providers */}
-      <OAuthProviders
-        status={status}
-        redirectTo={redirectTo}
-        disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
-        onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
-        isWeChatLoading={isWeChatSubmitting}
-      />
     </>
   )
 
@@ -345,10 +350,23 @@ export function UserAuthForm({
     <Form {...form}>
       <form
         onSubmit={form.handleSubmit(onSubmit)}
-        className={cn('grid gap-4', className)}
+        className={cn('grid gap-5', className)}
         {...props}
       >
         {hasAlternativeLogin && alternativeLoginMethods}
+
+        {hasAlternativeLogin && passwordLoginEnabled ? (
+          <div className='relative py-0.5' aria-hidden='true'>
+            <div className='absolute inset-0 flex items-center'>
+              <span className='w-full border-t' />
+            </div>
+            <div className='relative flex justify-center text-xs'>
+              <span className='bg-background text-muted-foreground px-3'>
+                {t('Or')}
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         {passwordLoginEnabled && (
           <>
@@ -361,7 +379,9 @@ export function UserAuthForm({
                   <FormLabel>{t('Username or Email')}</FormLabel>
                   <FormControl>
                     <Input
+                      autoComplete='username'
                       placeholder={t('Enter your username or email')}
+                      className='auth-field h-11 rounded-xl'
                       {...field}
                     />
                   </FormControl>
@@ -379,7 +399,9 @@ export function UserAuthForm({
                   <FormLabel>{t('Password')}</FormLabel>
                   <FormControl>
                     <PasswordInput
+                      autoComplete='current-password'
                       placeholder={t('Enter password')}
+                      className='auth-field h-11 rounded-xl'
                       {...field}
                     />
                   </FormControl>
@@ -397,7 +419,7 @@ export function UserAuthForm({
             {/* Submit Button */}
             <Button
               type='submit'
-              className='mt-2 w-full justify-center gap-2'
+              className='mt-1 h-11 w-full justify-center gap-2 rounded-xl'
               disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
             >
               {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
@@ -491,6 +513,9 @@ export function UserAuthForm({
           </div>
         </Dialog>
       )}
+      <div className='pt-2'>
+        <AccountAppealForm />
+      </div>
     </Form>
   )
 }

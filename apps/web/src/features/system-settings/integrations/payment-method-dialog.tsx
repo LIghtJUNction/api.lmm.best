@@ -36,12 +36,22 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
 
 import { getPaymentMethodRatePresets } from './payment-method-rate-presets'
 
 const SETTLEMENT_UNIT_PATTERN = /^[A-Za-z0-9._-]{1,16}$/
 const POSITIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
+const NON_NEGATIVE_INTEGER_PATTERN = /^(?:0|[1-9][0-9]*)$/
+const NON_NEGATIVE_DECIMAL_PATTERN = /^[0-9]+(?:\.[0-9]+)?$/
 
 const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
   z
@@ -49,7 +59,79 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
       name: z.string().min(1, t('Payment method name is required')),
       type: z.string().min(1, t('Payment type key is required')),
       icon: z.string().optional(),
-      min_topup: z.string().optional(),
+      enabled: z.boolean(),
+      description: z
+        .string()
+        .max(240, t('Description must be 240 characters or fewer'))
+        .optional(),
+      color: z
+        .string()
+        .optional()
+        .refine(
+          (value) => !value?.trim() || /^#[0-9a-fA-F]{6}$/.test(value.trim()),
+          { message: t('Color must be a six-digit hex value') }
+        ),
+      min_topup: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_DECIMAL_PATTERN.test(value.trim()) &&
+              Number.isFinite(Number(value.trim()))),
+          {
+            message: t('Minimum top-up must be a non-negative decimal number'),
+          }
+        ),
+      max_topup: z
+        .string()
+        .optional()
+        .refine(
+          (value) => {
+            if (!value?.trim()) return true
+            const trimmed = value.trim()
+            return POSITIVE_DECIMAL_PATTERN.test(trimmed) && Number(trimmed) > 0
+          },
+          {
+            message: t('Maximum top-up must be a positive decimal number'),
+          }
+        ),
+      unlock_after_days: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_INTEGER_PATTERN.test(value.trim()) &&
+              Number.isSafeInteger(Number(value.trim()))),
+          { message: t('Unlock delay must be a non-negative whole number') }
+        ),
+      audience_mode: z.enum(['legacy', 'all', 'include', 'exclude']),
+      audience_match: z.enum(['any', 'all']),
+      audience_email_contains: z.string().optional(),
+      audience_oauth_provider: z.string().optional(),
+      audience_user_group: z.string().optional(),
+      audience_role: z.enum(['none', 'common', 'admin', 'root']),
+      audience_linuxdo_score_min: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_DECIMAL_PATTERN.test(value.trim()) &&
+              Number.isFinite(Number(value.trim()))),
+          { message: t('LinuxDO score must be a non-negative number') }
+        ),
+      audience_linuxdo_score_max: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_DECIMAL_PATTERN.test(value.trim()) &&
+              Number.isFinite(Number(value.trim()))),
+          { message: t('LinuxDO score must be a non-negative number') }
+        ),
       topup_ratio: z
         .string()
         .optional()
@@ -59,7 +141,9 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
             const trimmed = value.trim()
             return POSITIVE_DECIMAL_PATTERN.test(trimmed) && Number(trimmed) > 0
           },
-          { message: t('Payment multiplier must be a positive decimal number') }
+          {
+            message: t('Payment multiplier must be a positive decimal number'),
+          }
         ),
       settlement_unit: z
         .string()
@@ -103,6 +187,51 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
           path: ['settlement_unit'],
         })
       }
+
+      const hasAudienceCondition =
+        !!values.audience_email_contains?.trim() ||
+        (!!values.audience_oauth_provider?.trim() &&
+          values.audience_oauth_provider !== 'none') ||
+        !!values.audience_linuxdo_score_min?.trim() ||
+        !!values.audience_linuxdo_score_max?.trim() ||
+        !!values.audience_user_group?.trim() ||
+        (!!values.audience_role?.trim() && values.audience_role !== 'none')
+      if (
+        (values.audience_mode === 'include' ||
+          values.audience_mode === 'exclude') &&
+        !hasAudienceCondition
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Add at least one audience condition'),
+          path: ['audience_mode'],
+        })
+      }
+
+      const scoreMin = values.audience_linuxdo_score_min?.trim()
+      const scoreMax = values.audience_linuxdo_score_max?.trim()
+      if (scoreMin && scoreMax && Number(scoreMin) > Number(scoreMax)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Minimum LinuxDO score cannot exceed maximum score'),
+          path: ['audience_linuxdo_score_max'],
+        })
+      }
+
+      const minTopUp = values.min_topup?.trim()
+      const maxTopUp = values.max_topup?.trim()
+      if (
+        minTopUp &&
+        maxTopUp &&
+        NON_NEGATIVE_DECIMAL_PATTERN.test(minTopUp) &&
+        Number(minTopUp) > Number(maxTopUp)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Minimum top-up cannot exceed maximum top-up'),
+          path: ['max_topup'],
+        })
+      }
     })
 
 type PaymentMethodDialogFormValues = z.infer<
@@ -115,11 +244,23 @@ export type PaymentMethodData = {
   name: string
   type: string
   icon?: string
+  enabled?: string
+  description?: string
+  color?: string
   min_topup?: string
+  max_topup?: string
+  unlock_after_days?: string
+  audience_mode?: 'legacy' | 'all' | 'include' | 'exclude'
+  audience_match?: 'any' | 'all'
+  audience_email_contains?: string
+  audience_oauth_provider?: string
+  audience_user_group?: string
+  audience_role?: 'none' | 'common' | 'admin' | 'root'
+  audience_linuxdo_score_min?: string
+  audience_linuxdo_score_max?: string
   topup_ratio?: string
   settlement_unit?: string
   unit_price?: string
-  color?: string
 }
 
 type PaymentMethodDialogProps = {
@@ -169,6 +310,18 @@ export function PaymentMethodDialog({
       value: 'stripe',
     },
     {
+      iconName: '',
+      label: 'Creem (creem)',
+      name: 'Creem',
+      value: 'creem',
+    },
+    {
+      iconName: '',
+      label: 'Waffo (waffo)',
+      name: 'Waffo',
+      value: 'waffo',
+    },
+    {
       iconName: 'SiLinux',
       label: 'LINUX DO Credit (Epay: epay)',
       name: 'LINUX DO Credit',
@@ -190,7 +343,20 @@ export function PaymentMethodDialog({
       name: '',
       type: '',
       icon: '',
+      enabled: true,
+      description: '',
+      color: '',
       min_topup: '',
+      max_topup: '',
+      unlock_after_days: '',
+      audience_mode: 'legacy',
+      audience_match: 'any',
+      audience_email_contains: '',
+      audience_oauth_provider: 'none',
+      audience_user_group: '',
+      audience_role: 'none',
+      audience_linuxdo_score_min: '',
+      audience_linuxdo_score_max: '',
       topup_ratio: '',
       settlement_unit: '',
       unit_price: '',
@@ -202,6 +368,7 @@ export function PaymentMethodDialog({
   const settlementUnitValue = form.watch('settlement_unit')?.trim()
   const unitPriceValue = form.watch('unit_price')?.trim()
   const usesDedicatedPricing = usesDedicatedPaymentPricing(selectedType)
+  const audienceMode = form.watch('audience_mode')
   const ratePresets = getPaymentMethodRatePresets(globalPrice)
 
   useEffect(() => {
@@ -210,7 +377,20 @@ export function PaymentMethodDialog({
         name: editData.name,
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
+        enabled: editData.enabled !== 'false',
+        description: editData.description ?? '',
+        color: editData.color ?? '',
         min_topup: editData.min_topup ?? '',
+        max_topup: editData.max_topup ?? '',
+        unlock_after_days: editData.unlock_after_days ?? '',
+        audience_mode: editData.audience_mode ?? 'legacy',
+        audience_match: editData.audience_match ?? 'any',
+        audience_email_contains: editData.audience_email_contains ?? '',
+        audience_oauth_provider: editData.audience_oauth_provider ?? 'none',
+        audience_user_group: editData.audience_user_group ?? '',
+        audience_role: editData.audience_role ?? 'none',
+        audience_linuxdo_score_min: editData.audience_linuxdo_score_min ?? '',
+        audience_linuxdo_score_max: editData.audience_linuxdo_score_max ?? '',
         topup_ratio: editData.topup_ratio ?? '',
         settlement_unit: editData.settlement_unit ?? '',
         unit_price: editData.unit_price ?? '',
@@ -220,7 +400,20 @@ export function PaymentMethodDialog({
         name: '',
         type: '',
         icon: '',
+        enabled: true,
+        description: '',
+        color: '',
         min_topup: '',
+        max_topup: '',
+        unlock_after_days: '',
+        audience_mode: 'legacy',
+        audience_match: 'any',
+        audience_email_contains: '',
+        audience_oauth_provider: 'none',
+        audience_user_group: '',
+        audience_role: 'none',
+        audience_linuxdo_score_min: '',
+        audience_linuxdo_score_max: '',
         topup_ratio: '',
         settlement_unit: '',
         unit_price: '',
@@ -236,8 +429,52 @@ export function PaymentMethodDialog({
     if (values.icon && values.icon.trim() !== '') {
       data.icon = values.icon.trim()
     }
+    if (!values.enabled) data.enabled = 'false'
+    if (values.description?.trim()) data.description = values.description.trim()
+    if (values.color?.trim()) data.color = values.color.trim()
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
+    }
+    if (values.max_topup?.trim()) {
+      data.max_topup = values.max_topup.trim()
+    }
+    if (
+      values.unlock_after_days?.trim() &&
+      values.unlock_after_days.trim() !== '0'
+    ) {
+      data.unlock_after_days = values.unlock_after_days.trim()
+    }
+    if (values.audience_mode !== 'legacy') {
+      data.audience_mode = values.audience_mode
+      if (
+        values.audience_mode === 'include' ||
+        values.audience_mode === 'exclude'
+      ) {
+        data.audience_match = values.audience_match
+        if (values.audience_email_contains?.trim()) {
+          data.audience_email_contains = values.audience_email_contains.trim()
+        }
+        if (
+          values.audience_oauth_provider?.trim() &&
+          values.audience_oauth_provider !== 'none'
+        ) {
+          data.audience_oauth_provider = values.audience_oauth_provider.trim()
+        }
+        if (values.audience_linuxdo_score_min?.trim()) {
+          data.audience_linuxdo_score_min =
+            values.audience_linuxdo_score_min.trim()
+        }
+        if (values.audience_linuxdo_score_max?.trim()) {
+          data.audience_linuxdo_score_max =
+            values.audience_linuxdo_score_max.trim()
+        }
+        if (values.audience_user_group?.trim()) {
+          data.audience_user_group = values.audience_user_group.trim()
+        }
+        if (values.audience_role?.trim() && values.audience_role !== 'none') {
+          data.audience_role = values.audience_role
+        }
+      }
     }
     if (
       !usesDedicatedPaymentPricing(values.type) &&
@@ -271,7 +508,7 @@ export function PaymentMethodDialog({
       onOpenChange={onOpenChange}
       title={isEditMode ? t('Edit payment method') : t('Add payment method')}
       description={t('Configure a payment method for user recharge options.')}
-      contentClassName='sm:max-w-[500px]'
+      contentClassName='sm:max-w-[620px]'
       contentHeight='auto'
       bodyClassName='space-y-4'
       footer={
@@ -295,6 +532,29 @@ export function PaymentMethodDialog({
           onSubmit={form.handleSubmit(handleSubmit)}
           className='space-y-4'
         >
+          <FormField
+            control={form.control}
+            name='enabled'
+            render={({ field }) => (
+              <FormItem className='bg-muted/20 flex items-center justify-between rounded-md border p-3'>
+                <div className='space-y-1'>
+                  <FormLabel>{t('Payment method enabled')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Disabled methods are hidden from users and rejected at checkout.'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+
           <FormField
             control={form.control}
             name='name'
@@ -409,6 +669,58 @@ export function PaymentMethodDialog({
             )}
           />
 
+          <div className='grid gap-4 sm:grid-cols-[1fr_auto]'>
+            <FormField
+              control={form.control}
+              name='description'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('User-facing payment description')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={2}
+                      placeholder={t(
+                        'Optional instructions or maintenance note'
+                      )}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Shown on the user payment button; do not put secrets here.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='color'
+              render={({ field }) => (
+                <FormItem className='sm:w-36'>
+                  <FormLabel>{t('Display color')}</FormLabel>
+                  <FormControl>
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        type='color'
+                        value={
+                          field.value && /^#[0-9a-fA-F]{6}$/.test(field.value)
+                            ? field.value
+                            : '#64748b'
+                        }
+                        onChange={field.onChange}
+                        className='h-10 w-12 cursor-pointer p-1'
+                      />
+                      <Input placeholder='#64748b' {...field} />
+                    </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
           <FormField
             control={form.control}
             name='min_topup'
@@ -430,6 +742,310 @@ export function PaymentMethodDialog({
               </FormItem>
             )}
           />
+
+          <FormField
+            control={form.control}
+            name='max_topup'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>
+                  {t('Maximum credited amount per payment (USD, optional)')}
+                </FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min='0.01'
+                    step='0.01'
+                    placeholder={t('e.g., 20')}
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Limit how many US dollars can be credited in one payment. Leave empty for no per-method limit.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='unlock_after_days'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Unlock after registration (days)')}</FormLabel>
+                <FormControl>
+                  <Input
+                    type='number'
+                    min='0'
+                    step='1'
+                    placeholder='0'
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Users can use this payment method after this many full days. Leave empty or set 0 for immediate access.'
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <div className='bg-muted/20 space-y-4 rounded-md border p-3'>
+            <div>
+              <p className='text-sm font-medium'>{t('Payment audience')}</p>
+              <p className='text-muted-foreground mt-1 text-xs leading-relaxed'>
+                {t(
+                  'Control who can see and use this method. Checkout uses the same server-side rules.'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='audience_mode'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Visibility')}</FormLabel>
+                  <FormControl>
+                    <Combobox
+                      options={[
+                        {
+                          label: t('Follow legacy account restrictions'),
+                          value: 'legacy',
+                        },
+                        { label: t('Visible to everyone'), value: 'all' },
+                        {
+                          label: t('Visible only to matching users'),
+                          value: 'include',
+                        },
+                        {
+                          label: t('Hidden from matching users'),
+                          value: 'exclude',
+                        },
+                      ]}
+                      value={field.value}
+                      onValueChange={(value) => {
+                        if (value) field.onChange(value)
+                      }}
+                      placeholder={t('Select visibility')}
+                      searchPlaceholder={t('Search visibility options...')}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Legacy mode preserves the existing special-account payment marker until you define a rule.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {(audienceMode === 'include' || audienceMode === 'exclude') && (
+              <>
+                <FormField
+                  control={form.control}
+                  name='audience_match'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('When multiple conditions exist')}
+                      </FormLabel>
+                      <FormControl>
+                        <Combobox
+                          options={[
+                            {
+                              label: t('Match any condition'),
+                              value: 'any',
+                            },
+                            {
+                              label: t('Match all conditions'),
+                              value: 'all',
+                            },
+                          ]}
+                          value={field.value}
+                          onValueChange={(value) => {
+                            if (value) field.onChange(value)
+                          }}
+                          placeholder={t('Select condition matching')}
+                          searchPlaceholder={t('Search matching options...')}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='audience_email_contains'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Email contains')}</FormLabel>
+                      <FormControl>
+                        <InputGroup>
+                          <InputGroupInput placeholder='linux.do' {...field} />
+                          <InputGroupAddon align='inline-end'>
+                            <InputGroupButton
+                              type='button'
+                              variant='ghost'
+                              onClick={() =>
+                                form.setValue(
+                                  'audience_email_contains',
+                                  'linux.do',
+                                  { shouldDirty: true, shouldValidate: true }
+                                )
+                              }
+                            >
+                              {t('Use linux.do preset')}
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        </InputGroup>
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'Case-insensitive substring match against the email.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='audience_oauth_provider'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('OAuth login method')}</FormLabel>
+                      <FormControl>
+                        <Combobox
+                          options={[
+                            { label: t('No OAuth condition'), value: 'none' },
+                            { label: 'LinuxDO', value: 'linuxdo' },
+                            { label: 'GitHub', value: 'github' },
+                            { label: 'Discord', value: 'discord' },
+                            { label: 'OIDC', value: 'oidc' },
+                            { label: t('WeChat'), value: 'wechat' },
+                            { label: 'Telegram', value: 'telegram' },
+                          ]}
+                          value={field.value || 'none'}
+                          onValueChange={(value) => {
+                            if (value) field.onChange(value)
+                          }}
+                          placeholder={t('Select OAuth login method')}
+                          searchPlaceholder={t('Search OAuth login methods...')}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          'LinuxDO is the preset; other supported account bindings can also be matched.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className='grid gap-3 sm:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='audience_linuxdo_score_min'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Minimum LinuxDO score')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min='0'
+                            step='any'
+                            placeholder='0'
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='audience_linuxdo_score_max'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Maximum LinuxDO score')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min='0'
+                            step='any'
+                            placeholder={t('No maximum')}
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div className='grid gap-3 sm:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='audience_user_group'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('User group condition')}</FormLabel>
+                        <FormControl>
+                          <Input placeholder='default, vip' {...field} />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Comma-separated user groups; matching is case-insensitive.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='audience_role'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Account role condition')}</FormLabel>
+                        <FormControl>
+                          <Combobox
+                            options={[
+                              { label: t('No role condition'), value: 'none' },
+                              { label: t('Common user'), value: 'common' },
+                              { label: t('Administrator'), value: 'admin' },
+                              { label: t('Root administrator'), value: 'root' },
+                            ]}
+                            value={field.value || 'none'}
+                            onValueChange={(value) =>
+                              value && field.onChange(value)
+                            }
+                            placeholder={t('Select account role')}
+                            searchPlaceholder={t('Search account roles...')}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <p className='text-muted-foreground text-xs leading-relaxed'>
+                  {t(
+                    'LinuxDO score is refreshed when the user signs in with LinuxDO OAuth.'
+                  )}
+                </p>
+              </>
+            )}
+          </div>
 
           {!usesDedicatedPricing && (
             <FormField

@@ -88,6 +88,80 @@ async fn channel_core_router_rejects_an_unauthenticated_request_before_storage_a
 }
 
 #[tokio::test]
+async fn channel_core_auth_preflight_runs_before_malformed_json_rejection() {
+    let app = router(ChannelCoreState {
+        pg: PgPoolOptions::new()
+            .connect_lazy("postgres://unused")
+            .expect("lazy PostgreSQL pool"),
+        valkey: redis::Client::open("redis://127.0.0.1/").expect("Valkey client"),
+        authorizer: Arc::new(Deny),
+        retry_times: 0,
+    });
+    let response = app
+        .oneshot(
+            Request::post("/api/channel/")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body: serde_json::Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body"),
+    )
+    .expect("response JSON");
+    assert_eq!(
+        body,
+        serde_json::json!({"success":false,"message":"Unauthorized, invalid access token","code":"AUTH_UNAUTHORIZED"})
+    );
+}
+
+#[tokio::test]
+async fn channel_auth_version_is_emitted_only_after_authorization() {
+    let authorized = router(ChannelCoreState {
+        pg: PgPoolOptions::new()
+            .connect_lazy("postgres://unused")
+            .expect("lazy PostgreSQL pool"),
+        valkey: redis::Client::open("redis://127.0.0.1/").expect("Valkey client"),
+        authorizer: Arc::new(Allow),
+        retry_times: 7,
+    })
+    .oneshot(
+        Request::get("/api/channel/ops")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+    assert_eq!(authorized.status(), StatusCode::OK);
+    assert_eq!(
+        authorized.headers()["auth-version"],
+        "864b7076dbcd0a3c01b5520316720ebf"
+    );
+
+    let unauthorized = router(ChannelCoreState {
+        pg: PgPoolOptions::new()
+            .connect_lazy("postgres://unused")
+            .expect("lazy PostgreSQL pool"),
+        valkey: redis::Client::open("redis://127.0.0.1/").expect("Valkey client"),
+        authorizer: Arc::new(Deny),
+        retry_times: 7,
+    })
+    .oneshot(
+        Request::get("/api/channel/ops")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert!(!unauthorized.headers().contains_key("auth-version"));
+}
+
+#[tokio::test]
 async fn channel_status_rejects_an_unmanageable_value_with_the_frozen_go_body() {
     let app = router(ChannelCoreState {
         pg: PgPoolOptions::new()

@@ -125,14 +125,20 @@ export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
 export function getAuthenticatedLandingRoute(
   user: AuthUser | null | undefined
 ): '/dashboard' | '/getting-started' {
-  return getOnboardingState(user).stage === 'complete'
+  // Administrator approval is the access boundary.  The remaining setup
+  // checklist is guidance for an already-enabled account and must not trap a
+  // newly approved L1 user on the L0 welcome page.
+  return getOnboardingState(user).activationComplete
     ? '/dashboard'
     : '/getting-started'
 }
 
 export function isContributorRoute(pathname: string): boolean {
-  return ['/getting-started', '/wallet', '/profile', '/support'].some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  // L0 gets one authenticated surface only. Public challenge browsing lives
+  // outside the console under /challenges; wallet and bounty-management
+  // routes must remain unavailable until L1 is approved.
+  return (
+    pathname === '/getting-started' || pathname.startsWith('/getting-started/')
   )
 }
 

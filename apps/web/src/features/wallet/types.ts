@@ -20,6 +20,11 @@ For commercial licensing, please contact support@quantumnous.com
 // Wallet Type Definitions
 // ============================================================================
 
+import type {
+  WaffoPancakeCheckoutLanguage,
+  WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
+
 /**
  * Generic API response
  */
@@ -35,6 +40,11 @@ export interface ApiResponse<T = unknown> {
 export type TopupInfoResponse = ApiResponse<TopupInfo>
 export type RedemptionResponse = ApiResponse<number>
 export type AmountResponse = ApiResponse<string>
+export type DiscountCodeResponse = ApiResponse<{
+  code: string
+  discount_percent: number
+  min_amount: number
+}>
 export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
   url?: string
 }
@@ -96,8 +106,12 @@ export interface PaymentMethod {
   type: string
   /** Legacy optional color for UI display */
   color?: string
+  /** Optional administrator-provided instructions shown on the selector. */
+  description?: string
   /** Minimum topup amount for this payment method */
   min_topup?: number
+  /** Maximum credited USD allowed in one payment for this method. */
+  max_topup?: string | number
   /** Optional react-icons component name or safe icon URL */
   icon?: string
   /** Settlement unit shown for this gateway, for example LDC. */
@@ -126,6 +140,12 @@ export interface WaffoPayMethod {
  * Topup configuration information
  */
 export interface TopupInfo {
+  /** Whether this account has completed the paid developer-access activation. */
+  developer_access_granted?: boolean
+  /** Whether activation is required before normal console access. */
+  activation_required?: boolean
+  /** Whether at least one activation payment path is configured. */
+  payment_available?: boolean
   /** Whether online topup is enabled */
   enable_online_topup: boolean
   /** Whether Stripe topup is enabled */
@@ -192,6 +212,8 @@ export interface PaymentRequest {
   amount: number
   /** Payment method identifier */
   payment_method: string
+  /** Optional administrator-issued percentage discount code. */
+  discount_code?: string
 }
 
 /**
@@ -202,6 +224,7 @@ export interface WaffoPaymentRequest {
   amount: number
   /** Optional server-side Waffo payment method index */
   pay_method_index?: number
+  discount_code?: string
 }
 
 /**
@@ -210,6 +233,11 @@ export interface WaffoPaymentRequest {
 export interface WaffoPancakePaymentRequest {
   /** Topup amount */
   amount: number
+  /** Waffo Pancake checkout region selected by the user or derived from locale */
+  checkout_region?: WaffoPancakeCheckoutRegion
+  /** Waffo Pancake checkout language derived from the interface locale */
+  checkout_language?: WaffoPancakeCheckoutLanguage
+  discount_code?: string
 }
 
 /**
@@ -220,6 +248,8 @@ export interface AmountRequest {
   amount: number
   /** Gateway selected for a regular Epay amount calculation. */
   payment_method?: string
+  /** Optional administrator-issued percentage discount code. */
+  discount_code?: string
 }
 
 /**

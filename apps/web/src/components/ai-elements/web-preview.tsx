@@ -45,6 +45,8 @@ import {
 import dayjs from '@/lib/dayjs'
 import { cn } from '@/lib/utils'
 
+import { sanitizeWebPreviewUrl } from './web-preview-url'
+
 export type WebPreviewContextValue = {
   url: string
   setUrl: (url: string) => void
@@ -74,12 +76,13 @@ export const WebPreview = ({
   onUrlChange,
   ...props
 }: WebPreviewProps) => {
-  const [url, setUrl] = useState(defaultUrl)
+  const [url, setUrl] = useState(() => sanitizeWebPreviewUrl(defaultUrl) ?? '')
   const [consoleOpen, setConsoleOpen] = useState(false)
 
   const handleUrlChange = (newUrl: string) => {
-    setUrl(newUrl)
-    onUrlChange?.(newUrl)
+    const sanitizedUrl = sanitizeWebPreviewUrl(newUrl) ?? ''
+    setUrl(sanitizedUrl)
+    onUrlChange?.(sanitizedUrl)
   }
 
   const contextValue: WebPreviewContextValue = {
@@ -211,11 +214,12 @@ export const WebPreviewBody = ({
   return (
     <div className='flex-1'>
       <iframe
-        className={cn('size-full', className)}
-        sandbox='allow-scripts allow-same-origin allow-forms allow-popups allow-presentation'
-        src={(src ?? url) || undefined}
-        title={t('Preview')}
         {...props}
+        className={cn('size-full', className)}
+        referrerPolicy='no-referrer'
+        sandbox='allow-scripts allow-forms allow-popups allow-presentation'
+        src={sanitizeWebPreviewUrl(src ?? url)}
+        title={t('Preview')}
       />
       {loading}
     </div>
@@ -238,6 +242,16 @@ export const WebPreviewConsole = ({
 }: WebPreviewConsoleProps) => {
   const { t } = useTranslation()
   const { consoleOpen, setConsoleOpen } = useWebPreview()
+  const logKeys = new Map<string, number>()
+  const logEntries = logs.map((log) => {
+    const baseKey = `${log.timestamp.getTime()}-${log.level}-${log.message}`
+    const occurrence = logKeys.get(baseKey) ?? 0
+    logKeys.set(baseKey, occurrence + 1)
+    return {
+      key: occurrence === 0 ? baseKey : `${baseKey}-${occurrence}`,
+      log,
+    }
+  })
 
   return (
     <Collapsible
@@ -272,7 +286,7 @@ export const WebPreviewConsole = ({
           {logs.length === 0 ? (
             <p className='text-muted-foreground'>{t('No console output')}</p>
           ) : (
-            logs.map((log, index) => (
+            logEntries.map(({ key, log }) => (
               <div
                 className={cn(
                   'text-xs',
@@ -280,7 +294,7 @@ export const WebPreviewConsole = ({
                   log.level === 'warn' && 'text-warning',
                   log.level === 'log' && 'text-foreground'
                 )}
-                key={`${log.timestamp.getTime()}-${index}`}
+                key={key}
               >
                 <span className='text-muted-foreground'>
                   {dayjs(log.timestamp).format('HH:mm:ss')}

@@ -1,17 +1,20 @@
 package model
 
 import (
+	"errors"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/performance_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/performance_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 	"gorm.io/gorm"
 )
 
@@ -45,6 +48,7 @@ func InitOptionMap() {
 	common.OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.WeChatAuthEnabled)
 	common.OptionMap["TurnstileCheckEnabled"] = strconv.FormatBool(common.TurnstileCheckEnabled)
 	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
+	common.OptionMap[common.RegistrationDisabledMethodsOptionKey] = ""
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
@@ -57,6 +61,8 @@ func InitOptionMap() {
 	common.OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(common.EmailDomainRestrictionEnabled)
 	common.OptionMap["EmailAliasRestrictionEnabled"] = strconv.FormatBool(common.EmailAliasRestrictionEnabled)
 	common.OptionMap["EmailDomainWhitelist"] = strings.Join(common.EmailDomainWhitelist, ",")
+	common.OptionMap[common.RegionAccessPolicyEnabledOptionKey] = strconv.FormatBool(common.IsRegionAccessPolicyEnabled())
+	common.OptionMap[common.RegionBlockedCountryCodesOptionKey] = common.RegionBlockedCountryCodesString()
 	common.OptionMap["SMTPServer"] = ""
 	common.OptionMap["SMTPFrom"] = ""
 	common.OptionMap["SMTPPort"] = strconv.Itoa(common.SMTPPort)
@@ -122,6 +128,31 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
+	assistantSettings := setting.GetAssistantSettings()
+	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
+	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
+	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = "0"
+	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
+	common.OptionMap[setting.AssistantMaxStepsOptionKey] = strconv.Itoa(assistantSettings.MaxSteps)
+	common.OptionMap[setting.AssistantTimeoutSecondsOptionKey] = strconv.Itoa(assistantSettings.TimeoutSeconds)
+	common.OptionMap[setting.AssistantCacheEnabledOptionKey] = strconv.FormatBool(assistantSettings.CacheEnabled)
+	common.OptionMap[setting.AssistantCacheTTLMinutesOptionKey] = strconv.Itoa(assistantSettings.CacheTTLMinutes)
+	common.OptionMap[setting.AssistantPersonaOptionKey] = assistantSettings.Persona
+	common.OptionMap[setting.AssistantSystemPromptOptionKey] = assistantSettings.SystemPrompt
+	common.OptionMap[setting.AssistantSearchProviderOptionKey] = string(assistantSettings.SearchProvider)
+	common.OptionMap[setting.AssistantSearchURLOptionKey] = assistantSettings.SearchURL
+	common.OptionMap[setting.AssistantSearchAPIKeyOptionKey] = assistantSettings.SearchAPIKey
+	common.OptionMap[setting.AssistantSearchMCPToolOptionKey] = assistantSettings.SearchMCPTool
+	common.OptionMap[setting.AssistantSkillsOptionKey] = assistantSettings.Skills
+	common.OptionMap[setting.AssistantSkillFilesOptionKey] = setting.AssistantSkillFilesJSON(assistantSettings.SkillFiles)
+	common.OptionMap[setting.AssistantReviewEnabledOptionKey] = strconv.FormatBool(assistantSettings.ReviewEnabled)
+	common.OptionMap[setting.AssistantReviewWindowDaysOptionKey] = strconv.Itoa(assistantSettings.ReviewWindowDays)
+	common.OptionMap[setting.AssistantReviewIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.ReviewIntervalHours)
+	common.OptionMap[setting.AssistantRetentionEnabledOptionKey] = strconv.FormatBool(assistantSettings.RetentionEnabled)
+	common.OptionMap[setting.AssistantActiveRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ActiveRetentionDays)
+	common.OptionMap[setting.AssistantArchivedRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ArchivedRetentionDays)
+	common.OptionMap[setting.AssistantSecurityRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.SecurityRetentionDays)
+	common.OptionMap[setting.AssistantRetentionIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.RetentionIntervalHours)
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
@@ -176,6 +207,17 @@ func InitOptionMap() {
 	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
 	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
 	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
+	advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
+	common.OptionMap[setting.AdvancedSecurityEnabledOptionKey] = strconv.FormatBool(advancedSecuritySettings.Enabled)
+	common.OptionMap[setting.AdvancedSecurityOnPromptOptionKey] = strconv.FormatBool(advancedSecuritySettings.OnPrompt)
+	common.OptionMap[setting.AdvancedSecurityActionOptionKey] = advancedSecuritySettings.Action
+	common.OptionMap[setting.AdvancedSecurityRulesOptionKey] = setting.AdvancedSecurityRulesToJSONString()
+	antiRelaySettings := setting.GetAntiRelaySettings()
+	common.OptionMap[setting.AntiRelayEnabledOptionKey] = strconv.FormatBool(antiRelaySettings.Enabled)
+	common.OptionMap[setting.AntiRelayRejectProxyHeadersOptionKey] = strconv.FormatBool(antiRelaySettings.RejectProxyHeaders)
+	common.OptionMap[setting.AntiRelayHTTPSOnlyOptionKey] = strconv.FormatBool(antiRelaySettings.HTTPSOnly)
+	common.OptionMap[setting.AntiRelayBlockedCIDRsOptionKey] = setting.AntiRelayBlockedCIDRsToJSONString()
+	common.OptionMap[setting.AntiRelayTrustedProxyCIDRsOptionKey] = setting.AntiRelayTrustedProxyCIDRsToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -211,6 +253,32 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == common.RegistrationDisabledMethodsOptionKey {
+		_, err := common.ParseRegistrationDisabledMethods(value)
+		return err
+	}
+	// Region enforcement is a security boundary rather than a presentation
+	// setting. Validate it here (instead of only in the generic controller) so
+	// assistant-admin bulk updates and other internal callers cannot persist a
+	// malformed value that silently disables the edge policy.
+	if err := validateRegionPolicyOption(key, value); err != nil {
+		return err
+	}
+	if dynamic_pricing_setting.IsOptionKey(key) {
+		return dynamic_pricing_setting.ValidateOptionValues(map[string]string{key: value})
+	}
+	if err := setting.ValidateAssistantOption(key, value); err != nil {
+		return err
+	}
+	if key == setting.AssistantModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
+		return errors.New("assistant model is not enabled in the default group; choose a live model from the model list")
+	}
+	if err := setting.ValidateAdvancedSecurityOption(key, value); err != nil {
+		return err
+	}
+	if err := setting.ValidateAntiRelayOption(key, value); err != nil {
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -220,6 +288,35 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == "public_relay_setting.group" {
+		group := strings.TrimSpace(value)
+		if group == "" || !ratio_setting.ContainsGroupRatio(group) {
+			return errors.New("public relay group must be an existing group")
+		}
+		return nil
+	}
+	if key == "group_ratio_setting.group_warnings" {
+		return ratio_setting.CheckGroupWarnings(value)
+	}
+	if key == operation_setting.ViolationFeeOptionKey+".policies" {
+		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
+	}
+	return nil
+}
+
+func validateRegionPolicyOption(key, value string) error {
+	switch key {
+	case common.RegionAccessPolicyEnabledOptionKey:
+		// updateOptionMap intentionally treats only the exact string "true" as
+		// enabled. Keep validation equally strict so values such as "TRUE" or
+		// "1" cannot be accepted and then applied as false.
+		if value != "true" && value != "false" {
+			return errors.New("region access policy enabled must be true or false")
+		}
+	case common.RegionBlockedCountryCodesOptionKey:
+		_, err := common.ParseRegionBlockedCountryCodes(value)
+		return err
 	}
 	return nil
 }
@@ -233,14 +330,26 @@ func UpdateOption(key string, value string) error {
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
+}
+
+// ValidateOptionValue exposes the same validation used by UpdateOption without
+// persisting or mutating the in-memory option map.  Assistant admin previews
+// use this to reject an invalid change before issuing a one-time confirmation
+// flow.
+func ValidateOptionValue(key, value string) error {
+	return validateOptionValue(key, value)
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
@@ -252,13 +361,46 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	dynamicValues := make(map[string]string)
 	for key, value := range values {
+		if dynamic_pricing_setting.IsOptionKey(key) {
+			dynamicValues[key] = value
+			continue
+		}
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
 	}
+	if len(dynamicValues) > 0 {
+		if err := dynamic_pricing_setting.ValidateOptionValues(dynamicValues); err != nil {
+			return err
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	// Apply the master switch last when enabling (all safety inputs are live
+	// first), and first when disabling (request-path pricing stops before any
+	// other setting changes).
+	enabledKey := "dynamic_pricing_setting.enabled"
+	if enabledValue, ok := values[enabledKey]; ok {
+		withoutEnabled := make([]string, 0, len(keys)-1)
+		for _, key := range keys {
+			if key != enabledKey {
+				withoutEnabled = append(withoutEnabled, key)
+			}
+		}
+		if enabledValue == "false" {
+			keys = append([]string{enabledKey}, withoutEnabled...)
+		} else {
+			keys = append(withoutEnabled, enabledKey)
+		}
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
+		for _, k := range keys {
+			v := values[k]
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
@@ -273,7 +415,8 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
+	for _, k := range keys {
+		v := values[k]
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}
@@ -281,11 +424,91 @@ func UpdateOptionsBulk(values map[string]string) error {
 	return nil
 }
 
+// UpdateAdvancedSecurityOptions persists and applies the four guardrail
+// settings as a unit. Database readers see one transaction, while request
+// handlers see one runtime settings swap instead of four intermediate states.
+func UpdateAdvancedSecurityOptions(enabled, onPrompt bool, action, rules string) error {
+	values := map[string]string{
+		setting.AdvancedSecurityEnabledOptionKey:  strconv.FormatBool(enabled),
+		setting.AdvancedSecurityOnPromptOptionKey: strconv.FormatBool(onPrompt),
+		setting.AdvancedSecurityActionOptionKey:   action,
+		setting.AdvancedSecurityRulesOptionKey:    rules,
+	}
+	keys := []string{
+		setting.AdvancedSecurityRulesOptionKey,
+		setting.AdvancedSecurityActionOptionKey,
+		setting.AdvancedSecurityOnPromptOptionKey,
+		setting.AdvancedSecurityEnabledOptionKey,
+	}
+	for _, key := range keys {
+		if err := validateOptionValue(key, values[key]); err != nil {
+			return err
+		}
+	}
+
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			option := Option{Key: key}
+			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+				return err
+			}
+			option.Value = values[key]
+			if err := tx.Save(&option).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Validation above makes this deterministic after the transaction. Keeping
+	// the setter defensive prevents future validation/runtime drift.
+	if err := setting.ApplyAdvancedSecuritySettings(enabled, onPrompt, action, rules); err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for _, key := range keys {
+		common.OptionMap[key] = values[key]
+	}
+	common.OptionMapRWMutex.Unlock()
+	return nil
+}
+
 func updateOptionMap(key string, value string) (err error) {
+	// Reject malformed persisted region settings before touching OptionMap or
+	// runtime enforcement. This also makes startup fail closed for an invalid
+	// legacy row instead of interpreting it as "disabled".
+	if err := validateRegionPolicyOption(key, value); err != nil {
+		return err
+	}
+	// Legacy model-specific Grok violation options are intentionally ignored.
+	// The active policy is now operation_setting's provider-agnostic group
+	// policy; deleting these keys from the runtime map keeps old database rows
+	// from reappearing in the admin option API without requiring destructive
+	// migration of the historical rows.
+	if strings.HasPrefix(key, "grok.violation_") {
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, key)
+		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
 	if key == retiredThemeOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
 		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
+	if key == setting.AssistantWeeklyCreditUSDOptionKey {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if common.OptionMap == nil {
+			common.OptionMap = make(map[string]string)
+		}
+		common.OptionMap[key] = "0"
 		return nil
 	}
 	common.OptionMapRWMutex.Lock()
@@ -336,6 +559,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.EmailDomainRestrictionEnabled = boolValue
 		case "EmailAliasRestrictionEnabled":
 			common.EmailAliasRestrictionEnabled = boolValue
+		case common.RegionAccessPolicyEnabledOptionKey:
+			common.SetRegionAccessPolicyEnabled(boolValue)
 		case "AutomaticDisableChannelEnabled":
 			common.AutomaticDisableChannelEnabled = boolValue
 		case "AutomaticEnableChannelEnabled":
@@ -384,6 +609,16 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.ModelRequestRateLimitEnabled = boolValue
 		case "StopOnSensitiveEnabled":
 			setting.StopOnSensitiveEnabled = boolValue
+		case setting.AdvancedSecurityEnabledOptionKey:
+			setting.SetAdvancedSecurityEnabled(boolValue)
+		case setting.AdvancedSecurityOnPromptOptionKey:
+			setting.SetAdvancedSecurityOnPrompt(boolValue)
+		case setting.AntiRelayEnabledOptionKey:
+			setting.SetAntiRelayEnabled(boolValue)
+		case setting.AntiRelayRejectProxyHeadersOptionKey:
+			setting.SetAntiRelayRejectProxyHeaders(boolValue)
+		case setting.AntiRelayHTTPSOnlyOptionKey:
+			setting.SetAntiRelayHTTPSOnly(boolValue)
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -398,11 +633,23 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.DefaultUseAutoGroup = boolValue
 		case "ExposeRatioEnabled":
 			ratio_setting.SetExposeRatioEnabled(boolValue)
+		case setting.AssistantEnabledOptionKey:
+			setting.SetAssistantEnabled(boolValue)
+		case setting.AssistantAgentLoopEnabledOptionKey:
+			setting.SetAssistantAgentLoopEnabled(boolValue)
+		case setting.AssistantCacheEnabledOptionKey:
+			setting.SetAssistantCacheEnabled(boolValue)
+		case setting.AssistantReviewEnabledOptionKey:
+			setting.SetAssistantReviewEnabled(boolValue)
+		case setting.AssistantRetentionEnabledOptionKey:
+			setting.SetAssistantRetentionEnabled(boolValue)
 		}
 	}
 	switch key {
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
+	case common.RegionBlockedCountryCodesOptionKey:
+		err = common.SetRegionBlockedCountryCodes(value)
 	case "SMTPServer":
 		common.SMTPServer = value
 	case "SMTPPort":
@@ -424,6 +671,42 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.PayAddress = value
 	case "Chats":
 		err = setting.UpdateChatsByJsonString(value)
+	case setting.AssistantModelOptionKey:
+		err = setting.UpdateAssistantModel(value)
+	case setting.AssistantMaxStepsOptionKey:
+		err = setting.UpdateAssistantMaxSteps(value)
+	case setting.AssistantTimeoutSecondsOptionKey:
+		err = setting.UpdateAssistantTimeoutSeconds(value)
+	case setting.AssistantCacheTTLMinutesOptionKey:
+		err = setting.UpdateAssistantCacheTTLMinutes(value)
+	case setting.AssistantPersonaOptionKey:
+		err = setting.UpdateAssistantPersona(value)
+	case setting.AssistantSystemPromptOptionKey:
+		err = setting.UpdateAssistantSystemPrompt(value)
+	case setting.AssistantSearchProviderOptionKey:
+		err = setting.UpdateAssistantSearchProvider(value)
+	case setting.AssistantSearchURLOptionKey:
+		err = setting.UpdateAssistantSearchURL(value)
+	case setting.AssistantSearchAPIKeyOptionKey:
+		err = setting.UpdateAssistantSearchAPIKey(value)
+	case setting.AssistantSearchMCPToolOptionKey:
+		err = setting.UpdateAssistantSearchMCPTool(value)
+	case setting.AssistantSkillsOptionKey:
+		err = setting.UpdateAssistantSkills(value)
+	case setting.AssistantSkillFilesOptionKey:
+		err = setting.UpdateAssistantSkillFiles(value)
+	case setting.AssistantReviewWindowDaysOptionKey:
+		err = setting.UpdateAssistantReviewWindowDays(value)
+	case setting.AssistantReviewIntervalHoursOptionKey:
+		err = setting.UpdateAssistantReviewIntervalHours(value)
+	case setting.AssistantActiveRetentionDaysOptionKey:
+		err = setting.UpdateAssistantActiveRetentionDays(value)
+	case setting.AssistantArchivedRetentionDaysOptionKey:
+		err = setting.UpdateAssistantArchivedRetentionDays(value)
+	case setting.AssistantSecurityRetentionDaysOptionKey:
+		err = setting.UpdateAssistantSecurityRetentionDays(value)
+	case setting.AssistantRetentionIntervalHoursOptionKey:
+		err = setting.UpdateAssistantRetentionIntervalHours(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "MaxTokenAutoGroups":
@@ -574,6 +857,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
+	case "group_ratio_setting.group_warnings":
+		err = ratio_setting.UpdateGroupWarningsByJSONString(value)
 	case "UserUsableGroups":
 		err = setting.UpdateUserUsableGroupsByJSONString(value)
 	case "CompletionRatio":
@@ -602,6 +887,14 @@ func updateOptionMap(key string, value string) (err error) {
 		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
 	case "SensitiveWords":
 		setting.SensitiveWordsFromString(value)
+	case setting.AdvancedSecurityActionOptionKey:
+		err = setting.UpdateAdvancedSecurityAction(value)
+	case setting.AdvancedSecurityRulesOptionKey:
+		err = setting.UpdateAdvancedSecurityRules(value)
+	case setting.AntiRelayBlockedCIDRsOptionKey:
+		err = setting.UpdateAntiRelayBlockedCIDRs(value)
+	case setting.AntiRelayTrustedProxyCIDRsOptionKey:
+		err = setting.UpdateAntiRelayTrustedProxyCIDRs(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":

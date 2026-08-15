@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >>"$FAKE_SSH_LOG"
+case " $* " in
+  *' readlink -- /srv/lmm-api-frontend/current '*) printf 'releases/old-release\n' ;;
+esac
+if [[ $* == *' bash -s -- '* ]]; then
+  script=$(cat)
+  if [[ $script == *'backup transaction lock ownership changed'* ]]; then
+    printf 'failed-backup-lock-release %s\n' "$*" >>"$FAKE_SSH_LOG"
+  fi
+  if [[ $script == *'required backup command is unavailable:'* ]]; then
+    [[ $script == *pg_dump* && $script == *pg_restore* ]] || exit 94
+    if [[ ${FAKE_MISSING_TARGET_COMMAND:-} == pg_restore ]]; then
+      printf 'required backup command is unavailable: pg_restore\n' >&2
+      exit 2
+    fi
+  fi
+  [[ -z ${FAKE_PREEXISTING_MATCH:-} || $* != *"$FAKE_PREEXISTING_MATCH"* ]] || exit 3
+fi
+if [[ $* == *' test ! -e '* && -n ${FAKE_PREEXISTING_MATCH:-} && $* == *"$FAKE_PREEXISTING_MATCH"* ]]; then
+  exit 1
+fi
+exit 0

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
 )
 
 var (
@@ -179,6 +179,10 @@ func initConstantEnv() {
 	constant.StreamScannerMaxBufferMB = GetEnvOrDefault("STREAM_SCANNER_MAX_BUFFER_MB", 128)
 	// MaxRequestBodyMB 请求体最大大小（解压后），用于防止超大请求/zip bomb导致内存暴涨
 	constant.MaxRequestBodyMB = GetEnvOrDefault("MAX_REQUEST_BODY_MB", 128)
+	// Non-streaming upstream responses are materialized by several adaptors.
+	// Keep a separate, lower ceiling so a provider cannot force heap growth up
+	// to the inbound request budget.
+	constant.MaxResponseBodyMB = GetEnvOrDefault("MAX_RESPONSE_BODY_MB", 32)
 	constant.AnonymousRequestBodyLimitKB = GetEnvOrDefault("ANONYMOUS_REQUEST_BODY_LIMIT_KB", 512)
 	// ForceStreamOption 覆盖请求参数，强制返回usage信息
 	constant.ForceStreamOption = GetEnvOrDefaultBool("FORCE_STREAM_OPTION", true)
@@ -193,10 +197,29 @@ func initConstantEnv() {
 	constant.GenerateDefaultToken = GetEnvOrDefaultBool("GENERATE_DEFAULT_TOKEN", false)
 	// 是否启用错误日志
 	constant.ErrorLogEnabled = GetEnvOrDefaultBool("ERROR_LOG_ENABLED", false)
-	// 任务轮询时查询的最大数量
-	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
+	// 任务轮询时查询的最大数量。即使环境变量错误，也必须保持有限，
+	// 否则 GORM 的 Limit(<=0) 会取消 SQL LIMIT，可能一次性载入全部任务。
+	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", constant.DefaultTaskQueryLimit)
+	if constant.TaskQueryLimit <= 0 {
+		constant.TaskQueryLimit = constant.DefaultTaskQueryLimit
+	}
+	if constant.TaskQueryLimit > constant.MaxTaskQueryLimit {
+		constant.TaskQueryLimit = constant.MaxTaskQueryLimit
+	}
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
+	// Provider polling is I/O-bound, but an unbounded goroutine per channel can
+	// retain large task/adaptor buffers during an upstream incident.
+	constant.TaskPollingConcurrency = GetEnvOrDefault("TASK_POLLING_CONCURRENCY", 8)
+	if constant.TaskPollingConcurrency <= 0 {
+		constant.TaskPollingConcurrency = 1
+	}
+	// Keep terminal scheduler history bounded per type. Active work is always
+	// retained; non-positive values fall back to the safe default.
+	constant.SystemTaskHistoryKeep = GetEnvOrDefault("SYSTEM_TASK_HISTORY_KEEP", 100)
+	if constant.SystemTaskHistoryKeep <= 0 {
+		constant.SystemTaskHistoryKeep = 100
+	}
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")
 	if soraPatchStr != "" {

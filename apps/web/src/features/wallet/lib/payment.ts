@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { WaffoPancakeCheckoutOptions } from '@/lib/waffo-pancake-checkout'
+
 import {
   PAYMENT_TYPES,
   DEFAULT_PRESET_MULTIPLIERS,
@@ -228,29 +230,50 @@ export function isPaymentMethodCurrencySupported(paymentType: string): boolean {
 }
 
 export interface PaymentProcessors {
-  regular: (topupAmount: number, paymentType: string) => Promise<boolean>
-  waffo: (topupAmount: number, payMethodIndex: number) => Promise<boolean>
-  waffoPancake: (topupAmount: number) => Promise<boolean>
+  regular: (
+    topupAmount: number,
+    paymentType: string,
+    discountCode?: string
+  ) => Promise<boolean>
+  waffo: (
+    topupAmount: number,
+    payMethodIndex: number,
+    discountCode?: string
+  ) => Promise<boolean>
+  waffoPancake: (
+    topupAmount: number,
+    checkoutOptions?: WaffoPancakeCheckoutOptions & { discount_code?: string }
+  ) => Promise<boolean>
 }
 
 export async function dispatchSelectedPayment(
   paymentMethod: PaymentMethod,
   topupAmount: number,
   waffoMethodIndex: number | null,
-  processors: PaymentProcessors
+  processors: PaymentProcessors,
+  waffoPancakeCheckoutOptions?: WaffoPancakeCheckoutOptions & {
+    discount_code?: string
+  },
+  discountCode = ''
 ): Promise<boolean> {
   if (isWaffoPayment(paymentMethod.type)) {
     if (waffoMethodIndex === null) {
       return false
     }
-    return processors.waffo(topupAmount, waffoMethodIndex)
+    return processors.waffo(topupAmount, waffoMethodIndex, discountCode)
   }
 
   if (isWaffoPancakePayment(paymentMethod.type)) {
-    return processors.waffoPancake(topupAmount)
+    if (!waffoPancakeCheckoutOptions) {
+      return processors.waffoPancake(topupAmount)
+    }
+    return processors.waffoPancake(topupAmount, {
+      ...waffoPancakeCheckoutOptions,
+      ...(discountCode ? { discount_code: discountCode } : {}),
+    })
   }
 
-  return processors.regular(topupAmount, paymentMethod.type)
+  return processors.regular(topupAmount, paymentMethod.type, discountCode)
 }
 
 export interface TopupAvailability {

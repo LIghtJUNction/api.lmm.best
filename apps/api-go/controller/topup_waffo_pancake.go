@@ -2,24 +2,27 @@ package controller
 
 import (
 	"fmt"
-	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 )
 
 type WaffoPancakePayRequest struct {
-	Amount int64 `json:"amount"`
+	Amount           int64  `json:"amount"`
+	DiscountCode     string `json:"discount_code,omitempty"`
+	CheckoutRegion   string `json:"checkout_region"`
+	CheckoutLanguage string `json:"checkout_language"`
 }
 
 func RequestWaffoPancakeAmount(c *gin.Context) {
@@ -28,9 +31,15 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffoPancake) {
+		return
+	}
 
 	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
+		return
+	}
+	if !requirePaymentMethodTopUpWithinLimit(c, model.PaymentMethodWaffoPancake, req.Amount) {
 		return
 	}
 
@@ -41,7 +50,12 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoneyDecimal, _, err := applyDiscountCodeQuote(getWaffoPancakePayMoneyDecimal(req.Amount, group), req.Amount, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -51,6 +65,10 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 }
 
 func getWaffoPancakePayMoney(amount int64, group string) float64 {
+	return getWaffoPancakePayMoneyDecimal(amount, group).InexactFloat64()
+}
+
+func getWaffoPancakePayMoneyDecimal(amount int64, group string) decimal.Decimal {
 	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
@@ -71,7 +89,7 @@ func getWaffoPancakePayMoney(amount int64, group string) float64 {
 		Mul(decimal.NewFromFloat(topupGroupRatio)).
 		Mul(decimal.NewFromFloat(discount))
 
-	return payMoney.InexactFloat64()
+	return payMoney
 }
 
 func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
@@ -117,6 +135,11 @@ type createWaffoPancakePairRequest struct {
 	ReturnURL  string `json:"return_url"`
 }
 
+type listWaffoPancakeCatalogRequest struct {
+	MerchantID string `json:"merchant_id"`
+	PrivateKey string `json:"private_key"`
+}
+
 // SaveWaffoPancake atomically persists all five operator-controlled fields.
 // Catalog / pair endpoints are transient — only this one writes the OptionMap.
 func SaveWaffoPancake(c *gin.Context) {
@@ -157,7 +180,13 @@ func resolveWaffoPancakeAdminCreds(bodyMerchantID, bodyPrivateKey string) (strin
 	m := strings.TrimSpace(bodyMerchantID)
 	k := strings.TrimSpace(bodyPrivateKey)
 	if m == "" && k == "" {
-		return setting.WaffoPancakeMerchantID, setting.WaffoPancakePrivateKey
+		return service.WaffoPancakeCredentials()
+	}
+	if m == "" {
+		m, _ = service.WaffoPancakeCredentials()
+	}
+	if k == "" {
+		_, k = service.WaffoPancakeCredentials()
 	}
 	return m, k
 }
@@ -214,13 +243,17 @@ func CreateWaffoPancakePair(c *gin.Context) {
 
 // ListWaffoPancakeCatalog returns the merchant's Stores + OnetimeProducts.
 // Doubles as a credential probe (a successful 200 proves the resolved creds
-// authenticate). See resolveWaffoPancakeAdminCreds for credential resolution.
+// authenticate). Credentials are accepted only in the JSON body; never read a
+// private key from query parameters because URLs are routinely logged.
 func ListWaffoPancakeCatalog(c *gin.Context) {
-	// Missing query creds mean "use persisted creds".
-	merchantID, privateKey := resolveWaffoPancakeAdminCreds(
-		strings.TrimSpace(c.Query("merchant_id")),
-		strings.TrimSpace(c.Query("private_key")),
-	)
+	var req listWaffoPancakeCatalogRequest
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
+			return
+		}
+	}
+	merchantID, privateKey := resolveWaffoPancakeAdminCreds(req.MerchantID, req.PrivateKey)
 	if merchantID == "" || privateKey == "" {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "Waffo Pancake 凭证未配置"})
 		return
@@ -347,8 +380,14 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffoPancake) {
+		return
+	}
 	if req.Amount < int64(setting.WaffoPancakeMinTopUp) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", setting.WaffoPancakeMinTopUp)})
+		return
+	}
+	if !requirePaymentMethodTopUpWithinLimit(c, model.PaymentMethodWaffoPancake, req.Amount) {
 		return
 	}
 
@@ -365,7 +404,12 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoneyDecimal, discountCode, err := applyDiscountCodeQuote(getWaffoPancakePayMoneyDecimal(req.Amount, group), req.Amount, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -392,6 +436,8 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		PaymentProvider:      model.PaymentProviderWaffoPancake,
 		ProviderProductId:    strings.TrimSpace(setting.WaffoPancakeProductID),
 		ProviderStoreId:      strings.TrimSpace(setting.WaffoPancakeStoreID),
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}
@@ -412,6 +458,11 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
 		ExpiresInSeconds:        &expiresInSeconds,
 		OrderMerchantExternalID: tradeNo,
+		OrderMetadata: map[string]string{
+			service.WaffoPancakeOrderMetadataProductID: strings.TrimSpace(setting.WaffoPancakeProductID),
+		},
+		CheckoutRegion:   req.CheckoutRegion,
+		CheckoutLanguage: req.CheckoutLanguage,
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
@@ -455,7 +506,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 读取请求体失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.String(http.StatusBadRequest, "bad request")
@@ -463,11 +514,11 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	}
 
 	signature := c.GetHeader("X-Waffo-Signature")
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 收到请求 path=%q client_ip=%s signature=%q body=%q", c.Request.RequestURI, c.ClientIP(), signature, string(bodyBytes)))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 收到请求 path=%q client_ip=%s body_bytes=%d", c.Request.RequestURI, c.ClientIP(), len(bodyBytes)))
 
 	event, err := service.VerifyConfiguredWaffoPancakeWebhook(string(bodyBytes), signature)
 	if err != nil {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签失败 path=%q client_ip=%s signature=%q body=%q error=%q", c.Request.RequestURI, c.ClientIP(), signature, string(bodyBytes), err.Error()))
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.String(http.StatusUnauthorized, "invalid signature")
 		return
 	}
@@ -480,9 +531,31 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
+	if err := service.ValidateWaffoPancakeWebhookEvent(event); err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf(
+			"Waffo Pancake webhook 状态字段不一致 event_type=%s event_id=%s order_id=%s client_ip=%s error=%q",
+			event.EventType, event.ID, event.Data.OrderID, c.ClientIP(), err.Error(),
+		))
+		// The signature is valid, but the provider payload is permanently
+		// contradictory. A retry would deliver the same event, so acknowledge it
+		// without mutating local payment state.
+		c.String(http.StatusOK, "OK")
+		return
+	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签成功 event_type=%s event_id=%s order_id=%s client_ip=%s", event.NormalizedEventType(), event.ID, event.Data.OrderID, c.ClientIP()))
-	if event.NormalizedEventType() != "order.completed" {
+	eventType := event.NormalizedEventType()
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签成功 event_type=%s event_id=%s order_id=%s client_ip=%s", eventType, event.ID, event.Data.OrderID, c.ClientIP()))
+	action := service.WaffoPancakeWebhookActionForEvent(eventType)
+	switch action {
+	case service.WaffoPancakeWebhookActionRefundSucceeded, service.WaffoPancakeWebhookActionRefundFailed:
+		if err := handleWaffoPancakeRefundEvent(c, event); err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款事件处理失败 event_type=%s event_id=%s order_id=%s client_ip=%s error=%q", eventType, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
+			c.String(http.StatusInternalServerError, "retry")
+			return
+		}
+		c.String(http.StatusOK, "OK")
+		return
+	case service.WaffoPancakeWebhookActionIgnore:
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -491,6 +564,15 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	// OrderID is Pancake's internal ORD_* (logs only).
 	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
 	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
+	if (action == service.WaffoPancakeWebhookActionSubscriptionActivated ||
+		action == service.WaffoPancakeWebhookActionSubscriptionPaymentSucceeded) && !isSubscription {
+		// A recurring-provider event must never be allowed to settle a wallet
+		// top-up. The local subscription order prefix is the explicit type
+		// boundary; acknowledge a misrouted signed event without mutating state.
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅事件与本地订单类型不匹配 event_type=%s event_id=%s trade_no=%s client_ip=%s", eventType, event.ID, rawTradeNo, c.ClientIP()))
+		c.String(http.StatusOK, "OK")
+		return
+	}
 
 	if isSubscription {
 		tradeNo, err := service.ResolveWaffoPancakeSubscriptionTradeNo(event)
@@ -499,6 +581,35 @@ func WaffoPancakeWebhook(c *gin.Context) {
 				"Waffo Pancake webhook 订阅订单解析失败 event_id=%s order_id=%s buyer_identity=%q client_ip=%s error=%q",
 				event.ID, event.Data.OrderID, event.Data.MerchantProvidedBuyerIdentity, c.ClientIP(), err.Error(),
 			))
+			c.String(http.StatusOK, "OK")
+			return
+		}
+		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+		if order == nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Waffo Pancake webhook 订阅订单消失 trade_no=%s event_id=%s order_id=%s client_ip=%s",
+				tradeNo, event.ID, event.Data.OrderID, c.ClientIP(),
+			))
+			c.String(http.StatusOK, "OK")
+			return
+		}
+		plan, planErr := model.GetSubscriptionPlanById(order.PlanId)
+		if planErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Waffo Pancake webhook 订阅套餐读取失败 trade_no=%s plan_id=%d event_id=%s client_ip=%s error=%q",
+				tradeNo, order.PlanId, event.ID, c.ClientIP(), planErr.Error(),
+			))
+			c.String(http.StatusInternalServerError, "retry")
+			return
+		}
+		if validationErr := validateWaffoPancakeSubscriptionEvent(event, order, plan); validationErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Waffo Pancake webhook 订阅证据不匹配 trade_no=%s plan_id=%d event_id=%s client_ip=%s error=%q",
+				tradeNo, order.PlanId, event.ID, c.ClientIP(), validationErr.Error(),
+			))
+			// The event is signed but permanently belongs to a different local
+			// order/product. Acknowledge it without granting the subscription;
+			// retrying cannot repair a provider/local evidence mismatch.
 			c.String(http.StatusOK, "OK")
 			return
 		}
@@ -526,9 +637,28 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
-
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	if err := validateWaffoPancakeTopUpEvent(event, topUp); err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf(
+			"Waffo Pancake webhook 充值订单证据不匹配 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q",
+			tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error(),
+		))
+		// The event is signed but permanently belongs to a different product or
+		// store. A retry cannot repair that mismatch; acknowledge without credit.
+		c.String(http.StatusOK, "OK")
+		return
+	}
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
+	// Re-read after taking the order lock. Two identical provider callbacks can
+	// otherwise both observe the old pending snapshot and create duplicate logs.
+	topUp = model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值订单在加锁后消失 trade_no=%s event_id=%s", tradeNo, event.ID))
+		c.String(http.StatusInternalServerError, "retry")
+		return
+	}
+	wasPending := topUp.Status == common.TopUpStatusPending
 
 	settledAmountMicros, err := monetaryStringToMicros(event.Data.Amount)
 	if err != nil {
@@ -540,10 +670,6 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	if providerEventId == "" {
 		providerEventId = event.EventID
 	}
-	// StoreID is bound below. The current Pancake webhook DTO exposes only
-	// ProductName, not the immutable product ID used at checkout. The order
-	// records the configured product ID, but callback product comparison remains
-	// unavailable until the provider includes that identifier in its signed event.
 	completed, err := model.CompleteExternalTopUp(model.ExternalTopUpSettlement{
 		TradeNo:               tradeNo,
 		PaymentProvider:       model.PaymentProviderWaffoPancake,
@@ -560,6 +686,280 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		return
 	}
 
+	if wasPending {
+		model.RecordTopupLog(
+			completed.UserId,
+			fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(int(completed.CreditedQuota)), completed.Money),
+			c.ClientIP(),
+			completed.PaymentMethod,
+			model.PaymentMethodWaffoPancake,
+		)
+	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s user_id=%d quota=%d event_id=%s order_id=%s client_ip=%s", tradeNo, completed.UserId, completed.CreditedQuota, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
+}
+
+// validateWaffoPancakeTopUpEvent binds newly-created wallet checkouts to the
+// configured store and product. Waffo echoes order metadata in signed webhook
+// payloads, so a valid event for another product must not settle this order.
+// Older orders may not have metadata; those remain compatible, while any
+// metadata that is present is always checked.
+func validateWaffoPancakeTopUpEvent(event *service.WaffoPancakeWebhookEvent, topUp *model.TopUp) error {
+	if event == nil || topUp == nil {
+		return fmt.Errorf("missing top-up settlement evidence")
+	}
+	if expectedStore := strings.TrimSpace(topUp.ProviderStoreId); expectedStore != "" &&
+		strings.TrimSpace(event.StoreID) != expectedStore {
+		return fmt.Errorf("top-up store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
+	}
+	actualProduct, present := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID]
+	if present {
+		expectedProduct := strings.TrimSpace(topUp.ProviderProductId)
+		actualProduct = strings.TrimSpace(actualProduct)
+		// A metadata key is signed evidence from a newly-created checkout. An
+		// empty value is not equivalent to a legacy payload with no key: reject
+		// it when the local order has a product binding, rather than silently
+		// accepting an unbound event.
+		if expectedProduct != "" && actualProduct != expectedProduct {
+			return fmt.Errorf("top-up product metadata mismatch: expected=%q actual=%q", expectedProduct, actualProduct)
+		}
+	}
+	return nil
+}
+
+// validateWaffoPancakeSubscriptionEvent keeps a signed provider callback
+// bound to the local subscription order. Signature verification authenticates
+// Waffo, but it does not prove that the event belongs to this plan or amount.
+// Product metadata is written into new checkout sessions and echoed by Waffo;
+// requiring it prevents a valid event for another product in the same merchant
+// from activating this local order.
+func validateWaffoPancakeSubscriptionEvent(event *service.WaffoPancakeWebhookEvent, order *model.SubscriptionOrder, plan *model.SubscriptionPlan) error {
+	if event == nil || order == nil || plan == nil {
+		return fmt.Errorf("missing subscription settlement evidence")
+	}
+	expectedCurrency := strings.ToUpper(strings.TrimSpace(plan.Currency))
+	if expectedCurrency == "" {
+		expectedCurrency = "USD"
+	}
+	actualCurrency := strings.ToUpper(strings.TrimSpace(event.Data.Currency))
+	if actualCurrency == "" || actualCurrency != expectedCurrency {
+		return fmt.Errorf("subscription currency mismatch: expected=%q actual=%q", expectedCurrency, actualCurrency)
+	}
+
+	expectedAmount, err := monetaryStringToMicros(formatWaffoPancakeAmount(order.Money))
+	if err != nil {
+		return fmt.Errorf("invalid local subscription amount: %w", err)
+	}
+	actualAmount, err := monetaryStringToMicros(event.Data.Amount)
+	if err != nil {
+		return fmt.Errorf("invalid provider subscription amount: %w", err)
+	}
+	if actualAmount != expectedAmount {
+		return fmt.Errorf("subscription amount mismatch: expected_micros=%d actual_micros=%d", expectedAmount, actualAmount)
+	}
+
+	// The global store setting is optional for plan-only configuration, but
+	// when present it is an additional signed store boundary. The product
+	// metadata check below remains mandatory either way.
+	if expectedStore := strings.TrimSpace(setting.WaffoPancakeStoreID); expectedStore != "" &&
+		strings.TrimSpace(event.StoreID) != expectedStore {
+		return fmt.Errorf("subscription store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
+	}
+	expectedProduct := strings.TrimSpace(plan.WaffoPancakeProductId)
+	actualProduct := strings.TrimSpace(event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID])
+	if expectedProduct == "" || actualProduct == "" || actualProduct != expectedProduct {
+		return fmt.Errorf("subscription product metadata mismatch: expected=%q actual=%q", expectedProduct, actualProduct)
+	}
+	if expectedPlan := strconv.Itoa(plan.Id); strings.TrimSpace(event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID]) != expectedPlan {
+		return fmt.Errorf("subscription plan metadata mismatch: expected=%q actual=%q", expectedPlan, strings.TrimSpace(event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID]))
+	}
+	return nil
+}
+
+// handleWaffoPancakeRefundEvent records a signed refund notification in the
+// append-only finance ledger. It deliberately does not debit user quota: a
+// refund can be partial or arrive after quota has been spent, so an automatic
+// wallet reversal needs a separate, user-facing policy and idempotent balance
+// settlement. The ledger entry is enough to make the notification durable and
+// visible to the finance dashboard without silently changing balances.
+func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWebhookEvent) error {
+	if event == nil {
+		return fmt.Errorf("missing refund event")
+	}
+	if err := service.ValidateWaffoPancakeWebhookEvent(event); err != nil {
+		return err
+	}
+	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
+	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
+	var err error
+	var tradeNo string
+	var userID int
+	var status string
+	if isSubscription {
+		tradeNo, err = service.ResolveWaffoPancakeRefundSubscriptionTradeNo(event)
+		if err != nil {
+			return fmt.Errorf("resolve refund subscription: %w", err)
+		}
+		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+		if order == nil {
+			return fmt.Errorf("refund subscription order disappeared trade_no=%s", tradeNo)
+		}
+		if err := validateWaffoPancakeSubscriptionRefundEvent(event, order); err != nil {
+			return err
+		}
+		userID, status = order.UserId, order.Status
+	} else {
+		tradeNo, err = service.ResolveWaffoPancakeRefundTradeNo(event)
+		if err != nil {
+			return fmt.Errorf("resolve refund order: %w", err)
+		}
+		topUp := model.GetTopUpByTradeNo(tradeNo)
+		if topUp == nil {
+			return fmt.Errorf("refund order disappeared trade_no=%s", tradeNo)
+		}
+		userID, status = topUp.UserId, topUp.Status
+	}
+	if status != common.TopUpStatusSuccess {
+		return fmt.Errorf("refund order is not settled trade_no=%s status=%s", tradeNo, status)
+	}
+
+	action := service.WaffoPancakeWebhookActionForEvent(event.NormalizedEventType())
+	if action == service.WaffoPancakeWebhookActionRefundFailed {
+		providerEventID := waffoPancakeRefundEventID(event)
+		if providerEventID == "" {
+			return fmt.Errorf("refund event has no stable id")
+		}
+		claimed, err := model.ClaimWaffoPancakeWebhookEvent(
+			model.PaymentProviderWaffoPancake,
+			providerEventID,
+			event.NormalizedEventType(),
+		)
+		if err != nil {
+			return fmt.Errorf("claim refund event: %w", err)
+		}
+		if !claimed {
+			return nil
+		}
+		reason := strings.TrimSpace(event.Data.RefundReason)
+		if len([]rune(reason)) > 200 {
+			reason = string([]rune(reason)[:200])
+		}
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款失败 trade_no=%s user_id=%d refund_id=%s reason=%q", tradeNo, userID, event.Data.RefundTicketMerchantExternalID, reason))
+		model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.failed trade_no=%s refund_id=%s reason=%s", tradeNo, event.Data.RefundTicketMerchantExternalID, reason))
+		return nil
+	}
+
+	amountMicros, err := monetaryStringToMicros(event.Data.Amount)
+	if err != nil || amountMicros <= 0 {
+		if err == nil {
+			err = fmt.Errorf("refund amount must be positive")
+		}
+		return fmt.Errorf("invalid refund amount: %w", err)
+	}
+	providerEventID := waffoPancakeRefundEventID(event)
+	if providerEventID == "" {
+		return fmt.Errorf("refund event has no stable id")
+	}
+	_, created, err := model.AppendFinanceLedgerEntryIfNew(&model.FinanceLedgerEntry{
+		EntryType:       model.FinanceEntryRevenue,
+		Category:        "refund",
+		AmountMicros:    amountMicros,
+		Currency:        strings.ToUpper(strings.TrimSpace(event.Data.Currency)),
+		Direction:       model.FinanceDirectionDebit,
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		UserId:          &userID,
+		SourceType:      model.FinanceSourceRefund,
+		SourceId:        providerEventID,
+		Note:            fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s order_id=%s refund_id=%s", tradeNo, event.Data.OrderID, event.Data.RefundTicketMerchantExternalID),
+		OccurredAt:      time.Now().Unix(),
+		CreatedBy:       userID,
+		IdempotencyKey:  "waffo:pancake:refund:" + providerEventID,
+	})
+	if err != nil {
+		return err
+	}
+	if !created {
+		return nil
+	}
+	model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s refund_id=%s amount=%s %s", tradeNo, event.Data.RefundTicketMerchantExternalID, event.Data.Amount, strings.ToUpper(strings.TrimSpace(event.Data.Currency))))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))
+	return nil
+}
+
+// validateWaffoPancakeSubscriptionRefundEvent keeps a signed refund bound to
+// the same merchant store, currency, and product as the local subscription
+// order. Refund events carry the original order metadata, but they are not
+// themselves sufficient evidence that the refund belongs to this plan: the
+// external trade number is the lookup key and must be supplemented with the
+// immutable checkout facts before recording finance data.
+func validateWaffoPancakeSubscriptionRefundEvent(event *service.WaffoPancakeWebhookEvent, order *model.SubscriptionOrder) error {
+	if event == nil || order == nil {
+		return fmt.Errorf("missing subscription refund settlement evidence")
+	}
+	actualStore := strings.TrimSpace(event.StoreID)
+	actualProduct, productMetadataPresent := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID]
+	actualPlan, planMetadataPresent := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID]
+	metadataPresent := productMetadataPresent || planMetadataPresent
+	// Older refund payloads (and orders created before checkout metadata was
+	// introduced) do not carry StoreID or OrderMetadata. Keep those payloads
+	// processable, but never ignore a contradictory value when the provider
+	// does send one. New payloads with either binding field are validated below.
+	if expectedStore := strings.TrimSpace(setting.WaffoPancakeStoreID); expectedStore != "" &&
+		(actualStore != "" || metadataPresent) && actualStore != expectedStore {
+		return fmt.Errorf("subscription refund store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
+	}
+	plan, err := model.GetSubscriptionPlanById(order.PlanId)
+	if err != nil || plan == nil {
+		if metadataPresent && err != nil {
+			return fmt.Errorf("subscription refund plan could not be loaded: %w", err)
+		}
+		if metadataPresent {
+			return fmt.Errorf("subscription refund plan could not be loaded")
+		}
+		// The plan may have been removed after a legacy order was settled. The
+		// trade number and (when supplied) buyer identity were already bound by
+		// ResolveWaffoPancakeRefundSubscriptionTradeNo, so retain compatibility.
+		return nil
+	}
+	expectedCurrency := strings.ToUpper(strings.TrimSpace(plan.Currency))
+	if expectedCurrency == "" {
+		expectedCurrency = "USD"
+	}
+	actualCurrency := strings.ToUpper(strings.TrimSpace(event.Data.Currency))
+	if actualCurrency != "" && actualCurrency != expectedCurrency {
+		return fmt.Errorf("subscription refund currency mismatch: expected=%q actual=%q", expectedCurrency, actualCurrency)
+	}
+	if !metadataPresent {
+		return nil
+	}
+	if actualCurrency == "" {
+		return fmt.Errorf("subscription refund currency mismatch: expected=%q actual=%q", expectedCurrency, actualCurrency)
+	}
+	expectedProduct := strings.TrimSpace(plan.WaffoPancakeProductId)
+	if expectedProduct == "" {
+		return fmt.Errorf("subscription refund product is not configured")
+	}
+	actualProduct = strings.TrimSpace(actualProduct)
+	if !productMetadataPresent || actualProduct != expectedProduct {
+		return fmt.Errorf("subscription refund product metadata mismatch: expected=%q actual=%q", expectedProduct, actualProduct)
+	}
+	actualPlan = strings.TrimSpace(actualPlan)
+	if expectedPlan := strconv.Itoa(plan.Id); !planMetadataPresent || actualPlan != expectedPlan {
+		return fmt.Errorf("subscription refund plan metadata mismatch: expected=%q actual=%q", expectedPlan, actualPlan)
+	}
+	return nil
+}
+
+func waffoPancakeRefundEventID(event *service.WaffoPancakeWebhookEvent) string {
+	if event == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(event.ID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(event.EventID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(event.Data.RefundTicketMerchantExternalID)
 }

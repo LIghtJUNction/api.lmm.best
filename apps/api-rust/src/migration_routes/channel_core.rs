@@ -7,8 +7,9 @@
 use async_trait::async_trait;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Query, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
@@ -19,6 +20,7 @@ use sqlx::{PgPool, Row};
 use std::{collections::BTreeMap, sync::Arc};
 
 const CHANNEL_CACHE_GENERATION: &str = "lmm:channels:generation";
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 
 /// Authorization is deliberately injected: the HTTP auth slice owns the
 /// bearer/session verifier and this route slice only owns channel policy.
@@ -62,7 +64,54 @@ pub fn router(state: ChannelCoreState) -> Router {
         .route("/api/channel/ops", get(ops))
         .route("/api/channel/fix", post(fix_abilities))
         .route("/api/channel/multi_key/manage", post(manage_multi_keys))
+        // Go's authentication middleware runs before JSON binding.  Keep a
+        // listener-owned preflight here so malformed/underspecified bodies
+        // cannot turn an anonymous request into Axum's 422 before the shared
+        // dashboard authorizer returns the legacy 401 envelope.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            channel_auth_boundary,
+        ))
         .with_state(state)
+}
+
+fn channel_action_for_request(request: &Request) -> ChannelAction {
+    let path = request.uri().path();
+    if request.method() == axum::http::Method::GET {
+        return ChannelAction::Read;
+    }
+    if path.ends_with("/status") || path.ends_with("/status/batch") {
+        return ChannelAction::Operate;
+    }
+    if path == "/api/channel/" && request.method() == axum::http::Method::PUT {
+        return ChannelAction::Write;
+    }
+    if path == "/api/channel/tag" {
+        return ChannelAction::Write;
+    }
+    if path == "/api/channel/batch/tag"
+        || path == "/api/channel/tag/disabled"
+        || path == "/api/channel/tag/enabled"
+    {
+        return ChannelAction::Operate;
+    }
+    ChannelAction::SensitiveWrite
+}
+
+async fn channel_auth_boundary(
+    axum::extract::State(state): axum::extract::State<ChannelCoreState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let action = channel_action_for_request(&request);
+    if let Err(error) = state.authorizer.authorize(request.headers(), action).await {
+        return error.legacy();
+    }
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 #[derive(Debug, Serialize)]
@@ -89,6 +138,9 @@ fn empty() -> Json<Envelope<Value>> {
 
 #[derive(Debug)]
 pub enum ChannelError {
+    /// The Go `ConsoleAccessGate` conceals channel discovery routes before
+    /// AdminAuth sees anonymous, invalid, disabled, or unactivated users.
+    ConsoleNotFound,
     Unauthorized,
     Forbidden,
     Invalid(&'static str),
@@ -98,6 +150,9 @@ pub enum ChannelError {
 }
 impl ChannelError {
     pub(crate) fn legacy(self) -> Response {
+        if matches!(&self, Self::ConsoleNotFound) {
+            return (StatusCode::NOT_FOUND, Json(json!({"message":"Not Found"}))).into_response();
+        }
         if matches!(&self, Self::Unauthorized) {
             return (
                 StatusCode::UNAUTHORIZED,
@@ -113,7 +168,7 @@ impl ChannelError {
                 .into_response();
         }
         let message = match self {
-            Self::Unauthorized | Self::Forbidden => unreachable!(),
+            Self::ConsoleNotFound | Self::Unauthorized | Self::Forbidden => unreachable!(),
             Self::Invalid(message) => message,
             Self::NotFound => "渠道不存在",
             Self::Database => "数据库错误",

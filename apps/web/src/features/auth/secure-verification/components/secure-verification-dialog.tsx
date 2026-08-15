@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
+import { ShieldCheck, KeyRound, Loader2, Mail, Smartphone } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -25,10 +25,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import type {
-  SecureVerificationState,
-  VerificationMethod,
-  VerificationMethods,
+import {
+  getPreferredVerificationMethods,
+  type SecureVerificationState,
+  type VerificationMethod,
+  type VerificationMethods,
 } from '../types'
 
 interface SecureVerificationDialogProps {
@@ -40,6 +41,9 @@ interface SecureVerificationDialogProps {
   onCancel: () => void
   onCodeChange: (code: string) => void
   onMethodChange: (method: VerificationMethod) => void
+  onSendEmailCode?: () => void | Promise<unknown>
+  emailCodeSending?: boolean
+  emailCodeSent?: boolean
 }
 
 export function SecureVerificationDialog({
@@ -51,17 +55,29 @@ export function SecureVerificationDialog({
   onCancel,
   onCodeChange,
   onMethodChange,
+  onSendEmailCode,
+  emailCodeSending = false,
+  emailCodeSent = false,
 }: SecureVerificationDialogProps) {
   const { t } = useTranslation()
+  const preferredMethods = useMemo(
+    () => getPreferredVerificationMethods(methods),
+    [methods]
+  )
   const availableTabs: VerificationMethod[] = useMemo(() => {
     const tabs: VerificationMethod[] = []
-    if (methods.has2FA) tabs.push('2fa')
-    if (methods.hasPasskey && methods.passkeySupported) tabs.push('passkey')
+    if (preferredMethods.hasEmail) tabs.push('email')
+    if (preferredMethods.has2FA) tabs.push('2fa')
+    if (preferredMethods.hasPasskey) tabs.push('passkey')
     return tabs
-  }, [methods])
+  }, [preferredMethods])
 
   const activeMethod =
-    state.method ?? (availableTabs.length > 0 ? availableTabs[0] : null)
+    state.method && availableTabs.includes(state.method)
+      ? state.method
+      : availableTabs.length > 0
+        ? availableTabs[0]
+        : null
 
   const title =
     state.title ??
@@ -73,7 +89,7 @@ export function SecureVerificationDialog({
     state.description ??
     (availableTabs.length
       ? 'Confirm your identity before accessing this sensitive action.'
-      : 'Enable Two-factor Authentication or Passkey in your profile settings to continue.')
+      : 'Bind an email, enable 2FA, or set up a Passkey before continuing.')
 
   const handleVerify = () => {
     if (!activeMethod) return
@@ -83,6 +99,8 @@ export function SecureVerificationDialog({
 
   const verifyDisabled =
     state.loading ||
+    (activeMethod === 'email' &&
+      (!emailCodeSent || !state.code.trim() || state.code.length < 6)) ||
     (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6))
 
   return (
@@ -132,7 +150,7 @@ export function SecureVerificationDialog({
           </div>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
+              'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.'
             )}
           </p>
         </div>
@@ -143,26 +161,74 @@ export function SecureVerificationDialog({
           className='gap-4'
         >
           <TabsList>
-            {methods.has2FA && (
-              <TabsTrigger value='2fa'>{t('Authenticator code')}</TabsTrigger>
+            {preferredMethods.hasEmail && (
+              <TabsTrigger value='email'>{t('Email verification')}</TabsTrigger>
             )}
-            {methods.hasPasskey && methods.passkeySupported && (
+            {preferredMethods.has2FA && (
+              <TabsTrigger value='2fa'>
+                {t('Two-factor authentication')}
+              </TabsTrigger>
+            )}
+            {preferredMethods.hasPasskey && (
               <TabsTrigger value='passkey'>{t('Passkey')}</TabsTrigger>
             )}
           </TabsList>
 
-          <TabsContent value='2fa' className='space-y-3'>
+          <TabsContent value='email' className='space-y-3'>
             <p className='text-muted-foreground text-sm'>
-              {t(
-                'Enter the 6-digit Time-based One-Time Password or 8-character backup code from your authenticator app.'
-              )}
+              {methods.emailHint
+                ? t('Send a one-time code to {{email}}.', {
+                    email: methods.emailHint,
+                  })
+                : t('Send a one-time code to your bound email address.')}
             </p>
+            <div className='flex gap-2'>
+              <Input
+                inputMode='numeric'
+                maxLength={6}
+                value={state.code}
+                onChange={(event) => onCodeChange(event.target.value)}
+                placeholder={t('Enter verification code')}
+                disabled={state.loading}
+                autoFocus={activeMethod === 'email'}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !verifyDisabled) {
+                    event.preventDefault()
+                    handleVerify()
+                  }
+                }}
+              />
+              <Button
+                type='button'
+                variant='outline'
+                onClick={onSendEmailCode}
+                disabled={state.loading || emailCodeSending}
+              >
+                {emailCodeSending ? (
+                  <Loader2 className='h-4 w-4 animate-spin' />
+                ) : (
+                  <Mail className='h-4 w-4' />
+                )}
+                {emailCodeSent ? t('Resend code') : t('Send code')}
+              </Button>
+            </div>
+          </TabsContent>
+
+          <TabsContent value='2fa' className='space-y-3'>
+            <div className='bg-muted/50 flex items-center gap-3 rounded-lg p-4'>
+              <Smartphone className='text-primary h-6 w-6' />
+              <p className='text-muted-foreground text-sm'>
+                {t(
+                  'Enter the code from your authenticator app or a backup code.'
+                )}
+              </p>
+            </div>
             <Input
               inputMode='numeric'
-              maxLength={8}
+              autoComplete='one-time-code'
               value={state.code}
               onChange={(event) => onCodeChange(event.target.value)}
-              placeholder={t('Enter verification code')}
+              placeholder={t('Enter verification code or backup code')}
               disabled={state.loading}
               autoFocus={activeMethod === '2fa'}
               onKeyDown={(event) => {
@@ -190,11 +256,6 @@ export function SecureVerificationDialog({
                 </div>
               </div>
             </div>
-            {!methods.passkeySupported && (
-              <p className='text-destructive text-sm'>
-                {t('This device does not support Passkey verification.')}
-              </p>
-            )}
           </TabsContent>
         </Tabs>
       )}

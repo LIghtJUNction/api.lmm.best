@@ -9,14 +9,20 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/controller"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
 
 	"github.com/gin-gonic/gin"
 )
 
 func SetRouter(router *gin.Engine) error {
+	// These loopback-only routes are used by the package-managed Nginx edge
+	// policy. They intentionally sit outside the /api group so a policy check
+	// does not consume API rate-limit budget or the console discovery gate.
+	router.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)
+	router.GET("/internal/errors/access-policy", controller.GetAccessPolicyErrorPage)
+
 	SetApiRouter(router)
 	SetOpenSourceBountyMCPRouter(router)
 	SetDashboardRouter(router)
@@ -116,10 +122,13 @@ func newFrontendHandler(configuredRoot string) (http.Handler, error) {
 func (handler *frontendHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	requestPath := path.Clean("/" + request.URL.Path)
 	if requestPath != "/" {
-		candidate := filepath.Join(handler.root, filepath.FromSlash(strings.TrimPrefix(requestPath, "/")))
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			handler.fileServer.ServeHTTP(writer, request)
-			return
+		relativeRequestPath := filepath.FromSlash(strings.TrimPrefix(requestPath, "/"))
+		if filepath.IsLocal(relativeRequestPath) {
+			candidate := filepath.Join(handler.root, relativeRequestPath)
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+				handler.fileServer.ServeHTTP(writer, request)
+				return
+			}
 		}
 	}
 	if isFrontendAssetPath(requestPath) {

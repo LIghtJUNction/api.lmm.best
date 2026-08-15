@@ -1,74 +1,169 @@
-<div align="center">
-
 # LMM Forge
 
-**Open-source bounty collaboration and delivery tracking.**
-
-</div>
+[![CI](https://github.com/LIghtJUNction/api.lmm.best/actions/workflows/ci.yml/badge.svg)](https://github.com/LIghtJUNction/api.lmm.best/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](./LICENSE)
+[![Release](https://img.shields.io/github/v/release/LIghtJUNction/api.lmm.best?display_name=tag)](https://github.com/LIghtJUNction/api.lmm.best/releases)
+[![Issues](https://img.shields.io/github/issues/LIghtJUNction/api.lmm.best)](https://github.com/LIghtJUNction/api.lmm.best/issues)
+[![Last Commit](https://img.shields.io/github/last-commit/LIghtJUNction/api.lmm.best)](https://github.com/LIghtJUNction/api.lmm.best/commits/main)
 
 > **Access policy:** Access from China is prohibited.
 
-## What LMM Forge does
+LMM Forge is a production-grade, web-first bounty collaboration system for open-source maintenance, with delivery tracking, review/audit trails, and settlement workflows.
 
-LMM Forge gives maintainers and contributors one accountable workflow for funded open-source work:
+## Table of Contents
 
-- publish a repository challenge with a defined scope, reward, delivery slots, and acceptance rules;
-- accept funded work with a verifiable GitHub identity;
-- attach Issue and pull request evidence to a delivery;
-- review work and release escrowed rewards;
-- preserve settlement, rating, tip, and dispute events in the same evidence trail.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [What LMM Forge supports](#what-lmm-forge-supports)
+- [Repository layout](#repository-layout)
+- [Documentation and operations](#documentation-and-operations)
+- [Workflow and command reference](#workflow-and-command-reference)
+- [Contribution and support](#contribution-and-support)
+- [Security and legal](#security-and-legal)
+- [License and attribution](#license-and-attribution)
 
-The public challenge board is readable without an account. Signing in enables challenge acceptance and wallet funding. A new account receives permanent developer-console access after creating its first credential; no deposit is required for activation. Existing accounts and administrators retain their established access.
+## Overview
 
-## Repository layout
+LMM Forge is a maintained derivative of `QuantumNous/new-api` with retained upstream compatibility and additional product features for bounty management.
 
-| Path | Role |
+Key differentiators:
+
+- Public bounty board with authenticated workflow controls
+- Evidence-driven acceptance for Issue/PR submissions
+- Escrowed reward handling with transparent settlement state
+- Dispute-aware delivery lifecycle and rating trail
+
+`FORK.md` captures the formal fork and attribution constraints that govern derivative distribution and branding.
+
+## Architecture
+
+| Concern | Status |
 | --- | --- |
-| [`apps/web`](./apps/web) | Shared React frontend and LMM Forge product experience |
-| [`apps/api-go`](./apps/api-go) | Default production backend and bounty settlement implementation |
-| [`apps/api-rust`](./apps/api-rust) | Optional Rust preview backend and compatibility tooling |
+| Frontend | Shared React application in `apps/web` |
+| Default backend | Go service in `apps/api-go` |
+| Preview backend | Rust service in `apps/api-rust` (not default production traffic)
+| Deployment | Shell-driven operations in `deploy/` and workflow automation in `.github/workflows` |
+| Packaging | Local/release packaging in `packaging/` |
 
-The default production build compiles `apps/web`, synchronizes the verified assets into the Go embed tree, and then builds the Go service. The Rust backend remains opt-in and does not replace the default image or release path.
+The production path compiles frontend assets, embeds verified assets into Go service output, and builds the standalone Go API binary.
 
 ## Quick start
 
-Review [`.env.example`](./.env.example), replace all example credentials, and then start the default stack:
+### Prerequisites
+
+- `git`, `bun`, `just`
+- Database + cache services suitable for local development
+- Optional: Go toolchain for native backend work, Rust toolchain for Rust preview runs
+
+### Bootstrap
 
 ```bash
+
 git clone https://github.com/LIghtJUNction/api.lmm.best.git
 cd api.lmm.best
-docker compose up -d
+just setup
 ```
 
-Open <http://localhost:3000> and complete the setup flow. Common development commands are:
+### Run local services
 
 ```bash
-just setup
-just dev
-just test
-just build
+just infra-up   # Starts default PostgreSQL + Valkey when docker-compose.dev.yml exists
+just dev        # Starts web + Go backend together
 ```
 
-`just build` produces independent frontend and Go backend artifacts in `apps/web/dist` and `apps/api-go/out`. PostgreSQL and Valkey are the default Compose services; the Go backend also retains its inherited SQLite and MySQL compatibility.
+Alternative flows:
 
-## Production notes
+```bash
+just dev-web
+just dev-go
+just dev-rust
+```
 
-Before exposing a deployment:
+Open <http://localhost:3000> and complete the setup flow.
 
-1. Enforce the access policy at the network edge in addition to displaying the notice in the application.
-2. Replace every example database, cache, and session secret.
-3. Terminate HTTPS at a trusted reverse proxy and configure exact trusted origins and proxy ranges.
-4. Keep PostgreSQL and Valkey on private networks and test database restoration.
-5. Review challenge escrow, wallet, rate-limit, logging, retention, and dispute settings.
+### Production-style local checks
 
-Application copy is not a substitute for geographic enforcement. Operators are responsible for implementing and maintaining any required IP, account, payment, and legal controls.
+```bash
+just build
+just test
+```
 
-## Technical foundation
+## What LMM Forge supports
 
-LMM Forge is the product layer maintained in this repository. Its service foundation is derived from [QuantumNous/New API](https://github.com/QuantumNous/new-api), which builds on [One API](https://github.com/songquanpeng/one-api). The inherited New API compatibility layer, identifiers, copyright notices, and attribution remain intact.
+- Challenge publication and acceptance
+- Contributor submission and evidence intake
+- Multi-step review with payout and dispute logic
+- User and administrator workflow surfaces for accountability and governance
+- Session and security controls documented under authentication contracts
+- Operational guardrails for upgrades, cutovers, and cache/auth topology constraints
 
-For deployment and authentication details, see [`docs/authentication.md`](./docs/authentication.md), [`NOTICE`](./NOTICE), and [`THIRD-PARTY-LICENSES.md`](./THIRD-PARTY-LICENSES.md).
+See [`docs/open-source-bounties.md`](./docs/open-source-bounties.md) for full bounty behavior and settlement rules.
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| [`apps/web`](./apps/web) | Shared React frontend |
+| [`apps/api-go`](./apps/api-go) | Go API backend and production default |
+| [`apps/api-rust`](./apps/api-rust) | Rust preview backend |
+| [`deploy`](./deploy) | Migration/cutover/deploy documentation and scripts |
+| [`packaging`](./packaging) | Packaging workflows and local package content |
+| [`docs`](./docs) | Operational guides, legal policy, and API references |
+
+## Documentation and operations
+
+- `docs/README.md`: canonical docs index
+- `docs/authentication.md`: authentication and session model
+- `docs/seamless-upgrades.md`: upgrade workflow and constraints
+- `docs/postgresql-migration.md`: migration rehearsal contract
+- `docs/postgresql-cutover.md`: production cutover contract
+- `docs/valkey-lmm-api.md`: dedicated cache architecture
+- `docs/rust-blue-green.md`: ownership and route migration checkpoints
+- `docs/openapi/api.json`: admin API spec
+- `docs/openapi/relay.json`: relay API spec
+- `docs/legal`: legal policy corpus
+- `THIRD-PARTY-LICENSES.md`: dependency and license inventory
+
+## Workflow and command reference
+
+### Primary command groups
+
+```text
+just setup           Install workspace dependencies
+just dev             Frontend + Go backend in one process group
+just build           Build frontend and Go backend artifacts
+just test            Run backend and frontend tests
+just check           Formatting, lint, typecheck, and contract checks
+just deploy-production  Production deployment entry point
+```
+
+### Additional commands
+
+- `just infra-up` / `just infra-down` for local infrastructure
+- `just dev-go`, `just dev-web`, `just dev-rust` for focused runs
+- `just clean-generated` to clear generated build artifacts
+- `just docker` or `just package` for environment-specific release outputs
+
+## Contribution and support
+
+- `Contributing` requirements: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- `Support model`: [SUPPORT.md](./SUPPORT.md)
+- `Code of Conduct`: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- `Issue workflows`: use GitHub Issue templates in `.github/ISSUE_TEMPLATE`
+
+## Security and legal
+
+Security policy is maintained at: [SECURITY.md](./SECURITY.md)
+
+Legal documents:
+
+- [docs/legal/user-agreement.md](./docs/legal/user-agreement.md)
+- [docs/legal/privacy-policy.md](./docs/legal/privacy-policy.md)
+- [docs/legal/terms-of-service.md](./docs/legal/terms-of-service.md)
 
 ## License and attribution
 
-This repository is licensed under the [GNU Affero General Public License v3.0](./LICENSE). Preserve the required QuantumNous/New API and One API notices, the visible upstream attribution, and all applicable third-party terms when redistributing a modified build.
+This repository is distributed under AGPL-3.0. See [LICENSE](./LICENSE).
+
+Fork attribution and required notices are preserved in [NOTICE](./NOTICE).

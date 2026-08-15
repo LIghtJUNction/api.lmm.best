@@ -16,252 +16,181 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  ArrowRight01Icon,
-  HeartHandshakeIcon,
-  WalletCardsIcon,
-} from '@hugeicons/core-free-icons'
+import { ArrowRight01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Link } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { type FormEvent, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
+import { getAssistantPreConversationPresets } from '@/features/assistant/api'
+import { requestAssistantSend } from '@/features/assistant/assistant-events'
+import { redactAssistantMessageForRequest } from '@/features/assistant/assistant-message-safety'
+import { getAssistantPromptValidation } from '@/features/assistant/assistant-prompt-validation'
+import { useStatus } from '@/hooks/use-status'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ChallengeList } from './challenge-list'
-import { ForgeBountyHeroArt } from './forge-bounty-hero-art'
 import { ForgePublicShell } from './forge-public-shell'
+import { useTypewriterPlaceholder } from './use-typewriter-placeholder'
 
 export function ForgeHome() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const user = useAuthStore((state) => state.auth.user)
-  const workspaceTarget = isConsoleActivated(user)
-    ? '/open-source-bounties'
-    : '/workspace'
+  const { status } = useStatus()
+  const [message, setMessage] = useState('')
+  const [messageFocused, setMessageFocused] = useState(false)
+  const assistantEnabled = status?.assistant?.enabled !== false
+  const messageInvalid = getAssistantPromptValidation(message).invalid
+  const preConversationPresetsQuery = useQuery({
+    queryKey: ['assistant-pre-conversation-presets'],
+    queryFn: getAssistantPreConversationPresets,
+    enabled: assistantEnabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+  const animatedPlaceholder = useTypewriterPlaceholder(
+    preConversationPresetsQuery.data?.presets.map((preset) => preset.prompt) ??
+      [],
+    message.length === 0 && !messageFocused
+  )
+
+  const submitMessage = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const safeMessage = redactAssistantMessageForRequest(message).content.trim()
+    if (!safeMessage || messageInvalid || !assistantEnabled) return
+
+    if (!user) {
+      requestAssistantSend(undefined, safeMessage)
+      void navigate({
+        to: '/sign-in',
+        // The route guard redirects L0 to getting-started after login while
+        // L1+ stays on the dashboard.
+        search: { redirect: '/dashboard' },
+      })
+      return
+    }
+
+    const activated = isConsoleActivated(user)
+    requestAssistantSend(activated ? 'service' : 'onboarding', safeMessage)
+    void navigate({ to: activated ? '/dashboard' : '/getting-started' })
+  }
 
   return (
     <ForgePublicShell>
       <main>
         <section
           aria-labelledby='forge-home-title'
-          className='border-border bg-background border-b pt-16'
+          className='border-border border-b'
         >
-          <div className='mx-auto grid min-h-[calc(100svh-9rem)] max-w-7xl items-center gap-10 px-5 py-10 md:px-10 md:py-12 lg:grid-cols-[minmax(0,0.42fr)_minmax(0,0.58fr)] lg:gap-6'>
-            <div className='relative z-10 max-w-xl'>
-              <p className='before:bg-foreground mb-5 flex items-center gap-2 text-xs font-bold uppercase before:block before:size-2 before:rounded-full'>
-                {t('Open-source work, made accountable')}
+          <div className='mx-auto grid max-w-5xl content-center gap-12 px-6 py-14 md:min-h-[min(46rem,calc(100dvh-5rem))] md:px-10 md:py-24'>
+            <div className='max-w-3xl'>
+              <p className='text-muted-foreground mb-5 text-sm'>
+                {t('Developer-friendly AI gateway')}
               </p>
               <h1
                 id='forge-home-title'
-                className='mb-7 max-w-3xl font-serif text-5xl leading-[1.02] font-normal md:text-7xl'
+                className='mb-7 max-w-3xl font-serif text-4xl leading-[1.02] font-normal tracking-tight sm:text-5xl md:text-7xl'
               >
                 LMM Forge
               </h1>
-              <p className='mb-8 max-w-2xl text-base leading-7 md:text-lg'>
+              <p className='text-muted-foreground max-w-2xl text-base leading-7 sm:text-lg sm:leading-8 md:text-xl'>
                 {t(
-                  'Fund open-source work, coordinate contributors, and track every delivery from accepted challenge to verified pull request.'
+                  'A semi-public-interest AI gateway for high-quality, transparent access.'
                 )}
               </p>
-              <div className='flex flex-col gap-3 sm:flex-row'>
-                <Button
-                  size='lg'
-                  className='rounded-sm'
-                  render={<Link to='/challenges' />}
-                >
-                  {t('Browse challenges')}
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    data-icon='inline-end'
-                    strokeWidth={2}
-                    aria-hidden='true'
-                  />
-                </Button>
-                <Button
-                  size='lg'
-                  variant='outline'
-                  className='rounded-sm'
-                  render={
-                    user ? (
-                      <Link to={workspaceTarget} />
-                    ) : (
-                      <Link to='/pricing' />
-                    )
-                  }
-                >
-                  {user ? t('Open workspace') : t('Explore access options')}
-                </Button>
-              </div>
+              <p className='text-muted-foreground mt-3 max-w-2xl leading-7'>
+                {t(
+                  'Use the gateway for your own work, or browse public open-source challenges.'
+                )}
+              </p>
             </div>
-            <ForgeBountyHeroArt />
-          </div>
-        </section>
 
-        <section className='border-border bg-background border-b'>
-          <div className='mx-auto grid max-w-7xl md:grid-cols-[250px_1fr] md:px-10'>
-            <div className='border-border border-b px-5 py-8 md:border-r md:border-b-0 md:px-0 md:pr-8'>
-              <p className='mb-3 text-xs font-bold uppercase'>
-                {t('Live board')}
-              </p>
-              <h2 className='mb-4 font-serif text-3xl font-normal'>
-                {t('Open work')}
-              </h2>
-              <p className='mb-5 text-sm leading-6'>
-                {t(
-                  'Published work below is loaded from the real challenge ledger.'
-                )}
-              </p>
-              <Link
-                to='/challenges'
-                className='border-foreground inline-flex items-center gap-2 border-b pb-1 text-sm font-bold'
-              >
-                {t('View all')}
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  className='size-4'
-                  strokeWidth={2}
-                  aria-hidden='true'
+            <form className='max-w-2xl' onSubmit={submitMessage}>
+              <label className='sr-only' htmlFor='forge-home-message'>
+                {t('Tell us what you want to do')}
+              </label>
+              <InputGroup className='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/50 h-12 rounded-xl has-[[data-slot=input-group-control]:focus-visible]:ring-0'>
+                <InputGroupInput
+                  id='forge-home-message'
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  onFocus={() => setMessageFocused(true)}
+                  onBlur={() => setMessageFocused(false)}
+                  className='focus-visible:!outline-none'
+                  placeholder={
+                    animatedPlaceholder || t('Describe what you need...')
+                  }
+                  maxLength={4000}
                 />
-              </Link>
-            </div>
-            <div className='px-5 py-3 md:pl-8'>
-              <ChallengeList limit={3} showHeading={false} />
-            </div>
+                <InputGroupAddon align='inline-end' className='pr-1'>
+                  <InputGroupButton
+                    type='submit'
+                    variant='default'
+                    size='sm'
+                    className='h-10 rounded-lg px-3'
+                    disabled={
+                      !message.trim() || messageInvalid || !assistantEnabled
+                    }
+                  >
+                    {t('Ask AI assistant')}
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      data-icon='inline-end'
+                      strokeWidth={2}
+                      aria-hidden='true'
+                    />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            </form>
           </div>
         </section>
 
         <section
-          id='workflow'
-          className='border-border border-b py-20 md:py-28'
+          aria-labelledby='forge-public-challenges-title'
+          className='border-border border-b'
         >
-          <div className='mx-auto max-w-7xl px-5 md:px-10'>
-            <div className='mb-14 grid gap-8 md:grid-cols-2 md:items-end'>
-              <h2 className='max-w-3xl font-serif text-4xl leading-tight font-normal md:text-6xl'>
-                {t('A delivery trail people can actually review.')}
-              </h2>
-              <p className='max-w-xl text-base leading-7 md:justify-self-end'>
-                {t(
-                  'Scope, acceptance, evidence, review, settlement, ratings, tips, and disputes stay connected to the same funded challenge.'
-                )}
-              </p>
-            </div>
-            <div className='border-foreground grid border-t-2 sm:grid-cols-2 lg:grid-cols-4'>
-              {[
-                [
-                  '01',
-                  'Publish and fund',
-                  'Define the repository, reward, slots, rules, and escrow.',
-                ],
-                [
-                  '02',
-                  'Accept the work',
-                  'A contributor claims a slot with a verifiable GitHub identity.',
-                ],
-                [
-                  '03',
-                  'Attach evidence',
-                  'Link the issue, pull request, and delivery notes in one trail.',
-                ],
-                [
-                  '04',
-                  'Review and settle',
-                  'Approve the work, release the reward, rate, tip, or dispute.',
-                ],
-              ].map(([index, title, description]) => (
-                <article
-                  key={index}
-                  className='border-border relative min-h-64 border-b py-7 sm:odd:border-r sm:odd:pr-6 sm:even:pl-6 lg:border-r lg:border-b-0 lg:px-6 lg:first:pl-0 lg:last:border-r-0'
+          <div className='mx-auto max-w-5xl px-5 py-12 md:px-10 md:py-16'>
+            <div className='mb-6 flex items-end justify-between gap-4'>
+              <div>
+                <p className='text-muted-foreground mb-2 text-sm'>
+                  {t('Public challenges')}
+                </p>
+                <h2
+                  id='forge-public-challenges-title'
+                  className='font-serif text-3xl font-normal md:text-4xl'
                 >
-                  <span className='bg-foreground absolute -top-2 left-0 size-4 rounded-full lg:left-6 lg:first:left-0' />
-                  <span className='mb-12 block text-xs font-bold'>{index}</span>
-                  <h3 className='mb-4 font-serif text-2xl font-medium'>
-                    {t(title)}
-                  </h3>
-                  <p className='text-sm leading-6 opacity-75'>
-                    {t(description)}
-                  </p>
-                </article>
-              ))}
+                  {t('Open-source challenges')}
+                </h2>
+              </div>
+              <Button
+                variant='outline'
+                className='shrink-0 rounded-sm'
+                render={<Link to='/challenges' />}
+              >
+                {t('Browse challenges')}
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  data-icon='inline-end'
+                  strokeWidth={2}
+                  aria-hidden='true'
+                />
+              </Button>
             </div>
-          </div>
-        </section>
-
-        <section className='forge-muted-section border-border border-b py-16 md:py-20'>
-          <div className='mx-auto grid max-w-7xl gap-8 px-5 md:grid-cols-[auto_1fr_auto] md:items-center md:px-10'>
-            <HugeiconsIcon
-              icon={WalletCardsIcon}
-              className='size-10'
-              strokeWidth={2}
-              aria-hidden='true'
-            />
-            <div>
-              <h2 className='font-serif text-3xl leading-tight font-normal md:text-4xl'>
-                {t('Need a dependable starting point?')}
-              </h2>
-              <p className='mt-3 max-w-2xl text-sm leading-6 md:text-base'>
-                {t(
-                  'Create an account, add usage credit when you are ready, and pay only for what you use.'
-                )}
-              </p>
-            </div>
-            <Button
-              variant='outline'
-              className='rounded-sm'
-              render={<Link to='/pricing' />}
-            >
-              {t('View access options')}
-              <HugeiconsIcon
-                icon={ArrowRight01Icon}
-                data-icon='inline-end'
-                strokeWidth={2}
-                aria-hidden='true'
-              />
-            </Button>
-          </div>
-        </section>
-
-        <section className='forge-accent-section border-border border-b py-20 md:py-28'>
-          <div className='mx-auto grid max-w-7xl gap-12 px-5 md:grid-cols-[0.9fr_1.1fr] md:px-10'>
-            <div>
-              <HugeiconsIcon
-                icon={HeartHandshakeIcon}
-                className='mb-8 size-10'
-                strokeWidth={2}
-                aria-hidden='true'
-              />
-              <h2 className='mb-6 max-w-2xl font-serif text-4xl leading-tight font-normal md:text-6xl'>
-                {t('Trust comes from evidence, not a progress label.')}
-              </h2>
-              <p className='max-w-xl text-base leading-7'>
-                {t(
-                  'Every funded action leaves a visible record for project owners and contributors.'
-                )}
-              </p>
-            </div>
-            <dl className='border-foreground border-t-2'>
-              {[
-                [
-                  'Challenge',
-                  'Repository, scope, reward, rules, and delivery slots',
-                ],
-                [
-                  'Evidence',
-                  'Issue, pull request, contributor note, and reviewer decision',
-                ],
-                [
-                  'Settlement',
-                  'Escrow funding, reward transfer, refund, tip, and dispute history',
-                ],
-              ].map(([term, description]) => (
-                <div
-                  key={term}
-                  className='border-border grid gap-2 border-b py-6 sm:grid-cols-[130px_1fr] sm:gap-6'
-                >
-                  <dt className='text-xs font-bold uppercase'>{t(term)}</dt>
-                  <dd className='font-serif text-lg'>{t(description)}</dd>
-                </div>
-              ))}
-            </dl>
+            <p className='text-muted-foreground mb-5 text-sm'>
+              {t('The public board is open to everyone.')}
+            </p>
+            <ChallengeList limit={3} showHeading={false} />
           </div>
         </section>
       </main>

@@ -3,8 +3,8 @@ use std::{env, sync::Arc};
 use async_trait::async_trait;
 use axum::{Extension, Router, body::Body, http::Request};
 use lmm_api_rs::migration_routes::identity_2fa::{
-    Identity2FAActor, Identity2FASession, Identity2FAState, SecuritySessionRotation,
-    SecuritySessionRotator, router,
+    Identity2FAActor, Identity2FAReadState, Identity2FASession, Identity2FAState,
+    SecuritySessionRotation, SecuritySessionRotator, router, status_read_router,
 };
 use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
@@ -44,6 +44,11 @@ fn app_without_actor() -> Router {
         .expect("valid lazy PostgreSQL URL");
     let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid Valkey URL");
     router(Identity2FAState::new(pool, valkey, Arc::new(UnusedRotator)))
+}
+
+#[test]
+fn status_read_router_constructor_is_wired() {
+    let _: fn(Identity2FAReadState) -> Router = status_read_router;
 }
 
 #[tokio::test]
@@ -200,6 +205,12 @@ async fn twofa_enable_reports_an_existing_enabled_factor_from_postgres() {
         .layer(Extension(Identity2FAActor {
             user_id: 7,
             role: 1,
+        }))
+        .layer(Extension(Identity2FASession {
+            session_id: "fixture-session".to_owned(),
+            client_ip: "127.0.0.1".to_owned(),
+            user_agent: "identity-2fa-integration-test".to_owned(),
+            cookie_secure: false,
         }))
         .oneshot(
             Request::post("/api/user/2fa/enable")

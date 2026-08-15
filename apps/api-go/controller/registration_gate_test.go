@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/oauth"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +22,7 @@ type registrationGateTestOAuthProvider struct {
 	existing *model.User
 }
 
-func (*registrationGateTestOAuthProvider) GetName() string { return "Registration Gate Test" }
+func (*registrationGateTestOAuthProvider) GetName() string { return "GitHub" }
 func (*registrationGateTestOAuthProvider) IsEnabled() bool { return true }
 func (*registrationGateTestOAuthProvider) ExchangeToken(context.Context, string, *gin.Context) (*oauth.OAuthToken, error) {
 	return &oauth.OAuthToken{}, nil
@@ -42,6 +42,7 @@ func (provider *registrationGateTestOAuthProvider) FillUserByProviderID(user *mo
 }
 func (*registrationGateTestOAuthProvider) SetProviderUserID(*model.User, string) {}
 func (*registrationGateTestOAuthProvider) GetProviderPrefix() string             { return "gate_" }
+func (*registrationGateTestOAuthProvider) ProviderUserIDColumn() string          { return "" }
 
 func setRegistrationGateTestState(t *testing.T, agreement, privacy string) {
 	t.Helper()
@@ -146,6 +147,28 @@ func TestPasswordRegistrationFailsClosedBeforeUserCreation(t *testing.T) {
 	}
 }
 
+func TestPasswordRegistrationMarksLinuxDOEmailAccount(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	setRegistrationGateTestState(t, "terms", "privacy")
+	common.EmailVerificationEnabled = true
+	email := "member@linux.do"
+	code := "123456"
+	common.RegisterVerificationCodeWithKey(email, code, common.EmailVerificationPurpose)
+	t.Cleanup(func() { common.DeleteKey(email, common.EmailVerificationPurpose) })
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/register", strings.NewReader(
+		`{"username":"linuxdo-email-user","password":"password1","email":"member@linux.do","verification_code":"123456","accepted_legal":true}`,
+	))
+	Register(c)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var user model.User
+	require.NoError(t, db.Where("username = ?", "linuxdo-email-user").First(&user).Error)
+	assert.Equal(t, model.PaymentRestrictionLinuxDOEmail, user.PaymentRestrictionFlags)
+}
+
 func TestOAuthFirstCreateUsesStateBoundConsentAndExistingLoginBypassesGate(t *testing.T) {
 	setupAuthFlowControllerTest(t)
 	setRegistrationGateTestState(t, "terms", "privacy")
@@ -169,6 +192,44 @@ func TestOAuthFirstCreateUsesStateBoundConsentAndExistingLoginBypassesGate(t *te
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	assert.Equal(t, 41, user.Id)
+}
+
+func TestOAuthRegistrationRestrictionBlocksNewAccountsButAllowsExistingLogin(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	setRegistrationGateTestState(t, "", "")
+
+	common.OptionMapRWMutex.Lock()
+	previous := ""
+	wasInitialized := common.OptionMap != nil
+	if common.OptionMap != nil {
+		previous = common.OptionMap[common.RegistrationDisabledMethodsOptionKey]
+	} else {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap[common.RegistrationDisabledMethodsOptionKey] = "github"
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		if wasInitialized {
+			common.OptionMap[common.RegistrationDisabledMethodsOptionKey] = previous
+		} else {
+			common.OptionMap = nil
+		}
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	provider := &registrationGateTestOAuthProvider{}
+	oauthUser := &oauth.OAuthUser{ProviderUserID: "restricted-subject"}
+	user, err := findOrCreateOAuthUser(nil, provider, oauthUser, "", true)
+	var disabledErr *OAuthRegistrationDisabledError
+	require.ErrorAs(t, err, &disabledErr)
+	assert.Nil(t, user)
+
+	provider.existing = &model.User{Id: 42, Username: "existing-github", Status: common.UserStatusEnabled}
+	user, err = findOrCreateOAuthUser(nil, provider, oauthUser, "", false)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, 42, user.Id)
 }
 
 func TestOAuthCallbackCannotSubstituteConsentForState(t *testing.T) {

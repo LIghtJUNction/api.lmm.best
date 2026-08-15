@@ -22,11 +22,13 @@ import {
   Bug,
   Compass,
   CreditCard,
+  ChartNoAxesCombined,
   FileText,
-  FlaskConical,
+  Image as ImageIcon,
   Key,
   LayoutDashboard,
   LifeBuoy,
+  ListChecks,
   ListTodo,
   Medal,
   MessageSquare,
@@ -69,19 +71,19 @@ export function useSidebarData(): SidebarData {
               icon: Compass,
             },
             {
-              title: t('Add funds'),
-              url: '/wallet',
-              icon: Wallet,
+              title: t('Open-source bounties'),
+              url: '/open-source-bounties',
+              icon: Compass,
             },
             {
-              title: t('Profile'),
-              url: '/profile',
-              icon: User,
+              title: t('Channel marketplace'),
+              url: '/public-relay',
+              icon: Radio,
             },
             {
-              title: t('Support'),
-              url: '/support',
-              icon: LifeBuoy,
+              title: t('To-dos'),
+              url: '/todos',
+              icon: ListChecks,
             },
           ],
         },
@@ -101,6 +103,11 @@ export function useSidebarData(): SidebarData {
             icon: Bug,
           },
           {
+            title: t('Channel marketplace'),
+            url: '/public-relay',
+            icon: Radio,
+          },
+          {
             title: t('Challenges'),
             url: '/challenges',
             icon: Trophy,
@@ -117,9 +124,9 @@ export function useSidebarData(): SidebarData {
         title: t('Chat'),
         items: [
           {
-            title: t('Playground'),
-            url: '/playground',
-            icon: FlaskConical,
+            title: t('Chat management'),
+            url: '/chat-management',
+            icon: MessageSquare,
           },
           {
             title: t('Chat'),
@@ -146,6 +153,11 @@ export function useSidebarData(): SidebarData {
             title: t('API Keys'),
             url: '/keys',
             icon: Key,
+          },
+          {
+            title: t('Drawing studio'),
+            url: '/drawing',
+            icon: ImageIcon,
           },
           {
             title: t('Usage Logs'),
@@ -180,6 +192,11 @@ export function useSidebarData(): SidebarData {
             url: '/support',
             icon: LifeBuoy,
           },
+          {
+            title: t('To-dos'),
+            url: '/todos',
+            icon: ListChecks,
+          },
         ],
       },
       {
@@ -207,9 +224,19 @@ export function useSidebarData(): SidebarData {
             icon: Ticket,
           },
           {
+            title: t('Discount Codes'),
+            url: '/discount-codes',
+            icon: Ticket,
+          },
+          {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Cost control'),
+            url: '/finance',
+            icon: ChartNoAxesCombined,
           },
           {
             title: t('System Info'),

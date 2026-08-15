@@ -34,7 +34,7 @@ build() {
   (
     cd apps/api-go || return
     CGO_ENABLED=0 go build -trimpath \
-      -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${pkgver}" \
+      -ldflags="-s -w -X github.com/LIghtJUNction/api.lmm.best/common.Version=${pkgver}" \
       -o "${srcdir}/lmm-api-go" .
   )
 }
@@ -45,8 +45,9 @@ package() {
   local file
 
   install -Dm0755 "${srcdir}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
-  install -Dm0644 "${shared}/lmm-api-go.service" \
-    "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
+  ln -s lmm-api-go "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0644 "${shared}/lmm-api.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
   install -Dm0600 "${shared}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
 

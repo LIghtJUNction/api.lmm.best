@@ -37,7 +37,7 @@ else
 fi
 [[ $OBSERVATION_SECONDS =~ ^[0-9]+$ && $OBSERVATION_SECONDS -ge 120 && $OBSERVATION_SECONDS -le 360 ]] || \
   die 'observation window must be 120-360 seconds'
-for command in bun file git jq makepkg pacman pg_restore realpath scp sha256sum ssh tar; do
+for command in bsdtar bun file git jq makepkg pacman pg_restore realpath scp sha256sum ssh tar; do
   command -v "$command" >/dev/null 2>&1 || die "required controller command is unavailable: $command"
 done
 
@@ -57,6 +57,34 @@ release_version="$base_version.r$revision_count.g$short_revision"
 deployment_id="go-$short_revision-$(date -u +%Y%m%dT%H%M%SZ)"
 [[ $deployment_id =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || die 'generated deployment ID is invalid'
 
+controller_transaction_lock_owned=0
+release_controller_owned_transaction_lock() {
+  ssh -o BatchMode=yes "$HOST" bash -s -- "$deployment_id" <<'REMOTE'
+set -Eeuo pipefail
+deployment_id=$1
+lock=/var/lib/lmm-api-go-deploy/transaction.lock
+marker="$lock/deployment.env"
+[[ -d $lock && ! -L $lock && -f $marker && ! -L $marker ]]
+[[ $(stat -c '%U:%G:%a' "$lock") == root:root:700 ]]
+[[ $(stat -c '%U:%G:%a' "$marker") == root:root:600 ]]
+grep -Fqx 'format=1' "$marker"
+grep -Fqx "deployment_id=$deployment_id" "$marker"
+grep -Fqx 'status=ACTIVE' "$marker"
+rm -f -- "$marker"
+rmdir -- "$lock"
+REMOTE
+}
+cleanup_controller_transaction_lock() {
+  local rc=$?
+  trap - EXIT
+  if ((rc != 0 && controller_transaction_lock_owned != 0)); then
+    set +e
+    release_controller_owned_transaction_lock
+  fi
+  exit "$rc"
+}
+trap cleanup_controller_transaction_lock EXIT
+
 artifacts=$WORKSPACE/artifacts/$deployment_id
 new_dir=$artifacts/new
 rollback_dir=$artifacts/rollback
@@ -68,7 +96,7 @@ for output in "$artifacts" "$manifest_dir" "$controller_backup"; do
   [[ ! -e $output && ! -L $output ]] || die "deployment output already exists: $output"
 done
 install -d -m0700 "$new_dir" "$rollback_dir" "$capture_dir" "$manifest_dir" \
-  "$WORKSPACE/tmp" "${controller_backup%/*}"
+  "$WORKSPACE/tmp" "$WORKSPACE/staging" "${controller_backup%/*}"
 
 (
   cd -- "$REPO_ROOT"
@@ -119,9 +147,8 @@ ssh -o BatchMode=yes "$HOST" "$remote_stage/capture-precutover-payload.sh" \
 ssh -o BatchMode=yes "$HOST" "$remote_stage/lmm-api-go" status \
   --base-url http://127.0.0.1:3000 --timeout 8s \
   --output "$remote_stage/precutover-status.json" --status-file "$remote_stage/precutover-status.code"
-old_version=$(ssh -o BatchMode=yes "$HOST" jq -er \
-  '.success == true and .ready == true and (.data.version | type == "string") and .data.version' \
-  "$remote_stage/precutover-status.json")
+old_version=$(ssh -o BatchMode=yes "$HOST" cat -- "$remote_stage/precutover-status.json" |
+  jq -er 'select(.success == true and .ready == true and (.data.version | type == "string")) | .data.version')
 [[ $old_version =~ ^[0-9][0-9A-Za-z._+]*$ ]] || die 'pre-cutover listener returned an invalid version'
 comparison=$(ssh -o BatchMode=yes "$HOST" vercmp "$old_version" "$release_version")
 ((comparison < 0)) || die "candidate is not an upgrade: $old_version -> $release_version"
@@ -129,12 +156,21 @@ scp -q "$HOST:$remote_stage/precutover-payload.tar" "$capture_dir/precutover-pay
 remote_payload_sha256=$(ssh -o BatchMode=yes "$HOST" sha256sum "$remote_stage/precutover-payload.tar" | awk '{print $1}')
 local_payload_sha256=$(sha256sum "$capture_dir/precutover-payload.tar" | awk '{print $1}')
 [[ $remote_payload_sha256 == "$local_payload_sha256" ]] || die 'captured payload changed in transit'
+rollback_layout=$(bsdtar -xOf "$capture_dir/precutover-payload.tar" ./metadata/layout)
+case $rollback_layout in split|direct) ;; *) die 'captured rollback layout is invalid' ;; esac
 
 TMPDIR=$WORKSPACE/tmp "$SCRIPT_DIR/build-precutover-packages.sh" \
   --workspace "$WORKSPACE" --payload "$capture_dir/precutover-payload.tar" --output-dir "$rollback_dir"
-rollback_core=$(find "$rollback_dir" -maxdepth 1 -type f -name 'lmm-api-*.pkg.tar.*' ! -name 'lmm-api-go-*' ! -name '*.sha256' -print -quit)
 rollback_go=$(find "$rollback_dir" -maxdepth 1 -type f -name 'lmm-api-go-*.pkg.tar.*' ! -name '*.sha256' -print -quit)
-[[ -n $rollback_core && -n $rollback_go ]] || die 'rollback packages are incomplete'
+if [[ $rollback_layout == split ]]; then
+  rollback_core=$(find "$rollback_dir" -maxdepth 1 -type f -name 'lmm-api-*.pkg.tar.*' ! -name 'lmm-api-go-*' ! -name '*.sha256' -print -quit)
+else
+  rollback_core=$rollback_dir/rollback-layout.direct
+fi
+[[ -n $rollback_core && -f $rollback_core && -n $rollback_go ]] || die 'rollback artifacts are incomplete'
+if [[ $rollback_layout == direct && $(<"$rollback_core") != direct ]]; then
+  die 'direct rollback marker is invalid'
+fi
 rollback_core_sha256=$(sha256sum "$rollback_core" | awk '{print $1}')
 rollback_go_sha256=$(sha256sum "$rollback_go" | awk '{print $1}')
 if ! is_sha256 "$rollback_core_sha256" || ! is_sha256 "$rollback_go_sha256"; then
@@ -153,7 +189,9 @@ fi
   --verify-script "$REPO_ROOT/.agents/skills/lmm-deploy-safely/scripts/verify-backup-set.sh" \
   --precutover-payload "$capture_dir/precutover-payload.tar" \
   --rollback-core-package "$rollback_core" --rollback-go-package "$rollback_go" \
+  --rollback-layout "$rollback_layout" \
   >"$manifest_dir/backup-locations.txt"
+controller_transaction_lock_owned=1
 target_mirror="$WORKSPACE/staging/backup-target-$deployment_id"
 [[ -f $target_mirror/database.archive && ! -L $target_mirror/database.archive ]] || die 'plain target database backup mirror is missing'
 pg_restore --list "$target_mirror/database.archive" >/dev/null
@@ -167,10 +205,9 @@ for encrypted_copy in "$controller_backup" "$WORKSPACE/staging/backup-off-host-$
     die 'encrypted configuration backup is missing'
   [[ -f $encrypted_copy/database.age && ! -L $encrypted_copy/database.age ]] || \
     die 'encrypted database backup is missing'
-  "$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
-    "$encrypted_copy/configuration.age" | tar -tf - >/dev/null
-  "$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
-    "$encrypted_copy/database.age" | pg_restore --list >/dev/null
+  # The target archives above are structurally validated. Consume each decrypted
+  # stream completely before comparing its digest: archive listing commands can
+  # stop before EOF and make age fail with SIGPIPE under pipefail.
   decrypted_configuration_sha256=$("$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
     "$encrypted_copy/configuration.age" | sha256sum | awk '{print $1}')
   decrypted_database_sha256=$("$AGE_BINARY" --decrypt --identity "$AGE_IDENTITY_FILE" \
@@ -189,20 +226,26 @@ remote_candidate="$remote_stage/${candidate##*/}"
 remote_core="$remote_stage/${rollback_core##*/}"
 remote_go="$remote_stage/${rollback_go##*/}"
 target_backup="/var/lib/lmm-api-go-deploy/backups/$deployment_id"
-activation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)
 deploy_unit="lmm-api-go-deploy-$deployment_id"
-ssh -o BatchMode=yes "$HOST" systemd-run \
+if ! ssh -o BatchMode=yes "$HOST" systemd-run \
   --unit="$deploy_unit" --collect --property=Type=oneshot --property=TimeoutStartSec=9min \
   "$remote_stage/activate-go-release.sh" activate \
   --workspace "$remote_workspace" \
   --package "$remote_candidate" --package-sha256 "$candidate_sha256" \
   --rollback-core-package "$remote_core" --rollback-core-sha256 "$rollback_core_sha256" \
   --rollback-go-package "$remote_go" --rollback-go-sha256 "$rollback_go_sha256" \
+  --rollback-layout "$rollback_layout" \
   --probe-binary "$remote_stage/lmm-api-go" --probe-binary-sha256 "$binary_sha256" \
   --expected-version "$release_version" --old-version "$old_version" \
   --frontend-index-sha256 "$frontend_index_sha256" \
   --frontend-release-script "$remote_stage/frontend-release.sh" \
-  --backup-dir "$target_backup" --rollback-seconds 600 >/dev/null
+  --backup-dir "$target_backup" --rollback-seconds 600 >/dev/null; then
+  # The remote dispatch result is ambiguous on transport failure. Retain the
+  # exact transaction lock so a running activation cannot lose its guard.
+  controller_transaction_lock_owned=0
+  die 'activation dispatch failed; transaction lock retained for audit'
+fi
+controller_transaction_lock_owned=0
 
 status_file="$remote_workspace/state/status"
 for _ in {1..160}; do
@@ -218,26 +261,42 @@ for _ in {1..160}; do
 done
 [[ $deployment_status == AWAITING_CONFIRMATION\ * ]] || die 'activation did not reach the observation gate before its rollback deadline'
 
+observation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)
 observation_started=$(date +%s)
 while (( $(date +%s) - observation_started < OBSERVATION_SECONDS )); do
   if ! ssh -o BatchMode=yes "$HOST" bash -s -- \
-    "$remote_workspace" "$release_version" "$frontend_index_sha256" "$deployment_id" "$activation_epoch" <<'REMOTE'
+    "$remote_workspace" "$release_version" "$frontend_index_sha256" "$deployment_id" "$observation_epoch" <<'REMOTE'
 set -Eeuo pipefail
 workspace=$1
 expected_version=$2
 frontend_sha=$3
 deployment_id=$4
-activation_epoch=$5
+observation_epoch=$5
 cli="$workspace/staging/lmm-api-go"
 state="$workspace/state"
 token="$state/probe-token"
 timer="lmm-api-go-rollback-$deployment_id.timer"
-systemctl is-active --quiet lmm-api-go.service
+nginx_observation_is_clean() {
+  local log_line
+  while IFS= read -r log_line; do
+    case $log_line in
+      '') continue ;;
+      # Public scanners probe unrelated static paths continuously. The release
+      # assets are validated by native CLI probes and package integrity, so
+      # only these explicit file-miss lines are observation noise.
+      *'open() "'*' failed (2: No such file or directory)'*'request: "'*' /static/'*) continue ;;
+      *) printf 'actionable nginx error: %s\n' "$log_line" >&2; return 1 ;;
+    esac
+  done < <(journalctl --quiet -u nginx.service --since "@$observation_epoch" \
+    --priority=err --no-pager --output=cat)
+}
+systemctl is-active --quiet lmm-api.service
 systemctl is-active --quiet "$timer"
-[[ $(systemctl show lmm-api-go.service -p NRestarts --value) == 0 ]]
+[[ $(systemctl show lmm-api.service -p NRestarts --value) == 0 ]]
 [[ $(pacman -Q lmm-api-go) == "lmm-api-go $expected_version-1" ]]
 ! pacman -Qq lmm-api >/dev/null 2>&1
-for removed in /usr/bin/lmm-api /usr/bin/lmm-api-select /usr/lib/lmm-api /usr/lib/systemd/system/lmm-api.service; do
+[[ -L /usr/bin/lmm-api && $(readlink -- /usr/bin/lmm-api) == lmm-api-go ]]
+for removed in /usr/bin/lmm-api-select /usr/lib/lmm-api /usr/lib/systemd/system/lmm-api-go.service; do
   [[ ! -e $removed && ! -L $removed ]]
 done
 "$cli" status --base-url http://127.0.0.1:3000 --timeout 8s --output "$state/observe-local.json"
@@ -251,8 +310,8 @@ jq -e '.success == true and .live == true' "$state/observe-live.json" >/dev/null
 "$cli" request --base-url https://api.lmm.best --path /v1/models --timeout 8s --fail \
   --token-file "$token" --output "$state/observe-models.json"
 jq -e '.data | type == "array"' "$state/observe-models.json" >/dev/null
-[[ -z $(journalctl --quiet -u lmm-api-go.service --since "@$activation_epoch" --priority=err --no-pager --output=cat) ]]
-[[ -z $(journalctl --quiet -u nginx.service --since "@$activation_epoch" --priority=err --no-pager --output=cat) ]]
+[[ -z $(journalctl --quiet -u lmm-api.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
+nginx_observation_is_clean
 REMOTE
   then
     die 'production observation detected an anomaly; rollback timer remains armed'

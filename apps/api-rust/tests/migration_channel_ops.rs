@@ -7,8 +7,9 @@ use axum::{
     response::Response,
 };
 use lmm_api_rs::auth::{
-    AuthBundle, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, DashboardUser,
-    LoginOutcome, LoginRequest, LogoutRequest, LogoutResult, RequestMetadata,
+    AuthBundle, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth,
+    DashboardOnboardingView, DashboardUser, DashboardUserView, LoginOutcome, LoginRequest,
+    LogoutRequest, LogoutResult, RequestMetadata, TrustLevelInfo, TrustLevelTier,
     TwoFactorLoginRequest,
 };
 use lmm_api_rs::migration_routes::{
@@ -35,6 +36,19 @@ impl ChannelAdminAuthorizer for Allow {
     }
 }
 
+struct DenyAll;
+
+#[async_trait]
+impl ChannelAdminAuthorizer for DenyAll {
+    async fn authorize(
+        &self,
+        _: &axum::http::HeaderMap,
+        _: ChannelAction,
+    ) -> Result<(), ChannelError> {
+        Err(ChannelError::Unauthorized)
+    }
+}
+
 struct DenySensitive;
 
 #[async_trait]
@@ -54,6 +68,67 @@ impl ChannelAdminAuthorizer for DenySensitive {
 struct SignedDashboardAuth {
     role: i64,
     permissions: Value,
+}
+
+impl SignedDashboardAuth {
+    fn user_view(&self) -> DashboardUserView {
+        DashboardUserView {
+            id: 7,
+            developer_access_granted: true,
+            username: "writer".to_owned(),
+            display_name: "Writer".to_owned(),
+            role: self.role,
+            status: 1,
+            email: String::new(),
+            github_id: String::new(),
+            discord_id: String::new(),
+            oidc_id: String::new(),
+            wechat_id: String::new(),
+            telegram_id: String::new(),
+            group: "default".to_owned(),
+            quota: 0,
+            used_quota: 0,
+            request_count: 0,
+            aff_code: String::new(),
+            aff_count: 0,
+            aff_quota: 0,
+            aff_history_quota: 0,
+            inviter_id: 0,
+            linux_do_id: String::new(),
+            setting: String::new(),
+            stripe_customer: String::new(),
+            trust_level_info: TrustLevelInfo {
+                level: 1,
+                automatic_level: 1,
+                override_level: None,
+                paid_amount: 0.0,
+                discount_ratio: 1.0,
+                discount_percent: 0.0,
+                next_level: Some(2),
+                next_level_paid_amount: Some(100.0),
+                amount_to_next_level: Some(100.0),
+                next_decay_at: None,
+                inactivity_decay_steps: 0,
+                decay_period_days: 90,
+                overridden: false,
+            },
+            trust_level_tiers: [TrustLevelTier {
+                level: 1,
+                min_paid_amount: 0.0,
+                requires_successful_top_up: false,
+                discount_percent: 0.0,
+            }; 5],
+            onboarding: DashboardOnboardingView {
+                activation_complete: true,
+                paid_activation_complete: true,
+                credential_complete: true,
+                first_request_complete: true,
+                stage: "active",
+            },
+            sidebar_modules: serde_json::json!({}),
+            permissions: self.permissions.clone(),
+        }
+    }
 }
 
 #[async_trait]
@@ -117,6 +192,16 @@ impl DashboardAuth for SignedDashboardAuth {
             sidebar_modules: serde_json::json!({}),
             permissions: self.permissions.clone(),
         })
+    }
+
+    async fn self_user_view_for_optional(
+        &self,
+        token: SecretString,
+    ) -> Result<DashboardUserView, AuthError> {
+        if token.expose_secret() != "signed-dashboard-session" {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        Ok(self.user_view())
     }
 
     async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, AuthError> {
@@ -216,6 +301,38 @@ async fn malformed_tag_operation_json_keeps_the_legacy_success_envelope() {
     assert_eq!(
         json_body(response).await,
         serde_json::json!({"success":false,"message":"参数错误"})
+    );
+}
+
+#[tokio::test]
+async fn malformed_tag_operation_authentication_precedes_json_binding() {
+    let app = channel_ops_router(ChannelOpsHttpState::new(
+        PgPoolOptions::new()
+            .connect_lazy("postgres://unused")
+            .expect("lazy pool"),
+        redis::Client::open("redis://127.0.0.1/").expect("Valkey client"),
+        Arc::new(DenyAll),
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/channel/tag/disabled")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        json_body(response).await,
+        serde_json::json!({
+            "success": false,
+            "message": "Unauthorized, invalid access token",
+            "code": "AUTH_UNAUTHORIZED"
+        })
     );
 }
 

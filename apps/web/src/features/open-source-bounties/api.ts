@@ -56,7 +56,15 @@ export async function listBounties() {
     total: number
     page: number
     page_size: number
-  }>(api.get('/api/open-source-bounties?page=1&page_size=50'))
+  }>(
+    api.get('/api/open-source-bounties?page=1&page_size=50', {
+      // Public challenges are optional on deployments that have not mounted
+      // the bounty candidate yet.  ChallengeList owns the inline fallback;
+      // never surface a probe 401/404 as a global toast.
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
+  )
   return { ...result, items: result.items ?? [] }
 }
 
@@ -80,8 +88,12 @@ export function revokeMcpToken() {
   return unwrap<null>(api.delete('/api/open-source-bounties/mcp-token'))
 }
 
-export function listOwnedBounties() {
-  return unwrap<BountyProject[]>(api.get('/api/open-source-bounties/mine'))
+export function listOwnedBounties(archived = false) {
+  return unwrap<BountyProject[]>(
+    api.get(
+      `/api/open-source-bounties/mine?archived=${archived ? 'true' : 'false'}`
+    )
+  )
 }
 
 export function listAcceptedBounties() {
@@ -133,6 +145,18 @@ export function resumeBounty(projectId: number) {
 export function closeBounty(projectId: number) {
   return unwrap<{ project: BountyProject; refunded_quota: number }>(
     api.post(`/api/open-source-bounties/projects/${projectId}/close`)
+  )
+}
+
+export function archiveBounty(projectId: number) {
+  return unwrap<BountyProject>(
+    api.post(`/api/open-source-bounties/projects/${projectId}/archive`)
+  )
+}
+
+export function unarchiveBounty(projectId: number) {
+  return unwrap<BountyProject>(
+    api.post(`/api/open-source-bounties/projects/${projectId}/unarchive`)
   )
 }
 
@@ -204,12 +228,23 @@ export function tipChallenge(
 
 export function listBountyNotifications() {
   return unwrap<BountyNotification[]>(
-    api.get('/api/open-source-bounties/notifications')
+    api.get('/api/open-source-bounties/notifications', {
+      // Older production candidates may advertise the capability before the
+      // unified route is mounted. A missing optional notification feed must
+      // not become a global "Not Found" toast or block the bounty page.
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
   )
 }
 
 export function markBountyNotificationsRead() {
-  return unwrap<null>(api.post('/api/open-source-bounties/notifications/read'))
+  return unwrap<null>(
+    api.post('/api/open-source-bounties/notifications/read', undefined, {
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
+  )
 }
 
 export function listReceivedBountyTips() {

@@ -11,10 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 
 	"golang.org/x/net/proxy"
 )
@@ -26,7 +27,9 @@ var (
 		clients: make(map[string]*http.Client),
 		aliases: make(map[string]string),
 	}
-	legacyProxyURLWarnings sync.Map
+	legacyProxyURLWarnings = cachex.NewByteCache[struct{}](256, 128<<10, func(key string, _ struct{}) int64 {
+		return int64(len(key) + 8)
+	})
 )
 
 type proxyHTTPClientCache struct {

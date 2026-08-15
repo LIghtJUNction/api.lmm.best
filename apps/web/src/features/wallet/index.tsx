@@ -25,8 +25,14 @@ import { useAuthUserRefresh } from '@/features/onboarding'
 import { useStatus } from '@/hooks/use-status'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { isLocalPreview } from '@/lib/local-preview'
+import {
+  getDefaultWaffoPancakeCheckoutRegion,
+  getWaffoPancakeCheckoutLanguage,
+  type WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { isApiSuccess, validateDiscountCode } from './api'
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
@@ -68,7 +74,7 @@ const PAYMENT_REFRESH_INTERVAL_MS = 3_000
 const PAYMENT_REFRESH_DEADLINE_MS = 2 * 60 * 1_000
 
 export function Wallet(props: WalletProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const authUser = useAuthStore((state) => state.auth.user)
   const { refreshUser } = useAuthUserRefresh()
   const user = authUser as UserWalletData | null
@@ -87,10 +93,16 @@ export function Wallet(props: WalletProps) {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [redemptionCode, setRedemptionCode] = useState('')
+  const [discountCode, setDiscountCode] = useState('')
+  const [appliedDiscountCode, setAppliedDiscountCode] = useState('')
+  const [discountPercent, setDiscountPercent] = useState<number | null>(null)
+  const [discountApplying, setDiscountApplying] = useState(false)
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
+  const [waffoPancakeCheckoutRegionOverride, setWaffoPancakeCheckoutRegion] =
+    useState<WaffoPancakeCheckoutRegion | null>(null)
   const [pendingCheckoutDeadline, setPendingCheckoutDeadline] = useState<
     number | null
   >(null)
@@ -124,6 +136,19 @@ export function Wallet(props: WalletProps) {
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
+  const interfaceLanguage = i18n.resolvedLanguage || i18n.language
+  const waffoPancakeCheckoutRegion =
+    waffoPancakeCheckoutRegionOverride ??
+    getDefaultWaffoPancakeCheckoutRegion(interfaceLanguage)
+  const waffoPancakeCheckoutLanguage =
+    getWaffoPancakeCheckoutLanguage(interfaceLanguage)
+
+  const handleWaffoPancakeCheckoutRegionChange = useCallback(
+    (region: WaffoPancakeCheckoutRegion) => {
+      setWaffoPancakeCheckoutRegion(region)
+    },
+    []
+  )
 
   const refreshWalletUser = useCallback(async () => {
     await refreshUser()
@@ -199,9 +224,14 @@ export function Wallet(props: WalletProps) {
       setTopupAmount(minTopup)
 
       // Calculate initial payment amount with default payment type
-      calculatePaymentAmount(minTopup, defaultPaymentType)
+      calculatePaymentAmount(minTopup, defaultPaymentType, appliedDiscountCode)
     }
-  }, [topupInfo, topupAvailability, calculatePaymentAmount])
+  }, [
+    topupInfo,
+    topupAvailability,
+    calculatePaymentAmount,
+    appliedDiscountCode,
+  ])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {
@@ -213,7 +243,9 @@ export function Wallet(props: WalletProps) {
     setTopupAmount(preset.value)
     setSelectedPreset(preset.value)
     const paymentType = getCurrentPaymentType()
-    if (paymentType) calculatePaymentAmount(preset.value, paymentType)
+    if (paymentType) {
+      calculatePaymentAmount(preset.value, paymentType, appliedDiscountCode)
+    }
   }
 
   // Handle topup amount change
@@ -221,7 +253,9 @@ export function Wallet(props: WalletProps) {
     setTopupAmount(amount)
     setSelectedPreset(null)
     const paymentType = getCurrentPaymentType()
-    if (paymentType) calculatePaymentAmount(amount, paymentType)
+    if (paymentType) {
+      calculatePaymentAmount(amount, paymentType, appliedDiscountCode)
+    }
   }
 
   // Handle payment method selection
@@ -247,7 +281,11 @@ export function Wallet(props: WalletProps) {
       }
 
       // Calculate payment amount and show confirmation dialog
-      await calculatePaymentAmount(topupAmount, method.type)
+      await calculatePaymentAmount(
+        topupAmount,
+        method.type,
+        appliedDiscountCode
+      )
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -285,7 +323,12 @@ export function Wallet(props: WalletProps) {
         regular: processPayment,
         waffo: processWaffoPayment,
         waffoPancake: processWaffoPancakePayment,
-      }
+      },
+      {
+        checkout_region: waffoPancakeCheckoutRegion,
+        checkout_language: waffoPancakeCheckoutLanguage,
+      },
+      appliedDiscountCode
     )
 
     if (success) {
@@ -311,6 +354,41 @@ export function Wallet(props: WalletProps) {
     if (success) {
       setRedemptionCode('')
       await refreshWalletUser()
+    }
+  }
+
+  const handleApplyDiscount = async () => {
+    const code = discountCode.trim()
+    if (!code) {
+      setAppliedDiscountCode('')
+      setDiscountPercent(null)
+      return
+    }
+    setDiscountApplying(true)
+    try {
+      const result = await validateDiscountCode({
+        code,
+        amount: topupAmount,
+        payment_method: getCurrentPaymentType() || undefined,
+      })
+      if (!isApiSuccess(result) || !result.data) {
+        toast.error(result.message || t('Discount code is invalid'))
+        return
+      }
+      setAppliedDiscountCode(result.data.code)
+      setDiscountCode(result.data.code)
+      setDiscountPercent(result.data.discount_percent)
+      const paymentType = getCurrentPaymentType()
+      if (paymentType) {
+        await calculatePaymentAmount(topupAmount, paymentType, result.data.code)
+      }
+      toast.success(
+        t('Discount applied: {{percent}}% off', {
+          percent: result.data.discount_percent,
+        })
+      )
+    } finally {
+      setDiscountApplying(false)
     }
   }
 
@@ -373,7 +451,11 @@ export function Wallet(props: WalletProps) {
     setPaymentLoading(loadingKey)
 
     try {
-      await calculatePaymentAmount(topupAmount, PAYMENT_TYPES.WAFFO)
+      await calculatePaymentAmount(
+        topupAmount,
+        PAYMENT_TYPES.WAFFO,
+        appliedDiscountCode
+      )
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -430,6 +512,20 @@ export function Wallet(props: WalletProps) {
                   onRedemptionCodeChange={setRedemptionCode}
                   onRedeem={handleRedeem}
                   redeeming={redeeming}
+                  discountCode={discountCode}
+                  onDiscountCodeChange={(value) => {
+                    setDiscountCode(value)
+                    if (
+                      appliedDiscountCode &&
+                      value.trim() !== appliedDiscountCode
+                    ) {
+                      setAppliedDiscountCode('')
+                      setDiscountPercent(null)
+                    }
+                  }}
+                  onApplyDiscount={handleApplyDiscount}
+                  discountApplying={discountApplying}
+                  discountPercent={discountPercent}
                   topupLink={topupInfo?.topup_link}
                   loading={topupLoading}
                   error={topupError}
@@ -437,6 +533,10 @@ export function Wallet(props: WalletProps) {
                   onOpenBilling={() => setBillingDialogOpen(true)}
                   onCreemProductSelect={handleCreemProductSelect}
                   onWaffoMethodSelect={handleWaffoMethodSelect}
+                  waffoPancakeCheckoutRegion={waffoPancakeCheckoutRegion}
+                  onWaffoPancakeCheckoutRegionChange={
+                    handleWaffoPancakeCheckoutRegionChange
+                  }
                   neutralMode={!developerAccessGranted}
                 />
               </div>

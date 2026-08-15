@@ -6,12 +6,15 @@
 //! issuance to the shared [`DashboardAuth`] implementation so session and
 //! token semantics stay identical to the login subsystem.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -20,10 +23,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use sqlx::PgPool;
 
-use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
+use crate::auth::{
+    AuthErrorKind, DashboardAuth, DashboardUserView, UserAuthPolicyError, enforce_user_auth_view,
+};
 
 const DEFAULT_USABLE_GROUPS: &[(&str, &str)] = &[("default", "默认分组"), ("vip", "vip分组")];
 const DEFAULT_GROUP_RATIOS: &[(&str, f64)] = &[("default", 1.0), ("vip", 1.0), ("svip", 1.0)];
+const DEFAULT_GROUP_GROUP_RATIOS: &[(&str, &[(&str, f64)])] = &[("vip", &[("edit_this", 0.9)])];
+const DEFAULT_AUTO_GROUPS: &[&str] = &["default"];
+const TOKEN_PATH: &str = "/api/user/token";
 
 /// Listener dependencies for the identity-catalogue route family.
 #[derive(Clone)]
@@ -46,16 +54,14 @@ impl IdentityCatalogState {
 pub fn router(state: IdentityCatalogState) -> Router {
     public_routes()
         .merge(protected_read_routes())
-        .route("/api/user/token", get(generate_access_token))
+        .route("/api/user/token", get(generate_access_token_no_store))
         .with_state(state)
 }
 
-/// Mounts only the anonymous catalogue endpoint on the normal listener.
-///
-/// The protected group/model reads and personal-token write remain in the
-/// isolated candidate surface until their own listener differential is
-/// complete.  Keeping this slice explicit prevents a public read migration
-/// from accidentally exposing the token-generation route.
+/// Mounts only the anonymous catalogue endpoint. This narrow constructor is
+/// retained for callers that need to stage public reads separately; the
+/// normal listener uses [`router`] once the protected read/token routes are
+/// intentionally composed.
 pub fn public_router(state: IdentityCatalogState) -> Router {
     public_routes().with_state(state)
 }
@@ -67,9 +73,18 @@ pub fn protected_read_router(state: IdentityCatalogState) -> Router {
     protected_read_routes().with_state(state)
 }
 
+/// Mounts only personal-token generation for the normal auth integration
+/// tests. The handler still performs the same server-side `UserAuth` check as
+/// the combined catalogue router.
+pub fn token_router(state: IdentityCatalogState) -> Router {
+    Router::new()
+        .route(TOKEN_PATH, get(generate_access_token_no_store))
+        .with_state(state)
+}
+
 fn public_routes() -> Router<IdentityCatalogState> {
-    // This legacy endpoint is deliberately public. In Gin it reads the absent
-    // identity as user 0 and returns the default usable groups.
+    // The path is registered without `UserAuth`, matching Gin, while the
+    // handler mirrors the API-wide ConsoleAccessGate discovery boundary.
     Router::new().route("/api/user/groups", get(get_public_groups))
 }
 
@@ -81,14 +96,26 @@ fn protected_read_routes() -> Router<IdentityCatalogState> {
 
 async fn get_public_groups(
     State(state): State<IdentityCatalogState>,
-) -> Result<Json<LegacySuccess<BTreeMap<String, GroupView>>>, CatalogError> {
-    Ok(success(Some(groups_for(&state.pg, "").await?)))
+    headers: HeaderMap,
+) -> Result<Response, CatalogError> {
+    let Some(token) = credential(&headers) else {
+        return Ok(not_found());
+    };
+    let user = match state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+    {
+        Ok(user) => user,
+        Err(_) => return Ok(not_found()),
+    };
+    Ok(success(Some(groups_for(&state.pg, &user.group).await?)))
 }
 
 async fn get_self_groups(
     State(state): State<IdentityCatalogState>,
     headers: HeaderMap,
-) -> Result<Json<LegacySuccess<BTreeMap<String, GroupView>>>, CatalogError> {
+) -> Result<Response, CatalogError> {
     let user = authenticated(&state, &headers).await?;
     Ok(success(Some(groups_for(&state.pg, &user.group).await?)))
 }
@@ -103,7 +130,7 @@ async fn get_user_models(
     State(state): State<IdentityCatalogState>,
     headers: HeaderMap,
     Query(query): Query<ModelsQuery>,
-) -> Result<Json<LegacySuccess<Vec<String>>>, CatalogError> {
+) -> Result<Response, CatalogError> {
     let user = authenticated(&state, &headers).await?;
     let config = group_config(&state.pg).await?;
     let usable = usable_groups(&config, &user.group);
@@ -114,7 +141,7 @@ async fn get_user_models(
         _ => Vec::new(),
     };
     if groups.is_empty() {
-        return Ok(success(Some(Vec::new())));
+        return Ok(success(Some(Vec::<String>::new())));
     }
     // Legacy calls GetGroupEnabledModels for every allowed group and removes
     // duplicates while retaining the first occurrence. In particular, an
@@ -142,12 +169,15 @@ async fn get_user_models(
 async fn generate_access_token(
     State(state): State<IdentityCatalogState>,
     headers: HeaderMap,
-) -> Result<Json<LegacySuccess<String>>, CatalogError> {
+) -> Result<Response, CatalogError> {
     let access_token =
         credential(&headers).ok_or_else(|| CatalogError::unauthorized(locale(&headers)))?;
-    // The Go route is inside `UserAuth`, so enforce its role/status policy
-    // before delegating the durable update to the auth service.
-    authenticated(&state, &headers).await?;
+    // The Go route is inside `UserAuth`, so enforce only its role/status
+    // policy before delegating the durable update to the auth service.  Unlike
+    // dashboard discovery routes, `/api/user/token` is not protected by a
+    // developer-access gate in the legacy router; an authenticated L0 user
+    // must be able to rotate the personal token as well.
+    let _user = authenticated(&state, &headers).await?;
     // `generate_personal_access_token` verifies the same bearer session and
     // generates the 29..=32-character legacy base64 token atomically.  Do not
     // reimplement this here: it also owns duplicate detection and user-cache
@@ -160,27 +190,34 @@ async fn generate_access_token(
     Ok(success(Some(token)))
 }
 
+async fn generate_access_token_no_store(
+    state: State<IdentityCatalogState>,
+    headers: HeaderMap,
+) -> Response {
+    let mut response = generate_access_token(state, headers)
+        .await
+        .unwrap_or_else(IntoResponse::into_response);
+    // Gin attaches DisableCache after UserAuth.  Consequently an auth
+    // rejection (401/403/404) has no cache headers, while every handler
+    // response—including the legacy 200 ApiError envelope—does.
+    if response.status().is_success() {
+        disable_cache(&mut response);
+    }
+    response
+}
+
 async fn authenticated(
     state: &IdentityCatalogState,
     headers: &HeaderMap,
-) -> Result<DashboardUser, CatalogError> {
-    let token = credential(headers).ok_or_else(|| CatalogError::unauthorized(locale(headers)))?;
+) -> Result<DashboardUserView, CatalogError> {
+    let token = credential(headers).ok_or_else(CatalogError::not_found)?;
     let user = state
         .auth
-        .self_user(SecretString::from(token))
+        .self_user_view_for_optional(SecretString::from(token))
         .await
-        .map_err(|error| CatalogError::from_auth(error, locale(headers)))?;
-    // This is deliberately server-derived, not a client-supplied role or
-    // status. Keep `middleware.UserAuth`'s validation order exactly.
-    if user.status != 1 {
-        return Err(CatalogError::user_disabled(locale(headers)));
-    }
-    if user.role < 1 {
-        return Err(CatalogError::insufficient_privilege(locale(headers)));
-    }
-    if user.id <= 0 || user.username.trim().is_empty() || !matches!(user.role, 0 | 1 | 10 | 100) {
-        return Err(CatalogError::invalid_user(locale(headers)));
-    }
+        .map_err(|_| CatalogError::not_found())?;
+    enforce_user_auth_view(&user)
+        .map_err(|error| CatalogError::from_user_auth(error, locale(headers)))?;
     Ok(user)
 }
 
@@ -197,6 +234,14 @@ struct GroupConfig {
     group_ratios: BTreeMap<String, BTreeMap<String, f64>>,
     special: BTreeMap<String, BTreeMap<String, String>>,
     auto: Vec<String>,
+}
+
+/// Current account-scoped routing groups shared by the dashboard token form
+/// and assistant key creation. The selectable map is sorted by group ID, while
+/// automatic groups preserve the administrator-configured routing order.
+pub(crate) struct UserGroupSelection {
+    pub selectable: BTreeMap<String, String>,
+    pub automatic: Vec<String>,
 }
 
 async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
@@ -226,7 +271,8 @@ async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
             .map(|(k, v)| ((*k).to_owned(), *v))
             .collect()
     });
-    let group_ratios = nested_number_map(values.get("GroupGroupRatio")).unwrap_or_default();
+    let group_ratios =
+        nested_number_map(values.get("GroupGroupRatio")).unwrap_or_else(default_group_group_ratios);
     let special = nested_string_map(values.get("group_ratio_setting.group_special_usable_group"))
         .or_else(|| special_from_legacy_setting(values.get("group_ratio_setting")))
         .unwrap_or_default();
@@ -235,8 +281,37 @@ async fn group_config(pg: &PgPool) -> Result<GroupConfig, CatalogError> {
         ratios,
         group_ratios,
         special,
-        auto: string_list(values.get("AutoGroups")),
+        // Go's setting package starts with `autoGroups = ["default"]` and
+        // only replaces it after an AutoGroups option is loaded. Preserve
+        // that default when a fresh database has no persisted option yet;
+        // an explicitly persisted `[]` must still disable automatic groups.
+        auto: values
+            .get("AutoGroups")
+            .map(|raw| string_list(Some(raw)))
+            .unwrap_or_else(default_auto_groups),
     })
+}
+
+fn default_group_group_ratios() -> BTreeMap<String, BTreeMap<String, f64>> {
+    DEFAULT_GROUP_GROUP_RATIOS
+        .iter()
+        .map(|(user_group, ratios)| {
+            (
+                (*user_group).to_owned(),
+                ratios
+                    .iter()
+                    .map(|(group, ratio)| ((*group).to_owned(), *ratio))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn default_auto_groups() -> Vec<String> {
+    DEFAULT_AUTO_GROUPS
+        .iter()
+        .map(|group| (*group).to_owned())
+        .collect()
 }
 
 async fn groups_for(
@@ -321,12 +396,38 @@ fn usable_groups(config: &GroupConfig, user_group: &str) -> BTreeMap<String, Str
 }
 
 fn auto_groups(config: &GroupConfig, usable: &BTreeMap<String, String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
     config
         .auto
         .iter()
-        .filter(|group| usable.contains_key(*group))
+        .filter(|group| {
+            !group.is_empty()
+                && group.as_str() != "auto"
+                && usable.contains_key(group.as_str())
+                && config.ratios.contains_key(group.as_str())
+                && seen.insert((*group).clone())
+        })
         .cloned()
         .collect()
+}
+
+pub(crate) async fn user_group_selection(
+    pg: &PgPool,
+    user_group: &str,
+) -> Result<UserGroupSelection, String> {
+    let config = group_config(pg).await.map_err(|error| error.message)?;
+    let usable = usable_groups(&config, user_group);
+    let automatic = auto_groups(&config, &usable);
+    let selectable = usable
+        .into_iter()
+        .filter(|(group, _)| {
+            !group.is_empty() && group != "auto" && config.ratios.contains_key(group)
+        })
+        .collect();
+    Ok(UserGroupSelection {
+        selectable,
+        automatic,
+    })
 }
 
 fn string_map(raw: Option<&String>) -> Option<BTreeMap<String, String>> {
@@ -366,12 +467,46 @@ struct LegacySuccess<T: Serialize> {
     data: Option<T>,
 }
 
-fn success<T: Serialize>(data: Option<T>) -> Json<LegacySuccess<T>> {
-    Json(LegacySuccess {
-        success: true,
-        message: "",
-        data,
-    })
+fn success<T: Serialize>(data: Option<T>) -> Response {
+    legacy_json_content_type(
+        Json(LegacySuccess {
+            success: true,
+            message: "",
+            data,
+        })
+        .into_response(),
+    )
+}
+
+fn not_found() -> Response {
+    legacy_json_content_type(
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"message": "Not Found"})),
+        )
+            .into_response(),
+    )
+}
+
+fn legacy_json_content_type(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+}
+
+fn disable_cache(response: &mut Response) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
 }
 
 #[derive(Debug)]
@@ -382,6 +517,14 @@ struct CatalogError {
 }
 
 impl CatalogError {
+    fn not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code: None,
+            message: "Not Found".to_owned(),
+        }
+    }
+
     fn unauthorized(locale: Locale) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
@@ -463,10 +606,21 @@ impl CatalogError {
             _ => Self::internal_auth(locale),
         }
     }
+
+    fn from_user_auth(error: UserAuthPolicyError, locale: Locale) -> Self {
+        match error {
+            UserAuthPolicyError::UserDisabled => Self::user_disabled(locale),
+            UserAuthPolicyError::InsufficientPrivilege => Self::insufficient_privilege(locale),
+            UserAuthPolicyError::InvalidUserInfo => Self::invalid_user(locale),
+        }
+    }
 }
 
 impl IntoResponse for CatalogError {
     fn into_response(self) -> Response {
+        if self.status == StatusCode::NOT_FOUND && self.code.is_none() {
+            return not_found();
+        }
         let mut body = Map::from_iter([
             ("success".to_owned(), Value::Bool(false)),
             ("message".to_owned(), Value::String(self.message)),
@@ -474,7 +628,7 @@ impl IntoResponse for CatalogError {
         if let Some(code) = self.code {
             body.insert("code".to_owned(), Value::String(code.to_owned()));
         }
-        (self.status, Json(Value::Object(body))).into_response()
+        legacy_json_content_type((self.status, Json(Value::Object(body))).into_response())
     }
 }
 
@@ -573,7 +727,9 @@ fn locale(headers: &HeaderMap) -> Locale {
 #[cfg(test)]
 mod tests {
     use super::{
-        IdentityCatalogState, legacy_ratio_value, protected_read_router, public_router, router,
+        GroupConfig, IdentityCatalogState, auto_groups, default_auto_groups,
+        default_group_group_ratios, legacy_ratio_value, protected_read_router, public_router,
+        router,
     };
     use async_trait::async_trait;
     use axum::{
@@ -586,8 +742,8 @@ mod tests {
 
     use crate::auth::{
         AuthBundle, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth,
-        DashboardUser, LoginOutcome, LoginRequest, LogoutRequest, LogoutResult, RequestMetadata,
-        TwoFactorLoginRequest,
+        DashboardSelfUserFacts, DashboardUser, DashboardUserView, LoginOutcome, LoginRequest,
+        LogoutRequest, LogoutResult, RequestMetadata, TwoFactorLoginRequest,
     };
 
     struct RejectingAuth;
@@ -687,6 +843,13 @@ mod tests {
             Ok(valid_user())
         }
 
+        async fn self_user_view_for_optional(
+            &self,
+            _: SecretString,
+        ) -> Result<DashboardUserView, crate::auth::AuthError> {
+            Ok(unactivated_user_view())
+        }
+
         async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, crate::auth::AuthError> {
             Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
         }
@@ -783,7 +946,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
     }
 
@@ -825,6 +988,13 @@ mod tests {
             Ok(valid_user())
         }
 
+        async fn self_user_view_for_optional(
+            &self,
+            _: SecretString,
+        ) -> Result<DashboardUserView, AuthError> {
+            Ok(unactivated_user_view())
+        }
+
         async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, AuthError> {
             Err(AuthError::new(AuthErrorKind::Unauthorized))
         }
@@ -863,11 +1033,25 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+            let expected_status = if path == "/api/user/token" {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            assert_eq!(response.status(), expected_status, "{path}");
             let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            let expected_body = if path == "/api/user/token" {
+                serde_json::json!({
+                    "success": false,
+                    "message": "无权进行此操作，access token 无效",
+                    "code": "AUTH_UNAUTHORIZED"
+                })
+            } else {
+                serde_json::json!({"message":"Not Found"})
+            };
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
-                serde_json::json!({"success":false,"message":"无权进行此操作，access token 无效","code":"AUTH_UNAUTHORIZED"})
+                expected_body
             );
         }
     }
@@ -905,6 +1089,49 @@ mod tests {
         assert_eq!(legacy_ratio_value(1.0), serde_json::json!(1));
         assert_eq!(legacy_ratio_value(0.97), serde_json::json!(0.97));
         assert_eq!(legacy_ratio_value(-2.0), serde_json::json!(-2));
+    }
+
+    #[test]
+    fn missing_catalog_options_keep_go_setting_defaults() {
+        assert_eq!(default_auto_groups(), vec!["default"]);
+        assert_eq!(
+            default_group_group_ratios(),
+            std::collections::BTreeMap::from([(
+                "vip".to_owned(),
+                std::collections::BTreeMap::from([("edit_this".to_owned(), 0.9)]),
+            )])
+        );
+    }
+
+    #[test]
+    fn auto_groups_match_go_selection_rules() {
+        let config = GroupConfig {
+            ratios: std::collections::BTreeMap::from([
+                ("default".to_owned(), 1.0),
+                ("vip".to_owned(), 0.9),
+            ]),
+            auto: vec![
+                "unknown".to_owned(),
+                "vip".to_owned(),
+                "auto".to_owned(),
+                "vip".to_owned(),
+                "default".to_owned(),
+            ],
+            ..GroupConfig::default()
+        };
+        let usable = std::collections::BTreeMap::from([
+            ("default".to_owned(), "默认分组".to_owned()),
+            ("vip".to_owned(), "vip分组".to_owned()),
+            ("auto".to_owned(), "自动".to_owned()),
+        ]);
+        assert_eq!(
+            auto_groups(&config, &usable),
+            vec!["vip".to_owned(), "default".to_owned()]
+        );
+    }
+
+    fn unactivated_user_view() -> DashboardUserView {
+        DashboardUserView::build(valid_user(), DashboardSelfUserFacts::default())
     }
 
     fn valid_user() -> DashboardUser {

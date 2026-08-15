@@ -10,7 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, to_value};
 use thiserror::Error;
 
-pub use http::{AuthHttpState, TurnstileVerifier, auth_router};
+pub use http::{
+    AnonymousRequestSecurity, AuthHttpState, TurnstileCheckOutcome, TurnstileVerifier,
+    anonymous_registration_surface, auth_router, turnstile_failure_response,
+    turnstile_missing_response,
+};
 pub use postgres::{AuthConfig, PgValkeyDashboardAuth};
 pub(crate) use token::dashboard_token_candidate;
 
@@ -26,6 +30,12 @@ pub const TWO_FACTOR_LOCKOUT_SECONDS: i64 = 5 * 60;
 pub enum CriticalRateLimitOutcome {
     Allowed,
     Rejected { retry_after_seconds: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssistantL1ConfirmationError {
+    Invalid,
+    Internal,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -95,14 +105,23 @@ pub struct DashboardUser {
 }
 
 /// Server-derived identity and live session metadata for route slices that
-/// need the current browser session SID. Personal access tokens do not expose
-/// this context.
+/// must rotate the current browser session after a security change.  The
+/// access token itself never exposes this context to request handlers.
 #[derive(Clone, Debug)]
 pub struct DashboardSessionContext {
     pub user: DashboardUser,
     pub session_id: String,
     pub client_ip: String,
     pub user_agent: String,
+}
+
+/// Short-lived proof issued after a purpose-scoped sensitive verification.
+/// The token is bound to the current dashboard session by the auth adapter;
+/// callers must not construct or persist it themselves.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecurityProof {
+    pub token: String,
+    pub expires_at: i64,
 }
 
 const TRUST_LEVEL_THRESHOLDS: [f64; 5] = [0.0, 0.0, 100.0, 500.0, 2_000.0];
@@ -197,7 +216,27 @@ impl DashboardUserView {
     /// Current Go contract projection for `/api/user/login`, `/api/user/auth/refresh`
     /// and `/api/user/self` parity comparisons.
     pub(crate) fn to_legacy_go_shape(&self) -> Value {
-        to_value(self).expect("serialize dashboard user view")
+        let mut value = to_value(self).expect("serialize dashboard user view");
+        let Some(object) = value.as_object_mut() else {
+            return value;
+        };
+        // These derived access/onboarding/trust fields belong to the newer
+        // Rust internal projection, not the frozen Gin DTO used by the Go
+        // oracle. Keep them available to policy consumers while excluding
+        // them from the wire shape used for takeover parity.
+        for field in [
+            "developer_access_granted",
+            "trust_level_info",
+            "trust_level_tiers",
+            "onboarding",
+        ] {
+            object.remove(field);
+        }
+        if let Some(Value::Object(permissions)) = object.get_mut("permissions") {
+            permissions.remove("console_activated_at");
+            permissions.remove("docs_access");
+        }
+        value
     }
 
     pub(crate) fn build(user: DashboardUser, facts: DashboardSelfUserFacts) -> Self {
@@ -318,10 +357,11 @@ fn evaluate_trust_level(role: i64, facts: DashboardSelfUserFacts) -> TrustLevelI
     let (level, inactivity_decay_steps, next_decay_at) =
         if let Some(override_level) = facts.trust_level_override {
             (
-                (0..=4)
-                    .contains(&override_level)
-                    .then_some(override_level)
-                    .unwrap_or(0),
+                if (0..=4).contains(&override_level) {
+                    override_level
+                } else {
+                    0
+                },
                 0,
                 None,
             )
@@ -479,7 +519,7 @@ mod dashboard_user_view_tests {
     }
 
     #[test]
-    fn legacy_go_shape_matches_current_dashboard_access_fields() {
+    fn legacy_go_shape_matches_frozen_dashboard_user_fields() {
         let value = DashboardUserView::build(
             dashboard_user(1),
             DashboardSelfUserFacts {
@@ -491,22 +531,12 @@ mod dashboard_user_view_tests {
         )
         .to_legacy_go_shape();
 
-        assert_eq!(value["developer_access_granted"], true);
-        assert_eq!(value["trust_level_info"]["level"], 3);
-        assert_eq!(value["trust_level_tiers"][3]["level"], 3);
-        assert_eq!(value["trust_level_tiers"][3]["min_paid_amount"], 500.0);
-        assert_eq!(
-            value["onboarding"],
-            json!({
-                "activation_complete": true,
-                "paid_activation_complete": true,
-                "credential_complete": true,
-                "first_request_complete": false,
-                "stage": "first_request"
-            })
-        );
-        assert_eq!(value["permissions"]["console_activated_at"], 1);
-        assert_eq!(value["permissions"]["docs_access"], true);
+        assert!(value.get("developer_access_granted").is_none());
+        assert!(value.get("trust_level_info").is_none());
+        assert!(value.get("trust_level_tiers").is_none());
+        assert!(value.get("onboarding").is_none());
+        assert!(value["permissions"].get("console_activated_at").is_none());
+        assert!(value["permissions"].get("docs_access").is_none());
         assert_eq!(value["username"], "alice");
         assert_eq!(value["id"], 7);
     }
@@ -784,13 +814,65 @@ pub trait DashboardAuth: Send + Sync {
 
     async fn self_user(&self, access_token: SecretString) -> Result<DashboardUser, AuthError>;
 
-    /// Resolves a live browser session, including its server-owned SID.
-    /// Adapters without a session authority fail closed.
+    /// Resolves a live browser session, including the server-owned SID and
+    /// request metadata needed by sensitive account routes. Personal access
+    /// tokens and adapters without a session authority fail closed.
     async fn current_session(
         &self,
         _access_token: SecretString,
     ) -> Result<DashboardSessionContext, AuthError> {
         Err(AuthError::new(AuthErrorKind::Unauthorized))
+    }
+
+    /// Issues a Go-compatible security proof for an already authenticated
+    /// browser session. Implementations must revalidate the durable session
+    /// and user auth version before signing; adapters without that authority
+    /// fail closed.
+    async fn issue_security_proof(
+        &self,
+        _user_id: i64,
+        _session_id: &str,
+        _method: &str,
+        _scopes: &[String],
+    ) -> Result<SecurityProof, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Internal))
+    }
+
+    /// Validates a security proof against the current durable browser session.
+    /// Implementations without the shared session authority fail closed.
+    async fn verify_security_proof(
+        &self,
+        _raw: SecretString,
+        _user_id: i64,
+        _session_id: &str,
+        _required_scope: &str,
+        _allowed_methods: &[String],
+    ) -> Result<String, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Internal))
+    }
+
+    /// Creates the short-lived, session-bound confirmation used by the
+    /// assistant's L1 recommendation UI. Adapters without the durable auth
+    /// flow authority fail closed.
+    async fn create_assistant_l1_confirmation(
+        &self,
+        _user_id: i64,
+        _session_id: &str,
+        _payload: &str,
+        _ttl: std::time::Duration,
+    ) -> Result<String, AuthError> {
+        Err(AuthError::new(AuthErrorKind::Internal))
+    }
+
+    /// Atomically consumes a session-bound assistant L1 confirmation and
+    /// returns its server-owned draft payload.
+    async fn consume_assistant_l1_confirmation(
+        &self,
+        _user_id: i64,
+        _session_id: &str,
+        _token: SecretString,
+    ) -> Result<String, AssistantL1ConfirmationError> {
+        Err(AssistantL1ConfirmationError::Internal)
     }
 
     /// Resolves a dashboard credential before the route-specific `UserAuth`

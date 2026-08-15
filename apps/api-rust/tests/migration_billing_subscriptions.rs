@@ -103,6 +103,7 @@ impl DashboardAuth for FixtureAuth {
 
 fn smoke_router() -> axum::Router {
     let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
         .connect_lazy("postgres://postgres@127.0.0.1:1/billing")
         .expect("valid lazy PostgreSQL test URL");
     router(BillingSubscriptionsState::new(
@@ -110,6 +111,17 @@ fn smoke_router() -> axum::Router {
         None,
         Arc::new(FixtureAuth),
     ))
+}
+
+fn console_gate_smoke_router() -> axum::Router {
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
+        .connect_lazy("postgres://postgres@127.0.0.1:1/billing")
+        .expect("valid lazy PostgreSQL test URL");
+    router(
+        BillingSubscriptionsState::new(pool, None, Arc::new(FixtureAuth))
+            .with_console_access_gate(),
+    )
 }
 
 async fn error_body(response: axum::response::Response) -> serde_json::Value {
@@ -139,6 +151,23 @@ async fn subscription_routes_should_reject_missing_bearer_token_before_database_
 }
 
 #[tokio::test]
+async fn l0_subscription_plan_reads_are_hidden_before_database_access() {
+    let response = console_gate_smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/subscription/plans")
+                .header("authorization", "Bearer user")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(error_body(response).await, json!({"message": "Not Found"}));
+}
+
+#[tokio::test]
 async fn subscription_admin_routes_should_require_an_administrator() {
     let response = smoke_router()
         .oneshot(
@@ -158,6 +187,84 @@ async fn subscription_admin_routes_should_require_an_administrator() {
             "success": false,
             "code": "AUTH_INSUFFICIENT_PRIVILEGE",
             "message": "Unauthorized, insufficient privileges"
+        })
+    );
+}
+
+#[tokio::test]
+async fn subscription_admin_auth_precedes_malformed_json_rejection() {
+    let response = smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/subscription/admin/plans")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        error_body(response).await,
+        json!({
+            "success": false,
+            "message": "Unauthorized, invalid access token"
+        })
+    );
+}
+
+#[tokio::test]
+async fn authenticated_subscription_extractor_failures_preserve_auth_version() {
+    let response = smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/subscription/admin/plans")
+                .header("authorization", "Bearer admin")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(
+        response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
+    );
+    assert!(matches!(
+        response.status(),
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+    ));
+}
+
+#[tokio::test]
+async fn subscription_self_degrades_database_read_failures_to_empty_lists() {
+    let response = smoke_router()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/subscription/self")
+                .header("authorization", "Bearer user")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        error_body(response).await,
+        json!({
+            "success": true,
+            "message": "",
+            "data": {
+                "billing_preference": "subscription_first",
+                "subscriptions": [],
+                "all_subscriptions": []
+            }
         })
     );
 }
@@ -335,7 +442,10 @@ async fn subscription_maintenance_expires_resets_and_cleans() {
         .fetch_one(&pool)
         .await
         .expect("PostgreSQL version");
-    assert!(version.starts_with("18."), "requires PostgreSQL 18, got {version}");
+    assert!(
+        version.starts_with("18."),
+        "requires PostgreSQL 18, got {version}"
+    );
     reset_schema(&pool).await;
 
     let valkey = redis::Client::open(valkey_url).expect("isolated Valkey URL");
@@ -403,12 +513,11 @@ async fn subscription_maintenance_expires_resets_and_cleans() {
     .expect("reset subscription");
     assert_eq!(reset.0, 0);
     assert!(reset.1 > 0 && reset.2 > current);
-    let remaining_records: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM subscription_pre_consume_records",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("pre-consume count");
+    let remaining_records: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM subscription_pre_consume_records")
+            .fetch_one(&pool)
+            .await
+            .expect("pre-consume count");
     assert_eq!(remaining_records, 1);
     assert_eq!(exists(&mut cache, "user:7").await, 0);
 }

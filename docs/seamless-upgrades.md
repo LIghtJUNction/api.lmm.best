@@ -1,20 +1,33 @@
 # Frontend and backend upgrades
 
-The installed package exposes one public operator CLI: `/usr/bin/lmm-api`.
-Serving and deployment are subcommands of that CLI; source-tree deployment
-helpers and a second public deploy command are not supported.
+The installed package exposes one public operator CLI. On the current
+production host (ArchDmit) its exact path is `/usr/bin/lmm-api-go`.
+Serving, health checks, HTTP requests, and deployment are subcommands of that
+CLI; source-tree deployment helpers and a second public deploy command are not
+supported.
+
+Use the native CLI for application-level server control:
+
+```bash
+ssh ArchDmit /usr/bin/lmm-api-go status
+ssh ArchDmit /usr/bin/lmm-api-go doctor
+ssh ArchDmit /usr/bin/lmm-api-go request --show-status /api/status
+```
+
+SSH is only the transport here. Host-level inspection (systemd, filesystem,
+memory, and journal reads) remains separate and read-only unless a guarded
+deployment transaction has been explicitly authorized.
 
 ## Current production boundary
 
-The 2026-08-09 read-only audit found `api.lmm.best` running the Go backend with
-PostgreSQL and the dedicated Valkey listener on port `6380`. The frontend still
-points at the existing versioned release, while Rust blue/green slots are
-internal-probe state only and do not own business traffic. A historical
-PostgreSQL cutover result exists, but its post-cutover verification was marked
-`failed/contract` and no current forward-only boundary was present; treat the
-database state as unverified until a fresh coordinator audit proves the active
-schema, boundary, and canaries. Do not copy the older “production is still
-Go/SQLite” statement into a new runbook.
+The 2026-08-14 read-only audit found `api.lmm.best` running the Go backend with
+PostgreSQL and dedicated Valkey. The canonical lowercase
+`pg-write-boundary` and `cutover-journal` agree on the transaction, schema and
+revision; the journal phase is `COMPLETE`; and `post-cutover-verify.json`
+attests the PostgreSQL historical migration as verified. Re-run the sanitized
+`inspect-state.sh` gate before every mutation instead of treating this dated
+observation as permanent evidence. Rust remains internal-probe-only and does
+not own production business traffic.
 
 ## Frontend: zero-downtime static releases
 
@@ -25,7 +38,7 @@ required by the CLI; a frontend publication does not restart the backend
 service or nginx.
 
 ```bash
-sudo /usr/bin/lmm-api deploy production \
+sudo /usr/bin/lmm-api-go deploy production \
   --frontend-only \
   --host ArchDmit \
   --deployment-id <deployment-id> \
@@ -75,14 +88,15 @@ remain exact aliases to the legal HTML files.
 
 ## Backend service and upgrades
 
-Systemd runs the installed launcher directly:
+Systemd runs the canonical service entry directly:
 
 ```ini
 ExecStart=/usr/bin/lmm-api serve
 ```
 
-Backend selection and status remain launcher subcommands (`lmm-api select` and
-`lmm-api status`); deployment phases are invoked as `lmm-api deploy ...`.
+Backend selection and status remain launcher subcommands (`lmm-api-go select`
+and `lmm-api-go status`); deployment phases are invoked as
+`lmm-api-go deploy ...`.
 Production backend changes are autonomous, locked transactions with offline
 backup verification, health validation, persistent audit output, a ten-minute
 rollback watchdog, and explicit confirmation before the transaction is
@@ -92,7 +106,7 @@ interruption. It is not a zero-downtime or blue/green deployment.
 
 Before invoking a subcommand on an existing target, verify that the installed
 core package actually provides this launcher protocol and that systemd uses
-`ExecStart=/usr/bin/lmm-api serve`. Legacy provider binaries may start the
+`ExecStart=/usr/bin/lmm-api-go serve`. Legacy provider binaries may start the
 backend when given an unknown command, so `status`, `deploy`, and `--help` are
 not safe inspection commands until the protocol is proven. Use systemd/package
 metadata, the running PID, sanitized process-environment scheme checks, and

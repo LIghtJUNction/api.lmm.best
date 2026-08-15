@@ -6,21 +6,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/relay/channel/ai360"
-	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
-	"github.com/QuantumNous/new-api/relay/channel/minimax"
-	"github.com/QuantumNous/new-api/relay/channel/moonshot"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/relay"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel/ai360"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel/lingyiwanwu"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel/minimax"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel/moonshot"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -206,17 +206,23 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	}, nil
 }
 
-func ListModels(c *gin.Context, modelType int) {
-	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
-	if !acceptUnsetRatioModel {
-		userId := c.GetInt("id")
-		if userId > 0 {
-			userSettings, _ := model.GetUserSetting(userId, false)
-			if userSettings.AcceptUnsetRatioModel {
-				acceptUnsetRatioModel = true
-			}
-		}
+func modelListAcceptsUnsetRatioModel(userID int) bool {
+	if operation_setting.SelfUseModeEnabled {
+		return true
 	}
+	if userID <= 0 {
+		return false
+	}
+	userSettings, err := model.GetUserSetting(userID, false)
+	return err == nil && userSettings.AcceptUnsetRatioModel
+}
+
+func modelListIncludesModel(modelName string, acceptUnsetRatioModel bool) bool {
+	return acceptUnsetRatioModel || helper.HasModelBillingConfig(modelName)
+}
+
+func ListModels(c *gin.Context, modelType int) {
+	acceptUnsetRatioModel := modelListAcceptsUnsetRatioModel(c.GetInt("id"))
 
 	userModelNames := make([]string, 0)
 	groups, err := getModelListGroups(c)
@@ -247,7 +253,7 @@ func ListModels(c *gin.Context, modelType int) {
 				continue
 			}
 		}
-		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+		if !modelListIncludesModel(modelName, acceptUnsetRatioModel) {
 			continue
 		}
 		userModelNames = append(userModelNames, modelName)

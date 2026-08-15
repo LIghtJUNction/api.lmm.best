@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -46,6 +46,9 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 	req.PaymentMethod = normalizeFastPayMethod(req.PaymentMethod)
 	if !isSupportedFastPayMethod(req.PaymentMethod) {
 		common.ApiErrorMsg(c, "FAST 易支付仅支持支付宝或微信支付")
+		return
+	}
+	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
 		return
 	}
 

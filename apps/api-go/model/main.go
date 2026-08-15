@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/clickhouse"
@@ -90,7 +90,7 @@ func CheckSetupForStartup(allowMigrationWrite bool) error {
 	if err := verifySetupState(); err != nil {
 		return err
 	}
-	constant.Setup = true
+	constant.SetSetup(true)
 	return nil
 }
 
@@ -120,6 +120,7 @@ func checkSetup() {
 			common.SysLog("system is not initialized, but root user exists")
 			// Create setup record
 			newSetup := Setup{
+				ID:            SetupSingletonID,
 				Version:       common.Version,
 				InitializedAt: time.Now().Unix(),
 			}
@@ -127,15 +128,15 @@ func checkSetup() {
 			if err != nil {
 				common.SysLog("failed to create setup record: " + err.Error())
 			}
-			constant.Setup = true
+			constant.SetSetup(true)
 		} else {
 			common.SysLog("system is not initialized and no root user exists")
-			constant.Setup = false
+			constant.SetSetup(false)
 		}
 	} else {
 		// Setup record exists, system is initialized
 		common.SysLog("system is already initialized at: " + time.Unix(setup.InitializedAt, 0).String())
-		constant.Setup = true
+		constant.SetSetup(true)
 	}
 }
 
@@ -334,12 +335,20 @@ func mainMigrationModels() []interface{} {
 		&Channel{}, &Token{}, &User{}, &UserSession{}, &AuthFlow{}, &ExternalIdentityClaim{},
 		&PasskeyCredential{}, &Option{}, &Redemption{}, &Ability{}, &Log{}, &Midjourney{},
 		&TopUp{}, &QuotaData{}, &Task{}, &Model{}, &Vendor{}, &PrefillGroup{}, &Setup{}, &TwoFA{},
-		&TwoFABackupCode{}, &Checkin{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
+		&TwoFABackupCode{}, &Checkin{}, &Gift{}, &GiftClaim{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
+		&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{},
+		&AccountActionRequest{},
 		&OpenSourceBountyLedger{}, &OpenSourceBountyDispute{}, &OpenSourceBountyMCPToken{},
 		&OpenSourceBountyMCPConfirmation{}, &OpenSourceBountyMCPOperation{}, &OpenSourceBountyRESTOperation{},
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
-		&CasbinRule{}, &AuthzRole{},
+		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
+		&WaffoPancakeWebhookReceipt{},
+		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantUserProfileAudit{}, &AssistantMemory{}, &AssistantFirstQuestionStat{}, &PromptPresetRow{}, &PromptPresetStat{}, &PromptConversionRef{}, &PromptConversationRef{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AssistantSecurityIncident{}, &AssistantSecurityReviewNotice{}, &AssistantNewUserGift{}, &AssistantGiftRiskKey{}, &AssistantGiftRiskMemory{}, &AdvancedSecurityEvent{},
+		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
+		&FinanceLedgerEntry{}, &FinancePaymentMethod{},
+		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},
+		&PublicRelayContribution{}, &PublicRelayReport{}, &PublicRelayTip{}, &PublicRelayReview{}, &PublicRelayPreference{},
 	}
 }
 
@@ -356,6 +365,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := BackfillDeveloperAccessRecommendationArchives(); err != nil {
+		return err
+	}
 	if err := migrateOpenSourceBountyChallengeRetryIndex(); err != nil {
 		return err
 	}
@@ -363,6 +375,12 @@ func migrateDB() error {
 		return err
 	}
 	if err := InitializeLegacyConsoleActivations(backfillConsoleActivation); err != nil {
+		return err
+	}
+	if err := InitializeExistingUsersL1Backfill(); err != nil {
+		return err
+	}
+	if err := migrateOpenSourceBountyMCPTokenAuthVersions(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
@@ -398,6 +416,7 @@ func migrateDBFast() error {
 		{&PasskeyCredential{}, "PasskeyCredential"},
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
+		{&DiscountCode{}, "DiscountCode"},
 		{&Ability{}, "Ability"},
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
@@ -411,8 +430,13 @@ func migrateDBFast() error {
 		{&TwoFA{}, "TwoFA"},
 		{&TwoFABackupCode{}, "TwoFABackupCode"},
 		{&Checkin{}, "Checkin"},
+		{&Gift{}, "Gift"},
+		{&GiftClaim{}, "GiftClaim"},
 		{&OpenSourceBountyProject{}, "OpenSourceBountyProject"},
 		{&OpenSourceBountyChallenge{}, "OpenSourceBountyChallenge"},
+		{&DeveloperAccessRequest{}, "DeveloperAccessRequest"},
+		{&DeveloperAccessRecommendationArchive{}, "DeveloperAccessRecommendationArchive"},
+		{&AccountActionRequest{}, "AccountActionRequest"},
 		{&OpenSourceBountyLedger{}, "OpenSourceBountyLedger"},
 		{&OpenSourceBountyDispute{}, "OpenSourceBountyDispute"},
 		{&OpenSourceBountyMCPToken{}, "OpenSourceBountyMCPToken"},
@@ -421,6 +445,9 @@ func migrateDBFast() error {
 		{&OpenSourceBountyRESTOperation{}, "OpenSourceBountyRESTOperation"},
 		{&SubscriptionOrder{}, "SubscriptionOrder"},
 		{&UserSubscription{}, "UserSubscription"},
+		{&WaffoPancakeWebhookReceipt{}, "WaffoPancakeWebhookReceipt"},
+		{&FinanceLedgerEntry{}, "FinanceLedgerEntry"},
+		{&FinancePaymentMethod{}, "FinancePaymentMethod"},
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
@@ -428,6 +455,31 @@ func migrateDBFast() error {
 		{&SystemInstance{}, "SystemInstance"},
 		{&SystemTask{}, "SystemTask"},
 		{&SystemTaskLock{}, "SystemTaskLock"},
+		{&PersonalAccessIP{}, "PersonalAccessIP"},
+		{&AssistantLead{}, "AssistantLead"},
+		{&AssistantProfileBucket{}, "AssistantProfileBucket"},
+		{&AssistantUserProfile{}, "AssistantUserProfile"},
+		{&AssistantUserProfileAudit{}, "AssistantUserProfileAudit"},
+		{&AssistantMemory{}, "AssistantMemory"},
+		{&AssistantFirstQuestionStat{}, "AssistantFirstQuestionStat"},
+		{&PromptPresetRow{}, "PromptPresetRow"},
+		{&PromptPresetStat{}, "PromptPresetStat"},
+		{&PromptConversionRef{}, "PromptConversionRef"},
+		{&PromptConversationRef{}, "PromptConversationRef"},
+		{&AssistantConversation{}, "AssistantConversation"},
+		{&AssistantHistoryMessage{}, "AssistantHistoryMessage"},
+		{&AssistantSecureCard{}, "AssistantSecureCard"},
+		{&AssistantSecurityIncident{}, "AssistantSecurityIncident"},
+		{&AdvancedSecurityEvent{}, "AdvancedSecurityEvent"},
+		{&ReleaseNote{}, "ReleaseNote"},
+		{&ReleaseNoteRead{}, "ReleaseNoteRead"},
+		{&UnifiedTodoRead{}, "UnifiedTodoRead"},
+		{&L1OnboardingTodo{}, "L1OnboardingTodo"},
+		{&PublicRelayContribution{}, "PublicRelayContribution"},
+		{&PublicRelayReport{}, "PublicRelayReport"},
+		{&PublicRelayTip{}, "PublicRelayTip"},
+		{&PublicRelayReview{}, "PublicRelayReview"},
+		{&PublicRelayPreference{}, "PublicRelayPreference"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -452,6 +504,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := BackfillDeveloperAccessRecommendationArchives(); err != nil {
+		return err
+	}
 	if err := migrateOpenSourceBountyChallengeRetryIndex(); err != nil {
 		return err
 	}
@@ -459,6 +514,12 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := InitializeLegacyConsoleActivations(backfillConsoleActivation); err != nil {
+		return err
+	}
+	if err := InitializeExistingUsersL1Backfill(); err != nil {
+		return err
+	}
+	if err := migrateOpenSourceBountyMCPTokenAuthVersions(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {

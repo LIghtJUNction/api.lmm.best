@@ -1,13 +1,14 @@
 # Local `lmm-api-go` package
 
-This builder packages one already-frozen Go backend binary together with the
-built frontend. It writes only inside an explicit marker-owned deployment
-workspace and creates a single `lmm-api-go` package. No launcher, provider
-selector, compatibility alias, or Rust payload is included.
+The Go backend binary owns the local build and packaging workflow. It builds the
+frontend, produces the static backend binary, validates both artifacts, and
+creates a single `lmm-api-go` Arch package inside an explicit marker-owned
+workspace. The package installs `lmm-api.service` and the canonical
+`/usr/bin/lmm-api` symlink to the Go provider; Rust remains an independently
+packaged candidate.
 
 ```bash
-bash packaging/local/lmm-api-go/build-local-package.sh \
-  --workspace /absolute/marker-owned/workspace \
-  --binary /absolute/path/to/lmm-api-go \
-  --frontend /absolute/path/to/apps/web/dist
+apps/api-go/out/lmm-api-go deploy build \
+  --repo /absolute/path/to/api.lmm.best \
+  --workspace /absolute/marker-owned/workspace
 ```

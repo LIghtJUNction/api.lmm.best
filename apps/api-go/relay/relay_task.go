@@ -9,16 +9,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel/task/taskcommon"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	relayconstant "github.com/LIghtJUNction/api.lmm.best/relay/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -158,6 +159,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 		return nil, taskErr
 	}
+	if taskErr := checkAdvancedSecurityTaskPrompt(c, info); taskErr != nil {
+		return nil, taskErr
+	}
 
 	// 2. 确定模型名称
 	modelName := info.OriginModelName
@@ -194,13 +198,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
-	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, clamp)
-	}
+	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）。
+	// TASK_PRICE_PATCH models intentionally skip adaptor dimension ratios, but
+	// the independently captured dynamic-pricing safety ratio must still be
+	// charged.
+	quota, clamp := taskSubmitQuotaWithRatios(info, modelName)
+	info.PriceData.Quota = quota
+	noteTaskQuotaClamp(info, clamp)
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	if info.Billing == nil && !info.PriceData.FreeModel {
@@ -222,7 +226,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
+		responseBody, _ := common.ReadResponseBody(resp)
 		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 	}
 
@@ -243,6 +247,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+		adjustedRatios = preserveDynamicPricingRatio(info, adjustedRatios)
 		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 			// 基于调整后的 ratios 重新计算 quota
 			finalQuota = adjustedQuota
@@ -259,9 +264,75 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
+func taskSubmitQuotaWithRatios(info *relaycommon.RelayInfo, modelName string) (int, *common.QuotaClamp) {
+	if info == nil {
+		return 0, nil
+	}
+	quota := float64(info.PriceData.Quota)
+	if common.StringsContains(constant.TaskPricePatches, modelName) {
+		if dynamicRatio, ok := info.PriceData.OtherRatios()["dynamic_pricing"]; ok {
+			quota *= dynamicRatio
+		}
+	} else {
+		quota = info.PriceData.ApplyOtherRatiosToFloat(quota)
+	}
+	return common.QuotaFromFloatChecked(quota)
+}
+
+// checkAdvancedSecurityTaskPrompt closes the gap between the normal model
+// relay (which has a TokenCountMeta) and task adaptors (which parse their own
+// request types). It runs after validation, but before pricing, pre-charge, or
+// any upstream request. Adaptors without a textual prompt are left untouched.
+func checkAdvancedSecurityTaskPrompt(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
+	if !setting.ShouldCheckAdvancedSecurityPrompt() {
+		return nil
+	}
+
+	prompt, ok := taskPromptFromContext(c)
+	if !ok || strings.TrimSpace(prompt) == "" {
+		return nil
+	}
+	evaluation := service.EvaluateAdvancedSecurityText(c, info, prompt)
+	if len(evaluation.Matches) == 0 {
+		return nil
+	}
+	if !evaluation.Blocked() {
+		return nil
+	}
+	return service.TaskErrorWrapperLocal(
+		errors.New(common.MessageWithRequestId(service.AdvancedSecurityBlockedMessage, c.GetString(common.RequestIdKey))),
+		"advanced_security_guardrail",
+		http.StatusBadRequest,
+	)
+}
+
+func taskPromptFromContext(c *gin.Context) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	value, ok := c.Get("task_request")
+	if !ok || value == nil {
+		return "", false
+	}
+	switch request := value.(type) {
+	case relaycommon.TaskSubmitReq:
+		return request.Prompt, true
+	case *dto.SunoSubmitReq:
+		if request == nil {
+			return "", false
+		}
+		return strings.Join([]string{request.GptDescriptionPrompt, request.Prompt, request.Title, request.Tags}, "\n"), true
+	case dto.SunoSubmitReq:
+		return strings.Join([]string{request.GptDescriptionPrompt, request.Prompt, request.Title, request.Tags}, "\n"), true
+	default:
+		return "", false
+	}
+}
+
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
 // 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
+	ratios = preserveDynamicPricingRatio(info, ratios)
 	// 从 PriceData 获取不含 OtherRatios 的基础价格
 	baseQuota := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
 	priceData := info.PriceData
@@ -273,6 +344,24 @@ func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float6
 	quota, clamp := common.QuotaFromFloatChecked(result)
 	noteTaskQuotaClamp(info, clamp)
 	return quota, true
+}
+
+// preserveDynamicPricingRatio keeps the multiplier captured before the task
+// was sent upstream. Task adaptors commonly return only their submit-time
+// dimensions (for example duration or size); replacing the whole map without
+// this merge would silently drop the dynamic price from final settlement.
+func preserveDynamicPricingRatio(info *relaycommon.RelayInfo, ratios map[string]float64) map[string]float64 {
+	merged := make(map[string]float64, len(ratios)+1)
+	for key, ratio := range ratios {
+		merged[key] = ratio
+	}
+	if info == nil {
+		return merged
+	}
+	if dynamicRatio, ok := info.PriceData.OtherRatios()["dynamic_pricing"]; ok {
+		merged["dynamic_pricing"] = dynamicRatio
+	}
+	return merged
 }
 
 // noteTaskQuotaClamp records the first quota saturation event onto the task's
@@ -454,7 +543,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		return nil
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -13,8 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -22,15 +22,23 @@ import (
 
 // 上游地址
 const (
-	upstreamModelsURL  = "https://basellm.github.io/llm-metadata/api/newapi/models.json"
-	upstreamVendorsURL = "https://basellm.github.io/llm-metadata/api/newapi/vendors.json"
+	upstreamModelsURL   = "https://basellm.github.io/llm-metadata/api/newapi/models.json"
+	upstreamVendorsURL  = "https://basellm.github.io/llm-metadata/api/newapi/vendors.json"
+	modelSyncCacheSize  = 16
+	modelSyncCacheBytes = 24 << 20
 )
 
 func normalizeLocale(locale string) (string, bool) {
 	l := strings.ToLower(strings.TrimSpace(locale))
 	switch l {
-	case "en", "zh-CN", "zh-TW", "ja":
-		return l, true
+	case "en":
+		return "en", true
+	case "zh", "zh-cn":
+		return "zh-CN", true
+	case "zh-tw":
+		return "zh-TW", true
+	case "ja":
+		return "ja", true
 	default:
 		return "", false
 	}
@@ -73,11 +81,18 @@ type upstreamVendor struct {
 	Status      int    `json:"status"`
 }
 
-var (
-	etagCache  = make(map[string]string)
-	bodyCache  = make(map[string][]byte)
-	cacheMutex sync.RWMutex
-)
+type modelSyncCacheEntry struct {
+	ETag string
+	Body []byte
+}
+
+func newModelSyncCache(maxEntries int, maxBytes int64) *cachex.ByteCache[modelSyncCacheEntry] {
+	return cachex.NewByteCache[modelSyncCacheEntry](maxEntries, maxBytes, func(url string, entry modelSyncCacheEntry) int64 {
+		return int64(len(url) + len(entry.ETag) + len(entry.Body) + 64)
+	})
+}
+
+var modelSyncCache = newModelSyncCache(modelSyncCacheSize, modelSyncCacheBytes)
 
 type overwriteField struct {
 	ModelName string   `json:"model_name"`
@@ -145,11 +160,9 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 			return err
 		}
 		// ETag conditional request
-		cacheMutex.RLock()
-		if et := etagCache[url]; et != "" {
-			req.Header.Set("If-None-Match", et)
+		if cached, found := modelSyncCache.Load(url); found && cached.ETag != "" {
+			req.Header.Set("If-None-Match", cached.ETag)
 		}
-		cacheMutex.RUnlock()
 
 		resp, err := getHTTPClient().Do(req)
 		if err != nil {
@@ -165,19 +178,12 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 			switch resp.StatusCode {
 			case http.StatusOK:
 				// read body into buffer for caching and flexible decode
-				limited := io.LimitReader(resp.Body, maxBytes)
-				buf, err := io.ReadAll(limited)
+				buf, err := common.ReadAllLimit(resp.Body, maxBytes)
 				if err != nil {
 					lastErr = err
 					return
 				}
-				// cache body and ETag
-				cacheMutex.Lock()
-				if et := resp.Header.Get("ETag"); et != "" {
-					etagCache[url] = et
-				}
-				bodyCache[url] = buf
-				cacheMutex.Unlock()
+				modelSyncCache.Store(url, modelSyncCacheEntry{ETag: resp.Header.Get("ETag"), Body: buf})
 
 				// Try decode as envelope first
 				if err := json.Unmarshal(buf, out); err != nil {
@@ -198,13 +204,12 @@ func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T])
 				lastErr = nil
 			case http.StatusNotModified:
 				// use cache
-				cacheMutex.RLock()
-				buf := bodyCache[url]
-				cacheMutex.RUnlock()
-				if len(buf) == 0 {
+				cached, found := modelSyncCache.Load(url)
+				if !found || len(cached.Body) == 0 {
 					lastErr = errors.New("cache miss for 304 response")
 					return
 				}
+				buf := cached.Body
 				if err := json.Unmarshal(buf, out); err != nil {
 					var arr []T
 					if err2 := json.Unmarshal(buf, &arr); err2 != nil {

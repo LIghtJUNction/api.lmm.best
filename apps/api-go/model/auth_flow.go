@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -22,6 +22,11 @@ const (
 	AuthFlowPurposePasskeyStepUp     = "passkey_step_up"
 	AuthFlowPurposeTelegramBind      = "telegram_bind"
 	AuthFlowPurposeTelegramAssertion = "telegram_assertion"
+	AuthFlowPurposeAssistantL1       = "assistant_l1_recommendation"
+	AuthFlowPurposeAssistantAdmin    = "assistant_admin_change"
+	AuthFlowPurposeAssistantKey      = "assistant_key_creation"
+	AuthFlowPurposeAssistantDrawing  = "assistant_drawing_generation"
+	AuthFlowPurposeAssistantHandoff  = "assistant_handoff"
 	AuthFlowIntentLogin              = "login"
 	AuthFlowIntentBind               = "bind"
 	AuthFlowTokenBytes               = 32

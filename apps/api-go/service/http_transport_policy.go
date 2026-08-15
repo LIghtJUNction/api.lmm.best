@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 )
 
 // HTTPTransportPolicy is the runtime-normalized outbound HTTP transport policy
@@ -17,7 +17,9 @@ type HTTPTransportPolicy struct {
 	Shards   int    // 1..dto.MaxHTTP2ConnectionShards
 }
 
-var httpTransportPolicyWarnings sync.Map
+var httpTransportPolicyWarnings = cachex.NewByteCache[struct{}](256, 64<<10, func(key string, _ struct{}) int64 {
+	return int64(len(key) + 8)
+})
 
 func defaultHTTPTransportPolicy() HTTPTransportPolicy {
 	return HTTPTransportPolicy{

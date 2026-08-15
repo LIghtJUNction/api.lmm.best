@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/gin-gonic/gin"
@@ -122,15 +122,48 @@ func GetTopUpInfo(c *gin.Context) {
 		return
 	}
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
-	if !access.Granted {
-		paymentAvailable, minPayment := neutralTopUpAvailability()
+	gatewayAvailability := paymentGatewayAvailabilityForUser(user, complianceConfirmed, time.Now())
+	if model.IsPaymentRestricted(user) && !gatewayAvailability.hasPayment() {
 		common.ApiSuccess(c, neutralTopUpInfo{
-			DeveloperAccessGranted:        false,
-			ActivationRequired:            true,
-			PaymentAvailable:              paymentAvailable,
-			MinPayment:                    minPayment,
+			DeveloperAccessGranted:        access.Granted,
+			ActivationRequired:            !access.Granted,
+			PaymentAvailable:              false,
+			PayMethods:                    []map[string]string{},
+			AmountOptions:                 []int{},
+			Discount:                      map[int]float64{},
+			EnableRedemption:              complianceConfirmed,
+			PaymentComplianceConfirmed:    complianceConfirmed,
+			PaymentComplianceTermsVersion: operation_setting.CurrentComplianceTermsVersion,
+		})
+		return
+	}
+	if !access.Granted {
+		paymentAvailable, minPayment := neutralTopUpAvailability(gatewayAvailability)
+		common.ApiSuccess(c, neutralTopUpInfo{
+			DeveloperAccessGranted:  false,
+			ActivationRequired:      true,
+			PaymentAvailable:        paymentAvailable,
+			MinPayment:              minPayment,
+			EnableOnlineTopUp:       gatewayAvailability.Online,
+			EnableStripeTopUp:       gatewayAvailability.Stripe,
+			EnableCreemTopUp:        gatewayAvailability.Creem,
+			EnableWaffoTopUp:        gatewayAvailability.Waffo,
+			EnableWaffoPancakeTopUp: gatewayAvailability.WaffoPancake,
+			PayMethods:              sanitizedPaymentMethods(gatewayAvailability.PayMethods),
+			CreemProducts:           setting.CreemProducts,
+			WaffoPayMethods: func() interface{} {
+				if gatewayAvailability.Waffo {
+					return setting.GetWaffoPayMethods()
+				}
+				return nil
+			}(),
+			MinTopUp:                      operation_setting.MinTopUp,
+			StripeMinTopUp:                setting.StripeMinTopUp,
+			WaffoMinTopUp:                 setting.WaffoMinTopUp,
+			WaffoPancakeMinTopUp:          setting.WaffoPancakeMinTopUp,
 			AmountOptions:                 operation_setting.GetPaymentSetting().AmountOptions,
 			Discount:                      operation_setting.GetPaymentSetting().AmountDiscount,
+			TopUpLink:                     common.TopUpLink,
 			PaymentComplianceConfirmed:    complianceConfirmed,
 			PaymentComplianceTermsVersion: operation_setting.CurrentComplianceTermsVersion,
 		})
@@ -143,94 +176,26 @@ func GetTopUpInfo(c *gin.Context) {
 	}
 
 	// 获取支付方式
-	payMethods := operation_setting.PayMethods
-	if !complianceConfirmed {
-		payMethods = []map[string]string{}
-	}
-
-	// 如果启用了 Stripe 支付，添加到支付方法列表
-	if isStripeTopUpEnabled() {
-		// 检查是否已经包含 Stripe
-		hasStripe := false
-		for _, method := range payMethods {
-			if method["type"] == "stripe" {
-				hasStripe = true
-				break
-			}
-		}
-
-		if !hasStripe {
-			stripeMethod := map[string]string{
-				"name":      "Stripe",
-				"type":      "stripe",
-				"color":     "#635BFF",
-				"min_topup": strconv.Itoa(setting.StripeMinTopUp),
-			}
-			payMethods = append(payMethods, stripeMethod)
-		}
-	}
-
-	// Waffo Pancake is displayed above the standard Waffo gateway.
-	enableWaffoPancake := isWaffoPancakeTopUpEnabled()
-	if enableWaffoPancake {
-		hasWaffoPancake := false
-		for _, method := range payMethods {
-			if method["type"] == model.PaymentMethodWaffoPancake {
-				hasWaffoPancake = true
-				break
-			}
-		}
-
-		if !hasWaffoPancake {
-			payMethods = append(payMethods, map[string]string{
-				"name":      "Waffo Pancake",
-				"type":      model.PaymentMethodWaffoPancake,
-				"color":     "#F97316",
-				"min_topup": strconv.Itoa(setting.WaffoPancakeMinTopUp),
-			})
-		}
-	}
-
-	// 如果启用了 Waffo 支付，添加到支付方法列表
-	enableWaffo := isWaffoTopUpEnabled()
-	if enableWaffo {
-		hasWaffo := false
-		for _, method := range payMethods {
-			if method["type"] == model.PaymentMethodWaffo {
-				hasWaffo = true
-				break
-			}
-		}
-
-		if !hasWaffo {
-			waffoMethod := map[string]string{
-				"name":      "Waffo (Global Payment)",
-				"type":      model.PaymentMethodWaffo,
-				"color":     "#3B82F6",
-				"min_topup": strconv.Itoa(setting.WaffoMinTopUp),
-			}
-			payMethods = append(payMethods, waffoMethod)
-		}
-	}
+	payMethods := gatewayAvailability.PayMethods
 
 	data := gin.H{
 		"developer_access_granted":         true,
-		"enable_online_topup":              isEpayTopUpEnabled() || isFastPayTopUpEnabled(),
-		"enable_stripe_topup":              isStripeTopUpEnabled(),
-		"enable_creem_topup":               isCreemTopUpEnabled(),
-		"enable_waffo_topup":               enableWaffo,
-		"enable_waffo_pancake_topup":       enableWaffoPancake,
+		"enable_online_topup":              gatewayAvailability.Online,
+		"enable_stripe_topup":              gatewayAvailability.Stripe,
+		"enable_creem_topup":               gatewayAvailability.Creem,
+		"enable_waffo_topup":               gatewayAvailability.Waffo,
+		"enable_waffo_pancake_topup":       gatewayAvailability.WaffoPancake,
 		"enable_redemption":                complianceConfirmed,
 		"payment_compliance_confirmed":     complianceConfirmed,
 		"payment_compliance_terms_version": operation_setting.CurrentComplianceTermsVersion,
 		"waffo_pay_methods": func() interface{} {
-			if enableWaffo {
+			if gatewayAvailability.Waffo {
 				return setting.GetWaffoPayMethods()
 			}
 			return nil
 		}(),
 		"creem_products":          setting.CreemProducts,
-		"pay_methods":             payMethods,
+		"pay_methods":             sanitizedPaymentMethods(payMethods),
 		"topup_group_ratio":       topupGroupRatio,
 		"min_topup":               operation_setting.MinTopUp,
 		"stripe_min_topup":        setting.StripeMinTopUp,
@@ -244,17 +209,140 @@ func GetTopUpInfo(c *gin.Context) {
 }
 
 type neutralTopUpInfo struct {
-	DeveloperAccessGranted        bool            `json:"developer_access_granted"`
-	ActivationRequired            bool            `json:"activation_required"`
-	PaymentAvailable              bool            `json:"payment_available"`
-	MinPayment                    float64         `json:"min_payment"`
-	AmountOptions                 []int           `json:"amount_options"`
-	Discount                      map[int]float64 `json:"discount"`
-	PaymentComplianceConfirmed    bool            `json:"payment_compliance_confirmed"`
-	PaymentComplianceTermsVersion string          `json:"payment_compliance_terms_version"`
+	DeveloperAccessGranted        bool                `json:"developer_access_granted"`
+	ActivationRequired            bool                `json:"activation_required"`
+	PaymentAvailable              bool                `json:"payment_available"`
+	MinPayment                    float64             `json:"min_payment"`
+	EnableOnlineTopUp             bool                `json:"enable_online_topup"`
+	EnableStripeTopUp             bool                `json:"enable_stripe_topup"`
+	EnableCreemTopUp              bool                `json:"enable_creem_topup"`
+	EnableWaffoTopUp              bool                `json:"enable_waffo_topup"`
+	EnableWaffoPancakeTopUp       bool                `json:"enable_waffo_pancake_topup"`
+	EnableRedemption              bool                `json:"enable_redemption"`
+	PayMethods                    []map[string]string `json:"pay_methods"`
+	CreemProducts                 string              `json:"creem_products"`
+	WaffoPayMethods               interface{}         `json:"waffo_pay_methods"`
+	MinTopUp                      int                 `json:"min_topup"`
+	StripeMinTopUp                int                 `json:"stripe_min_topup"`
+	WaffoMinTopUp                 int                 `json:"waffo_min_topup"`
+	WaffoPancakeMinTopUp          int                 `json:"waffo_pancake_min_topup"`
+	TopUpLink                     string              `json:"topup_link"`
+	AmountOptions                 []int               `json:"amount_options"`
+	Discount                      map[int]float64     `json:"discount"`
+	PaymentComplianceConfirmed    bool                `json:"payment_compliance_confirmed"`
+	PaymentComplianceTermsVersion string              `json:"payment_compliance_terms_version"`
 }
 
-func neutralTopUpAvailability() (bool, float64) {
+// availablePaymentMethods returns the operator-configured catalog plus any
+// dedicated gateways that are enabled at runtime. The catalog contains only
+// display/quote metadata; gateway credentials remain server-side.
+func availablePaymentMethods(complianceConfirmed bool) []map[string]string {
+	if !complianceConfirmed {
+		return []map[string]string{}
+	}
+
+	payMethods := append([]map[string]string(nil), operation_setting.PayMethods...)
+	appendIfMissing := func(method map[string]string) {
+		for _, existing := range payMethods {
+			if existing["type"] == method["type"] {
+				return
+			}
+		}
+		payMethods = append(payMethods, method)
+	}
+
+	if isStripeTopUpEnabled() {
+		appendIfMissing(map[string]string{
+			"name":      "Stripe",
+			"type":      "stripe",
+			"color":     "#635BFF",
+			"min_topup": strconv.Itoa(setting.StripeMinTopUp),
+		})
+	}
+	if isWaffoPancakeTopUpEnabled() {
+		appendIfMissing(map[string]string{
+			"name":      "Waffo Pancake",
+			"type":      model.PaymentMethodWaffoPancake,
+			"color":     "#F97316",
+			"min_topup": strconv.Itoa(setting.WaffoPancakeMinTopUp),
+		})
+	}
+	if isWaffoTopUpEnabled() {
+		appendIfMissing(map[string]string{
+			"name":      "Waffo (Global Payment)",
+			"type":      model.PaymentMethodWaffo,
+			"color":     "#3B82F6",
+			"min_topup": strconv.Itoa(setting.WaffoMinTopUp),
+		})
+	}
+	return payMethods
+}
+
+func sanitizedPaymentMethods(methods []map[string]string) []map[string]string {
+	allowed := map[string]struct{}{
+		"name": {}, "type": {}, "icon": {}, "color": {}, "min_topup": {},
+		"max_topup": {}, "description": {}, "settlement_unit": {}, "unit_price": {}, "topup_ratio": {},
+	}
+	result := make([]map[string]string, 0, len(methods))
+	for _, method := range methods {
+		public := make(map[string]string)
+		for key, value := range method {
+			if _, ok := allowed[key]; ok {
+				public[key] = value
+			}
+		}
+		if public["name"] == "" || public["type"] == "" {
+			continue
+		}
+		result = append(result, public)
+	}
+	return result
+}
+
+type paymentGatewayAvailability struct {
+	Online       bool
+	Stripe       bool
+	Creem        bool
+	Waffo        bool
+	WaffoPancake bool
+	PayMethods   []map[string]string
+}
+
+func (availability paymentGatewayAvailability) hasPayment() bool {
+	return availability.Online || availability.Stripe || availability.Creem || availability.Waffo || availability.WaffoPancake
+}
+
+func paymentGatewayAvailabilityForUser(user *model.User, complianceConfirmed bool, now time.Time) paymentGatewayAvailability {
+	methods := availablePaymentMethods(complianceConfirmed)
+	unlockedMethods := make([]map[string]string, 0, len(methods))
+	for _, method := range methods {
+		if isPaymentMethodAvailableForUser(user, method["type"], now) {
+			unlockedMethods = append(unlockedMethods, method)
+		}
+	}
+
+	availability := paymentGatewayAvailability{
+		Stripe:       isStripeTopUpEnabled() && isPaymentMethodAvailableForUser(user, model.PaymentMethodStripe, now),
+		Creem:        isCreemTopUpEnabled() && isPaymentMethodAvailableForUser(user, model.PaymentMethodCreem, now),
+		Waffo:        isWaffoTopUpEnabled() && isPaymentMethodAvailableForUser(user, model.PaymentMethodWaffo, now),
+		WaffoPancake: isWaffoPancakeTopUpEnabled() && isPaymentMethodAvailableForUser(user, model.PaymentMethodWaffoPancake, now),
+		PayMethods:   unlockedMethods,
+	}
+	for _, method := range unlockedMethods {
+		paymentType := method["type"]
+		switch paymentType {
+		case model.PaymentMethodStripe, model.PaymentMethodCreem, model.PaymentMethodWaffo, model.PaymentMethodWaffoPancake:
+			continue
+		}
+		if isEpayTopUpEnabled() || (isFastPayTopUpEnabled() && isSupportedFastPayMethod(paymentType)) {
+			availability.Online = true
+			break
+		}
+	}
+	return availability
+}
+
+func neutralTopUpAvailability(availability paymentGatewayAvailability) (bool, float64) {
 	minimums := make([]float64, 0, 5)
 	addMinimum := func(enabled bool, value float64) {
 		if enabled && value > 0 {
@@ -262,11 +350,11 @@ func neutralTopUpAvailability() (bool, float64) {
 		}
 	}
 
-	onlineEnabled := isEpayTopUpEnabled() || isFastPayTopUpEnabled()
-	stripeEnabled := isStripeTopUpEnabled()
-	creemEnabled := isCreemTopUpEnabled()
-	waffoEnabled := isWaffoTopUpEnabled()
-	pancakeEnabled := isWaffoPancakeTopUpEnabled()
+	onlineEnabled := availability.Online
+	stripeEnabled := availability.Stripe
+	creemEnabled := availability.Creem
+	waffoEnabled := availability.Waffo
+	pancakeEnabled := availability.WaffoPancake
 	addMinimum(onlineEnabled, float64(operation_setting.MinTopUp))
 	addMinimum(stripeEnabled, float64(setting.StripeMinTopUp))
 	addMinimum(waffoEnabled, float64(setting.WaffoMinTopUp))
@@ -303,11 +391,13 @@ func getTopupUserGroup(id int) (string, error) {
 type EpayRequest struct {
 	Amount        float64 `json:"amount"`
 	PaymentMethod string  `json:"payment_method"`
+	DiscountCode  string  `json:"discount_code,omitempty"`
 }
 
 type AmountRequest struct {
 	Amount        int64  `json:"amount"`
 	PaymentMethod string `json:"payment_method"`
+	DiscountCode  string `json:"discount_code,omitempty"`
 }
 
 func GetEpayClient() *epay.Client {
@@ -325,9 +415,17 @@ func GetEpayClient() *epay.Client {
 }
 
 var positiveDecimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+var nonNegativeDecimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 var settlementUnitPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,16}$`)
 
 func getPayMethod(paymentMethod string) (map[string]string, error) {
+	enabled, err := configuredPaymentMethodEnabled(paymentMethod)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return nil, fmt.Errorf("payment method %q is disabled", paymentMethod)
+	}
 	for _, payMethod := range operation_setting.PayMethods {
 		if payMethod["type"] == paymentMethod {
 			return payMethod, nil
@@ -450,7 +548,7 @@ func getMinTopup() int64 {
 
 func RequestEpay(c *gin.Context) {
 	var req EpayRequest
-	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod); err != nil {
+	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod, &req.DiscountCode); err != nil {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay 参数解包失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
 		return
@@ -466,7 +564,14 @@ func RequestEpay(c *gin.Context) {
 		// dispatch and its global-Price quote before ePay method validation.
 		c.Set("parsed_amount", req.Amount)
 		c.Set("parsed_payment_method", fastPayMethod)
+		c.Set("parsed_discount_code", req.DiscountCode)
 		RequestFastPay(c)
+		return
+	}
+	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+		return
+	}
+	if !requirePaymentMethodTopUpWithinLimit(c, req.PaymentMethod, int64Amount) {
 		return
 	}
 
@@ -476,7 +581,7 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney, err := quoteTopUp(int64Amount, group, req.PaymentMethod)
+	payMoney, discountCode, err := quoteTopUpWithDiscount(int64Amount, group, req.PaymentMethod, req.DiscountCode)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式配置无效"})
 		return
@@ -526,6 +631,8 @@ func RequestEpay(c *gin.Context) {
 		TradeNo:              tradeNo,
 		PaymentMethod:        req.PaymentMethod,
 		PaymentProvider:      model.PaymentProviderEpay,
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}
@@ -721,6 +828,12 @@ func RequestAmount(c *gin.Context) {
 		return
 	}
 	id := c.GetInt("id")
+	if req.PaymentMethod != "" && !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+		return
+	}
+	if req.PaymentMethod != "" && !requirePaymentMethodTopUpWithinLimit(c, req.PaymentMethod, req.Amount) {
+		return
+	}
 	group, err := getTopupUserGroup(id)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
@@ -731,9 +844,9 @@ func RequestAmount(c *gin.Context) {
 		// Older clients did not send payment_method to the quote endpoint.
 		// Keep their global Price behavior while new clients use the selected
 		// payment method's server-authoritative settlement price.
-		payMoney = quoteTopUpWithPricing(req.Amount, group, decimal.NewFromFloat(operation_setting.Price), decimal.NewFromInt(1))
+		payMoney, _, err = quoteLegacyTopUpWithDiscount(req.Amount, group, req.DiscountCode)
 	} else {
-		payMoney, err = quoteTopUp(req.Amount, group, req.PaymentMethod)
+		payMoney, _, err = quoteTopUpWithDiscount(req.Amount, group, req.PaymentMethod, req.DiscountCode)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式配置无效"})
 			return

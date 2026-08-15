@@ -17,7 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { SettingsPage } from '../components/settings-page'
-import type { ContentSettings, SystemOption } from '../types'
+import {
+  normalizeAssistantSearchProvider,
+  type ContentSettings,
+  type SystemOption,
+} from '../types'
 import {
   CONTENT_DEFAULT_SECTION,
   getContentSectionContent,
@@ -37,6 +41,29 @@ const defaultContentSettings: ContentSettings = {
   DataExportDefaultTime: 'hour',
   DataExportInterval: 5,
   Chats: '[]',
+  AssistantEnabled: true,
+  AssistantModel: 'deepseek-v4-flash',
+  AssistantAgentLoopEnabled: true,
+  AssistantMaxSteps: 6,
+  AssistantTimeoutSeconds: 45,
+  AssistantCacheEnabled: true,
+  AssistantCacheTTLMinutes: 1440,
+  AssistantPersona: '',
+  AssistantSystemPrompt: '',
+  AssistantSearchProvider: 'none',
+  AssistantSearchURL: '',
+  AssistantSearchAPIKey: '',
+  AssistantSearchMCPTool: '',
+  AssistantSkills: '',
+  AssistantSkillFiles: '[]',
+  AssistantReviewEnabled: true,
+  AssistantReviewWindowDays: 30,
+  AssistantReviewIntervalHours: 24,
+  AssistantRetentionEnabled: true,
+  AssistantActiveRetentionDays: 90,
+  AssistantArchivedRetentionDays: 30,
+  AssistantSecurityRetentionDays: 180,
+  AssistantRetentionIntervalHours: 24,
   DrawingEnabled: false,
   MjNotifyEnabled: false,
   MjAccountFilterEnabled: false,
@@ -53,6 +80,11 @@ function resolveContentSettings(
 
   const optionMap = new Map(raw.map((item) => [item.key, item.value]))
   const next = { ...settings }
+
+  next.AssistantSearchProvider = normalizeAssistantSearchProvider(
+    optionMap.get('AssistantSearchProvider'),
+    next.AssistantSearchURL
+  )
 
   const legacyMap = [
     { current: 'console_setting.announcements', legacy: 'Announcements' },

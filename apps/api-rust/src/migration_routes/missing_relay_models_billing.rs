@@ -28,6 +28,7 @@ use sqlx::PgPool;
 
 use crate::{
     RequestContext,
+    missing_relay_model_delete_candidate::delete_model,
     models::{ModelView, ModelsError, ModelsErrorKind, ModelsRequest, PgModelsService},
 };
 
@@ -95,9 +96,33 @@ impl PgStaticModelLookup {
 #[async_trait]
 impl ModelLookupService for PgStaticModelLookup {
     async fn authenticate(&self, request: ModelLookupRequest) -> Result<(), ModelsError> {
-        self.authentication
+        let result = self
+            .authentication
             .authenticate_only_with_policy(request.into(), self.enforce_discovery_policy)
-            .await
+            .await;
+        if self.enforce_discovery_policy
+            && result.as_ref().is_err_and(|error| {
+                matches!(
+                    error.kind,
+                    ModelsErrorKind::MissingToken
+                        | ModelsErrorKind::InvalidToken
+                        | ModelsErrorKind::DiscoveryHidden
+                )
+            })
+        {
+            return Err(ModelsError::new(
+                ModelsErrorKind::DiscoveryHidden,
+                "Not Found",
+            ));
+        }
+        result
+    }
+
+    async fn authenticate_model_delete(
+        &self,
+        request: ModelLookupRequest,
+    ) -> Result<(), ModelsError> {
+        self.authentication.authenticate_only(request.into()).await
     }
 
     async fn find_static_model(&self, model: &str) -> Result<Option<ModelView>, ModelsError> {
@@ -133,13 +158,25 @@ impl From<ModelLookupRequest> for ModelsRequest {
 #[async_trait]
 pub trait ModelLookupService: Send + Sync {
     async fn authenticate(&self, request: ModelLookupRequest) -> Result<(), ModelsError>;
+    /// Authentication for the frozen model-deletion boundary.
+    ///
+    /// The current normal listener applies a discovery/trust policy to the
+    /// GET catalogue lookup, while the legacy deletion boundary stops after
+    /// ordinary token middleware. Keep that distinction explicit at the
+    /// service boundary instead of accidentally hiding a valid token.
+    async fn authenticate_model_delete(
+        &self,
+        request: ModelLookupRequest,
+    ) -> Result<(), ModelsError> {
+        self.authenticate(request).await
+    }
     async fn find_static_model(&self, model: &str) -> Result<Option<ModelView>, ModelsError>;
 }
 
 #[derive(Clone)]
 pub struct ModelLookupState {
-    service: Arc<dyn ModelLookupService>,
-    version: Arc<str>,
+    pub(crate) service: Arc<dyn ModelLookupService>,
+    pub(crate) version: Arc<str>,
 }
 
 impl ModelLookupState {
@@ -159,9 +196,10 @@ impl ModelLookupState {
 /// one Axum `MethodRouter`, rather than attempting to merge overlapping route
 /// patterns (which Axum rejects at router construction time).
 pub fn model_lookup_method_router(state: ModelLookupState) -> MethodRouter {
+    let get_state = state;
     get(
         move |Path(model): Path<String>, headers: HeaderMap, request: Request| {
-            let state = state.clone();
+            let state = get_state.clone();
             async move { retrieve_model(state, model, headers, request).await }
         },
     )
@@ -172,6 +210,18 @@ pub fn model_lookup_method_router(state: ModelLookupState) -> MethodRouter {
 /// Production composition must use [`model_lookup_method_router`] to join this
 /// GET handler with the relay slice's exact POST and DELETE methods.
 pub fn model_lookup_router(state: ModelLookupState) -> Router {
+    Router::new()
+        .route(
+            "/v1/models/{model}",
+            get(retrieve_model_with_state).delete(delete_model_with_state),
+        )
+        .with_state(state)
+}
+
+/// GET-only normal-listener composition. The model-deletion boundary remains a
+/// candidate until its frozen differential evidence and independent approval
+/// are accepted by the migration gate.
+pub fn model_lookup_get_router(state: ModelLookupState) -> Router {
     Router::new()
         .route("/v1/models/{model}", get(retrieve_model_with_state))
         .with_state(state)
@@ -184,6 +234,15 @@ async fn retrieve_model_with_state(
     request: Request,
 ) -> Response {
     retrieve_model(state, model, headers, request).await
+}
+
+async fn delete_model_with_state(
+    State(state): State<ModelLookupState>,
+    Path(model): Path<String>,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
+    delete_model(state, model, headers, request).await
 }
 
 async fn retrieve_model(
@@ -244,6 +303,17 @@ async fn retrieve_model(
     }
 }
 
+pub(crate) fn model_lookup_request(headers: &HeaderMap, request: &Request) -> ModelLookupRequest {
+    ModelLookupRequest {
+        authorization: headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+        api_key: header_value(headers, "x-api-key"),
+        client_ip: client_ip(headers, request),
+    }
+}
+
 fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -265,14 +335,14 @@ fn client_ip(headers: &HeaderMap, request: &Request) -> IpAddr {
         .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
 }
 
-fn request_id(request: &Request) -> String {
+pub(crate) fn request_id(request: &Request) -> String {
     request.extensions().get::<RequestContext>().map_or_else(
         || uuid::Uuid::new_v4().to_string(),
         |context| context.request_id.clone(),
     )
 }
 
-fn auth_failure(error: ModelsError, version: &str, request_id: &str) -> Response {
+pub(crate) fn auth_failure(error: ModelsError, version: &str, request_id: &str) -> Response {
     // The frozen Go relay mounts `/v1/models/:model` behind `TokenAuth`,
     // which reports both a missing and an invalid credential as the OpenAI
     // error envelope.  Keep the current-listener discovery concealment
@@ -318,7 +388,7 @@ fn auth_failure(error: ModelsError, version: &str, request_id: &str) -> Response
     )
 }
 
-fn compat_response(mut response: Response, version: &str, request_id: &str) -> Response {
+pub(crate) fn compat_response(mut response: Response, version: &str, request_id: &str) -> Response {
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json; charset=utf-8"),

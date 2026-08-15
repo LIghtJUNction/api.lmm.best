@@ -251,16 +251,14 @@ async fn user(
     headers: &HeaderMap,
 ) -> Result<DashboardUser, Response> {
     let token = dashboard_token(headers).ok_or_else(|| auth_error(StatusCode::UNAUTHORIZED))?;
-    match state
+    let user = match state
         .auth
         .self_user(SecretString::from(token.to_owned()))
         .await
     {
-        Ok(user) => enforce_user_auth(&user)
-            .map(|()| user)
-            .map_err(|error| user_auth_error(headers, error)),
+        Ok(user) => user,
         Err(e) if e.kind == AuthErrorKind::UserDisabled => {
-            Err(user_auth_error(headers, UserAuthPolicyError::UserDisabled))
+            return Err(user_auth_error(headers, UserAuthPolicyError::UserDisabled));
         }
         Err(e)
             if matches!(
@@ -270,10 +268,13 @@ async fn user(
                     | AuthErrorKind::SessionRevoked
             ) =>
         {
-            Err(auth_error(StatusCode::UNAUTHORIZED))
+            return Err(auth_error(StatusCode::UNAUTHORIZED));
         }
-        Err(_) => Err(auth_error(StatusCode::INTERNAL_SERVER_ERROR)),
-    }
+        Err(_) => return Err(auth_error(StatusCode::INTERNAL_SERVER_ERROR)),
+    };
+    enforce_user_auth(&user)
+        .map(|()| user)
+        .map_err(|error| user_auth_error(headers, error))
 }
 
 /// Mirrors the frozen Go `authorizationToken` parser: accept a bare token or
@@ -352,21 +353,28 @@ fn parse_go_i64(value: &str) -> Option<i64> {
     })
 }
 
-fn checkin_config_from_options(options: &BTreeMap<String, String>) -> (bool, i64, i64) {
-    (
-        options
+#[derive(Clone, Debug, PartialEq)]
+struct CheckinConfig {
+    enabled: bool,
+    min_quota: i64,
+    max_quota: i64,
+}
+
+fn checkin_config_from_options(options: &BTreeMap<String, String>) -> CheckinConfig {
+    CheckinConfig {
+        enabled: options
             .get("checkin_setting.enabled")
             .and_then(|value| parse_go_bool(value))
             .unwrap_or(false),
-        options
+        min_quota: options
             .get("checkin_setting.min_quota")
             .and_then(|value| parse_go_i64(value))
             .unwrap_or(DEFAULT_CHECKIN_MIN_QUOTA),
-        options
+        max_quota: options
             .get("checkin_setting.max_quota")
             .and_then(|value| parse_go_i64(value))
             .unwrap_or(DEFAULT_CHECKIN_MAX_QUOTA),
-    )
+    }
 }
 
 fn checkin_usd_log_quota(award: i64, quota_per_unit: f64) -> String {
@@ -378,7 +386,7 @@ fn checkin_usd_log_quota(award: i64, quota_per_unit: f64) -> String {
     format!("＄{:.6} 额度", (award as f64) / quota_per_unit)
 }
 
-async fn checkin_config(pg: &PgPool) -> Result<(bool, i64, i64), ()> {
+async fn checkin_config(pg: &PgPool) -> Result<CheckinConfig, ()> {
     // `ConfigManager.LoadFromDB` in frozen Go only collects option keys with
     // the case-sensitive `checkin_setting.` prefix.  Its historical JSON
     // aggregate key (`checkin_setting`) is deliberately ignored.
@@ -395,6 +403,7 @@ async fn checkin_config(pg: &PgPool) -> Result<(bool, i64, i64), ()> {
     let options = rows.into_iter().collect();
     Ok(checkin_config_from_options(&options))
 }
+
 fn date(now: i64, timezone: FixedOffset) -> String {
     chrono::DateTime::from_timestamp(now, 0)
         .unwrap_or(chrono::DateTime::UNIX_EPOCH)
@@ -415,15 +424,17 @@ async fn checkin_status(
     headers: HeaderMap,
     Query(query): Query<Month>,
 ) -> Response {
+    // The frozen Go route only requires UserAuth; ordinary active users can
+    // read their check-in history even when they do not have developer access.
     let actor = match user(&state, &headers).await {
         Ok(v) => v,
         Err(v) => return v,
     };
-    let (enabled, min, max) = match checkin_config(&state.pg).await {
+    let config = match checkin_config(&state.pg).await {
         Ok(v) => v,
         Err(_) => return fail("系统错误"),
     };
-    if !enabled {
+    if !config.enabled {
         return fail("签到功能未启用");
     }
     // Go's `DefaultQuery` only supplies the current month when the parameter
@@ -453,9 +464,12 @@ async fn checkin_status(
     .fetch_one(&state.pg)
     .await
     .unwrap_or(false);
-    checkin_status_ok(
-        json!({"enabled":enabled,"min_quota":min,"max_quota":max,"stats":{"total_quota":total,"total_checkins":count,"checkin_count":records.len(),"checked_in_today":checked,"records":records}}),
-    )
+    checkin_status_ok(json!({
+        "enabled": config.enabled,
+        "min_quota": config.min_quota,
+        "max_quota": config.max_quota,
+        "stats":{"total_quota":total,"total_checkins":count,"checkin_count":records.len(),"checked_in_today":checked,"records":records}
+    }))
 }
 
 async fn checkin(State(state): State<IdentityCheckinAffState>, headers: HeaderMap) -> Response {
@@ -463,18 +477,22 @@ async fn checkin(State(state): State<IdentityCheckinAffState>, headers: HeaderMa
         Ok(v) => v,
         Err(v) => return v,
     };
-    let (enabled, min, max) = match checkin_config(&state.pg).await {
+    let config = match checkin_config(&state.pg).await {
         Ok(v) => v,
         Err(_) => return fail("系统错误"),
     };
-    if !enabled {
+    if !config.enabled {
         return fail("签到功能未启用");
     }
-    if min < 0 || max < min {
+    // The pinned Go route uses the configured operation-setting range here.
+    // It does not apply the separate trust-level pricing projection used by
+    // newer Go revisions, so keep the write path on the same raw values as
+    // the legacy endpoint and its response contract.
+    if config.min_quota < 0 || config.max_quota < config.min_quota {
         return fail("签到失败，请稍后重试");
     }
     let today = state.calendar.date(state.clock.now());
-    let award = state.awarder.award(min, max);
+    let award = state.awarder.award(config.min_quota, config.max_quota);
     let mut tx = match state.pg.begin().await {
         Ok(v) => v,
         Err(_) => return fail("签到失败，请稍后重试"),
@@ -697,16 +715,14 @@ async fn amount(State(state): State<IdentityCheckinAffState>, request: Request) 
         None => return legacy("error", "参数错误"),
     };
     let min = option_i64(&state.pg, "MinTopUp", 1).await;
-    let display_type = option_string(&state.pg, "general_setting")
-        .await
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .and_then(|value| {
-            value
-                .get("quota_display_type")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "USD".to_owned());
+    let display_type = match option_string(&state.pg, "general_setting.quota_display_type").await {
+        Some(value) => value,
+        None => option_string(&state.pg, "general_setting")
+            .await
+            .as_deref()
+            .map(|value| quota_display_type_from_options(None, Some(value)))
+            .unwrap_or_else(|| "USD".to_owned()),
+    };
     let quota_per_unit = option_f64(&state.pg, "QuotaPerUnit", DEFAULT_QUOTA_PER_UNIT as f64).await;
     let minimum = topup_minimum(min, &display_type, quota_per_unit);
     if request.amount < minimum {
@@ -740,23 +756,19 @@ async fn amount(State(state): State<IdentityCheckinAffState>, request: Request) 
         .and_then(Value::as_f64)
         .filter(|v| *v > 0.0)
         .unwrap_or(1.0);
-    let payment: Value = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT value FROM options WHERE key='payment_setting'",
-    )
-    .fetch_optional(&state.pg)
-    .await
-    .ok()
-    .flatten()
-    .flatten()
-    .and_then(|v| serde_json::from_str(&v).ok())
-    .unwrap_or(Value::Null);
-    // Legacy uses an amount-specific discount only when it is positive.
-    let discount = payment
-        .get("amount_discount")
-        .and_then(|value| value.get(request.amount.to_string()))
-        .and_then(Value::as_f64)
-        .filter(|value| *value > 0.0)
-        .unwrap_or(1.0);
+    let amount_discount = option_string(&state.pg, "payment_setting.amount_discount").await;
+    let legacy_payment_setting = if amount_discount.is_none() {
+        option_string(&state.pg, "payment_setting").await
+    } else {
+        None
+    };
+    // Go uses the positive amount-specific discount, with the dotted
+    // registered option taking precedence over the legacy aggregate shape.
+    let discount = amount_discount_from_options(
+        amount_discount.as_deref(),
+        legacy_payment_setting.as_deref(),
+        request.amount,
+    );
     let amount_in_currency = if display_type == "TOKENS" {
         (request.amount as f64) / quota_per_unit
     } else {
@@ -778,6 +790,38 @@ fn topup_minimum(min_topup: i64, display_type: &str, quota_per_unit: f64) -> i64
         min_topup
     }
 }
+
+fn quota_display_type_from_options(dotted: Option<&str>, aggregate: Option<&str>) -> String {
+    dotted
+        .and_then(|value| (!value.trim().is_empty()).then(|| value.to_owned()))
+        .or_else(|| {
+            aggregate
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| {
+                    value
+                        .get("quota_display_type")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| "USD".to_owned())
+}
+
+fn amount_discount_from_options(dotted: Option<&str>, aggregate: Option<&str>, amount: i64) -> f64 {
+    dotted
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| value.get(amount.to_string()).and_then(Value::as_f64))
+        .or_else(|| {
+            aggregate
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| value.get("amount_discount").cloned())
+                .and_then(|value| value.get(amount.to_string()).and_then(Value::as_f64))
+        })
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(1.0)
+}
+
 async fn option_string(pg: &PgPool, key: &str) -> Option<String> {
     sqlx::query_scalar::<_, Option<String>>("SELECT value FROM options WHERE key=$1")
         .bind(key)
@@ -946,7 +990,11 @@ mod tests {
         let setting = BTreeMap::new();
         assert_eq!(
             checkin_config_from_options(&setting),
-            (false, 1_000, 10_000)
+            CheckinConfig {
+                enabled: false,
+                min_quota: 1_000,
+                max_quota: 10_000,
+            }
         );
     }
 
@@ -959,8 +1007,19 @@ mod tests {
                 "100.000000".to_owned(),
             ),
             ("checkin_setting.max_quota".to_owned(), "250".to_owned()),
+            (
+                "checkin_setting.level_multipliers".to_owned(),
+                "[0.25,0.5,0.75,0.9,1]".to_owned(),
+            ),
         ]);
-        assert_eq!(checkin_config_from_options(&setting), (true, 100, 250));
+        assert_eq!(
+            checkin_config_from_options(&setting),
+            CheckinConfig {
+                enabled: true,
+                min_quota: 100,
+                max_quota: 250,
+            }
+        );
     }
 
     #[test]
@@ -992,7 +1051,11 @@ mod tests {
         ]);
         assert_eq!(
             checkin_config_from_options(&setting),
-            (false, DEFAULT_CHECKIN_MIN_QUOTA, DEFAULT_CHECKIN_MAX_QUOTA)
+            CheckinConfig {
+                enabled: false,
+                min_quota: DEFAULT_CHECKIN_MIN_QUOTA,
+                max_quota: DEFAULT_CHECKIN_MAX_QUOTA,
+            }
         );
     }
 
@@ -1080,5 +1143,36 @@ mod tests {
     fn token_display_topup_minimum_uses_the_current_quota_per_unit() {
         assert_eq!(topup_minimum(2, "TOKENS", 1_234.5), 2_469);
         assert_eq!(topup_minimum(2, "USD", 1_234.5), 2);
+    }
+
+    #[test]
+    fn amount_quote_prefers_go_dotted_settings_and_keeps_aggregate_fallback() {
+        assert_eq!(
+            quota_display_type_from_options(
+                Some("TOKENS"),
+                Some(r#"{"quota_display_type":"CNY"}"#),
+            ),
+            "TOKENS"
+        );
+        assert_eq!(
+            quota_display_type_from_options(None, Some(r#"{"quota_display_type":"CNY"}"#)),
+            "CNY"
+        );
+        assert_eq!(
+            amount_discount_from_options(
+                Some(r#"{"100":0.8}"#),
+                Some(r#"{"amount_discount":{"100":0.7}}"#),
+                100,
+            ),
+            0.8
+        );
+        assert_eq!(
+            amount_discount_from_options(None, Some(r#"{"amount_discount":{"100":0.7}}"#), 100),
+            0.7
+        );
+        assert_eq!(
+            amount_discount_from_options(Some("invalid"), None, 100),
+            1.0
+        );
     }
 }

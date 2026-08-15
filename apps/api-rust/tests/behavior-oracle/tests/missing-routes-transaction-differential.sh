@@ -17,6 +17,7 @@ case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT mus
 pg_port=${LMM_TRANSACTION_PG_PORT:-55467}
 go_port=${LMM_TRANSACTION_GO_PORT:-13037}
 rust_port=${LMM_TRANSACTION_RUST_PORT:-33067}
+rust_test_instance=${LMM_TRANSACTION_RUST_TEST_INSTANCE:-1}
 # Default Valkey endpoint for the Rust test-instance is 6380, but the script
 # now falls back to a random free port if that port is occupied.
 valkey_port=${LMM_TRANSACTION_VALKEY_PORT:-6380}
@@ -24,6 +25,7 @@ runtime_base=${LMM_TRANSACTION_RUNTIME_BASE:-/tmp}
 [[ -d $runtime_base && -w $runtime_base ]] || { echo "transaction runtime base is not writable: $runtime_base" >&2; exit 1; }
 runtime=$(mktemp -d "$runtime_base/lmm-transaction-differential.XXXXXX")
 keep_runtime=${LMM_TRANSACTION_KEEP_RUNTIME:-0}
+result_dir=${LMM_TRANSACTION_RESULT_DIR:-}
 cargo_target=${LMM_TRANSACTION_CARGO_TARGET_DIR:-"$runtime/cargo-target"}
 rust_binary=${LMM_TRANSACTION_RUST_BINARY:-"$cargo_target/debug/lmm-api-rs"}
 go_build="$runtime/go-build"
@@ -34,17 +36,23 @@ rust_role=lmm_test_transaction_rust
 database=lmm_test_transaction
 passed=0
 route_filter=${LMM_TRANSACTION_ROUTE_FILTER:-}
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    echo "LMM_TRANSACTION_RESULT_DIR must be an absolute path without '..'" >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 [[ -n $route_filter ]] && expected_phase_total=4 || expected_phase_total=28
-go_pid=
-rust_pid=
-valkey_pid=
-go_pid_start=
-rust_pid_start=
-valkey_pid_start=
+# shellcheck disable=SC2034 # Read indirectly through the PID variable names.
+go_pid='' rust_pid='' valkey_pid='' go_pid_start='' rust_pid_start='' valkey_pid_start=''
 
 cleanup() {
-  stop_listeners || true
-  stop_owned_process valkey_pid || true
+  # The trap is installed before the helper definitions so that preflight
+  # failures still clean their exact runtime.  Guard calls whose definitions
+  # may not have been reached yet.
+  if declare -F stop_listeners >/dev/null 2>&1; then stop_listeners || true; fi
+  if declare -F stop_owned_process >/dev/null 2>&1; then stop_owned_process valkey_pid || true; fi
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   if [[ $keep_runtime == 1 ]]; then
     echo "preserved transaction runtime: $runtime" >&2
@@ -103,19 +111,25 @@ admin_schema_sql() {
 }
 snapshot() {
   local engine=$1
+  local topup_projection="to_jsonb(x) - 'id' - 'create_time' - 'complete_time'"
+  if [[ ${LMM_TRANSACTION_OMIT_OPTIONAL_TOPUP_COLUMNS:-0} == 1 ]]; then
+    topup_projection+=" - 'credited_quota' - 'expected_amount_micros' - 'provider_event_id' - 'provider_product_id' - 'provider_store_id' - 'provider_transaction_id' - 'settled_amount_micros' - 'settlement_currency'"
+  fi
   app_sql "$engine" "SELECT jsonb_build_object(
-    'users', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'access_token' - 'created_at' - 'last_login_at' ORDER BY id) FROM users x),'[]'::jsonb),
+    'users', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'access_token' - 'created_at' - 'last_login_at' - 'last_api_activity_at' - 'trust_level_override' ORDER BY id) FROM users x),'[]'::jsonb),
     'checkins', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'created_at' ORDER BY user_id,checkin_date) FROM checkins x),'[]'::jsonb),
     'redemptions', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'created_time' - 'redeemed_time' ORDER BY key) FROM redemptions x),'[]'::jsonb),
-    'top_ups', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'create_time' - 'complete_time' ORDER BY trade_no) FROM top_ups x),'[]'::jsonb),
+    'top_ups', COALESCE((SELECT jsonb_agg($topup_projection ORDER BY trade_no) FROM top_ups x),'[]'::jsonb),
     'logs', COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'id' - 'created_at' - 'request_id' - 'upstream_request_id' ORDER BY user_id,type,content) FROM logs x WHERE type <> 7),'[]'::jsonb),
     'options', COALESCE((SELECT jsonb_object_agg(key,value ORDER BY key) FROM options WHERE key IN ('checkin_setting','checkin_setting.enabled','checkin_setting.min_quota','checkin_setting.max_quota','payment_setting.compliance_confirmed','payment_setting.compliance_terms_version','QuotaPerUnit','MinTopUp','Price','TopupGroupRatio','general_setting')),'{}'::jsonb))" | jq -S .
 }
 canonical_json() {
-  jq -S '
+  local context=${1:-}
+  jq -S --arg context "$context" '
     def dynamic_field:
       . == "access_token" or . == "refresh_token" or . == "session" or . == "sid"
-      or . == "request_id" or . == "created_at" or . == "updated_at";
+      or . == "request_id" or . == "created_at" or . == "updated_at"
+      or (($context | startswith("sessions-list.")) and (. == "last_active_at" or . == "expires_at"));
     def unpad_char_32:
       rtrimstr(" ") | rtrimstr(" ") | rtrimstr(" ") | rtrimstr(" ");
     def dynamic_response_token:
@@ -165,7 +179,9 @@ if [[ ${LMM_TRANSACTION_CANONICAL_JSON_SELF_TEST:-0} == 1 ]]; then
 fi
 wait_for() {
   local port=$1 path=$2
-  for _ in {1..300}; do curl --silent --output /dev/null "http://127.0.0.1:$port$path" && return 0 || true; sleep .05; done
+  # Go's first PostgreSQL AutoMigrate can exceed 15 seconds on a loaded
+  # shared host even though the process is healthy and making progress.
+  for _ in {1..6000}; do curl --silent --output /dev/null "http://127.0.0.1:$port$path" && return 0 || true; sleep .05; done
   return 1
 }
 start_listeners() {
@@ -177,11 +193,26 @@ start_listeners() {
     PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false GIN_MODE=release \
     "$go_build/legacy-go" >"$runtime/go.log" 2>&1 & record_pid go_pid "$!"
   if ! wait_for "$go_port" /api/status; then sed -n '1,220p' "$runtime/go.log" >&2; return 1; fi
-  LMM_RS_TEST_INSTANCE=1 LMM_RS_SLOT=single LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" \
-    DATABASE_URL="$rust_dsn" VALKEY_URL="redis://127.0.0.1:$valkey_port/6" LMM_SCHEMA_CONTRACT=1 \
-    SESSION_SECRET='TransactionOracle-2026!SyntheticOnly' CRYPTO_SECRET='TransactionOracle-Crypto-2026!SyntheticOnly' \
-    PASSWORD_LOGIN_ENABLED=true GLOBAL_API_RATE_LIMIT_ENABLE=false CRITICAL_RATE_LIMIT_ENABLE=false TRUSTED_PROXIES=none VERSION=v0.0.0 \
-    "$rust_binary" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!"
+  local rust_instance=${LMM_TRANSACTION_RS_TEST_INSTANCE:-1}
+  local rust_slot=green
+  [[ $rust_instance == 1 ]] && rust_slot=single
+  local -a rust_env=(
+    "LMM_RS_SLOT=$rust_slot"
+    "LMM_RS_LISTEN_ADDR=127.0.0.1:$rust_port"
+    "DATABASE_URL=$rust_dsn"
+    "VALKEY_URL=redis://127.0.0.1:$valkey_port/6"
+    "LMM_RS_TEST_VALKEY_PORT=$valkey_port"
+    "LMM_SCHEMA_CONTRACT=1"
+    'SESSION_SECRET=TransactionOracle-2026!SyntheticOnly'
+    'CRYPTO_SECRET=TransactionOracle-Crypto-2026!SyntheticOnly'
+    'PASSWORD_LOGIN_ENABLED=true'
+    'GLOBAL_API_RATE_LIMIT_ENABLE=false'
+    'CRITICAL_RATE_LIMIT_ENABLE=false'
+    'TRUSTED_PROXIES=none'
+    'VERSION=v0.0.0'
+  )
+  [[ $rust_instance == 1 ]] && rust_env+=("LMM_RS_TEST_INSTANCE=1")
+  env "${rust_env[@]}" "$rust_binary" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!"
   if ! wait_for "$rust_port" /readyz; then sed -n '1,220p' "$runtime/rust.log" >&2; return 1; fi
 }
 login() {
@@ -205,7 +236,7 @@ pair() {
   call go "$name" "$method" "$path" "$body" "$go_session"
   call rust "$name" "$method" "$path" "$body" "$rust_session"
   diff -u "$runtime/go.$name.status" "$runtime/rust.$name.status"
-  diff -u <(canonical_json <"$runtime/go.$name.body") <(canonical_json <"$runtime/rust.$name.body")
+  diff -u <(canonical_json "$name" <"$runtime/go.$name.body") <(canonical_json "$name" <"$runtime/rust.$name.body")
   # Headers are retained beside each response, but legacy's dashboard cache
   # directives are intentionally not an atomic-route contract.  Status/body
   # and the six durable snapshots are the differential verdict here.
@@ -219,7 +250,7 @@ prepare_actor() {
 seed() {
   local mode=$1 engine
   for engine in go rust; do
-    admin_schema_sql "${engine_schema[$engine]}" "TRUNCATE logs, checkins, redemptions, top_ups, users, options RESTART IDENTITY CASCADE;"
+    admin_schema_sql "${engine_schema[$engine]}" "TRUNCATE logs, checkins, redemptions, top_ups, passkey_credentials, user_oauth_bindings, custom_oauth_providers, users, options RESTART IDENTITY CASCADE;"
     admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO options(key,value) VALUES
       ('checkin_setting.enabled','true'),
       ('checkin_setting.min_quota','100'),
@@ -233,6 +264,10 @@ seed() {
     case "$mode" in
       checkin-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='false' WHERE key='checkin_setting.enabled'" ;;
       checkin-existing) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO checkins(id,user_id,checkin_date,quota_awarded,created_at) VALUES(1,101,to_char(CURRENT_DATE,'YYYY-MM-DD'),100,0)" ;;
+      passkey) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO passkey_credentials(id,user_id,credential_id,public_key,last_used_at) VALUES(1,101,'ORACLE-CREDENTIAL-101','ORACLE-PUBLIC-KEY-101',NULL)" ;;
+      oauth-binding) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO custom_oauth_providers(id,name,slug,icon,enabled) VALUES(1,'Oracle OAuth','oracle','oracle-icon',TRUE); INSERT INTO user_oauth_bindings(id,user_id,provider_id,provider_user_id) VALUES(1,101,1,'ORACLE-PROVIDER-USER-101')" ;;
+      aff-code) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_code='ORACLE-AFF-101' WHERE id=101" ;;
+      topup-admin) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO top_ups(id,user_id,amount,money,trade_no,payment_method,payment_provider,create_time,status) VALUES(1,101,2,2,'ORACLE-TOPUP-ADMIN-101','manual','stripe',1730000000,'pending')" ;;
       aff-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE users SET aff_quota=499999 WHERE id=101" ;;
       amount-failure) admin_schema_sql "${engine_schema[$engine]}" "UPDATE options SET value='3' WHERE key='MinTopUp'" ;;
       redeem*) admin_schema_sql "${engine_schema[$engine]}" "INSERT INTO redemptions(id,key,status,quota,created_time,expired_time) VALUES(1,'ORACLE-REDEEM-101',1,300,0,0)" ;;
@@ -255,6 +290,16 @@ route_for() {
   case "$1" in
     access-token-generation) printf 'GET\t/api/user/token\t__NONE__\tuser101\n' ;;
     checkin-status) printf 'GET\t/api/user/checkin?month=2026-08\t__NONE__\tuser101\n' ;;
+    topup-info) printf 'GET\t/api/user/topup/info\t__NONE__\tuser101\n' ;;
+    topup-self) printf 'GET\t/api/user/topup/self?p=1&page_size=10\t__NONE__\tuser101\n' ;;
+    user-groups) printf 'GET\t/api/user/groups\t__NONE__\tanonymous\n' ;;
+    self-groups) printf 'GET\t/api/user/self/groups\t__NONE__\tuser101\n' ;;
+    user-models) printf 'GET\t/api/user/models\t__NONE__\tuser101\n' ;;
+    aff-code) printf 'GET\t/api/user/aff\t__NONE__\tuser101\n' ;;
+    admin-topups) printf 'GET\t/api/user/topup?p=1&page_size=10\t__NONE__\troot\n' ;;
+    sessions-list) printf 'GET\t/api/user/sessions\t__NONE__\tuser101\n' ;;
+    passkey-status) printf 'GET\t/api/user/passkey\t__NONE__\tuser101\n' ;;
+    federation-bindings) printf 'GET\t/api/user/oauth/bindings\t__NONE__\tuser101\n' ;;
     checkin-commit-rollback) printf 'POST\t/api/user/checkin\t{}\tuser101\n' ;;
     affiliate-transfer) printf 'POST\t/api/user/aff_transfer\t{"quota":500000}\tuser101\n' ;;
     amount-quote) printf 'POST\t/api/user/amount\t{"amount":2}\tuser101\n' ;;
@@ -266,6 +311,11 @@ phase_seed() {
   local route=$1 phase=$2
   case "$route:$phase" in
     checkin-status:failure) printf checkin-failure ;;
+    topup-self:positive|topup-self:rollback|topup-self:replay) printf topup ;;
+    aff-code:positive|aff-code:failure|aff-code:rollback|aff-code:replay) printf aff-code ;;
+    admin-topups:positive|admin-topups:rollback|admin-topups:replay) printf topup-admin ;;
+    passkey-status:positive|passkey-status:rollback|passkey-status:replay) printf passkey ;;
+    federation-bindings:positive|federation-bindings:rollback|federation-bindings:replay) printf oauth-binding ;;
     checkin-commit-rollback:failure) printf checkin-existing ;;
     affiliate-transfer:failure) printf aff-failure ;;
     amount-quote:failure) printf amount-failure ;;
@@ -283,6 +333,10 @@ run_phase() {
   start_listeners
   IFS=$'\t' read -r method path body actor < <(route_for "$id")
   [[ $phase != failure || $id != access-token-generation ]] || actor=anonymous
+  [[ $phase != failure || $id != admin-topups ]] || actor=anonymous
+  [[ $phase != failure || $id != sessions-list ]] || actor=anonymous
+  [[ $phase != failure || $id != passkey-status ]] || actor=anonymous
+  [[ $phase != failure || $id != federation-bindings ]] || actor=anonymous
   prepare_actor "$actor"
   snapshot go >"$runtime/go.$id.$phase.before"; snapshot rust >"$runtime/rust.$id.$phase.before"
   pair "$id.$phase.first" "$method" "$path" "$body"
@@ -319,6 +373,9 @@ if [[ ${LMM_TRANSACTION_SKIP_RUST_BUILD:-0} != 1 ]]; then
 fi
 [[ -x $rust_binary ]] || { echo "Rust test-instance binary unavailable: $rust_binary" >&2; exit 1; }
 cp -a "$legacy_root/." "$go_build/go-source"
+# The frozen oracle archive is intentionally immutable; the disposable copy
+# must be writable for the embedded frontend placeholder and cleanup hooks.
+chmod -R u+rwX -- "$go_build/go-source"
 mkdir -p "$go_build/go-source/web/dist"; : >"$go_build/go-source/web/dist/index.html"
 (cd "$go_build/go-source" && GOTOOLCHAIN=local CGO_ENABLED=1 go build -buildvcs=false -o "$go_build/legacy-go" .)
 initdb --no-locale --encoding=UTF8 --auth=trust -D "$runtime/pg" >/dev/null
@@ -341,11 +398,44 @@ for owner_pair in "$go_schema:$go_role" "$rust_schema:$rust_role"; do
     END LOOP;
   END \$\$; ALTER SCHEMA $schema OWNER TO $role;"
 done
+# Current Go's settlement model is additive to the frozen baseline.  When the
+# oracle is the current Go checkout, provision the same nullable-safe columns
+# in both disposable schemas so the transaction snapshot exercises the real
+# normalized credited-quota write rather than silently hiding it as an absent
+# legacy column.  The default stays off for the immutable 5418 contract.
+if [[ ${LMM_TRANSACTION_TOPUP_SETTLEMENT_COLUMNS:-0} == 1 ]]; then
+  for schema in "$go_schema" "$rust_schema"; do
+    admin_schema_sql "$schema" "ALTER TABLE top_ups
+      ADD COLUMN IF NOT EXISTS credited_quota BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS expected_amount_micros BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS settled_amount_micros BIGINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS settlement_currency VARCHAR(16) NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS provider_product_id VARCHAR(255) NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS provider_store_id VARCHAR(255) NOT NULL DEFAULT '',
+      ADD COLUMN IF NOT EXISTS provider_event_id VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS provider_transaction_id VARCHAR(255);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_provider_event
+        ON top_ups (payment_provider, provider_event_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_provider_transaction
+        ON top_ups (payment_provider, provider_transaction_id);"
+  done
+fi
+# Rust's readiness probe also requires the forward-only contract-2
+# open-source-bounty relations.  Apply this after the baseline ownership pass
+# because PostgreSQL does not allow a linked serial sequence to be re-owned
+# independently from its table.
+sed "s/__LMM_APP_SCHEMA__/$rust_schema/g" \
+  "$repo_root/apps/api-rust/migrations/0002_open_source_bounty_schema.sql" \
+  >"$runtime/$rust_schema-open-source-bounty.sql"
+PGOPTIONS="-c search_path=$rust_schema" psql -h 127.0.0.1 -p "$pg_port" -d "$database" \
+  -q -v ON_ERROR_STOP=1 -f "$runtime/$rust_schema-open-source-bounty.sql" >/dev/null
+admin_schema_sql "$rust_schema" "GRANT SELECT ON open_source_bounty_projects, open_source_bounty_challenges, open_source_bounty_ledgers, open_source_bounty_disputes, open_source_bounty_mcp_tokens, open_source_bounty_mcp_confirmations, open_source_bounty_mcp_operations, open_source_bounty_rest_operations TO $rust_role;"
 valkey-server --bind 127.0.0.1 --port "$valkey_port" --save '' --appendonly no --dir "$runtime" --logfile "$runtime/valkey.log" > /dev/null 2>&1 & record_pid valkey_pid "$!"
 for _ in {1..100}; do valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null 2>&1 && break; sleep .05; done
 valkey-cli -h 127.0.0.1 -p "$valkey_port" ping >/dev/null
 
-if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null; then
+if [[ -n $route_filter ]] && ! jq -e --arg id "$route_filter" '.fixtures | any(.id == $id)' "$fixtures" >/dev/null \
+  && [[ $route_filter != topup-info && $route_filter != topup-self && $route_filter != user-groups && $route_filter != self-groups && $route_filter != user-models && $route_filter != aff-code && $route_filter != admin-topups && $route_filter != sessions-list && $route_filter != passkey-status && $route_filter != federation-bindings ]]; then
   echo "unknown transaction route filter: $route_filter" >&2
   exit 2
 fi
@@ -353,6 +443,23 @@ while IFS=$'\t' read -r id; do
   [[ -n $id ]] || continue
   [[ -z $route_filter || $id == "$route_filter" ]] || continue
   for phase in positive failure rollback replay; do run_phase "$id" "$phase"; done
+  if [[ -n $result_dir ]]; then
+    route_json=$(jq -c --arg id "$id" '.fixtures[] | select(.id == $id) | .route' "$fixtures")
+    method=$(jq -r '.method' <<<"$route_json")
+    path=$(jq -r '.path' <<<"$route_json")
+    path=${path%%\?*}
+    jq -cn --arg method "$method" --arg path "$path" --arg route "$id" \
+      --arg runtime "$runtime" \
+      '{method:$method,path:$path,differential_verified:true,differential_scope:"full-transaction",cases:28,route_fixture:$route,isolated_runtime:$runtime,approval_credit:false,differences:null,mismatch_names:[]}' \
+      >"$result_dir/$id.json"
+  fi
 done < <(jq -r '.fixtures[].id' "$fixtures")
+if [[ $route_filter == federation-bindings && ${LMM_TRANSACTION_RS_TEST_INSTANCE:-1} != 0 ]]; then
+  echo 'federation-bindings requires LMM_TRANSACTION_RS_TEST_INSTANCE=0 because the test instance intentionally denies federation identities' >&2
+  exit 2
+fi
+if [[ $route_filter == topup-info || $route_filter == topup-self || $route_filter == user-groups || $route_filter == self-groups || $route_filter == user-models || $route_filter == aff-code || $route_filter == admin-topups || $route_filter == sessions-list || $route_filter == passkey-status || $route_filter == federation-bindings ]]; then
+  for phase in positive failure rollback replay; do run_phase "$route_filter" "$phase"; done
+fi
 if [[ -n $route_filter ]]; then expected_routes=1; expected_phases=4; else expected_routes=7; expected_phases=28; fi
 jq -cn --argjson routes "$expected_routes" --argjson phases "$passed" --argjson expected_phases "$expected_phases" '{test:"missing-routes-transaction-differential",routes:$routes,phases:$phases,expected_phases:$expected_phases,isolated:{postgres_schemas:["lmm_test_transaction_go","lmm_test_transaction_rust"],valkey_databases:[5,6],production_access:false},result:"passed"}'

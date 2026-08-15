@@ -27,6 +27,9 @@ import type {
   DeleteAccountRequest,
   CheckinStatusResponse,
   CheckinResponse,
+  PersonalAccessIPPolicy,
+  GiftItem,
+  GiftClaimResponse,
 } from './types'
 
 // ============================================================================
@@ -80,6 +83,25 @@ export async function deleteUserAccount(
   data?: DeleteAccountRequest
 ): Promise<ApiResponse> {
   const res = await api.delete('/api/user/self', { data })
+  return res.data
+}
+
+export async function getPersonalAccessIP(): Promise<
+  ApiResponse<PersonalAccessIPPolicy>
+> {
+  const res = await api.get('/api/user/access-ip')
+  return res.data
+}
+
+export async function setPersonalAccessIP(
+  ip: string
+): Promise<ApiResponse<PersonalAccessIPPolicy>> {
+  const res = await api.put('/api/user/access-ip', { ip })
+  return res.data
+}
+
+export async function deletePersonalAccessIP(): Promise<ApiResponse> {
+  const res = await api.delete('/api/user/access-ip')
   return res.data
 }
 
@@ -165,7 +187,7 @@ export async function revokeOtherLoginSessions(): Promise<ApiResponse> {
 // ============================================================================
 
 export interface CustomOAuthBinding {
-  provider_id: string
+  provider_id: number | string
   provider_name: string
   external_id?: string
 }
@@ -225,6 +247,33 @@ export async function performCheckin(
   const url = turnstileToken
     ? `/api/user/checkin?turnstile=${encodeURIComponent(turnstileToken)}`
     : '/api/user/checkin'
-  const res = await api.post(url)
+  const res = await api.post(url, undefined, {
+    // The check-in card presents verification failures itself so that the
+    // challenge flow does not produce a duplicate global toast.
+    skipBusinessError: true,
+  })
+  return res.data
+}
+
+// ============================================================================
+// Compensation Gift APIs
+// ============================================================================
+
+/**
+ * List gifts currently visible to the user with claim/eligibility status
+ */
+export async function getAvailableGifts(): Promise<ApiResponse<GiftItem[]>> {
+  const res = await api.get('/api/user/gift')
+  return res.data
+}
+
+/**
+ * Claim a compensation gift. Idempotent: repeated claims return 200 with
+ * `already_claimed=true` and quota is credited exactly once.
+ */
+export async function claimGift(
+  giftId: number
+): Promise<ApiResponse<GiftClaimResponse>> {
+  const res = await api.post(`/api/user/gift/${giftId}/claim`)
   return res.data
 }

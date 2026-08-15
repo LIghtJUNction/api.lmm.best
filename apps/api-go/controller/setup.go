@@ -1,13 +1,17 @@
 package controller
 
 import (
+	"errors"
+	"strings"
+	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type Setup struct {
@@ -24,11 +28,14 @@ type SetupRequest struct {
 	DemoSiteEnabled    bool   `json:"DemoSiteEnabled"`
 }
 
+var errSetupAlreadyCompleted = errors.New("setup already completed")
+var setupMu sync.Mutex
+
 func GetSetup(c *gin.Context) {
 	setup := Setup{
-		Status: constant.Setup,
+		Status: constant.IsSetup(),
 	}
-	if constant.Setup {
+	if setup.Status {
 		c.JSON(200, gin.H{
 			"success": true,
 			"data":    setup,
@@ -44,21 +51,13 @@ func GetSetup(c *gin.Context) {
 }
 
 func PostSetup(c *gin.Context) {
-	// Check if setup is already completed
-	if constant.Setup {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "系统已经初始化完成",
-		})
+	if constant.IsSetup() {
+		setupDone(c)
 		return
 	}
 
-	// Check if root user already exists
-	rootExists := model.RootUserExists()
-
 	var req SetupRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
 			"message": "请求参数有误",
@@ -66,6 +65,19 @@ func PostSetup(c *gin.Context) {
 		return
 	}
 
+	// Setup is a singleton write. The process lock avoids duplicate password
+	// hashing and noisy failed transactions; the database singleton remains the
+	// cross-instance authority.
+	setupMu.Lock()
+	defer setupMu.Unlock()
+	if constant.IsSetup() {
+		setupDone(c)
+		return
+	}
+
+	rootExists := model.RootUserExists()
+
+	var rootUser model.User
 	// If root doesn't exist, validate and create admin account
 	if !rootExists {
 		// Validate username length: max 12 characters to align with model.User validation
@@ -102,7 +114,7 @@ func PostSetup(c *gin.Context) {
 			})
 			return
 		}
-		rootUser := model.User{
+		rootUser = model.User{
 			Username:    req.Username,
 			Password:    hashedPassword,
 			Role:        common.RoleRootUser,
@@ -111,48 +123,42 @@ func PostSetup(c *gin.Context) {
 			AccessToken: nil,
 			Quota:       100000000,
 		}
-		err = model.DB.Create(&rootUser).Error
-		if err != nil {
-			c.JSON(200, gin.H{
-				"success": false,
-				"message": "创建管理员账号失败: " + err.Error(),
-			})
+	}
+
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		setup := model.Setup{
+			ID:            model.SetupSingletonID,
+			Version:       common.Version,
+			InitializedAt: time.Now().Unix(),
+		}
+		if err := tx.Create(&setup).Error; err != nil {
+			if isUniqueConstraintError(err) {
+				return errSetupAlreadyCompleted
+			}
+			return err
+		}
+
+		var rootCount int64
+		if err := tx.Model(&model.User{}).Where("role = ?", common.RoleRootUser).Count(&rootCount).Error; err != nil {
+			return err
+		}
+		if rootCount == 0 {
+			if rootExists {
+				return errors.New("root user disappeared during setup")
+			}
+			if err := tx.Create(&rootUser).Error; err != nil {
+				return err
+			}
+		}
+
+		return saveSetupOptions(tx, req)
+	})
+	if err != nil {
+		if errors.Is(err, errSetupAlreadyCompleted) {
+			constant.SetSetup(true)
+			setupDone(c)
 			return
 		}
-	}
-
-	// Set operation modes
-	operation_setting.SelfUseModeEnabled = req.SelfUseModeEnabled
-	operation_setting.DemoSiteEnabled = req.DemoSiteEnabled
-
-	// Save operation modes to database for persistence
-	err = model.UpdateOption("SelfUseModeEnabled", boolToString(req.SelfUseModeEnabled))
-	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "保存自用模式设置失败: " + err.Error(),
-		})
-		return
-	}
-
-	err = model.UpdateOption("DemoSiteEnabled", boolToString(req.DemoSiteEnabled))
-	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "保存演示站点模式设置失败: " + err.Error(),
-		})
-		return
-	}
-
-	// Update setup status
-	constant.Setup = true
-
-	setup := model.Setup{
-		Version:       common.Version,
-		InitializedAt: time.Now().Unix(),
-	}
-	err = model.DB.Create(&setup).Error
-	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
 			"message": "系统初始化失败: " + err.Error(),
@@ -160,10 +166,60 @@ func PostSetup(c *gin.Context) {
 		return
 	}
 
+	applySetupOperationModes(req)
+	constant.SetSetup(true)
+
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "系统初始化成功",
 	})
+}
+
+func setupDone(c *gin.Context) {
+	c.JSON(200, gin.H{
+		"success": false,
+		"message": "系统已经初始化完成",
+	})
+}
+
+func saveSetupOptions(tx *gorm.DB, req SetupRequest) error {
+	values := map[string]string{
+		"SelfUseModeEnabled": boolToString(req.SelfUseModeEnabled),
+		"DemoSiteEnabled":    boolToString(req.DemoSiteEnabled),
+	}
+	for key, value := range values {
+		option := model.Option{Key: key}
+		if err := tx.FirstOrCreate(&option, model.Option{Key: key}).Error; err != nil {
+			return err
+		}
+		option.Value = value
+		if err := tx.Save(&option).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applySetupOperationModes(req SetupRequest) {
+	operation_setting.SelfUseModeEnabled = req.SelfUseModeEnabled
+	operation_setting.DemoSiteEnabled = req.DemoSiteEnabled
+
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	if common.OptionMap == nil {
+		return
+	}
+	common.OptionMap["SelfUseModeEnabled"] = boolToString(req.SelfUseModeEnabled)
+	common.OptionMap["DemoSiteEnabled"] = boolToString(req.DemoSiteEnabled)
+}
+
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique") ||
+		strings.Contains(message, "duplicate")
 }
 
 func boolToString(b bool) string {

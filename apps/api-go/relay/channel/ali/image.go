@@ -4,18 +4,17 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -132,17 +131,16 @@ func getImageBase64sFromForm(c *gin.Context, fieldName string) ([]string, error)
 
 	// 获取base64编码的图片
 	var imageBase64s []string
+	remaining := common.ResponseBodyLimit()
 	for _, file := range imageFiles {
-		image, err := file.Open()
-		if err != nil {
-			return nil, errors.New("failed to open image file")
+		if remaining <= 0 {
+			return nil, errors.New("combined image upload exceeds memory budget")
 		}
-
-		// 读取文件内容
-		imageData, err := io.ReadAll(image)
+		imageData, err := common.ReadUpload(file, remaining)
 		if err != nil {
-			return nil, errors.New("failed to read image file")
+			return nil, fmt.Errorf("failed to read bounded image file: %w", err)
 		}
+		remaining -= int64(len(imageData))
 
 		// 获取MIME类型
 		mimeType := http.DetectContentType(imageData)
@@ -153,7 +151,6 @@ func getImageBase64sFromForm(c *gin.Context, fieldName string) ([]string, error)
 		// 构造data URL格式
 		dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64Data)
 		imageBase64s = append(imageBase64s, dataURL)
-		image.Close()
 	}
 	return imageBase64s, nil
 }
@@ -212,7 +209,7 @@ func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error
 	}
 	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 
 	var response AliResponse
 	err = common.Unmarshal(responseBody, &response)
@@ -287,7 +284,7 @@ func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *rela
 	responseFormat := c.GetString("response_format")
 
 	var aliTaskResponse AliResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError), nil
 	}

@@ -21,7 +21,8 @@ use axum::{
     routing::get,
 };
 use secrecy::SecretString;
-use serde_json::{Value, json};
+use serde_json::{Map, Number, Value, json};
+use sqlx::PgPool;
 
 use crate::auth::{
     AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth, UserAuthPolicyError,
@@ -31,6 +32,8 @@ use crate::{ClientIpKey, RequestContext, legacy_empty_response};
 
 const ADMIN_ROLE: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const GROUP_PATH: &str = "/api/group/";
+const RATIO_CONFIG_PATH: &str = "/api/ratio_config";
 
 /// Identity derived from a verified dashboard session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,6 +71,15 @@ pub trait MissingControlAuthorizer: Send + Sync {
         headers: &HeaderMap,
     ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
         self.principal(headers).await
+    }
+
+    /// Resolves a principal backed by a live browser session. Implementations
+    /// without session authority fail closed after validating the credential.
+    async fn browser_session_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+        self.principal(headers).await.map(|_| None)
     }
 }
 
@@ -170,6 +182,32 @@ impl MissingControlAuthorizer for DashboardMissingControlAuthorizer {
             Err(error) if error.kind == AuthErrorKind::UserDisabled => Err(
                 MissingControlAuthError::UserAuth(UserAuthPolicyError::UserDisabled),
             ),
+            Err(_) => Err(MissingControlAuthError::Unavailable),
+        }
+    }
+
+    async fn browser_session_principal(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+        let token = dashboard_credential(headers).ok_or(MissingControlAuthError::Unauthorized)?;
+        let principal = self.principal(headers).await?;
+        match self.auth.current_session(SecretString::from(token)).await {
+            Ok(_) => Ok(Some(principal)),
+            Err(error)
+                if matches!(
+                    error.kind,
+                    AuthErrorKind::Unauthorized | AuthErrorKind::InvalidCredentials
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) if error.kind == AuthErrorKind::TokenExpired => {
+                Err(MissingControlAuthError::TokenExpired)
+            }
+            Err(error) if error.kind == AuthErrorKind::SessionRevoked => {
+                Err(MissingControlAuthError::SessionRevoked)
+            }
             Err(_) => Err(MissingControlAuthError::Unavailable),
         }
     }
@@ -384,6 +422,7 @@ pub struct MissingControlPublicState {
     store: Arc<dyn MissingControlStore>,
     authorizer: Arc<dyn MissingControlAuthorizer>,
     limiter: Arc<dyn MissingControlRateLimiter>,
+    console_access_auth: Option<Arc<dyn DashboardAuth>>,
     last_good: Arc<RwLock<MissingControlLastGood>>,
 }
 
@@ -397,6 +436,7 @@ impl MissingControlPublicState {
             store,
             authorizer,
             limiter: Arc::new(AllowMissingControlRateLimiter),
+            console_access_auth: None,
             last_good: Arc::new(RwLock::new(MissingControlLastGood::default())),
         }
     }
@@ -407,6 +447,15 @@ impl MissingControlPublicState {
         limiter: Arc<dyn MissingControlRateLimiter>,
     ) -> Self {
         self.limiter = limiter;
+        self
+    }
+
+    /// Enables the API-wide Go ConsoleAccessGate for the normal listener.
+    /// Candidate/module tests leave it disabled so they can exercise the
+    /// route-local optional-auth behavior without a second boundary.
+    #[must_use]
+    pub fn with_console_access_gate(mut self, auth: Arc<dyn DashboardAuth>) -> Self {
+        self.console_access_auth = Some(auth);
         self
     }
 
@@ -476,9 +525,72 @@ impl MissingControlPublicState {
     }
 }
 
+/// Minimal state for the public ratio configuration endpoint.
+///
+/// The broader [`MissingControlPublicState`] remains isolated on the
+/// candidate surface because its other routes carry additional control-plane
+/// semantics.  The ratio read itself is a bounded PostgreSQL option lookup,
+/// so the normal listener can mount this one route without exposing those
+/// unrelated candidate paths.
+#[derive(Clone)]
+pub struct RatioConfigState {
+    pg: PgPool,
+    limiter: Arc<dyn MissingControlRateLimiter>,
+}
+
+impl RatioConfigState {
+    #[must_use]
+    pub fn new(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Self {
+        Self {
+            pg,
+            limiter: Arc::new(DashboardMissingControlRateLimiter::new(auth)),
+        }
+    }
+}
+
+/// Minimal state for the administrator-only group catalogue endpoint.
+///
+/// The legacy handler enumerates the keys of the process-wide `GroupRatio`
+/// map.  Reading that option directly keeps this normal-listener mount narrow:
+/// it does not expose the broader pricing or model-control candidate surface.
+#[derive(Clone)]
+pub struct GroupState {
+    pg: PgPool,
+    authorizer: Arc<dyn MissingControlAuthorizer>,
+}
+
+impl GroupState {
+    #[must_use]
+    pub fn new(pg: PgPool, auth: Arc<dyn DashboardAuth>) -> Self {
+        Self {
+            pg,
+            authorizer: Arc::new(DashboardMissingControlAuthorizer::new(auth)),
+        }
+    }
+}
+
+/// Mounts only `GET /api/group/` for the normal listener.
+pub fn group_router(state: GroupState) -> Router {
+    Router::new()
+        .route(GROUP_PATH, get(groups_direct))
+        .with_state(state)
+}
+
+/// Mounts only `GET /api/ratio_config` for the normal listener.
+pub fn ratio_config_router(state: RatioConfigState) -> Router {
+    Router::new()
+        .route(RATIO_CONFIG_PATH, get(ratio_config_direct))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            ratio_config_critical_rate_limit,
+        ))
+        .with_state(state)
+}
+
 /// Mount point used by the migration root.
 pub fn missing_control_public_router(state: MissingControlPublicState) -> Router {
-    Router::new()
+    let router = Router::new()
+        .route("/api/assistant/pricing", get(assistant_pricing))
         .route("/api/group/", get(groups))
         .route("/api/models", get(models))
         .route("/api/pricing", get(pricing))
@@ -494,7 +606,76 @@ pub fn missing_control_public_router(state: MissingControlPublicState) -> Router
             "/api/usage/token/",
             get(token_usage_get).fallback(token_usage_method_fallback),
         )
-        .with_state(state)
+        .with_state(state.clone());
+    if state.console_access_auth.is_some() {
+        router.layer(middleware::from_fn_with_state(
+            state,
+            console_access_boundary,
+        ))
+    } else {
+        router
+    }
+}
+
+async fn console_access_boundary(
+    State(state): State<MissingControlPublicState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !console_discovery_route(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let Some(auth) = state.console_access_auth.as_ref() else {
+        return next.run(request).await;
+    };
+    let Some(token) = dashboard_credential(request.headers()) else {
+        return console_not_found();
+    };
+    let user = match auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+    {
+        Ok(user) => user,
+        Err(_) => return console_not_found(),
+    };
+    if !user.developer_access_granted {
+        return console_not_found();
+    }
+    next.run(request).await
+}
+
+fn console_discovery_route(path: &str) -> bool {
+    [
+        "/api/assistant/pricing",
+        "/api/group",
+        "/api/models",
+        "/api/pricing",
+        "/api/rankings",
+        "/api/ratio_config",
+        "/api/usage",
+    ]
+    .iter()
+    .any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
+}
+
+fn console_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response()
+}
+
+async fn assistant_pricing(
+    State(state): State<MissingControlPublicState>,
+    headers: HeaderMap,
+) -> Response {
+    let principal = match require_assistant_dashboard(&state, &headers).await {
+        Ok(principal) => principal,
+        Err(response) => return response,
+    };
+    with_auth_version(legacy_json(state.pricing(Some(principal)).await))
 }
 
 async fn groups(State(state): State<MissingControlPublicState>, headers: HeaderMap) -> Response {
@@ -506,6 +687,36 @@ async fn groups(State(state): State<MissingControlPublicState>, headers: HeaderM
         return public_user_auth_error(&headers, UserAuthPolicyError::InsufficientPrivilege);
     }
     with_auth_version(public_success(json!(state.groups().await)))
+}
+
+async fn groups_direct(State(state): State<GroupState>, headers: HeaderMap) -> Response {
+    let principal =
+        match require_public_dashboard_authorizer(state.authorizer.as_ref(), &headers).await {
+            Ok(principal) => principal,
+            Err(response) => return response,
+        };
+    if principal.role < ADMIN_ROLE {
+        return public_user_auth_error(&headers, UserAuthPolicyError::InsufficientPrivilege);
+    }
+
+    // Go's `GetGroups` returns the keys of GroupRatio. Invalid or absent
+    // persisted JSON leaves the legacy cache at its empty initial value in the
+    // isolated fixture; preserve that fail-closed read shape here.
+    let groups =
+        sqlx::query_scalar::<_, String>("SELECT value FROM options WHERE key = 'GroupRatio'")
+            .fetch_optional(&state.pg)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|value| serde_json::from_str::<Map<String, Value>>(&value).ok())
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|(group, _)| group)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+    with_auth_version(public_success(json!(groups)))
 }
 
 async fn models(State(state): State<MissingControlPublicState>, headers: HeaderMap) -> Response {
@@ -580,6 +791,72 @@ async fn ratio_config(State(state): State<MissingControlPublicState>) -> Respons
         Some(data) => legacy_json(json!({"success": true, "message": "", "data": data})),
         None => public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用"),
     }
+}
+
+async fn ratio_config_direct(State(state): State<RatioConfigState>) -> Response {
+    let enabled = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM options WHERE key = 'ExposeRatioEnabled'",
+    )
+    .fetch_optional(&state.pg)
+    .await
+    .ok()
+    .flatten()
+    .is_some_and(|value| value == "true");
+    if !enabled {
+        return public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用");
+    }
+
+    let rows = match sqlx::query_as::<_, (String, String)>(
+        "SELECT key, value FROM options WHERE key = ANY($1)",
+    )
+    .bind(vec![
+        "ModelRatio",
+        "CompletionRatio",
+        "CacheRatio",
+        "CreateCacheRatio",
+        "ModelPrice",
+    ])
+    .fetch_all(&state.pg)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(_) => return public_failure(StatusCode::FORBIDDEN, "倍率配置接口未启用"),
+    };
+    let values = rows
+        .into_iter()
+        .filter_map(|(key, value)| {
+            serde_json::from_str::<BTreeMap<String, f64>>(&value)
+                .ok()
+                .map(|value| (key, go_ratio_map_json(value)))
+        })
+        .collect::<BTreeMap<String, Value>>();
+    let data = json!({
+        "model_ratio": values.get("ModelRatio").cloned().unwrap_or_else(|| json!({})),
+        "completion_ratio": values.get("CompletionRatio").cloned().unwrap_or_else(|| json!({})),
+        "cache_ratio": values.get("CacheRatio").cloned().unwrap_or_else(|| json!({})),
+        "create_cache_ratio": values.get("CreateCacheRatio").cloned().unwrap_or_else(|| json!({})),
+        "model_price": values.get("ModelPrice").cloned().unwrap_or_else(|| json!({})),
+    });
+    legacy_json(json!({"success": true, "message": "", "data": data}))
+}
+
+fn go_ratio_map_json(values: BTreeMap<String, f64>) -> Value {
+    let values = values
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let number = if value.is_finite()
+                && value.fract() == 0.0
+                && value >= i64::MIN as f64
+                && value <= i64::MAX as f64
+            {
+                Number::from(value as i64)
+            } else {
+                Number::from_f64(value)?
+            };
+            Some((key, Value::Number(number)))
+        })
+        .collect::<Map<String, Value>>();
+    Value::Object(values)
 }
 
 async fn token_usage_get(
@@ -701,6 +978,32 @@ async fn critical_rate_limit(
     match critical_rate_limit_response(&state, &client_ip).await {
         Some(response) => response,
         None => next.run(request).await,
+    }
+}
+
+async fn ratio_config_critical_rate_limit(
+    State(state): State<RatioConfigState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let client_ip = request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|key| key.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|ip| ip.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_owned());
+    match state.limiter.check(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => next.run(request).await,
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => empty_limiter_response(StatusCode::TOO_MANY_REQUESTS, Some(retry_after_seconds)),
+        Err(_) => empty_limiter_response(StatusCode::INTERNAL_SERVER_ERROR, None),
     }
 }
 
@@ -1022,7 +1325,14 @@ async fn require_public_dashboard(
     state: &MissingControlPublicState,
     headers: &HeaderMap,
 ) -> Result<MissingControlPrincipal, Response> {
-    match state.authorizer.principal(headers).await {
+    require_public_dashboard_authorizer(state.authorizer.as_ref(), headers).await
+}
+
+async fn require_public_dashboard_authorizer(
+    authorizer: &dyn MissingControlAuthorizer,
+    headers: &HeaderMap,
+) -> Result<MissingControlPrincipal, Response> {
+    match authorizer.principal(headers).await {
         Ok(principal) => Ok(principal),
         Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
             Err(public_dashboard_unauthorized(headers))
@@ -1064,6 +1374,34 @@ async fn require_dashboard(
         Err(MissingControlAuthError::UserAuth(error)) => Err(user_auth_error(headers, error)),
         Err(MissingControlAuthError::PolicyInvalid { error, .. }) => {
             Err(user_auth_error(headers, error))
+        }
+    }
+}
+
+async fn require_assistant_dashboard(
+    state: &MissingControlPublicState,
+    headers: &HeaderMap,
+) -> Result<MissingControlPrincipal, Response> {
+    match state.authorizer.browser_session_principal(headers).await {
+        Ok(Some(principal)) => Ok(principal),
+        Ok(None) => Err(assistant_session_required()),
+        Err(MissingControlAuthError::UnmatchedOpaque | MissingControlAuthError::Unauthorized) => {
+            Err(with_auth_version(dashboard_unauthorized(headers)))
+        }
+        Err(MissingControlAuthError::TokenExpired) => Err(with_auth_version(
+            dashboard_auth_failure(headers, AuthErrorKind::TokenExpired),
+        )),
+        Err(MissingControlAuthError::SessionRevoked) => Err(with_auth_version(
+            dashboard_auth_failure(headers, AuthErrorKind::SessionRevoked),
+        )),
+        Err(MissingControlAuthError::Unavailable) => {
+            Err(with_auth_version(dashboard_internal_error(headers)))
+        }
+        Err(MissingControlAuthError::UserAuth(error)) => {
+            Err(with_auth_version(user_auth_error(headers, error)))
+        }
+        Err(MissingControlAuthError::PolicyInvalid { error, .. }) => {
+            Err(with_auth_version(user_auth_error(headers, error)))
         }
     }
 }
@@ -1152,6 +1490,17 @@ fn dashboard_unauthorized(headers: &HeaderMap) -> Response {
             "message": auth_invalid_access_token(headers),
         }),
     )
+}
+
+fn assistant_session_required() -> Response {
+    with_auth_version(legacy_json_with_status(
+        StatusCode::FORBIDDEN,
+        json!({
+            "success": false,
+            "code": "ASSISTANT_SESSION_REQUIRED",
+            "message": "assistant tools require a browser login session",
+        }),
+    ))
 }
 
 fn dashboard_auth_failure(headers: &HeaderMap, kind: AuthErrorKind) -> Response {
@@ -1338,6 +1687,13 @@ mod tests {
             _: &HeaderMap,
         ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
             self.0.ok_or(MissingControlAuthError::Unauthorized)
+        }
+
+        async fn browser_session_principal(
+            &self,
+            headers: &HeaderMap,
+        ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
+            self.principal(headers).await.map(Some)
         }
     }
 
@@ -1683,6 +2039,42 @@ mod tests {
                     "model_limits_enabled": true,
                     "expires_at": 0,
                 },
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn normal_ratio_config_read_fails_closed_when_options_are_unavailable() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(1))
+            .connect_lazy("postgres://unused:unused@localhost/unused")
+            .expect("valid lazy PostgreSQL URL");
+        let response = ratio_config_direct(axum::extract::State(RatioConfigState {
+            pg: pool,
+            limiter: std::sync::Arc::new(AllowMissingControlRateLimiter),
+        }))
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"success": false, "message": "倍率配置接口未启用"})
+        );
+    }
+
+    #[test]
+    fn ratio_map_json_matches_go_integer_number_encoding() {
+        let values = BTreeMap::from([
+            ("fractional".to_owned(), 0.25),
+            ("integral".to_owned(), 2.0),
+        ]);
+        assert_eq!(
+            go_ratio_map_json(values),
+            json!({
+                "fractional": 0.25,
+                "integral": 2,
             })
         );
     }

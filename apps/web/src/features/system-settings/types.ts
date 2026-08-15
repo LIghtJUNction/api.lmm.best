@@ -39,6 +39,89 @@ export type UpdateOptionResponse = {
   message: string
 }
 
+export type DynamicPricingModelStatus = {
+  factor: number
+  request_factor_min: number
+  request_factor_max: number
+  engine_factor: number
+  hard_cost_floor: number
+  load_ema: number
+  cost_ema: number
+  has_unpriced_traffic: boolean
+  unpriced_tokens: number
+  unpriced_requests: number
+  updated_at: number
+}
+
+export type DynamicPricingChannelStatus = {
+  id: number
+  name: string
+  cost: number
+  cost_floor: number
+  configured: boolean
+}
+
+export type DynamicPricingSetting = {
+  enabled: boolean
+  min_factor: number
+  require_channel_cost: boolean
+  tick_interval_seconds: number
+  window_minutes: number
+  target_tpm: number
+  target_rpm: number
+  target_cost_rate: number
+  base_price_usd_per_million: number
+  alpha_load: number
+  alpha_up: number
+  alpha_down: number
+  cost_floor_factor: number
+  max_factor: number
+  load_deadzone: number
+  heat_gamma: number
+  max_step_up: number
+  max_step_down: number
+  failover_probability: number
+  channel_costs: Record<string, number>
+  per_model: Record<string, unknown>
+}
+
+export type DynamicPricingStatusResponse = {
+  success: boolean
+  message: string
+  data: {
+    enabled: boolean
+    preview_factor: number
+    setting: DynamicPricingSetting
+    models: Record<string, DynamicPricingModelStatus>
+    safety: {
+      ready: boolean
+      status: string
+      reason: string
+      active_channel_count: number
+      configured_channel_count: number
+      channels: DynamicPricingChannelStatus[]
+      missing_channels: Array<{ id: number; name: string }>
+      require_channel_cost: boolean
+    }
+  }
+}
+
+export type DynamicPricingSettingUpdate = {
+  enabled: boolean
+  min_factor: number
+  base_price_usd_per_million: number
+  cost_floor_factor: number
+  max_factor: number
+  channel_costs: Record<string, number>
+}
+
+export type UpdateAdvancedSecuritySettingsRequest = {
+  enabled: boolean
+  on_prompt: boolean
+  action: 'block' | 'audit'
+  rules: unknown
+}
+
 export type ConfirmPaymentComplianceResponse = {
   success: boolean
   message: string
@@ -120,9 +203,36 @@ export type SiteSettings = {
   SidebarModulesAdmin: string
 }
 
+export const ASSISTANT_SEARCH_PROVIDERS = [
+  'none',
+  'exa',
+  'tavily',
+  'brave',
+  'generic_http',
+  'mcp_streamable_http',
+] as const
+
+export type AssistantSearchProvider =
+  (typeof ASSISTANT_SEARCH_PROVIDERS)[number]
+
+export function normalizeAssistantSearchProvider(
+  value: unknown,
+  searchURL = ''
+): AssistantSearchProvider {
+  if (
+    typeof value === 'string' &&
+    (ASSISTANT_SEARCH_PROVIDERS as readonly string[]).includes(value)
+  ) {
+    return value as AssistantSearchProvider
+  }
+
+  return searchURL.trim() ? 'generic_http' : 'none'
+}
+
 export type AuthSettings = {
   PasswordLoginEnabled: boolean
   PasswordRegisterEnabled: boolean
+  RegistrationDisabledMethods: string
   EmailVerificationEnabled: boolean
   RegisterEnabled: boolean
   EmailDomainRestrictionEnabled: boolean
@@ -179,6 +289,29 @@ export type ContentSettings = {
   DataExportDefaultTime: string
   DataExportInterval: number
   Chats: string
+  AssistantEnabled: boolean
+  AssistantModel: string
+  AssistantAgentLoopEnabled: boolean
+  AssistantMaxSteps: number
+  AssistantTimeoutSeconds: number
+  AssistantCacheEnabled: boolean
+  AssistantCacheTTLMinutes: number
+  AssistantPersona: string
+  AssistantSystemPrompt: string
+  AssistantSearchProvider: AssistantSearchProvider
+  AssistantSearchURL: string
+  AssistantSearchAPIKey: string
+  AssistantSearchMCPTool: string
+  AssistantSkills: string
+  AssistantSkillFiles: string
+  AssistantReviewEnabled: boolean
+  AssistantReviewWindowDays: number
+  AssistantReviewIntervalHours: number
+  AssistantRetentionEnabled: boolean
+  AssistantActiveRetentionDays: number
+  AssistantArchivedRetentionDays: number
+  AssistantSecurityRetentionDays: number
+  AssistantRetentionIntervalHours: number
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean
@@ -206,6 +339,12 @@ export type ModelSettings = {
   'claude.thinking_adapter_budget_tokens_percentage': number
   'grok.violation_deduction_enabled': boolean
   'grok.violation_deduction_amount': number
+  'dynamic_pricing_setting.enabled': boolean
+  'dynamic_pricing_setting.min_factor': number
+  'dynamic_pricing_setting.base_price_usd_per_million': number
+  'dynamic_pricing_setting.cost_floor_factor': number
+  'dynamic_pricing_setting.max_factor': number
+  'dynamic_pricing_setting.channel_costs': string
   ModelPrice: string
   ModelRatio: string
   CacheRatio: string
@@ -226,6 +365,7 @@ export type ModelSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'group_ratio_setting.group_warnings': string
   RetryTimes: number
   ChannelDisableThreshold: string
   AutomaticDisableChannelEnabled: boolean
@@ -282,6 +422,7 @@ export type BillingSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'group_ratio_setting.group_warnings': string
   PayAddress: string
   EpayId: string
   EpayKey: string
@@ -335,12 +476,15 @@ export type BillingSettings = {
   'checkin_setting.enabled': boolean
   'checkin_setting.min_quota': number
   'checkin_setting.max_quota': number
+  'checkin_setting.level_multipliers': number[]
 }
 
 export type OperationsSettings = {
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
+  RegionAccessPolicyEnabled: boolean
+  RegionBlockedCountryCodes: string
   QuotaRemindThreshold: string
   SMTPServer: string
   SMTPPort: string
@@ -378,6 +522,15 @@ export type SecuritySettings = {
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string
+  AdvancedSecurityEnabled: boolean
+  AdvancedSecurityOnPromptEnabled: boolean
+  AdvancedSecurityAction: 'block' | 'audit'
+  AdvancedSecurityRules: string
+  AntiRelayEnabled: boolean
+  AntiRelayRejectProxyHeadersEnabled: boolean
+  AntiRelayHTTPSOnlyEnabled: boolean
+  AntiRelayBlockedCIDRs: string[]
+  AntiRelayTrustedProxyCIDRs: string[]
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean

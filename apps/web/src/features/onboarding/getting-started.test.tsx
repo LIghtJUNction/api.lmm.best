@@ -11,6 +11,9 @@ import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 
+import type { ApiRequestConfig } from '@/lib/api'
+import type { AuthUser } from '@/stores/auth-store'
+
 const domWindow = new Window({ url: 'https://console.example.test/' })
 for (const key of [
   'window',
@@ -50,10 +53,13 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { consumeQueuedAssistantRequest, subscribeToAssistantOpen } =
+  await import('@/features/assistant/assistant-events')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { GettingStarted } = await import('./getting-started')
 
 const originalGet = api.get
+const originalPost = api.post
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -65,29 +71,11 @@ await i18n.use(initReactI18next).init({
   resources: { en: { translation: {} } },
 })
 
-const user = {
+const user: AuthUser = {
   id: 7,
   username: 'new-user',
   role: 1,
   developer_access_granted: false,
-}
-
-const emptyTopupInfo = {
-  enable_online_topup: false,
-  enable_stripe_topup: false,
-  pay_methods: [],
-  min_topup: 1,
-  stripe_min_topup: 1,
-  amount_options: [],
-  discount: {},
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve
-  })
-  return { promise, resolve }
 }
 
 async function flushEffects() {
@@ -101,18 +89,13 @@ function makeRouter() {
     path: '/getting-started',
     component: GettingStarted,
   })
-  const emptyRoutes = [
-    '/wallet',
-    '/support',
-    '/keys',
-    '/playground',
-    '/dashboard',
-  ].map((path) =>
-    createRoute({
-      getParentRoute: () => rootRoute,
-      path,
-      component: () => null,
-    })
+  const emptyRoutes = ['/challenges', '/support', '/keys', '/dashboard'].map(
+    (path) =>
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path,
+        component: () => null,
+      })
   )
   return createRouter({
     routeTree: rootRoute.addChildren([gettingStartedRoute, ...emptyRoutes]),
@@ -121,16 +104,28 @@ function makeRouter() {
 }
 
 async function renderPage(
-  topupResponse: Promise<{ data: Record<string, unknown> }>,
-  bountyCapability = false
+  bountyCapability = false,
+  bountyResponse: { data: Record<string, unknown> } | Error = {
+    data: {
+      success: true,
+      data: { items: [], total: 0, page: 1, page_size: 50 },
+    },
+  },
+  accessRequest: Record<string, unknown> | null = null,
+  userOverride: Partial<AuthUser> = {}
 ) {
+  const currentUser = { ...user, ...userOverride }
   const gets: string[] = []
-  api.get = (async (url) => {
+  const getConfigs: Array<ApiRequestConfig | undefined> = []
+  api.get = (async (url, config) => {
     gets.push(url)
+    getConfigs.push(config)
     if (url === '/api/user/self') {
-      return { data: { success: true, data: user } }
+      return { data: { success: true, data: currentUser } }
     }
-    if (url === '/api/user/topup/info') return topupResponse
+    if (url === '/api/user/developer-access/request') {
+      return { data: { success: true, data: accessRequest } }
+    }
     if (url === '/api/status') {
       return {
         data: {
@@ -148,19 +143,17 @@ async function renderPage(
       }
     }
     if (url.startsWith('/api/open-source-bounties?')) {
-      return {
-        data: {
-          success: true,
-          data: { items: [], total: 0, page: 1, page_size: 50 },
-        },
-      }
+      if (bountyResponse instanceof Error) throw bountyResponse
+      return bountyResponse
     }
     return { data: { success: true, data: [] } }
   }) as typeof api.get
-  useAuthStore.getState().auth.setUser(user)
+  useAuthStore.getState().auth.setUser(currentUser)
 
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // Keep the test honest: ChallengeList must disable retries itself for a
+    // best-effort route probe, rather than relying on a test-only default.
+    defaultOptions: { queries: { retry: 3 } },
   })
   const router = makeRouter()
   const container = document.createElement('div')
@@ -176,7 +169,7 @@ async function renderPage(
     )
     await flushEffects()
   })
-  return { container, root, queryClient, gets }
+  return { container, root, queryClient, gets, getConfigs }
 }
 
 async function unmountPage(page: Awaited<ReturnType<typeof renderPage>>) {
@@ -186,83 +179,287 @@ async function unmountPage(page: Awaited<ReturnType<typeof renderPage>>) {
 }
 
 afterEach(() => {
+  consumeQueuedAssistantRequest()
   api.get = originalGet
+  api.post = originalPost
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
+  window.sessionStorage.clear()
   document.body.replaceChildren()
 })
 
 after(() => domWindow.close())
 
-describe('getting started payment availability', () => {
-  test('shows a non-actionable checking state while payment availability loads', async () => {
-    const topup = deferred<{ data: Record<string, unknown> }>()
-    const page = await renderPage(topup.promise)
+describe('getting started access boundaries', () => {
+  test('opens the AI onboarding conversation once when an L0 user enters', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((request) =>
+      opened.push(request.preset)
+    )
+
+    const first = await renderPage(false, undefined, null, { id: 7001 })
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(first)
+
+    const second = await renderPage(false, undefined, null, { id: 7001 })
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(second)
+    unsubscribe()
+  })
+
+  test('keeps the setup tutorial out of L0 and derives L1 progress from account state', async () => {
+    const l0Page = await renderPage()
     assert.equal(
-      page.container.textContent?.includes('Checking payment availability...'),
+      l0Page.container.textContent?.includes('Three steps to get started'),
+      false
+    )
+    assert.equal(
+      l0Page.container.textContent?.includes('How can I help?'),
       true
     )
-    assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
-    assert.equal(page.container.querySelector('a[href="/support"]'), null)
+    await unmountPage(l0Page)
 
-    topup.resolve({ data: { success: true, data: emptyTopupInfo } })
+    const l1Page = await renderPage(false, undefined, null, {
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
+    assert.equal(l1Page.container.textContent?.includes('1/3'), true)
+    assert.equal(l1Page.container.textContent?.includes('Create API key'), true)
+    assert.equal(l1Page.container.textContent?.includes('Continue setup'), true)
+    await unmountPage(l1Page)
+  })
+
+  test('uses one assistant entry without a second composer or hard-coded presets', async () => {
+    const opened: Array<string | undefined> = []
+    const messages: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((request) => {
+      opened.push(request.preset)
+      messages.push(request.message)
+    })
+    const page = await renderPage()
     await act(flushEffects)
+
+    const start = [...page.container.querySelectorAll('button')].find(
+      (button) => button.textContent?.includes('Start with AI assistant')
+    )
+    assert.ok(start)
+    await act(async () => {
+      start.click()
+      await flushEffects()
+    })
+
+    assert.deepEqual(opened, ['onboarding'])
+    assert.deepEqual(messages, [undefined])
+    assert.equal(
+      page.container.textContent?.includes(
+        'What can I do while access is under review?'
+      ),
+      false
+    )
+    assert.equal(
+      page.container.textContent?.includes('Which option is the best value?'),
+      false
+    )
+    assert.equal(
+      page.container.textContent?.includes('How is request cost calculated?'),
+      false
+    )
+    assert.equal(page.container.querySelector('input'), null)
+    await unmountPage(page)
+    unsubscribe()
+  })
+
+  test('opens onboarding guidance once while administrator review is pending', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((request) =>
+      opened.push(request.preset)
+    )
+    const pendingRequest = {
+      id: 9901,
+      status: 'pending',
+      reason: '',
+      admin_note: '',
+      created_at: 1,
+      reviewed_at: 0,
+    }
+
+    const first = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      pendingRequest
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(first)
+
+    const second = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      pendingRequest
+    )
+    assert.deepEqual(opened, ['onboarding'])
+    await unmountPage(second)
+    unsubscribe()
+  })
+
+  test('keeps a pending recommendation to one compact status line', async () => {
+    const page = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      {
+        id: 9902,
+        status: 'pending',
+        reason: 'I am building a small Claude Code integration.',
+        source: 'assistant_recommendation',
+        ai_recommendation:
+          'Recommend L1 for a documented development use case.',
+        admin_note: '',
+        created_at: 1,
+        reviewed_at: 0,
+      },
+      { id: 7002 }
+    )
+
+    assert.equal(
+      page.container.textContent?.includes('AI recommendation submitted'),
+      true
+    )
+    assert.equal(page.container.textContent?.includes('Pending review'), true)
+    assert.equal(
+      page.container.textContent?.includes(
+        'I am building a small Claude Code integration.'
+      ),
+      false
+    )
+    assert.equal(
+      page.container.textContent?.includes(
+        'Recommend L1 for a documented development use case.'
+      ),
+      false
+    )
+    assert.equal(page.container.querySelector('[role="progressbar"]'), null)
     await unmountPage(page)
   })
 
-  test('offers support only when availability fails or is confirmed empty', async () => {
-    for (const response of [
-      { data: { success: false, message: 'offline' } },
-      { data: { success: true, data: emptyTopupInfo } },
-    ]) {
-      const page = await renderPage(Promise.resolve(response))
-      const expected = response.data.success
-        ? 'Online payment is temporarily unavailable. Contact support before attempting to add funds.'
-        : 'Payment availability could not be verified. Contact support before attempting to add funds.'
-      assert.equal(page.container.textContent?.includes(expected), true)
-      assert.ok(page.container.querySelector('a[href="/support"]'))
-      assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
-      await unmountPage(page)
-    }
+  test('routes a direct L1 application through the single assistant surface', async () => {
+    const page = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      null,
+      { id: 9904 }
+    )
+
+    assert.equal(
+      page.container.querySelector('[data-testid="l0-direct-access-request"]'),
+      null
+    )
+    assert.equal(page.container.querySelector('textarea'), null)
+    assert.ok(
+      [...page.container.querySelectorAll('button')].find((button) =>
+        button.textContent?.includes('Start with AI assistant')
+      )
+    )
+    await unmountPage(page)
   })
 
-  test('shows wallet activation and optional challenges only from confirmed live capabilities', async () => {
+  test('shows administrator feedback and lets a rejected user revise with AI', async () => {
+    const opened: Array<string | undefined> = []
+    const unsubscribe = subscribeToAssistantOpen((request) =>
+      opened.push(request.preset)
+    )
     const page = await renderPage(
-      Promise.resolve({
-        data: {
-          success: true,
-          data: {
-            ...emptyTopupInfo,
-            enable_online_topup: true,
-            pay_methods: [{ name: 'Card', type: 'card' }],
-          },
-        },
-      }),
+      false,
+      { data: { success: true, data: [] } },
+      {
+        id: 9903,
+        status: 'rejected',
+        reason: 'Need access.',
+        source: 'assistant_recommendation',
+        ai_recommendation: 'The use case needs more detail.',
+        admin_note: 'Please explain which client and models you plan to use.',
+        created_at: 1,
+        reviewed_at: 2,
+      },
+      { id: 7003 }
+    )
+
+    assert.equal(
+      page.container.textContent?.includes('Access request rejected'),
       true
     )
+    assert.equal(
+      page.container.textContent?.includes(
+        'Please explain which client and models you plan to use.'
+      ),
+      true
+    )
+
+    const revise = [...page.container.querySelectorAll('button')].find(
+      (button) => button.textContent?.includes('Revise')
+    )
+    assert.ok(revise)
+    await act(async () => {
+      revise.click()
+      await flushEffects()
+    })
+    assert.equal(opened.at(-1), 'onboarding')
+
+    await unmountPage(page)
+    unsubscribe()
+  })
+
+  test('shows only the read-only access conversation to L0', async () => {
+    const page = await renderPage(true)
     await act(flushEffects)
 
-    assert.ok(page.container.querySelector('a[href="/wallet"]'))
+    assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
+    assert.equal(page.gets.includes('/api/user/topup/info'), false)
+    assert.equal(page.container.textContent?.includes('How can I help?'), true)
+    assert.equal(page.container.querySelector('a[href="/challenges"]'), null)
+    assert.equal(page.container.textContent?.includes('Create API key'), false)
     assert.equal(
-      page.container.textContent?.includes(
-        'Any successful external top-up activates access.'
-      ),
-      true
-    )
-    assert.equal(
-      page.container.textContent?.includes('Optional open-source challenges'),
-      true
-    )
-    assert.equal(
-      page.container.textContent?.includes(
-        'Contributions can earn account credit, but they do not activate access.'
-      ),
-      true
+      page.container.textContent?.includes('Open setup guide'),
+      false
     )
     assert.equal(
       page.gets.some((url) => url.startsWith('/api/open-source-bounties?')),
+      false
+    )
+    await unmountPage(page)
+  })
+
+  test('keeps unavailable optional probes inline and does not retry them', async () => {
+    const page = await renderPage(true, new Error('Not Found'), null, {
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
+    await act(flushEffects)
+
+    const bountyCalls = page.gets.filter((url) =>
+      url.startsWith('/api/open-source-bounties?')
+    )
+    assert.equal(bountyCalls.length, 1)
+    assert.equal(
+      page.container.textContent?.includes(
+        'Challenges are temporarily unavailable.'
+      ),
       true
     )
+
+    const bountyConfig = page.getConfigs.find((_, index) =>
+      page.gets[index].startsWith('/api/open-source-bounties?')
+    )
+    assert.equal(bountyConfig?.skipBusinessError, true)
+    assert.equal(bountyConfig?.skipErrorHandler, true)
     await unmountPage(page)
   })
 })

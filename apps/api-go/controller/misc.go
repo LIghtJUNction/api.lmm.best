@@ -1,23 +1,27 @@
 package controller
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/console_setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/oauth"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/console_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,6 +53,48 @@ func GetLiveness(c *gin.Context) {
 	})
 }
 
+func getPublicPreviewModelIDs() []string {
+	// The public status payload and the assistant must share the same live
+	// catalog. Keeping a separate ability-table preview would silently omit
+	// models that are enabled in other groups or newly published in pricing.
+	return getPublicCatalogModelIDs()
+}
+
+func getPublicCatalogModelIDsForUser(userID int) []string {
+	return getPublicCatalogModelIDsWithBillingPolicy(modelListAcceptsUnsetRatioModel(userID))
+}
+
+// getPublicCatalogModelIDs mirrors the live public pricing catalog. The
+// assistant's L0 pricing tool intentionally exposes only the default-group
+// reference price, so models that are enabled exclusively in a private group
+// must not be advertised here: otherwise the assistant would list a model and
+// then be unable to quote its reference price. The all group is public too.
+// An empty result is intentional: callers must report that the live catalog is
+// not ready instead of silently substituting a potentially incomplete ability
+// snapshot.
+func getPublicCatalogModelIDs() []string {
+	return getPublicCatalogModelIDsWithBillingPolicy(false)
+}
+
+func getPublicCatalogModelIDsWithBillingPolicy(acceptUnsetRatioModel bool) []string {
+	modelIDs := make(map[string]struct{})
+	for _, pricing := range getPricingCache() {
+		if !common.StringsContains(pricing.EnableGroup, "default") &&
+			!common.StringsContains(pricing.EnableGroup, "all") {
+			continue
+		}
+		if name := strings.TrimSpace(pricing.ModelName); name != "" && modelListIncludesModel(name, acceptUnsetRatioModel) {
+			modelIDs[name] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(modelIDs))
+	for name := range modelIDs {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func GetStatus(c *gin.Context) {
 	if err := cacheReadinessError(); err != nil {
 		ensureCachesWarmAsync()
@@ -61,10 +107,12 @@ func GetStatus(c *gin.Context) {
 	}
 
 	cs := console_setting.GetConsoleSetting()
+	registrationDisabledMethods := common.GetRegistrationDisabledMethods()
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
 
 	passkeySetting := system_setting.GetPasskeySettings()
+	assistantSettings := setting.GetAssistantSettings()
 	data := gin.H{
 		"version":                     common.Version,
 		"start_time":                  common.StartTime,
@@ -90,30 +138,37 @@ func GetStatus(c *gin.Context) {
 		"docs_link":                   operation_setting.GetGeneralSetting().DocsLink,
 		"quota_per_unit":              common.QuotaPerUnit,
 		// 兼容旧前端：保留 display_in_currency，同时提供新的 quota_display_type
-		"display_in_currency":           operation_setting.IsCurrencyDisplay(),
-		"quota_display_type":            operation_setting.GetQuotaDisplayType(),
-		"custom_currency_symbol":        operation_setting.GetGeneralSetting().CustomCurrencySymbol,
-		"custom_currency_exchange_rate": operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate,
-		"enable_batch_update":           common.BatchUpdateEnabled,
-		"enable_drawing":                common.DrawingEnabled,
-		"enable_task":                   common.TaskEnabled,
-		"enable_data_export":            common.DataExportEnabled,
-		"data_export_default_time":      common.DataExportDefaultTime,
-		"default_collapse_sidebar":      common.DefaultCollapseSidebar,
-		"mj_notify_enabled":             setting.MjNotifyEnabled,
-		"chats":                         setting.Chats,
-		"demo_site_enabled":             operation_setting.DemoSiteEnabled,
-		"self_use_mode_enabled":         operation_setting.SelfUseModeEnabled,
-		"register_enabled":              common.RegisterEnabled,
-		"password_login_enabled":        common.PasswordLoginEnabled,
-		"password_register_enabled":     common.PasswordRegisterEnabled,
-		"default_use_auto_group":        setting.DefaultUseAutoGroup,
+		"display_in_currency":                 operation_setting.IsCurrencyDisplay(),
+		"quota_display_type":                  operation_setting.GetQuotaDisplayType(),
+		"custom_currency_symbol":              operation_setting.GetGeneralSetting().CustomCurrencySymbol,
+		"custom_currency_exchange_rate":       operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate,
+		"enable_batch_update":                 common.BatchUpdateEnabled,
+		"enable_drawing":                      common.DrawingEnabled,
+		"enable_task":                         common.TaskEnabled,
+		"enable_data_export":                  common.DataExportEnabled,
+		"data_export_default_time":            common.DataExportDefaultTime,
+		"default_collapse_sidebar":            common.DefaultCollapseSidebar,
+		"mj_notify_enabled":                   setting.MjNotifyEnabled,
+		"chats":                               setting.Chats,
+		"demo_site_enabled":                   operation_setting.DemoSiteEnabled,
+		"self_use_mode_enabled":               operation_setting.SelfUseModeEnabled,
+		"register_enabled":                    common.RegisterEnabled,
+		"password_login_enabled":              common.PasswordLoginEnabled,
+		"password_register_enabled":           common.PasswordRegisterEnabled,
+		"oauth_registration_disabled_methods": registrationDisabledMethods,
+		"default_use_auto_group":              setting.DefaultUseAutoGroup,
+		"preview_model_ids":                   getPublicPreviewModelIDs(),
 		"backend_capabilities": gin.H{
 			"bounty_notifications":    true,
 			"bounty_challenge_cancel": true,
 			"bounty_public_read":      true,
 			"self_oauth_unbind":       true,
 			"responses_websocket":     true,
+		},
+		"assistant": gin.H{
+			"enabled":      assistantSettings.Enabled,
+			"model":        assistantSettings.Model,
+			"funding_mode": "super_administrator",
 		},
 
 		"usd_exchange_rate": operation_setting.USDExchangeRate,
@@ -141,7 +196,7 @@ func GetStatus(c *gin.Context) {
 		"passkey_allow_insecure":      passkeySetting.AllowInsecureOrigin,
 		"passkey_user_verification":   passkeySetting.UserVerification,
 		"passkey_attachment":          passkeySetting.AttachmentPreference,
-		"setup":                       constant.Setup,
+		"setup":                       constant.IsSetup(),
 		"user_agreement_enabled":      system_setting.UserAgreementPublished(),
 		"privacy_policy_enabled":      system_setting.PrivacyPolicyPublished(),
 		"checkin_enabled":             operation_setting.GetCheckinSetting().Enabled,
@@ -351,12 +406,19 @@ func SendPasswordResetEmail(c *gin.Context) {
 	if _, err := model.GetUniqueUserByEmail(email); err == nil {
 		code := common.GenerateVerificationCode(0)
 		common.RegisterVerificationCodeWithKey(email, code, common.PasswordResetPurpose)
-		link := fmt.Sprintf("%s/user/reset?email=%s&token=%s", system_setting.ServerAddress, email, code)
 		subject := fmt.Sprintf("%s密码重置", common.SystemName)
-		content := fmt.Sprintf("<p>您好，你正在进行%s密码重置。</p>"+
-			"<p>点击 <a href='%s'>此处</a> 进行密码重置。</p>"+
-			"<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> %s </p>"+
-			"<p>重置链接 %d 分钟内有效，如果不是本人操作，请忽略。</p>", common.SystemName, link, link, common.VerificationValidMinutes)
+		content, buildErr := buildPasswordResetEmailContent(
+			system_setting.ServerAddress,
+			common.SystemName,
+			email,
+			code,
+			common.VerificationValidMinutes,
+		)
+		if buildErr != nil {
+			logger.LogError(c.Request.Context(), "failed to build password reset email: "+buildErr.Error())
+			c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+			return
+		}
 		err := common.SendEmail(subject, email, content)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("failed to send password reset email to %s: %s", email, err.Error()))
@@ -369,6 +431,43 @@ func SendPasswordResetEmail(c *gin.Context) {
 		"message": "",
 	})
 }
+
+func buildPasswordResetEmailContent(serverAddress, systemName, email, token string, validMinutes int) (string, error) {
+	resetURL, err := url.Parse(strings.TrimSpace(serverAddress))
+	if err != nil {
+		return "", fmt.Errorf("invalid server address: %w", err)
+	}
+	if resetURL.Host == "" || (resetURL.Scheme != "http" && resetURL.Scheme != "https") {
+		return "", fmt.Errorf("server address must be an absolute http/https URL")
+	}
+	resetURL.Path = strings.TrimRight(resetURL.Path, "/") + "/user/reset"
+	query := resetURL.Query()
+	query.Set("email", email)
+	query.Set("token", token)
+	resetURL.RawQuery = query.Encode()
+
+	var content bytes.Buffer
+	err = passwordResetEmailTemplate.Execute(&content, struct {
+		SystemName   string
+		ResetURL     string
+		ValidMinutes int
+	}{
+		SystemName:   systemName,
+		ResetURL:     resetURL.String(),
+		ValidMinutes: validMinutes,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render password reset email: %w", err)
+	}
+	return content.String(), nil
+}
+
+var passwordResetEmailTemplate = template.Must(template.New("password-reset-email").Parse(
+	`<p>您好，你正在进行{{.SystemName}}密码重置。</p>` +
+		`<p>点击 <a href="{{.ResetURL}}">此处</a> 进行密码重置。</p>` +
+		`<p>如果链接无法点击，请尝试点击下面的链接或将其复制到浏览器中打开：<br> {{.ResetURL}} </p>` +
+		`<p>重置链接 {{.ValidMinutes}} 分钟内有效，如果不是本人操作，请忽略。</p>`,
+))
 
 type PasswordResetRequest struct {
 	Email string `json:"email"`

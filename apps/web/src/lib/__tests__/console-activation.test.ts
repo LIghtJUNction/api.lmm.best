@@ -95,7 +95,7 @@ describe('console activation boundary', () => {
     })
 
     assert.equal(isConsoleActivated(account), true)
-    assert.equal(getAuthenticatedLandingRoute(account), '/getting-started')
+    assert.equal(getAuthenticatedLandingRoute(account), '/dashboard')
   })
 
   test('lands only explicitly granted complete accounts in the dashboard', () => {
@@ -127,7 +127,7 @@ describe('console activation boundary', () => {
           } as AuthUser['trust_level_info'],
         })
       ),
-      '/getting-started'
+      '/dashboard'
     )
   })
 
@@ -191,15 +191,16 @@ describe('console activation boundary', () => {
     )
   })
 
-  test('allows only onboarding, wallet, profile, and support routes before activation', () => {
+  test('allows only onboarding before activation', () => {
     assert.equal(isContributorRoute('/getting-started'), true)
-    assert.equal(isContributorRoute('/wallet'), true)
-    assert.equal(isContributorRoute('/profile/security'), true)
-    assert.equal(isContributorRoute('/support'), true)
+    assert.equal(isContributorRoute('/getting-started/request'), true)
+    assert.equal(isContributorRoute('/wallet'), false)
+    assert.equal(isContributorRoute('/open-source-bounties'), false)
+    assert.equal(isContributorRoute('/profile/security'), false)
+    assert.equal(isContributorRoute('/support'), false)
     assert.equal(isContributorRoute('/workspace'), false)
     assert.equal(isContributorRoute('/challenges/42'), false)
     assert.equal(isContributorRoute('/models'), false)
-    assert.equal(isContributorRoute('/open-source-bounties'), false)
   })
 
   test('hides legacy public discovery surfaces before activation', () => {

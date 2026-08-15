@@ -5,6 +5,7 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 config=$repo/deploy/nginx/lmm-api-locations.conf
 server_config=$repo/deploy/nginx/new-api.conf
 mime_types=$repo/deploy/nginx/mime.types
+region_policy=$repo/deploy/nginx/lmm-api-region-policy.conf
 release=$repo/deploy/frontend-release.sh
 nginx_installer=$repo/deploy/nginx/install-nginx-split.sh
 route_manifest=$repo/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv
@@ -53,7 +54,8 @@ assert_literal 'max-age=31536000, immutable' "$config"
 assert_literal 'no-cache, must-revalidate' "$config"
 assert_literal 'proxy_buffering off' "$config"
 assert_literal 'Connection $connection_upgrade' "$config"
-assert_literal 'include /etc/nginx/site-policy/http/*.conf;' "$repo/deploy/nginx/http-map.conf"
+assert_literal 'geoip2 /var/lib/geoip2/DBIP-Country-Lite.mmdb {' "$repo/deploy/nginx/http-map.conf"
+assert_literal 'map $lmm_geoip_country_code $lmm_cn_source {' "$repo/deploy/nginx/http-map.conf"
 
 redirect_server=$(awk '
   /^server \{$/ { server_count++; capture = server_count == 1 }
@@ -75,8 +77,8 @@ fi
   fail 'the second server must exclusively listen on the canonical HTTPS entry point'
 [[ $(grep -Fc 'include /etc/nginx/lmm-api-locations.conf;' <<<"$canonical_server") == 1 ]] ||
   fail 'the canonical HTTPS server must serve application routes'
-[[ $(grep -Fc 'include /etc/nginx/site-policy/api.lmm.best/*.conf;' <<<"$canonical_server") == 1 ]] ||
-  fail 'the canonical HTTPS server must load host-specific access policies'
+[[ $(grep -Fc 'include /etc/nginx/lmm-api-region-policy.conf;' <<<"$canonical_server") == 1 ]] ||
+  fail 'the canonical HTTPS server must load the package-managed access policy'
 if grep -Fq 'listen 9000 ssl;' <<<"$canonical_server"; then
   fail 'the canonical HTTPS server must not also serve the legacy :9000 origin'
 fi
@@ -91,6 +93,13 @@ assert_literal 'nginx -t' "$nginx_installer"
 assert_literal 'systemctl reload nginx' "$nginx_installer"
 assert_literal 'restore_backup "$backup"' "$nginx_installer"
 assert_literal 'MIME_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-mime.types' "$nginx_installer"
+assert_literal 'REGION_POLICY_TARGET=$ROOT_PREFIX/etc/nginx/lmm-api-region-policy.conf' "$nginx_installer"
+assert_literal 'auth_request /internal/access-ip-policy;' "$region_policy"
+assert_literal 'auth_request_set $lmm_access_policy_result $upstream_http_x_lmm_access_policy;' "$region_policy"
+assert_literal 'X-LMM-CN-Source $lmm_cn_source;' "$region_policy"
+assert_literal 'X-LMM-Access-Policy $lmm_access_policy_result;' "$region_policy"
+assert_literal 'X-LMM-Internal-Error access-policy;' "$region_policy"
+assert_literal 'deploy production edge-policy install|verify' "$repo/apps/api-go/internal/appcli/deploy.go"
 if grep -Fq 'location ^~ /dashboard/' "$config"; then
   fail 'broad /dashboard/ proxy would swallow frontend dashboard routes'
 fi

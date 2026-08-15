@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -168,7 +168,7 @@ func configureNeutralTopUpInfoTest(t *testing.T) {
 	operation_setting.EpayId = "merchant-secret"
 	operation_setting.EpayKey = "key-secret"
 	operation_setting.PayMethods = []map[string]string{{
-		"name": "provider-secret", "type": "epay", "product_id": "prod-secret",
+		"name": "LDC", "type": "epay", "product_id": "prod-secret",
 	}}
 }
 
@@ -193,19 +193,16 @@ func TestGetTopUpInfoReturnsNeutralDataWhenDeveloperAccessIsDenied(t *testing.T)
 	assert.Equal(t, false, payload.Data["developer_access_granted"])
 	assert.Equal(t, true, payload.Data["activation_required"])
 	assert.Equal(t, true, payload.Data["payment_available"])
+	assert.Equal(t, true, payload.Data["enable_online_topup"])
 	assert.EqualValues(t, 7, payload.Data["min_payment"])
-	assert.Len(t, payload.Data, 8)
+	assert.Contains(t, payload.Data, "pay_methods")
+	assert.Equal(t, []any{map[string]any{"name": "LDC", "type": "epay"}}, payload.Data["pay_methods"])
 	for _, forbidden := range []string{
-		"enable_online_topup", "enable_stripe_topup", "enable_creem_topup",
-		"enable_waffo_topup", "enable_waffo_pancake_topup", "pay_methods",
-		"waffo_pay_methods", "creem_products", "topup_group_ratio", "topup_link",
-		"stripe_min_topup", "waffo_min_topup", "waffo_pancake_min_topup",
+		"provider-secret.invalid", "merchant-secret", "key-secret", "prod-secret",
+		"topup_group_ratio",
 	} {
-		assert.NotContains(t, payload.Data, forbidden)
+		assert.NotContains(t, strings.ToLower(response.Body.String()), forbidden)
 	}
-	assert.NotContains(t, strings.ToLower(response.Body.String()), "provider-secret")
-	assert.NotContains(t, strings.ToLower(response.Body.String()), "prod-secret")
-	assert.NotContains(t, strings.ToLower(response.Body.String()), "epay")
 }
 
 func TestGetTopUpInfoFailsClosedWhenDeveloperAccessCalculationFails(t *testing.T) {
@@ -252,6 +249,42 @@ func TestGetTopUpInfoPreservesGrantedResponseAndAddsAccessDecision(t *testing.T)
 	assert.Equal(t, true, payload.Data["developer_access_granted"])
 	assert.Contains(t, payload.Data, "pay_methods")
 	assert.Contains(t, payload.Data, "topup_group_ratio")
+}
+
+func TestGetTopUpInfoHidesPaymentMethodsForRestrictedAccount(t *testing.T) {
+	db := setupUserOnboardingTestDB(t)
+	configureNeutralTopUpInfoTest(t)
+	levelOne := 1
+	user := model.User{
+		Username:                "restricted-topup",
+		Password:                "password",
+		Role:                    common.RoleCommonUser,
+		Status:                  common.UserStatusEnabled,
+		TrustLevelOverride:      &levelOne,
+		PaymentRestrictionFlags: model.PaymentRestrictionLinuxDOHighScore,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Set("id", user.Id)
+	GetTopUpInfo(context)
+
+	var payload struct {
+		Success bool           `json:"success"`
+		Data    map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	require.True(t, payload.Success)
+	assert.Equal(t, true, payload.Data["developer_access_granted"])
+	assert.Equal(t, false, payload.Data["payment_available"])
+	assert.Equal(t, false, payload.Data["enable_online_topup"])
+	assert.Equal(t, false, payload.Data["enable_stripe_topup"])
+	assert.Equal(t, []any{}, payload.Data["pay_methods"])
+	assert.Equal(t, []any{}, payload.Data["amount_options"])
+	assert.NotContains(t, response.Body.String(), "payment_restriction")
+	assert.NotContains(t, response.Body.String(), "LDC")
 }
 
 func TestRequestCreemPayRejectsConfiguredProductWithoutCurrency(t *testing.T) {

@@ -644,6 +644,7 @@ async fn settings(pg: &PgPool) -> Result<BTreeMap<String, String>, ()> {
                 "WaffoPancakePrivateKey",
                 "WaffoPancakeProductID",
                 "general_setting.quota_display_type",
+                "DisplayInCurrencyEnabled",
                 "QuotaPerUnit",
                 "TopupGroupRatio",
                 "payment_setting.amount_discount",
@@ -906,8 +907,7 @@ fn quote_money(
     settings: &BTreeMap<String, String>,
 ) -> FixedDecimal {
     let original = FixedDecimal::from_i64(amount);
-    let quota_display = setting_string(settings, "general_setting.quota_display_type")
-        .is_some_and(|value| value == "TOKENS");
+    let quota_display = token_display(settings);
     let displayed = if quota_display {
         original
             .div(positive_setting_decimal(
@@ -962,9 +962,7 @@ fn json_value(settings: &BTreeMap<String, String>, key: &str) -> Option<Value> {
     setting_string(settings, key).and_then(|v| serde_json::from_str(&v).ok())
 }
 fn normalized_amount(amount: i64, settings: &BTreeMap<String, String>) -> i64 {
-    if setting_string(settings, "general_setting.quota_display_type")
-        .is_some_and(|value| value == "TOKENS")
-    {
+    if token_display(settings) {
         FixedDecimal::from_i64(amount)
             .div(positive_setting_decimal(
                 settings,
@@ -978,6 +976,19 @@ fn normalized_amount(amount: i64, settings: &BTreeMap<String, String>) -> i64 {
         amount
     }
 }
+
+/// `DisplayInCurrencyEnabled` is the legacy Go option. Go maps it to the
+/// registered `general_setting.quota_display_type` at startup; keep the same
+/// fallback for databases that have not yet been rewritten to the dotted key.
+/// The new registered value always wins when both forms exist.
+fn token_display(settings: &BTreeMap<String, String>) -> bool {
+    if let Some(value) = setting_string(settings, "general_setting.quota_display_type") {
+        return value == "TOKENS";
+    }
+    settings
+        .get("DisplayInCurrencyEnabled")
+        .is_some_and(|value| value != "true")
+}
 fn format_amount(amount: FixedDecimal, currency: &str) -> String {
     if matches!(currency, "IDR" | "JPY" | "KRW" | "VND") {
         amount.fixed(0)
@@ -989,19 +1000,19 @@ fn waffo_method(
     settings: &BTreeMap<String, String>,
     request: &PayRequest,
 ) -> Option<(String, String)> {
-    let methods = json_value(settings, "WaffoPayMethods")
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
+    let methods = waffo_methods(settings);
     if let Some(index) = request.pay_method_index {
         let method = methods.get(usize::try_from(index).ok()?)?;
         return Some((
             method
                 .get("pay_method_type")
+                .or_else(|| method.get("payMethodType"))
                 .or_else(|| method.get("PayMethodType"))?
                 .as_str()?
                 .to_owned(),
             method
                 .get("pay_method_name")
+                .or_else(|| method.get("payMethodName"))
                 .or_else(|| method.get("PayMethodName"))?
                 .as_str()?
                 .to_owned(),
@@ -1013,15 +1024,57 @@ fn waffo_method(
     methods.into_iter().find_map(|method| {
         let ty = method
             .get("pay_method_type")
+            .or_else(|| method.get("payMethodType"))
             .or_else(|| method.get("PayMethodType"))?
             .as_str()?;
         let name = method
             .get("pay_method_name")
+            .or_else(|| method.get("payMethodName"))
             .or_else(|| method.get("PayMethodName"))?
             .as_str()?;
         (ty == request.pay_method_type && name == request.pay_method_name)
             .then(|| (ty.to_owned(), name.to_owned()))
     })
+}
+
+/// Go's `GetWaffoPayMethods` falls back only when the option is absent, blank,
+/// or malformed. A valid `[]` remains an explicit empty allow-list. Keep the
+/// same distinction here and accept both the current camel-case JSON keys and
+/// legacy spellings used by older clients.
+fn waffo_methods(settings: &BTreeMap<String, String>) -> Vec<Value> {
+    let Some(raw) = settings.get("WaffoPayMethods") else {
+        return default_waffo_methods();
+    };
+    if raw.trim().is_empty() {
+        return default_waffo_methods();
+    }
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Array(methods)) => methods,
+        _ => default_waffo_methods(),
+    }
+}
+
+fn default_waffo_methods() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "Card",
+            "icon": "/pay-card.png",
+            "payMethodType": "CREDITCARD,DEBITCARD",
+            "payMethodName": "",
+        }),
+        json!({
+            "name": "Apple Pay",
+            "icon": "/pay-apple.png",
+            "payMethodType": "APPLEPAY",
+            "payMethodName": "APPLEPAY",
+        }),
+        json!({
+            "name": "Google Pay",
+            "icon": "/pay-google.png",
+            "payMethodType": "GOOGLEPAY",
+            "payMethodName": "GOOGLEPAY",
+        }),
+    ]
 }
 
 #[cfg(test)]
@@ -1165,6 +1218,31 @@ mod tests {
         );
         assert_eq!(normalized_amount(200, &settings), 2);
     }
+
+    #[test]
+    fn token_display_keeps_go_legacy_option_fallback() {
+        let legacy_tokens = BTreeMap::from([
+            ("DisplayInCurrencyEnabled".to_owned(), "false".to_owned()),
+            ("QuotaPerUnit".to_owned(), "100".to_owned()),
+        ]);
+        assert!(token_display(&legacy_tokens));
+        assert_eq!(normalized_amount(200, &legacy_tokens), 2);
+        assert_eq!(
+            quote_money(200, "default", WAFFO, &legacy_tokens),
+            FixedDecimal::parse("2").unwrap()
+        );
+
+        let dotted_wins = BTreeMap::from([
+            ("DisplayInCurrencyEnabled".to_owned(), "false".to_owned()),
+            (
+                "general_setting.quota_display_type".to_owned(),
+                "USD".to_owned(),
+            ),
+            ("QuotaPerUnit".to_owned(), "100".to_owned()),
+        ]);
+        assert!(!token_display(&dotted_wins));
+        assert_eq!(normalized_amount(200, &dotted_wins), 200);
+    }
     #[test]
     fn payment_method_is_server_allowlisted() {
         let settings = BTreeMap::from([(
@@ -1194,6 +1272,54 @@ mod tests {
                 }
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn payment_methods_match_go_camel_case_and_default_fallbacks() {
+        let camel_case = BTreeMap::from([(
+            "WaffoPayMethods".to_owned(),
+            r#"[{"payMethodType":"APPLEPAY","payMethodName":"APPLEPAY"}]"#.to_owned(),
+        )]);
+        assert_eq!(
+            waffo_method(
+                &camel_case,
+                &PayRequest {
+                    amount: 1,
+                    pay_method_index: Some(0),
+                    pay_method_type: String::new(),
+                    pay_method_name: String::new(),
+                },
+            ),
+            Some(("APPLEPAY".to_owned(), "APPLEPAY".to_owned()))
+        );
+
+        let missing = BTreeMap::new();
+        assert_eq!(
+            waffo_method(
+                &missing,
+                &PayRequest {
+                    amount: 1,
+                    pay_method_index: Some(0),
+                    pay_method_type: String::new(),
+                    pay_method_name: String::new(),
+                },
+            ),
+            Some(("CREDITCARD,DEBITCARD".to_owned(), String::new()))
+        );
+
+        let explicit_empty = BTreeMap::from([("WaffoPayMethods".to_owned(), "[]".to_owned())]);
+        assert_eq!(
+            waffo_method(
+                &explicit_empty,
+                &PayRequest {
+                    amount: 1,
+                    pay_method_index: Some(0),
+                    pay_method_type: String::new(),
+                    pay_method_name: String::new(),
+                },
+            ),
+            None
         );
     }
     #[test]

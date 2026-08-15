@@ -3,8 +3,9 @@ package controller
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 )
 
 func isPaymentComplianceConfirmed() bool {
@@ -79,17 +80,23 @@ func isWaffoPancakeTopUpEnabled() bool {
 	}
 	// Presence-of-credentials = enabled. Webhook public keys ship inside
 	// the SDK; mode (test/prod) is read from each event.
-	return strings.TrimSpace(setting.WaffoPancakeMerchantID) != "" &&
-		strings.TrimSpace(setting.WaffoPancakePrivateKey) != "" &&
+	merchantID, privateKey := service.WaffoPancakeCredentials()
+	return merchantID != "" &&
+		privateKey != "" &&
 		strings.TrimSpace(setting.WaffoPancakeProductID) != ""
 }
 
 func isWaffoPancakeWebhookConfigured() bool {
-	return isWaffoPancakeTopUpEnabled()
+	// Webhooks must remain available after new checkouts are disabled or the
+	// active product is rotated. Existing orders can still complete or emit a
+	// refund, and neither path needs the current product id. Keep the
+	// checkout-only product requirement in isWaffoPancakeTopUpEnabled.
+	merchantID, privateKey := service.WaffoPancakeCredentials()
+	return merchantID != "" && privateKey != ""
 }
 
 func isWaffoPancakeWebhookEnabled() bool {
-	return isWaffoPancakeTopUpEnabled()
+	return isPaymentComplianceConfirmed() && isWaffoPancakeWebhookConfigured()
 }
 
 func isEpayTopUpEnabled() bool {

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -91,12 +91,39 @@ func GetOpenSourceBountyConfig(c *gin.Context) {
 }
 
 func ListOwnedOpenSourceBounties(c *gin.Context) {
-	items, err := model.ListOwnedOpenSourceBounties(c.GetInt("id"))
+	archived, _ := strconv.ParseBool(c.DefaultQuery("archived", "false"))
+	items, err := model.ListOwnedOpenSourceBountiesFiltered(c.GetInt("id"), archived)
 	if err != nil {
 		openSourceBountyApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, items)
+}
+
+func ArchiveOpenSourceBounty(c *gin.Context) {
+	projectId, ok := openSourceBountyId(c, "id")
+	if !ok {
+		return
+	}
+	project, err := model.ArchiveOpenSourceBounty(c.GetInt("id"), projectId)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, project)
+}
+
+func UnarchiveOpenSourceBounty(c *gin.Context) {
+	projectId, ok := openSourceBountyId(c, "id")
+	if !ok {
+		return
+	}
+	project, err := model.UnarchiveOpenSourceBounty(c.GetInt("id"), projectId)
+	if err != nil {
+		openSourceBountyApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, project)
 }
 
 func ListAcceptedOpenSourceBounties(c *gin.Context) {

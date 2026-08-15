@@ -9,6 +9,7 @@ repo_root=$(git rev-parse --show-toplevel)
 matrix=${MISSING_ROUTES_MATRIX:-"$repo_root/apps/api-rust/tests/behavior-oracle/tests/missing-routes-matrix.tsv"}
 mode=${MISSING_ROUTES_MODE:-preflight}
 include_classes=${MISSING_ROUTES_INCLUDE_CLASSES:-"no-side-effect,database-transaction,external-gateway"}
+result_dir=${MISSING_ROUTES_RESULT_DIR:-}
 
 for command in awk curl jq sort; do
   command -v "$command" >/dev/null || {
@@ -17,6 +18,13 @@ for command in awk curl jq sort; do
   }
 done
 [[ -f $matrix ]] || { echo "missing route matrix: $matrix" >&2; exit 1; }
+if [[ -n $result_dir ]]; then
+  [[ $result_dir == /* && $result_dir != *..* ]] || {
+    echo "MISSING_ROUTES_RESULT_DIR must be an absolute path without '..'" >&2
+    exit 2
+  }
+  mkdir -p "$result_dir"
+fi
 case "$mode" in preflight|transport) ;; *) echo "MISSING_ROUTES_MODE must be preflight or transport" >&2; exit 2 ;; esac
 case ",$include_classes," in
   *",no-side-effect,"*|*",database-transaction,"*|*",external-gateway,"*) ;;
@@ -124,4 +132,19 @@ done < "$matrix"
 ROUTE_REQUEST_DIR="$runtime/requests" ROUTE_REQUIRE_EFFECTS=strict \
   "$repo_root/apps/api-rust/tests/scripts/run-route-differential.sh" "$runtime/fixtures" | tee "$runtime/results.jsonl"
 verified=$(jq -s '[.[] | select(.differential_verified)] | length' "$runtime/results.jsonl")
+if [[ -n $result_dir ]]; then
+  # These fixtures prove only the anonymous/invalid-webhook listener boundary.
+  # Keep them out of the full differential count while preserving the exact
+  # route identity and the captured response comparison for later review.
+  while IFS= read -r result; do
+    fixture=$(jq -r '.fixture' <<<"$result")
+    request_spec="$runtime/requests/$fixture.json"
+    route_id=$(jq -r '.route.id' "$request_spec")
+    method=${route_id%% *}
+    path=${route_id#* }
+    jq -cn --arg method "$method" --arg path "$path" --argjson result "$result" \
+      '{method:$method,path:$path,differential_verified:false,transport_boundary_verified:($result.differential_verified // false),differential_scope:"transport-boundary",approval_credit:false,differences:($result.differences // null),mismatch_names:[]}' \
+      >"$result_dir/$fixture.json"
+  done <"$runtime/results.jsonl"
+fi
 jq -cn --argjson routes "$index" --argjson verified "$verified" --arg selected "$include_classes" '{test:"missing-routes-listener-boundary",routes:$routes,selected_classes:$selected,transport_matches: $verified,approval_credit:false,reason:"all captures use anonymous or invalid-webhook fail-closed fixtures; transaction success and provider fixtures remain required"}'

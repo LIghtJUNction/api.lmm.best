@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -27,7 +27,15 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 	if types.IsChannelError(apiErr) {
 		return true
 	}
-	if types.IsSkipRetryError(apiErr) || retryTimes <= 0 {
+	if retryTimes <= 0 {
+		return false
+	}
+	if c != nil && apiErr.StatusCode == 400 &&
+		(common.GetContextKeyBool(c, constant.ContextKeyUpstreamCapabilityMismatch) ||
+			common.GetContextKeyBool(c, constant.ContextKeyUpstreamUnsupportedParameter)) {
+		return true
+	}
+	if types.IsSkipRetryError(apiErr) {
 		return false
 	}
 	code := apiErr.StatusCode
@@ -43,12 +51,25 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
+// ShouldExcludeChannelForRetry reports whether the current channel should be
+// omitted from the next attempt. This is intentionally request-scoped: a
+// transient upstream 503 or an explicit capability mismatch must not trigger a
+// persistent channel ban.
+func ShouldExcludeChannelForRetry(c *gin.Context, _ *types.NewAPIError) bool {
+	if c == nil {
+		return false
+	}
+	return common.GetContextKeyBool(c, constant.ContextKeyUpstreamChannelFailure) ||
+		common.GetContextKeyBool(c, constant.ContextKeyUpstreamCapabilityMismatch) ||
+		common.GetContextKeyBool(c, constant.ContextKeyUpstreamUnsupportedParameter)
+}
+
 func ProcessChannelError(c *gin.Context, channelError types.ChannelError, apiErr *types.NewAPIError) {
 	if apiErr == nil {
 		return
 	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, apiErr.StatusCode, common.LocalLogPreview(apiErr.MaskSensitiveErrorWithStatusCode())))
-	if ShouldDisableChannel(apiErr) && channelError.AutoBan {
+	if ShouldDisableChannel(apiErr) && channelError.AutoBan && !ShouldExcludeChannelForRetry(c, apiErr) {
 		gopool.Go(func() {
 			DisableChannel(channelError, apiErr.ErrorWithStatusCode())
 		})

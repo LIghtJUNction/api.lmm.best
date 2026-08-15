@@ -3,21 +3,23 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 )
 
 type SubscriptionWaffoPancakePayRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId           int    `json:"plan_id"`
+	CheckoutRegion   string `json:"checkout_region"`
+	CheckoutLanguage string `json:"checkout_language"`
 }
 
 func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
@@ -28,6 +30,9 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	var req SubscriptionWaffoPancakePayRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if !requirePaymentMethodAvailable(c, model.PaymentMethodWaffoPancake) {
 		return
 	}
 
@@ -46,8 +51,8 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	}
 	// Plan targets its own Pancake product, so we only require credentials
 	// here — not the gateway-level WaffoPancakeProductID.
-	if strings.TrimSpace(setting.WaffoPancakeMerchantID) == "" ||
-		strings.TrimSpace(setting.WaffoPancakePrivateKey) == "" {
+	merchantID, privateKey := service.WaffoPancakeCredentials()
+	if merchantID == "" || privateKey == "" {
 		common.ApiErrorMsg(c, "Waffo Pancake 未配置或密钥无效")
 		return
 	}
@@ -103,9 +108,15 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 			Amount:      decimal.NewFromFloat(plan.PriceAmount).StringFixed(2),
 			TaxCategory: "saas",
 		},
+		OrderMetadata: map[string]string{
+			service.WaffoPancakeOrderMetadataProductID: strings.TrimSpace(plan.WaffoPancakeProductId),
+			service.WaffoPancakeOrderMetadataPlanID:    strconv.Itoa(plan.Id),
+		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
 		ExpiresInSeconds:        &expiresInSeconds,
 		OrderMerchantExternalID: tradeNo,
+		CheckoutRegion:          req.CheckoutRegion,
+		CheckoutLanguage:        req.CheckoutLanguage,
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅结账会话创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))

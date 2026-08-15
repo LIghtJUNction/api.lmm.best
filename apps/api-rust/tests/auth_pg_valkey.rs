@@ -4,9 +4,10 @@ use axum::{
 };
 use bcrypt::{DEFAULT_COST, hash};
 use lmm_api_rs::auth::{
-    AuthConfig, AuthErrorKind, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth,
-    UserAuthPolicyError, auth_router, enforce_user_auth,
+    AssistantL1ConfirmationError, AuthConfig, AuthErrorKind, AuthHttpState, DashboardAuth,
+    PgValkeyDashboardAuth, UserAuthPolicyError, auth_router, enforce_user_auth,
 };
+use lmm_api_rs::migration_routes::missing_identity_catalog::{IdentityCatalogState, token_router};
 use lmm_api_rs::{ClientIpKey, RequestContext};
 use secrecy::SecretString;
 use serde_json::Value;
@@ -44,12 +45,18 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
         .await
         .expect("isolated Valkey reset");
 
-    let auth = PgValkeyDashboardAuth::new(pool.clone(), valkey.clone(), integration_config())
-        .expect("auth adapter");
+    let auth: Arc<dyn DashboardAuth> = Arc::new(
+        PgValkeyDashboardAuth::new(pool.clone(), valkey.clone(), integration_config())
+            .expect("auth adapter"),
+    );
     let router =
-        auth_router(AuthHttpState::new(Arc::new(auth), false).with_password_login_enabled(true));
+        auth_router(AuthHttpState::new(Arc::clone(&auth), false).with_password_login_enabled(true))
+            .merge(token_router(IdentityCatalogState::new(
+                pool.clone(),
+                Arc::clone(&auth),
+            )));
 
-    for (method, uri) in [("POST", "/api/user/login/2fa"), ("GET", "/api/user/token")] {
+    for (method, uri) in [("POST", "/api/user/login/2fa")] {
         let response = router
             .clone()
             .oneshot(
@@ -91,6 +98,26 @@ async fn auth_routes_preserve_postgres_and_valkey_control_plane() {
         .as_str()
         .expect("session id")
         .to_owned();
+
+    let personal_token = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/user/token")
+                .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+                .body(Body::empty())
+                .expect("personal access token request"),
+        )
+        .await
+        .expect("personal access token response");
+    assert_eq!(personal_token.status(), StatusCode::OK);
+    assert_eq!(
+        personal_token.headers()[header::CACHE_CONTROL],
+        "no-store, no-cache, must-revalidate, private, max-age=0"
+    );
+    let personal_token_body = json_body(personal_token).await;
+    assert_eq!(personal_token_body["success"], true);
+    assert!(personal_token_body["data"].as_str().is_some());
 
     let row = sqlx::query(
         "SELECT status, refresh_hash, user_auth_version FROM user_sessions WHERE sid = $1",
@@ -480,8 +507,9 @@ async fn dashboard_resolver_preserves_session_pat_and_userauth_boundaries() {
         .await
         .expect("restore valid user");
 
-    // A disabled but otherwise valid session must reach `/self`'s UserAuth
-    // boundary, while the general required resolver remains strict.
+    // Go validates internal sessions (including user status) before its
+    // post-resolution UserAuth policy, so a disabled session is revoked at
+    // the resolver boundary. Opaque PATs above retain AUTH_USER_DISABLED.
     sqlx::query("UPDATE users SET status = 2 WHERE id = 7")
         .execute(&pool)
         .await
@@ -499,8 +527,14 @@ async fn dashboard_resolver_preserves_session_pat_and_userauth_boundaries() {
         .expect("disabled session self response");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let body = json_body(response).await;
-    assert_eq!(body["code"], "AUTH_USER_DISABLED");
-    assert_eq!(body["message"], "User has been banned");
+    assert_eq!(
+        body["code"], "AUTH_SESSION_REVOKED",
+        "disabled internal session follows Go's resolver order"
+    );
+    assert_eq!(
+        body["message"],
+        "Unauthorized, not logged in and no access token provided"
+    );
     assert!(body.get("data").is_none());
     assert_eq!(
         auth.self_user(SecretString::from(session.clone()))
@@ -853,6 +887,50 @@ async fn assert_concurrent_limit(
             .expect("active count"),
         1
     );
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18 and Valkey; use auth-listener-differential.sh"]
+async fn assistant_l1_confirmation_should_be_session_bound_and_single_use() {
+    let (database_url, valkey_url) = integration_urls();
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("test PostgreSQL must be reachable");
+    reset_schema(&pool).await;
+    let valkey = redis::Client::open(valkey_url).expect("Valkey URL");
+    let auth =
+        PgValkeyDashboardAuth::new(pool, valkey, integration_config()).expect("auth adapter");
+    let token = auth
+        .create_assistant_l1_confirmation(
+            7,
+            "browser-session",
+            r#"{"user_statement":"concrete use case","recommendation":"concrete recommendation for administrator review"}"#,
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("confirmation token");
+
+    let wrong_session = auth
+        .consume_assistant_l1_confirmation(
+            7,
+            "different-session",
+            SecretString::from(token.clone()),
+        )
+        .await;
+    assert_eq!(wrong_session, Err(AssistantL1ConfirmationError::Invalid));
+
+    let payload = auth
+        .consume_assistant_l1_confirmation(7, "browser-session", SecretString::from(token.clone()))
+        .await
+        .expect("matching confirmation consumes once");
+    assert!(payload.contains("concrete use case"));
+
+    let replay = auth
+        .consume_assistant_l1_confirmation(7, "browser-session", SecretString::from(token))
+        .await;
+    assert_eq!(replay, Err(AssistantL1ConfirmationError::Invalid));
 }
 
 fn integration_config() -> AuthConfig {

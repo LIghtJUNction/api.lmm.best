@@ -39,6 +39,7 @@ import type {
   WaffoPaymentResponse,
   WaffoPancakePaymentRequest,
   WaffoPancakePaymentResponse,
+  DiscountCodeResponse,
 } from './types'
 
 // ============================================================================
@@ -56,7 +57,14 @@ export function isApiSuccess(response: ApiResponse): boolean {
  * Get topup configuration info
  */
 export async function getTopupInfo(): Promise<TopupInfoResponse> {
-  const res = await api.get('/api/user/topup/info')
+  // Payment availability is optional onboarding decoration.  The caller
+  // renders an inline fallback when this probe is unavailable, so an
+  // inactive/legacy listener must not turn a harmless 401/404 into a global
+  // toast (or a duplicate error on every focus refresh).
+  const res = await api.get('/api/user/topup/info', {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
   return res.data
 }
 
@@ -67,6 +75,18 @@ export async function redeemTopupCode(
   request: RedemptionRequest
 ): Promise<RedemptionResponse> {
   const res = await api.post('/api/user/topup', request)
+  return res.data
+}
+
+/** Validate a discount code without reserving or consuming it. */
+export async function validateDiscountCode(request: {
+  code: string
+  amount: number
+  payment_method?: string
+}): Promise<DiscountCodeResponse> {
+  const res = await api.post('/api/user/discount-code/validate', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
   return res.data
 }
 

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -14,17 +13,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
 type FastPayPayRequest struct {
 	Amount        float64 `json:"amount"`
 	PaymentMethod string  `json:"payment_method"`
+	DiscountCode  string  `json:"discount_code,omitempty"`
 }
 
 type FastPayConfig struct {
@@ -158,7 +158,7 @@ func buildFastPayOrderParams(cfg *FastPayConfig, outTradeNo, amount, subject, pa
 	return params
 }
 
-func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) error {
+func parsePayRequest(c *gin.Context, amount *float64, paymentMethod, discountCode *string) error {
 	// Check if values were pre-parsed by a parent handler (e.g. RequestEpay delegating to RequestFastPay)
 	if v, exists := c.Get("parsed_amount"); exists {
 		if amt, ok := v.(float64); ok && amt > 0 {
@@ -168,6 +168,11 @@ func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) err
 	if v, exists := c.Get("parsed_payment_method"); exists {
 		if pm, ok := v.(string); ok && pm != "" {
 			*paymentMethod = pm
+		}
+	}
+	if v, exists := c.Get("parsed_discount_code"); exists {
+		if code, ok := v.(string); ok {
+			*discountCode = code
 		}
 	}
 
@@ -180,6 +185,7 @@ func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) err
 	var req struct {
 		Amount        float64 `json:"amount" form:"amount"`
 		PaymentMethod string  `json:"payment_method" form:"payment_method"`
+		DiscountCode  string  `json:"discount_code" form:"discount_code"`
 	}
 
 	_ = c.ShouldBind(&req)
@@ -189,6 +195,9 @@ func parsePayRequest(c *gin.Context, amount *float64, paymentMethod *string) err
 	}
 	if *paymentMethod == "" && req.PaymentMethod != "" {
 		*paymentMethod = req.PaymentMethod
+	}
+	if *discountCode == "" && req.DiscountCode != "" {
+		*discountCode = req.DiscountCode
 	}
 
 	if *amount <= 0 {
@@ -219,7 +228,7 @@ func RequestFastPay(c *gin.Context) {
 	}
 
 	var req FastPayPayRequest
-	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod); err != nil {
+	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod, &req.DiscountCode); err != nil {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("FAST易支付 参数解包失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
 		return
@@ -229,9 +238,15 @@ func RequestFastPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "FAST 易支付仅支持支付宝或微信支付"})
 		return
 	}
+	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+		return
+	}
 	int64Amount := int64(req.Amount)
 	if int64Amount < getMinTopup() {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+		return
+	}
+	if !requirePaymentMethodTopUpWithinLimit(c, req.PaymentMethod, int64Amount) {
 		return
 	}
 
@@ -247,7 +262,12 @@ func RequestFastPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(int64Amount, group)
+	payMoneyDecimal, discountCode, err := quoteLegacyTopUpWithDiscount(int64Amount, group, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -284,6 +304,8 @@ func RequestFastPay(c *gin.Context) {
 		TradeNo:              tradeNo,
 		PaymentMethod:        req.PaymentMethod,
 		PaymentProvider:      model.PaymentProviderFastPay,
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}
@@ -316,7 +338,7 @@ type FastPayNotifyPayload struct {
 }
 
 func readFastPayNotifyPayload(c *gin.Context) (FastPayNotifyPayload, []byte, error) {
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil || len(bytes.TrimSpace(bodyBytes)) == 0 {
 		return FastPayNotifyPayload{}, nil, fmt.Errorf("empty callback body")
 	}

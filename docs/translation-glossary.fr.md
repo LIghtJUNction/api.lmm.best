@@ -1,107 +1,101 @@
-# Glossaire Français (French Glossary)
+# French Glossary (Project Terminology)
 
-Ce document fournit des traductions standards françaises pour la terminologie clé du projet afin d'assurer la cohérence et la précision des traductions.
+This glossary defines preferred French translations used across the project documentation and UI.
 
-This document provides standard French translations for key project terminology to ensure consistency and accuracy in translations.
+## Core Concepts
 
-## Concepts de Base (Core Concepts)
+- Emojis are allowed only if they already exist in the source text.
+- Technical terms may remain in English when the original text uses them.
+- English technical terms are allowed when widely used in French-speaking technical environments (for example, API).
 
-- L'utilisation d'émojis dans les traductions est autorisée s'ils sont présents dans l'original
-- L'utilisation de termes purement techniques est autorisée s'ils sont présents dans l'original
-- L'utilisation de termes techniques en anglais est autorisée s'ils sont largement utilisés dans l'environnement technique francophone (par exemple, API)
+| English Term | French Term | Canonical English | Description |
+|--------------|-------------|-------------------|-------------|
+| Ratio | Ratio | Ratio/Multiplier | Multiplier used for price calculation. **Important:** In pricing context, always use **Ratio** instead of **Multiplicateur**. |
+| Token | Jeton | Token | API access credentials or text units processed by models. |
+| Channel | Canal | Channel | Access path to API providers. |
+| Group | Groupe | Group | Classification used for users or tokens. |
+| Quota | Quota | Quota | Available service quota for a user. |
 
-| Chinois | Français | Anglais | Description |
-|---------|----------|---------|-------------|
-| 倍率 | Ratio | Ratio/Multiplier | Multiplicateur utilisé pour le calcul des prix. **Important :** Dans le contexte des calculs de prix, toujours utiliser "Ratio" plutôt que "Multiplicateur" pour assurer la cohérence terminologique |
-| 令牌 | Jeton | Token | Identifiants d'accès API ou unités de texte traitées par les modèles |
-| 渠道 | Canal | Channel | Canal d'accès aux fournisseurs d'API |
-| 分组 | Groupe | Group | Classification des utilisateurs ou des jetons |
-| 额度 | Quota | Quota | Quota de services disponible pour l'utilisateur |
+## Model Related
 
-## Modèles (Model Related)
+| English Term | French Term | Canonical English | Description |
+|--------------|-------------|-------------------|-------------|
+| Prompt | Invite | Prompt | Input content for the model. |
+| Completion | Complétion | Completion | Model output content. **Important:** Do not use alternatives such as *achèvement* or *finalisation* in this context. |
+| Input | Entrée | Input/Prompt | Data sent to the model. |
+| Output | Sortie | Output/Completion | Data returned by the model. |
+| Model Ratio | Ratio du modèle | Model Ratio | Pricing ratio for different models. |
+| Completion Ratio | Ratio de complétion | Completion Ratio | Extra billing ratio for model output. |
+| Price per call | Prix fixe | Price per call | Price charged per request. |
+| Pay-as-you-go | Paiement à l'utilisation | Pay-as-you-go | Usage-based pricing model. |
+| Pay-per-call | Paiement par appel | Pay-per-call | Flat charge per request. |
 
-| Chinois | Français | Anglais | Description |
-|---------|----------|---------|-------------|
-| 提示 | Invite | Prompt | Contenu d'entrée du modèle |
-| 补全 | Complétion | Completion | Contenu de sortie du modèle. **Important :** Ne pas utiliser "Achèvement" ou "Finalisation" - uniquement "Complétion" pour correspondre à la terminologie technique |
-| 输入 | Entrée | Input/Prompt | Contenu envoyé au modèle |
-| 输出 | Sortie | Output/Completion | Contenu retourné par le modèle |
-| 模型倍率 | Ratio du modèle | Model Ratio | Ratio de tarification pour différents modèles |
-| 补全倍率 | Ratio de complétion | Completion Ratio | Ratio de tarification supplémentaire pour la sortie |
-| 固定价格 | Prix fixe | Price per call | Prix par appel |
-| 按量计费 | Paiement à l'utilisation | Pay-as-you-go | Tarification basée sur l'utilisation |
-| 按次计费 | Paiement par appel | Pay-per-view | Prix fixe par appel |
+## User Management
 
-## Gestion des Utilisateurs (User Management)
+| English Term | French Term | Canonical English | Description |
+|--------------|-------------|-------------------|-------------|
+| Root User | Super-administrateur | Root User | Administrator with highest privileges. |
+| Admin User | Administrateur | Admin User | System administrator. |
+| Normal User | Utilisateur normal | Normal User | User with standard privileges. |
 
-| Chinois | Français | Anglais | Description |
-|---------|----------|---------|-------------|
-| 超级管理员 | Super-administrateur | Root User | Administrateur avec les privilèges les plus élevés |
-| 管理员 | Administrateur | Admin User | Administrateur système |
-| 普通用户 | Utilisateur normal | Normal User | Utilisateur avec privilèges standards |
+## Recharge & Redemption
 
-## Recharge et Échange (Recharge & Redemption)
+| English Term | French Term | Canonical English | Description |
+|--------------|-------------|-------------------|-------------|
+| Top up | Recharge | Top Up | Add quota to an account. |
+| Redemption Code | Code d'échange | Redemption Code | Code that can be redeemed for quota. |
 
-| Chinois | Français | Anglais | Description |
-|---------|----------|---------|-------------|
-| 充值 | Recharge | Top Up | Ajout de quota au compte |
-| 兑换码 | Code d'échange | Redemption Code | Code qui peut être échangé contre du quota |
+## Channel Management
 
-## Gestion des Canaux (Channel Management)
+| English Term | French Term | Canonical English | Description |
+|--------------|-------------|-------------------|-------------|
+| Channel | Canal | Channel | API provider access channel. |
+| API Key | Clé API | API Key | API access key. **Important:** Prefer **Clé API** over generic translations of token. |
+| Priority | Priorité | Priority | Channel selection priority. |
+| Weight | Poids | Weight | Load-balancing weight. |
+| Proxy | Proxy | Proxy | Proxy server address. |
+| Model Mapping | Redirection de modèle | Model Mapping | Replace model name in request body. |
+| Provider | Fournisseur | Provider/Vendor | API/AI service provider. |
 
-| Chinois | Français | Anglais | Description |
-|---------|----------|---------|-------------|
-| 渠道 | Canal | Channel | Canal du fournisseur d'API |
-| API密钥 | Clé API | API Key | Clé d'accès API. **Important :** Utiliser "Clé API" au lieu de "Jeton API" pour plus de précision et conformément à la terminologie technique francophone établie. Le terme "Clé" reflète mieux la fonctionnalité d'accès aux ressources, tandis que "Jeton" est plus souvent associé aux unités de texte dans le contexte du traitement des modèles linguistiques. |
-| 优先级 | Priorité | Priority | Priorité de sélection du canal |
-| 权重 | Poids | Weight | Poids d'équilibrage de charge |
-| 代理 | Proxy | Proxy | Adresse du serveur proxy |
-| 模型重定向 | Redirection de modèle | Model Mapping | Remplacement du nom du modèle dans le corps de la requête |
-| 供应商 | Fournisseur | Provider/Vendor | Fournisseur de services ou d'API |
+## Security Related
 
-## Sécurité (Security Related)
+| English Term | French Term | Canonical English | Description |
+|--------------|-------------|-------------------|-------------|
+| Two-Factor Authentication | Authentification à deux facteurs | Two-Factor Authentication | Extra account security check. |
+| 2FA | 2FA | Two-Factor Authentication | Abbreviation for two-factor authentication. |
 
-| Chinois | Français | Anglais | Description |
-|---------|----------|---------|-------------|
-| 两步验证 | Authentification à deux facteurs | Two-Factor Authentication | Méthode de vérification de sécurité supplémentaire pour les comptes |
-| 2FA | 2FA | Two-Factor Authentication | Abréviation de l'authentification à deux facteurs |
+## Translation Guidance
 
-## Recommandations de Traduction (Translation Guidelines)
+### Context-Aware Prompt/Input Distinction
 
-### Variantes Contextuelles de Traduction
+- **Invite / Prompt**: User interaction and LLM prompt contexts.
+- **Entrée / Input**: Billing, technical documentation, and data-processing descriptions.
+- **Rule**: Use *Invite/Prompt* for UI/interaction wording and *Entrée/Input* for backend or calculation contexts.
 
-**Invite/Entrée (Prompt/Input)**
+### Token Meaning by Context
 
-- **Invite** : Lors de l'interaction avec les LLM, dans l'interface utilisateur, lors de la description de l'interaction avec le modèle
-- **Entrée** : Dans la tarification, la documentation technique, la description du processus de traitement des données
-- **Règle** : S'il s'agit de l'expérience utilisateur et de l'interaction avec l'IA → "Invite", s'il s'agit du processus technique ou des calculs → "Entrée"
+- API token for access control (API Token)
+- Text token processed by the model (Text Token)
+- System access token for authentication flow (Access Token)
 
-**Jeton (Token)**
+### Quota Notes
 
-- Jeton d'accès API (API Token)
-- Unité de texte traitée par le modèle (Text Token)
-- Jeton d'accès système (Access Token)
+- Service quota available to a user.
+- Sometimes also translated as **Crédit** depending on context.
 
-**Quota (Quota)**
+### French Language Notes
 
-- Quota de services disponible pour l'utilisateur
-- Parfois traduit comme "Crédit"
+- Keep plural forms valid for localization frameworks (`_one`, `_other`).
+- Pay attention to gender and grammar in French terms.
+- Examples: `modèle` is masculine, `canal` is masculine.
 
-### Particularités de la Langue Française
+### Standardized Terms
 
-- **Formes plurielles** : Nécessite une implémentation correcte des formes plurielles (_one, _other)
-- **Accords grammaticaux** : Attention aux accords grammaticaux dans les termes techniques
-- **Genre grammatical** : Accord du genre des termes techniques (par exemple, "modèle" - masculin, "canal" - masculin)
-
-### Termes Standardisés
-
-- **Complétion (Completion)** : Contenu de sortie du modèle
-- **Ratio (Ratio)** : Multiplicateur pour le calcul des prix
-- **Code d'échange (Redemption Code)** : Utilisé au lieu de "Code d'échange" pour plus de précision
-- **Fournisseur (Provider/Vendor)** : Organisation ou service fournissant des API ou des modèles d'IA
+- **Complétion**: model output.
+- **Ratio**: multiplier for pricing.
+- **Code de redemption / code d'échange**: prefer **Code d'échange**.
+- **Fournisseur**: organization or service exposing API or models.
 
 ---
 
-**Note pour les contributeurs :** Si vous trouvez des incohérences dans les traductions de terminologie ou si vous avez de meilleures suggestions de traduction pour le français, n'hésitez pas à créer une Issue ou une Pull Request.
-
-**Contribution Note for French:** If you find any inconsistencies in terminology translations or have better translation suggestions for French, please feel free to submit an Issue or Pull Request.
+**Contributor note:** If you spot inconsistent terminology or have better French localization suggestions, open an Issue or Pull Request.

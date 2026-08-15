@@ -8,12 +8,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	passkeysvc "github.com/QuantumNous/new-api/service/passkey"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	passkeysvc "github.com/LIghtJUNction/api.lmm.best/service/passkey"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
@@ -667,25 +667,32 @@ func getAuthenticatedUser(c *gin.Context) (*model.User, error) {
 }
 
 func requirePasskeyRegistrationVerification(c *gin.Context, userID int) bool {
-	twoFA, err := model.GetTwoFAByUserId(userID)
+	methods, err := middleware.PreferredSecurityProofMethods(userID)
 	if err != nil {
 		common.ApiError(c, err)
 		return false
 	}
-	if twoFA == nil || !twoFA.IsEnabled {
+	if len(methods) == 0 {
 		return true
 	}
-	return middleware.RequireSecurityProof(c, securityProofScopePasskeyRegister, []string{secureVerificationMethod2FA})
+	if methods[0] == secureVerificationMethodPasskey {
+		if _, err := model.GetPasskeyByUserID(userID); errors.Is(err, model.ErrPasskeyNotFound) {
+			// First-time Passkey registration has no existing Passkey with which
+			// to perform the compatibility fallback proof.
+			return true
+		} else if err != nil {
+			common.ApiError(c, err)
+			return false
+		}
+	}
+	return middleware.RequireSecurityProof(c, securityProofScopePasskeyRegister, methods)
 }
 
 func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
-	twoFA, err := model.GetTwoFAByUserId(userID)
+	methods, err := middleware.PreferredSecurityProofMethods(userID)
 	if err != nil {
 		common.ApiError(c, err)
 		return false
-	}
-	if twoFA != nil && twoFA.IsEnabled {
-		return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethod2FA})
 	}
 
 	_, err = model.GetPasskeyByUserID(userID)
@@ -701,5 +708,5 @@ func requirePasskeyDeleteVerification(c *gin.Context, userID int) bool {
 		return false
 	}
 
-	return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, []string{secureVerificationMethodPasskey})
+	return middleware.RequireSecurityProof(c, securityProofScopePasskeyDelete, methods)
 }

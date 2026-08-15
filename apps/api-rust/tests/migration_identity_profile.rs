@@ -32,6 +32,15 @@ impl ProfileIdentityResolver for VerifiedPrincipal {
     }
 }
 
+struct InternalPrincipal;
+
+#[async_trait]
+impl ProfileIdentityResolver for InternalPrincipal {
+    async fn principal(&self, _: &HeaderMap) -> Result<ProfileIdentity, ProfileAuthError> {
+        Err(ProfileAuthError::Internal)
+    }
+}
+
 fn app() -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
@@ -46,6 +55,37 @@ fn app_without_listener_principal() -> axum::Router {
         .expect("valid lazy test URL");
     let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid test URL");
     router(ProfileState::new(pool, valkey))
+}
+
+#[tokio::test]
+async fn profile_auth_dependency_failures_keep_go_internal_auth_status_and_code() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1/unused")
+        .expect("valid lazy test URL");
+    let valkey = redis::Client::open("redis://127.0.0.1/").expect("valid test URL");
+    let response =
+        router(ProfileState::new(pool, valkey).with_identity_resolver(Arc::new(InternalPrincipal)))
+            .oneshot(
+                Request::get("/api/user/aff")
+                    .header("accept-language", "zh-CN")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON failure envelope"),
+        serde_json::json!({
+            "success": false,
+            "code": "AUTH_INTERNAL_ERROR",
+            "message": "数据库出错，请联系管理员"
+        })
+    );
 }
 
 #[tokio::test]
@@ -136,13 +176,59 @@ async fn profile_setting_rejects_an_invalid_notification_type_before_postgres() 
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
     assert_eq!(
         serde_json::from_slice::<Value>(&body).expect("JSON failure envelope")["message"],
-        "invalid notification type"
+        "Invalid warning type"
+    );
+}
+
+#[tokio::test]
+async fn profile_setting_null_body_keeps_gin_zero_value_validation() {
+    let response = app()
+        .oneshot(
+            Request::put("/api/user/setting")
+                .header("authorization", "Bearer listener-verified")
+                .header("content-type", "application/json")
+                .body(Body::from("null"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).expect("JSON failure envelope"),
+        serde_json::json!({"success": false, "message": "Invalid warning type"})
+    );
+}
+
+#[tokio::test]
+async fn authenticated_profile_handler_errors_preserve_auth_version() {
+    let response = app()
+        .oneshot(
+            Request::put("/api/user/self")
+                .header("authorization", "Bearer listener-verified")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("auth-version")
+            .and_then(|value| value.to_str().ok()),
+        Some("864b7076dbcd0a3c01b5520316720ebf")
     );
 }
 
@@ -184,7 +270,7 @@ async fn self_profile_password_rotation_requires_session_owner_before_postgres()
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body");
@@ -220,7 +306,7 @@ async fn self_profile_uses_request_locale_for_rejected_unverified_identity() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 18 and Valkey; set LMM_IDENTITY_TEST_DATABASE_URL and LMM_IDENTITY_TEST_VALKEY_URL"]
-async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_cache() {
+async fn profile_preference_write_updates_postgres_and_refreshes_valkey_user_cache() {
     assert_eq!(
         env::var("LMM_IDENTITY_TEST_ALLOW_SCHEMA_RESET").as_deref(),
         Ok("1"),
@@ -251,9 +337,16 @@ async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_c
         .get_multiplexed_async_connection()
         .await
         .expect("connect isolated Valkey");
-    redis::cmd("SET")
+    redis::cmd("HSET")
         .arg("user:7")
-        .arg("stale")
+        .arg("Id")
+        .arg(7)
+        .arg("AuthVersion")
+        .arg(1)
+        .arg("CacheSchema")
+        .arg(2)
+        .arg("Setting")
+        .arg("{}")
         .query_async::<()>(&mut cache)
         .await
         .expect("seed cache");
@@ -291,12 +384,16 @@ async fn profile_preference_write_updates_postgres_and_invalidates_valkey_user_c
         serde_json::from_str::<Value>(&setting).expect("setting JSON")["language"],
         "en"
     );
-    let exists: i64 = redis::cmd("EXISTS")
+    let cached_setting: String = redis::cmd("HGET")
         .arg("user:7")
+        .arg("Setting")
         .query_async(&mut cache)
         .await
-        .expect("cache existence");
-    assert_eq!(exists, 0);
+        .expect("cache setting");
+    assert_eq!(
+        serde_json::from_str::<Value>(&cached_setting).expect("cached setting JSON")["language"],
+        "en"
+    );
 
     let response = application
         .oneshot(

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/oauth"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -35,6 +35,27 @@ type oauthFlowPayload struct {
 // providerParams returns map with Provider key for i18n templates
 func providerParams(name string) map[string]any {
 	return map[string]any{"Provider": name}
+}
+
+func applyLinuxDOPaymentRestriction(provider oauth.Provider, oauthUser *oauth.OAuthUser, user *model.User) error {
+	if _, ok := provider.(*oauth.LinuxDOProvider); !ok || oauthUser == nil || user == nil {
+		return nil
+	}
+	score, ok := oauthUser.Extra["gamification_score"].(float64)
+	if !ok || score < 0 {
+		return nil
+	}
+	if err := model.UpdateLinuxDOGamificationScore(user.Id, score); err != nil {
+		return err
+	}
+	user.LinuxDOGamificationScore = score
+	user.LinuxDOScoreUpdatedAt = time.Now().Unix()
+	if score > model.LinuxDOGamificationScorePaymentThreshold {
+		user.PaymentRestrictionFlags |= model.PaymentRestrictionLinuxDOHighScore
+	} else {
+		user.PaymentRestrictionFlags &^= model.PaymentRestrictionLinuxDOHighScore
+	}
+	return nil
 }
 
 // GenerateOAuthCode generates a state code for OAuth CSRF protection
@@ -239,6 +260,10 @@ func HandleOAuth(c *gin.Context) {
 		}
 		return
 	}
+	if err := applyLinuxDOPaymentRestriction(provider, oauthUser, user); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	// 8. Check user status
 	if user.Status != common.UserStatusEnabled {
@@ -307,13 +332,22 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 			return
 		}
 	} else {
-		// Built-in provider: update user record directly
-		provider.SetProviderUserID(&user, oauthUser.ProviderUserID)
-		err = user.Update(false)
+		// Built-in provider: update only the binding column. Do not write the
+		// full user snapshot, which may contain stale role/status/group values.
+		column := provider.ProviderUserIDColumn()
+		if column == "" {
+			err = errors.New("oauth provider does not expose a bind column")
+		} else {
+			err = model.UpdateUserBindColumn(user.Id, column, oauthUser.ProviderUserID)
+		}
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
+	}
+	if err := applyLinuxDOPaymentRestriction(provider, oauthUser, &user); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 
 	common.ApiSuccessI18n(c, i18n.MsgOAuthBindSuccess, gin.H{
@@ -360,6 +394,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 
 	// User doesn't exist, create new user if registration is enabled
 	if !common.RegisterEnabled {
+		return nil, &OAuthRegistrationDisabledError{}
+	}
+	if common.IsRegistrationMethodDisabled(oauthRegistrationMethod(provider)) {
 		return nil, &OAuthRegistrationDisabledError{}
 	}
 	if err := publicRegistrationGateFailure(acceptedLegal); err != nil {
@@ -462,6 +499,23 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	}
 
 	return user, nil
+}
+
+func oauthRegistrationMethod(provider oauth.Provider) string {
+	switch typed := provider.(type) {
+	case *oauth.GitHubProvider:
+		return "github"
+	case *oauth.DiscordProvider:
+		return "discord"
+	case *oauth.OIDCProvider:
+		return "oidc"
+	case *oauth.LinuxDOProvider:
+		return "linuxdo"
+	case *oauth.GenericOAuthProvider:
+		return "custom:" + typed.GetConfig().Slug
+	default:
+		return strings.ToLower(strings.TrimSpace(provider.GetName()))
+	}
 }
 
 // Error types for OAuth

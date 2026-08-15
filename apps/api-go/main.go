@@ -14,25 +14,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/internal/appcli"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	"github.com/QuantumNous/new-api/pkg/wsmanager"
-	"github.com/QuantumNous/new-api/relay"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/router"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/authz"
-	_ "github.com/QuantumNous/new-api/setting/performance_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/controller"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
+	"github.com/LIghtJUNction/api.lmm.best/internal/appcli"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/oauth"
+	perfmetrics "github.com/LIghtJUNction/api.lmm.best/pkg/perf_metrics"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/wsmanager"
+	"github.com/LIghtJUNction/api.lmm.best/relay"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/router"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/service/authz"
+	_ "github.com/LIghtJUNction/api.lmm.best/setting/performance_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -222,6 +222,7 @@ func runServer() {
 	server.Use(middleware.RequestId())
 	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
+	server.Use(middleware.AntiRelayAccess())
 	middleware.SetUpLogger(server)
 	// 设置路由
 	if err := router.SetRouter(server); err != nil {
@@ -232,6 +233,14 @@ func runServer() {
 	listenAddress, err := buildListenAddress(os.Getenv("LMM_API_BIND_ADDRESS"), port)
 	if err != nil {
 		common.FatalLog("failed to configure HTTP listen address: " + err.Error())
+		return
+	}
+	if err := regionalBindPolicy(
+		common.IsRegionAccessPolicyEnabled(),
+		os.Getenv("LMM_API_BIND_ADDRESS"),
+		listenAddress,
+	); err != nil {
+		common.FatalLog("failed to configure regional access policy: " + err.Error())
 		return
 	}
 	localAcceptance, err := localAcceptancePolicy(
@@ -281,9 +290,12 @@ func runServer() {
 
 func buildListenAddress(bindAddress, port string) (string, error) {
 	if bindAddress == "" {
-		// Preserve the historical public default when no explicit bind address is
-		// configured.
-		return ":" + port, nil
+		// Keep the application private by default. The production regional gate
+		// runs at Nginx; a public fallback listener would let callers bypass its
+		// GeoIP and account-aware policy whenever the environment is incomplete.
+		// Deployments that intentionally expose the application can still opt in
+		// with an explicit LMM_API_BIND_ADDRESS.
+		return net.JoinHostPort("127.0.0.1", port), nil
 	}
 	bindAddress = strings.TrimSpace(bindAddress)
 	if bindAddress == "" {
@@ -294,6 +306,25 @@ func buildListenAddress(bindAddress, port string) (string, error) {
 	}
 
 	return net.JoinHostPort(bindAddress, port), nil
+}
+
+// regionalBindPolicy keeps the application private whenever the edge region
+// policy is enabled. Otherwise a deployment can accidentally expose port
+// 3000 directly and bypass Nginx's GeoIP decision entirely.
+func regionalBindPolicy(policyEnabled bool, configuredBindAddress, listenAddress string) error {
+	if !policyEnabled {
+		return nil
+	}
+
+	configured := strings.TrimSpace(configuredBindAddress)
+	if configured != "" && !isExactLoopbackHost(configured) {
+		return fmt.Errorf("regional access policy requires LMM_API_BIND_ADDRESS to be exactly 127.0.0.1 or ::1")
+	}
+	host, _, err := net.SplitHostPort(listenAddress)
+	if err != nil || !isExactLoopbackHost(host) {
+		return fmt.Errorf("regional access policy requires the final HTTP listen address to be loopback")
+	}
+	return nil
 }
 
 func localAcceptancePolicy(flagValue, configuredBindAddress, listenAddress string) (bool, error) {
@@ -393,6 +424,9 @@ func InitResources() (returnErr error) {
 	}
 
 	perfmetrics.Init()
+
+	// 启动动态定价 ticker（按窗口聚合用量并更新模型价格倍率）
+	service.StartDynamicPricingTicker()
 
 	// 启动系统监控
 	common.StartSystemMonitor()

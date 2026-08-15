@@ -40,7 +40,9 @@ import {
 } from '../constants'
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
+import { UserAssistantHistoryDialog } from './user-assistant-history-dialog'
 import { UserQuotaCell } from './user-quota-cell'
+import { UserTrustLevelCell } from './user-trust-level-cell'
 
 export function useUsersColumns(): ColumnDef<User>[] {
   const { t } = useTranslation()
@@ -89,6 +91,26 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const username = row.getValue('username') as string
         const displayName = row.original.display_name
         const remark = row.original.remark
+        const paymentRestrictionFlags =
+          row.original.payment_restriction_flags || 0
+        let linuxDOScoreReason: string | null = null
+        if (row.original.linux_do_gamification_score !== undefined) {
+          linuxDOScoreReason = t('LinuxDO community score: {{score}}', {
+            score: row.original.linux_do_gamification_score,
+          })
+        } else if (paymentRestrictionFlags & 2) {
+          linuxDOScoreReason = t('LinuxDO community score exceeded 10,000')
+        }
+        const paymentRestrictionReasons = [
+          paymentRestrictionFlags & 1
+            ? t('Registered with a linux.do email address')
+            : null,
+          linuxDOScoreReason,
+          row.original.linux_do_id ? t('Uses LinuxDO OAuth') : null,
+          row.original.disposable_email
+            ? t('Disposable email promotion restriction')
+            : null,
+        ].filter(Boolean) as string[]
 
         return (
           <div className='flex min-w-[160px] flex-col gap-1'>
@@ -96,6 +118,31 @@ export function useUsersColumns(): ColumnDef<User>[] {
               <LongText className='max-w-[140px] font-medium'>
                 {username}
               </LongText>
+              {paymentRestrictionReasons.length > 0 && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span
+                        className='cursor-help text-amber-500'
+                        role='img'
+                        aria-label={t('Payment audience profile')}
+                      >
+                        ★
+                      </span>
+                    }
+                  />
+                  <TooltipContent>
+                    <p className='mb-1 text-xs font-medium'>
+                      {t('Payment audience profile')}
+                    </p>
+                    {paymentRestrictionReasons.map((reason) => (
+                      <p key={reason} className='text-xs'>
+                        {reason}
+                      </p>
+                    ))}
+                  </TooltipContent>
+                </Tooltip>
+              )}
               {remark && (
                 <Tooltip>
                   <TooltipTrigger
@@ -120,6 +167,21 @@ export function useUsersColumns(): ColumnDef<User>[] {
       enableHiding: false,
       size: 220,
       meta: { mobileTitle: true },
+    },
+    {
+      accessorKey: 'email',
+      header: t('Email'),
+      cell: ({ row }) => {
+        const email = row.original.email?.trim()
+        return (
+          <LongText className='max-w-[240px] text-sm'>
+            {email || t('No email provided')}
+          </LongText>
+        )
+      },
+      enableSorting: false,
+      size: 240,
+      meta: { mobileOrder: 15 },
     },
     {
       accessorKey: 'status',
@@ -173,6 +235,52 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { mobileOrder: 40 },
     },
     {
+      id: 'topup_quota',
+      accessorFn: (row) => row.topup_summary?.quota ?? 0,
+      header: t('Top-up'),
+      cell: ({ row }) => {
+        const summary = row.original.topup_summary
+        const methods = summary?.methods ?? []
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div className='flex min-w-[150px] cursor-help flex-col gap-0.5 text-sm' />
+              }
+            >
+              <span>{formatQuota(summary?.quota ?? 0)}</span>
+              <span className='text-muted-foreground text-xs'>
+                {summary?.orders ?? 0} {t('Top-up')}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className='max-w-[320px]'>
+              {methods.length === 0 ? (
+                <p className='text-xs'>{formatQuota(0)}</p>
+              ) : (
+                <div className='space-y-1'>
+                  {methods.map((method) => {
+                    const label = [
+                      method.method.trim(),
+                      method.provider?.trim(),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                    return (
+                      <p key={`${label}-${method.orders}`} className='text-xs'>
+                        {label || '—'}: {formatQuota(method.quota)}
+                      </p>
+                    )
+                  })}
+                </div>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        )
+      },
+      size: 170,
+      meta: { mobileOrder: 45 },
+    },
+    {
       accessorKey: 'group',
       header: t('Group'),
       cell: ({ row }) => {
@@ -222,43 +330,68 @@ export function useUsersColumns(): ColumnDef<User>[] {
       id: 'trust_level',
       header: t('Trust level'),
       cell: ({ row }) => {
-        const user = row.original
-        const info = user.trust_level_info
-        let level = info?.level ?? 0
-        if (!info?.level && user.role >= 100) level = 6
-        else if (!info?.level && user.role >= 10) level = 5
-        let badgeVariant: 'info' | 'success' | 'neutral' = 'neutral'
-        if (level >= 5) badgeVariant = 'info'
-        else if (level >= 3) badgeVariant = 'success'
-        const overridden = info?.overridden === true
+        return <UserTrustLevelCell user={row.original} />
+      },
+      enableSorting: false,
+      size: 150,
+      meta: { mobileBadge: true, mobileOrder: 25 },
+    },
+    {
+      id: 'assistant_profile',
+      header: t('AI labels'),
+      cell: ({ row }) => {
+        const profile = row.original.assistant_profile
+        const tags = profile?.tags ?? []
+        const source = profile?.source
+        if (tags.length === 0) {
+          return <span className='text-muted-foreground text-sm'>-</span>
+        }
         return (
           <Tooltip>
             <TooltipTrigger
               render={
-                <StatusBadge
-                  label={`L${level}`}
-                  variant={badgeVariant}
-                  copyable={false}
-                  className='cursor-help'
-                />
+                <div className='flex max-w-[220px] flex-wrap gap-1 overflow-hidden' />
               }
-            />
+            >
+              {tags.slice(0, 3).map((tag) => (
+                <StatusBadge
+                  key={tag}
+                  label={tag}
+                  variant='neutral'
+                  copyable={false}
+                />
+              ))}
+              {tags.length > 3 && (
+                <StatusBadge
+                  label={`+${tags.length - 3}`}
+                  variant='neutral'
+                  copyable={false}
+                />
+              )}
+            </TooltipTrigger>
             <TooltipContent>
-              <p className='text-xs'>
-                {overridden
-                  ? t('Administrator override')
-                  : t('Automatic level')}
-                {info?.discount_percent
-                  ? ` · ${info.discount_percent}% ${t('discount')}`
-                  : ''}
+              <p className='mb-1 text-xs font-medium'>{t('AI labels')}</p>
+              <p className='text-xs'>{tags.join(', ')}</p>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                {source === 'assistant'
+                  ? t('Generated from assistant conversations')
+                  : t('Managed by an administrator')}
               </p>
             </TooltipContent>
           </Tooltip>
         )
       },
       enableSorting: false,
-      size: 110,
-      meta: { mobileBadge: true, mobileOrder: 25 },
+      size: 230,
+      meta: { mobileOrder: 28 },
+    },
+    {
+      id: 'assistant_conversations',
+      header: t('Support conversations'),
+      cell: ({ row }) => <UserAssistantHistoryDialog user={row.original} />,
+      enableSorting: false,
+      size: 150,
+      meta: { mobileOrder: 26 },
     },
     {
       id: 'invite_info',

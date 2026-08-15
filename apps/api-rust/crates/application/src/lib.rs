@@ -97,16 +97,21 @@ impl PublicContentService {
 
     /// Returns the legacy-compatible value; Go defaults absent options to an empty string.
     pub async fn read(&self, kind: PublicContentKind) -> Result<String, PublicContentError> {
-        if let Ok(Ok(Some(value))) =
-            tokio::time::timeout(self.dependency_timeout, self.cache.get(kind)).await
-        {
-            return Ok(value);
+        // PostgreSQL is authoritative. The legacy Go handler reads its
+        // process-local OptionMap and never prefers a potentially stale cache
+        // entry over the current option value.
+        match tokio::time::timeout(self.dependency_timeout, self.repository.get(kind)).await {
+            Ok(Ok(Some(value))) => Ok(value),
+            Ok(Ok(None)) => Ok(String::new()),
+            Ok(Err(_)) | Err(_) => {
+                // Keep Valkey only as a last-resort availability fallback when
+                // the authoritative source is unavailable.
+                match tokio::time::timeout(self.dependency_timeout, self.cache.get(kind)).await {
+                    Ok(Ok(Some(value))) => Ok(value),
+                    Ok(Ok(None)) | Ok(Err(_)) | Err(_) => Err(PublicContentError),
+                }
+            }
         }
-        let value = tokio::time::timeout(self.dependency_timeout, self.repository.get(kind))
-            .await
-            .map_err(|_| PublicContentError)??
-            .unwrap_or_default();
-        Ok(value)
     }
 }
 
@@ -288,6 +293,8 @@ mod tests {
 
     struct PendingRepository;
 
+    struct FailingRepository;
+
     struct CountingRepository {
         reads: AtomicUsize,
         value: &'static str,
@@ -364,6 +371,16 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl PublicContentRepository for FailingRepository {
+        async fn get(
+            &self,
+            _kind: PublicContentKind,
+        ) -> Result<Option<String>, PublicContentError> {
+            Err(PublicContentError)
+        }
+    }
+
     #[tokio::test]
     async fn missing_public_content_should_match_the_go_empty_default() {
         let service = PublicContentService::new(
@@ -381,7 +398,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_hit_should_not_read_postgres() {
+    async fn authoritative_repository_wins_over_stale_cache() {
         let repository = Arc::new(CountingRepository {
             reads: AtomicUsize::new(0),
             value: "postgres",
@@ -395,10 +412,26 @@ mod tests {
             service
                 .read(PublicContentKind::About)
                 .await
-                .expect("cache read succeeds"),
-            "valkey"
+                .expect("authoritative read succeeds"),
+            "postgres"
         );
-        assert_eq!(repository.reads.load(Ordering::Relaxed), 0);
+        assert_eq!(repository.reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn repository_failure_should_fall_back_to_cache() {
+        let service = PublicContentService::new(
+            Arc::new(FailingRepository),
+            Arc::new(HitCache("cached")),
+            TEST_DEPENDENCY_TIMEOUT,
+        );
+        assert_eq!(
+            service
+                .read(PublicContentKind::Notice)
+                .await
+                .expect("cache fallback succeeds"),
+            "cached"
+        );
     }
 
     #[tokio::test]

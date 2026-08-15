@@ -258,13 +258,23 @@ sub is_models_post_alias {
         || $path eq '/v1beta/models/:model/*tail';
 }
 
+# The shared `/v1/models/:model` method router is composed in three places:
+# the focused compatibility candidate, the normal GET catalogue, and the
+# relay's POST/DELETE method router.  These declarations intentionally describe
+# one Axum method surface rather than three independently mounted endpoints.
+sub is_models_shared_alias {
+    return 1 if $_[1] eq '/v1/models/:model'
+        && ($_[0] eq 'GET' || $_[0] eq 'DELETE');
+    return is_models_post_alias(@_);
+}
+
 sub method_calls {
     my ($expression) = @_;
     my @calls;
     my $index = 0;
     while ($index < length($expression)) {
         my $remaining = substr($expression, $index);
-        if ($remaining =~ /\A(?:axum\s*::\s*routing\s*::\s*)?($method_pattern)\s*\(/i) {
+        if ($remaining =~ /\A(?:\.\s*)?(?:axum\s*::\s*routing\s*::\s*)?($method_pattern)\s*\(/i) {
             my $method = lc $1;
             my $opening = $index + length($&)- 1;
             my $closing = matching_delimiter($expression, $opening, '(', ')');
@@ -492,20 +502,48 @@ for my $file (@source_files) {
             next;
         }
         my $path_expression = substr($clean, $opening + 1, $comma - $opening - 1);
-        if ($path_expression !~ /^\s*"((?:\\.|[^"\\])*)"\s*$/s) {
-            $failed |= fail("$file:$line: route path must be a static string literal");
+        my $expression = substr($clean, $comma + 1, $closing - $comma - 1);
+        my ($calls, $method_error) = method_calls($expression);
+        my $static_path_candidate =
+            $path_expression =~ /^\s*"(?:\\.|[^"\\])*"\s*$/s
+            || $path_expression =~ /^\s*[A-Za-z_][A-Za-z0-9_]*_PATH\s*$/s;
+        if (!$static_path_candidate && !$method_error && !@$calls) {
+            # Registry/catalog APIs also expose `.route(source, target)`.
+            # They are capability lookups, not Axum route declarations.
             pos($clean) = $closing + 1;
             next;
         }
-        my $raw_path = $1;
+        my ($raw_path, $route_alias) = (undef, 0);
+        if ($path_expression =~ /^\s*"((?:\\.|[^"\\])*)"\s*$/s) {
+            $raw_path = $1;
+        } elsif ($path_expression =~ /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$/s) {
+            my $constant_name = $1;
+            if ($constant_name !~ /_PATH\z/) {
+                $failed |= fail("$file:$line: route path identifier must use a *_PATH constant");
+            } else {
+                my $constant_pattern = qr{
+                    \bconst\s+\Q$constant_name\E\s*:\s*&str\s*=\s*"((?:\\.|[^"\\])*)"\s*;
+                }x;
+                if ($raw =~ $constant_pattern) {
+                    $raw_path = $1;
+                    $route_alias = 1;
+                } else {
+                    $failed |= fail("$file:$line: route path constant $constant_name must be a local static string");
+                }
+            }
+        } else {
+            $failed |= fail("$file:$line: route path must be a static string literal or a *_PATH constant");
+        }
+        if (!defined $raw_path) {
+            pos($clean) = $closing + 1;
+            next;
+        }
         my $path = normalize_path($raw_path);
         if (!defined $path) {
             $failed |= fail("$file:$line: unsupported or malformed route path $raw_path");
             pos($clean) = $closing + 1;
             next;
         }
-        my $expression = substr($clean, $comma + 1, $closing - $comma - 1);
-        my ($calls, $method_error) = method_calls($expression);
         if ($method_error || !@$calls) {
             $failed |= fail("$file:$line: cannot statically parse route methods" . ($method_error ? ": $method_error" : ''));
             pos($clean) = $closing + 1;
@@ -514,6 +552,11 @@ for my $file (@source_files) {
         my %declaration_methods;
         for my $call (@$calls) {
             my ($method, $handler) = @$call;
+            # A *_PATH route is an explicitly named non-owning split mount.
+            # Its owning route must still be emitted through a literal path in
+            # this source tree; skipping aliases keeps read-only/state-specific
+            # mounts from being mistaken for duplicate production ownership.
+            next if $route_alias;
             my $candidate_path = normalize_candidate_path($method, $path);
             next if !defined $candidate_path;
             if ($declaration_methods{$method}++) {
@@ -522,7 +565,7 @@ for my $file (@source_files) {
             }
             my $key = "$method\t$candidate_path";
             if (exists $candidates{$key}) {
-                next if is_models_post_alias($method, $path);
+                next if is_models_shared_alias($method, $path);
                 $failed |= fail("$file:$line: duplicate normalized route $method $candidate_path (first at $candidates{$key})");
                 next;
             }

@@ -9,6 +9,7 @@ use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::time::UNIX_EPOCH;
+use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -16,6 +17,7 @@ const ISSUER: &str = "new-api";
 const AUDIENCE: &str = "new-api-dashboard";
 const TOKEN_USE: &str = "access";
 const SECURITY_PROOF_TOKEN_USE: &str = "security_proof";
+const SECURITY_PROOF_TTL_SECONDS: i64 = 5 * 60;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct AuthIdentity {
@@ -38,10 +40,15 @@ struct Claims {
     nbf: i64,
     iat: i64,
     jti: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scopes: Option<Vec<String>>,
 }
 
 pub(super) struct LegacyTokenCodec {
     access_key: SecretSlice<u8>,
+    security_proof_key: SecretSlice<u8>,
     auth_flow_key: SecretSlice<u8>,
     refresh_key: SecretSlice<u8>,
     refresh_rotate_key: SecretSlice<u8>,
@@ -55,6 +62,7 @@ impl LegacyTokenCodec {
         }
         Ok(Self {
             access_key: SecretSlice::from(derive_key(secret, "access")?),
+            security_proof_key: SecretSlice::from(derive_key(secret, "security_proof")?),
             auth_flow_key: SecretSlice::from(
                 format!("auth-flow-v1:{}", session_secret.expose_secret()).into_bytes(),
             ),
@@ -85,6 +93,8 @@ impl LegacyTokenCodec {
             nbf: now - 5,
             iat: now,
             jti: uuid::Uuid::new_v4().to_string(),
+            method: None,
+            scopes: None,
         };
         let token = encode(
             &Header::new(Algorithm::HS256),
@@ -130,6 +140,123 @@ impl LegacyTokenCodec {
             user_auth_version: claims.uv,
             session_version: claims.sv,
         })
+    }
+
+    /// Issues the Go-compatible short-lived proof used by sensitive dashboard
+    /// operations. The caller must already have validated the live session;
+    /// this codec only signs the server-derived identity and requested scope.
+    pub fn issue_security_proof(
+        &self,
+        identity: &AuthIdentity,
+        method: &str,
+        scopes: &[String],
+    ) -> Result<(String, i64), AuthError> {
+        if identity.user_id <= 0
+            || identity.session_id.is_empty()
+            || identity.user_auth_version <= 0
+            || identity.session_version <= 0
+            || method.trim().is_empty()
+            || scopes.is_empty()
+            || scopes.iter().any(|scope| scope.trim().is_empty())
+        {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        let now = unix_now();
+        let expires_at = now + SECURITY_PROOF_TTL_SECONDS;
+        let claims = Claims {
+            token_use: SECURITY_PROOF_TOKEN_USE.to_owned(),
+            sid: identity.session_id.clone(),
+            uv: identity.user_auth_version,
+            sv: identity.session_version,
+            iss: ISSUER.to_owned(),
+            sub: identity.user_id.to_string(),
+            aud: vec![AUDIENCE.to_owned()],
+            exp: expires_at,
+            nbf: now - 5,
+            iat: now,
+            jti: uuid::Uuid::new_v4().to_string(),
+            method: Some(method.trim().to_owned()),
+            scopes: Some(scopes.iter().map(|scope| scope.trim().to_owned()).collect()),
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(self.security_proof_key()),
+        )
+        .map_err(|_| AuthError::new(AuthErrorKind::Internal))?;
+        Ok((token, expires_at))
+    }
+
+    /// Validates a Go-compatible security proof against one live dashboard
+    /// identity. Empty `allowed_methods` retains Go's allow-all convention;
+    /// scope and method comparisons are constant-time.
+    pub fn verify_security_proof(
+        &self,
+        raw: &SecretString,
+        identity: &AuthIdentity,
+        required_scope: &str,
+        allowed_methods: &[String],
+    ) -> Result<String, AuthError> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.leeway = 5;
+        validation.validate_nbf = true;
+        validation.set_audience(&[AUDIENCE]);
+        validation.set_issuer(&[ISSUER]);
+        validation.set_required_spec_claims(&["exp", "nbf", "iss", "aud", "sub", "iat"]);
+        let data = decode::<Claims>(
+            raw.expose_secret().trim(),
+            &DecodingKey::from_secret(self.security_proof_key()),
+            &validation,
+        )
+        .map_err(|error| match error.kind() {
+            ErrorKind::ExpiredSignature => AuthError::new(AuthErrorKind::TokenExpired),
+            _ => AuthError::new(AuthErrorKind::Unauthorized),
+        })?;
+        let claims = data.claims;
+        let user_id = claims
+            .sub
+            .parse::<i64>()
+            .map_err(|_| AuthError::new(AuthErrorKind::Unauthorized))?;
+        if claims.token_use != SECURITY_PROOF_TOKEN_USE
+            || claims.jti.is_empty()
+            || claims.sid.is_empty()
+            || claims.uv <= 0
+            || claims.sv <= 0
+            || user_id != identity.user_id
+            || claims.sid != identity.session_id
+            || claims.uv != identity.user_auth_version
+            || claims.sv != identity.session_version
+        {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        let method = claims
+            .method
+            .ok_or_else(|| AuthError::new(AuthErrorKind::Unauthorized))?;
+        if !allowed_methods.is_empty()
+            && !allowed_methods
+                .iter()
+                .any(|allowed| method.as_bytes().ct_eq(allowed.as_bytes()).into())
+        {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        let scopes = claims
+            .scopes
+            .ok_or_else(|| AuthError::new(AuthErrorKind::Unauthorized))?;
+        if !required_scope.is_empty()
+            && !scopes
+                .iter()
+                .any(|scope| scope.as_bytes().ct_eq(required_scope.as_bytes()).into())
+        {
+            return Err(AuthError::new(AuthErrorKind::Unauthorized));
+        }
+        Ok(method)
+    }
+
+    fn security_proof_key(&self) -> &[u8] {
+        // The proof key is derived from the same session secret namespace as
+        // Go's authSigningKey("security_proof"). Keep it separate from the
+        // access-token key so token-use confusion cannot cross the boundary.
+        self.security_proof_key.expose_secret()
     }
 
     /// Returns true only for a credential that declares itself to be one of
@@ -354,6 +481,51 @@ mod tests {
     }
 
     #[test]
+    fn security_proof_round_trips_with_session_scope_and_method_binding() {
+        let codec = LegacyTokenCodec::new(SecretString::from(
+            "0123456789abcdef-SESSION-SECRET!".to_owned(),
+        ))
+        .expect("codec");
+        let identity = identity();
+        let scopes = vec!["channel.key.read".to_owned()];
+        let (token, expires_at) = codec
+            .issue_security_proof(&identity, "email", &scopes)
+            .expect("issue proof");
+        assert!(expires_at > unix_now());
+        assert_eq!(
+            codec
+                .verify_security_proof(
+                    &SecretString::from(token.clone()),
+                    &identity,
+                    "channel.key.read",
+                    &["email".to_owned()],
+                )
+                .expect("verify proof"),
+            "email"
+        );
+        assert!(
+            codec
+                .verify_security_proof(
+                    &SecretString::from(token.clone()),
+                    &identity,
+                    "passkey.delete",
+                    &["email".to_owned()],
+                )
+                .is_err()
+        );
+        assert!(
+            codec
+                .verify_security_proof(
+                    &SecretString::from(token),
+                    &identity,
+                    "channel.key.read",
+                    &["passkey".to_owned()],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn dashboard_jwt_candidates_never_be_reclassified_as_opaque_credentials() {
         let codec = LegacyTokenCodec::new(SecretString::from(
             "0123456789abcdef-SESSION-SECRET!".to_owned(),
@@ -387,6 +559,8 @@ mod tests {
                 nbf: 0,
                 iat: 0,
                 jti: uuid::Uuid::new_v4().to_string(),
+                method: None,
+                scopes: None,
             },
             &EncodingKey::from_secret(codec.access_key.expose_secret()),
         )

@@ -61,7 +61,9 @@ For commercial licensing, please contact support@quantumnous.com
   --forge-model-2: var(--forge-cactus-light);
   --forge-model-3: var(--forge-clay-light);
   --forge-model-4: var(--forge-sage-light);
-  --forge-model-5: var(--forge-secondary-light);
+  /* Secondary is a surface token, not a chart series: it can disappear on
+   * the paper/card background. Keep the fifth model visibly distinct. */
+  --forge-model-5: var(--forge-extra-honey-light);
   --forge-vendor-openai: var(--forge-ink-light);
   --forge-vendor-anthropic: var(--forge-clay-light);
   --forge-vendor-google: var(--forge-cactus-light);
@@ -109,7 +111,7 @@ For commercial licensing, please contact support@quantumnous.com
   --forge-paper: var(--forge-paper-dark);
   --forge-ink: var(--forge-foreground-dark);
   --forge-gesture-ink: var(--forge-ink-light);
-  --forge-stage: var(--forge-stage-dark);
+  --forge-stage: var(--forge-cactus-dark);
   --forge-foundation: var(--forge-paper-dark);
   --forge-foundation-ink: var(--forge-ink-light);
   --forge-chart-text: color-mix(
@@ -126,7 +128,7 @@ For commercial licensing, please contact support@quantumnous.com
   --forge-model-2: var(--forge-cactus-dark);
   --forge-model-3: var(--forge-clay-dark);
   --forge-model-4: var(--forge-sage-dark);
-  --forge-model-5: var(--forge-secondary-dark);
+  --forge-model-5: var(--forge-extra-honey-dark);
   --forge-vendor-openai: var(--forge-foreground-dark);
   --forge-vendor-anthropic: var(--forge-clay-dark);
   --forge-vendor-google: var(--forge-cactus-dark);

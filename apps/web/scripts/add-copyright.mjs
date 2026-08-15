@@ -16,6 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/*
+Copyright (C) 2026 LIghtJUNction
+*/
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -64,6 +67,11 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
+*/
+`
+
+const FORK_COPYRIGHT_HEADER = `/*
+Copyright (C) 2026 LIghtJUNction
 */
 `
 
@@ -152,6 +160,7 @@ function splitShebang(text) {
 function applyHeader(text) {
   const newline = text.includes('\r\n') ? '\r\n' : '\n'
   const header = COPYRIGHT_HEADER.replaceAll('\n', newline)
+  const forkHeader = FORK_COPYRIGHT_HEADER.replaceAll('\n', newline)
   const [shebang, body] = splitShebang(text)
   const hadHeader = PROJECT_COPYRIGHT_BLOCK_PATTERN.test(body)
   let strippedBody = body
@@ -164,13 +173,13 @@ function applyHeader(text) {
   if (strippedBody.length === 0) {
     return {
       action: hadHeader ? 'updated' : 'added',
-      text: shebang + header,
+      text: shebang + header + (hadHeader ? '' : forkHeader),
     }
   }
 
   return {
     action: hadHeader ? 'updated' : 'added',
-    text: shebang + header + strippedBody,
+    text: shebang + header + (hadHeader ? '' : forkHeader) + strippedBody,
   }
 }
 

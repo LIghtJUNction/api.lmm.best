@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/shopspring/decimal"
 	pancake "github.com/waffo-com/waffo-pancake-sdk-go"
 )
 
@@ -14,6 +16,51 @@ import (
 type WaffoPancakePriceSnapshot struct {
 	Amount      string
 	TaxCategory string
+}
+
+// WaffoPancake checkout regions are deliberately a closed set.  The Waffo
+// API has no `region` request field: the China market is selected by sending a
+// fixed CN billing detail, while global checkout leaves billingDetail omitted.
+type WaffoPancakeCheckoutRegion string
+
+const (
+	WaffoPancakeCheckoutRegionGlobal WaffoPancakeCheckoutRegion = "global"
+	WaffoPancakeCheckoutRegionChina  WaffoPancakeCheckoutRegion = "china"
+)
+
+// waffoPancakeCheckoutLanguages is the allow-list accepted by Waffo's
+// checkout endpoint.  Keep this list in sync with the provider's BCP 47
+// enum, rather than forwarding an arbitrary browser language tag.
+var waffoPancakeCheckoutLanguages = map[string]struct{}{
+	"en":         {},
+	"pt-BR":      {},
+	"es-MX":      {},
+	"id-ID":      {},
+	"vi-VN":      {},
+	"ru-RU":      {},
+	"en-KE":      {},
+	"es-PE":      {},
+	"es-CO":      {},
+	"es-CL":      {},
+	"zh-Hant-TW": {},
+	"zh-Hant-HK": {},
+	"th-TH":      {},
+	"ja-JP":      {},
+	"en-NG":      {},
+	"ko-KR":      {},
+	"en-HK":      {},
+	"zh-Hans-HK": {},
+	"pl-PL":      {},
+	"tr-TR":      {},
+	"zh-Hans":    {},
+	"ms-MY":      {},
+}
+
+var waffoPancakeChineseCheckoutLanguages = map[string]struct{}{
+	"zh-Hans":    {},
+	"zh-Hant-TW": {},
+	"zh-Hant-HK": {},
+	"zh-Hans-HK": {},
 }
 
 // WaffoPancakeCreateSessionParams is the input to CreateWaffoPancakeCheckoutSession.
@@ -26,7 +73,23 @@ type WaffoPancakeCreateSessionParams struct {
 	BuyerEmail              string
 	ExpiresInSeconds        *int
 	OrderMerchantExternalID string
+	// OrderMetadata is echoed by Waffo in signed webhook events.  Callers use
+	// it to bind a callback to the exact product/plan selected at checkout.
+	OrderMetadata map[string]string
+	// CheckoutRegion is the application-level china/global selector. It is
+	// translated to billingDetail by the service; Waffo has no region field.
+	CheckoutRegion string
+	// CheckoutLanguage is validated against Waffo's supported BCP 47 enum.
+	CheckoutLanguage string
 }
+
+// WaffoPancakeOrderMetadataProductID and WaffoPancakeOrderMetadataPlanID are
+// deliberately namespaced so provider/user-supplied metadata cannot be
+// mistaken for our settlement evidence.
+const (
+	WaffoPancakeOrderMetadataProductID = "lmm_product_id"
+	WaffoPancakeOrderMetadataPlanID    = "lmm_plan_id"
+)
 
 // WaffoPancakeCheckoutSession is the response of CreateWaffoPancakeCheckoutSession.
 // CheckoutURL already carries the `#token=...` fragment; Token / TokenExpiresAt
@@ -54,14 +117,98 @@ type WaffoPancakeWebhookEvent struct {
 
 type WaffoPancakeWebhookData struct {
 	// OrderID = Pancake ORD_* (logs); OrderMerchantExternalID = our trade_no (lookup).
-	OrderID                       string
-	OrderMerchantExternalID       string
-	BuyerEmail                    string
-	Currency                      string
-	Amount                        string
-	TaxAmount                     string
-	ProductName                   string
-	MerchantProvidedBuyerIdentity string
+	OrderID                        string
+	OrderStatus                    string
+	OrderMerchantExternalID        string
+	RefundTicketMerchantExternalID string
+	BuyerEmail                     string
+	Currency                       string
+	Amount                         string
+	TaxAmount                      string
+	ProductName                    string
+	OrderMetadata                  map[string]string
+	ProductMetadata                map[string]string
+	MerchantProvidedBuyerIdentity  string
+	PaymentID                      string
+	PaymentStatus                  string
+	PaymentMethod                  string
+	PaymentLast4                   string
+	RefundStatus                   string
+	RefundReason                   string
+	RefundCreatedAt                string
+	Total                          string
+}
+
+// WaffoPancakeWebhookAction is the small, explicit dispatch surface used by
+// the HTTP handler. Unknown provider events are acknowledged without mutating
+// local payment state so adding a provider event cannot accidentally credit or
+// debit a wallet.
+type WaffoPancakeWebhookAction string
+
+const (
+	WaffoPancakeWebhookActionOrderCompleted               WaffoPancakeWebhookAction = "order_completed"
+	WaffoPancakeWebhookActionSubscriptionActivated        WaffoPancakeWebhookAction = "subscription_activated"
+	WaffoPancakeWebhookActionSubscriptionPaymentSucceeded WaffoPancakeWebhookAction = "subscription_payment_succeeded"
+	WaffoPancakeWebhookActionRefundSucceeded              WaffoPancakeWebhookAction = "refund_succeeded"
+	WaffoPancakeWebhookActionRefundFailed                 WaffoPancakeWebhookAction = "refund_failed"
+	WaffoPancakeWebhookActionIgnore                       WaffoPancakeWebhookAction = "ignore"
+)
+
+func WaffoPancakeWebhookActionForEvent(eventType string) WaffoPancakeWebhookAction {
+	switch strings.TrimSpace(eventType) {
+	case "order.completed":
+		return WaffoPancakeWebhookActionOrderCompleted
+	// Activation does not prove that the order was paid. Pancake checkout uses
+	// one-time products for plans, so only definitive payment events may settle
+	// the pending local order.
+	case "subscription.activated":
+		return WaffoPancakeWebhookActionIgnore
+	case "subscription.payment_succeeded":
+		return WaffoPancakeWebhookActionSubscriptionPaymentSucceeded
+	case "refund.succeeded":
+		return WaffoPancakeWebhookActionRefundSucceeded
+	case "refund.failed":
+		return WaffoPancakeWebhookActionRefundFailed
+	default:
+		return WaffoPancakeWebhookActionIgnore
+	}
+}
+
+// ValidateWaffoPancakeWebhookEvent checks the status fields that Pancake
+// includes in signed payment payloads. A signature proves that Pancake sent
+// the payload, but it does not make contradictory fields safe to process: a
+// refund.succeeded event must not carry refundStatus=failed, for example.
+// Older payloads may omit optional status fields, so empty values remain
+// accepted for backwards compatibility.
+func ValidateWaffoPancakeWebhookEvent(event *WaffoPancakeWebhookEvent) error {
+	if event == nil {
+		return fmt.Errorf("missing webhook event")
+	}
+	check := func(field, actual, expected string) error {
+		actual = strings.TrimSpace(actual)
+		if actual != "" && !strings.EqualFold(actual, expected) {
+			return fmt.Errorf("webhook %s mismatch: expected %q actual %q", field, expected, actual)
+		}
+		return nil
+	}
+
+	switch WaffoPancakeWebhookActionForEvent(event.EventType) {
+	case WaffoPancakeWebhookActionOrderCompleted:
+		if err := check("orderStatus", event.Data.OrderStatus, "completed"); err != nil {
+			return err
+		}
+		return check("paymentStatus", event.Data.PaymentStatus, "succeeded")
+	case WaffoPancakeWebhookActionSubscriptionActivated:
+		return check("orderStatus", event.Data.OrderStatus, "active")
+	case WaffoPancakeWebhookActionSubscriptionPaymentSucceeded:
+		return check("paymentStatus", event.Data.PaymentStatus, "succeeded")
+	case WaffoPancakeWebhookActionRefundSucceeded:
+		return check("refundStatus", event.Data.RefundStatus, "succeeded")
+	case WaffoPancakeWebhookActionRefundFailed:
+		return check("refundStatus", event.Data.RefundStatus, "failed")
+	default:
+		return nil
+	}
 }
 
 // NormalizedEventType returns the event type or empty string for a nil event.
@@ -77,10 +224,27 @@ func (e *WaffoPancakeWebhookEvent) NormalizedEventType() string {
 // newWaffoPancakeClientFromCreds so the operator can verify typed-but-not-
 // yet-saved credentials.
 func newWaffoPancakeClient() (*pancake.Client, error) {
+	merchantID, privateKey := WaffoPancakeCredentials()
 	return pancake.New(pancake.Config{
-		MerchantID: setting.WaffoPancakeMerchantID,
-		PrivateKey: setting.WaffoPancakePrivateKey,
+		MerchantID: merchantID,
+		PrivateKey: privateKey,
 	})
+}
+
+// WaffoPancakeCredentials resolves persisted settings first, then the two
+// official environment variables used by the first server-side integration.
+// Environment fallback keeps secrets out of the database and is intentionally
+// limited to credentials; store/product IDs remain runtime configuration.
+func WaffoPancakeCredentials() (string, string) {
+	merchantID := strings.TrimSpace(setting.WaffoPancakeMerchantID)
+	if merchantID == "" {
+		merchantID = strings.TrimSpace(os.Getenv("WAFFO_MERCHANT_ID"))
+	}
+	privateKey := strings.TrimSpace(setting.WaffoPancakePrivateKey)
+	if privateKey == "" {
+		privateKey = strings.TrimSpace(os.Getenv("WAFFO_PRIVATE_KEY"))
+	}
+	return merchantID, privateKey
 }
 
 func newWaffoPancakeClientFromCreds(merchantID, privateKey string) (*pancake.Client, error) {
@@ -91,6 +255,91 @@ func newWaffoPancakeClientFromCreds(merchantID, privateKey string) (*pancake.Cli
 		MerchantID: merchantID,
 		PrivateKey: privateKey,
 	})
+}
+
+// NormalizeWaffoPancakeCheckoutRegion accepts only the two regions exposed by
+// this application. Empty and invalid values intentionally fall back to the
+// unrestricted global checkout; callers that need language-based defaulting
+// should use ResolveWaffoPancakeCheckoutRegion.
+func NormalizeWaffoPancakeCheckoutRegion(region string) WaffoPancakeCheckoutRegion {
+	switch strings.TrimSpace(region) {
+	case string(WaffoPancakeCheckoutRegionChina):
+		return WaffoPancakeCheckoutRegionChina
+	case string(WaffoPancakeCheckoutRegionGlobal), "":
+		return WaffoPancakeCheckoutRegionGlobal
+	default:
+		return WaffoPancakeCheckoutRegionGlobal
+	}
+}
+
+// ResolveWaffoPancakeCheckoutRegion applies the application defaulting rule:
+// an omitted region follows one of the supported Chinese checkout languages,
+// while an omitted region with any other (or no) language is global. Explicit
+// values always win, and an unrecognised region is never allowed to select CN.
+func ResolveWaffoPancakeCheckoutRegion(region, language string) WaffoPancakeCheckoutRegion {
+	switch strings.TrimSpace(region) {
+	case string(WaffoPancakeCheckoutRegionChina):
+		return WaffoPancakeCheckoutRegionChina
+	case string(WaffoPancakeCheckoutRegionGlobal):
+		return WaffoPancakeCheckoutRegionGlobal
+	case "":
+		if language = NormalizeWaffoPancakeCheckoutLanguage(language); language != "" {
+			if _, ok := waffoPancakeChineseCheckoutLanguages[language]; ok {
+				return WaffoPancakeCheckoutRegionChina
+			}
+		}
+		return WaffoPancakeCheckoutRegionGlobal
+	default:
+		return WaffoPancakeCheckoutRegionGlobal
+	}
+}
+
+// NormalizeWaffoPancakeCheckoutLanguage returns a supported BCP 47 language
+// tag.  Invalid and empty values are omitted so Waffo can infer its default,
+// preserving compatibility with clients that predate checkout_language.
+func NormalizeWaffoPancakeCheckoutLanguage(language string) string {
+	language = strings.TrimSpace(language)
+	if _, ok := waffoPancakeCheckoutLanguages[language]; !ok {
+		return ""
+	}
+	return language
+}
+
+// buildWaffoPancakeSDKCheckoutParams is kept separate from the network call
+// so the region/language security boundary can be tested without credentials.
+func buildWaffoPancakeSDKCheckoutParams(params *WaffoPancakeCreateSessionParams) (pancake.AuthenticatedCheckoutParams, error) {
+	if params == nil {
+		return pancake.AuthenticatedCheckoutParams{}, fmt.Errorf("missing checkout params")
+	}
+
+	sdkParams := pancake.AuthenticatedCheckoutParams{
+		CreateCheckoutSessionParams: pancake.CreateCheckoutSessionParams{
+			ProductID:               params.ProductID,
+			Currency:                "USD",
+			BuyerEmail:              optionalString(params.BuyerEmail),
+			ExpiresInSeconds:        params.ExpiresInSeconds,
+			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
+			Metadata:                params.OrderMetadata,
+		},
+		BuyerIdentity: params.BuyerIdentity,
+	}
+	if params.PriceSnapshot != nil {
+		sdkParams.PriceSnapshot = &pancake.PriceInfo{
+			Amount:      params.PriceSnapshot.Amount,
+			TaxCategory: pancake.TaxCategory(params.PriceSnapshot.TaxCategory),
+		}
+	}
+	if ResolveWaffoPancakeCheckoutRegion(params.CheckoutRegion, params.CheckoutLanguage) == WaffoPancakeCheckoutRegionChina {
+		sdkParams.BillingDetail = &pancake.BillingDetail{
+			Country:    "CN",
+			IsBusiness: false,
+		}
+	}
+	if language := NormalizeWaffoPancakeCheckoutLanguage(params.CheckoutLanguage); language != "" {
+		checkoutLanguage := pancake.CashierLanguage(language)
+		sdkParams.Language = &checkoutLanguage
+	}
+	return sdkParams, nil
 }
 
 // CreateWaffoPancakeCheckoutSession creates an Authenticated-mode checkout
@@ -111,21 +360,9 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 		return nil, fmt.Errorf("build Waffo Pancake client: %w", err)
 	}
 
-	sdkParams := pancake.AuthenticatedCheckoutParams{
-		CreateCheckoutSessionParams: pancake.CreateCheckoutSessionParams{
-			ProductID:               params.ProductID,
-			Currency:                "USD",
-			BuyerEmail:              optionalString(params.BuyerEmail),
-			ExpiresInSeconds:        params.ExpiresInSeconds,
-			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
-		},
-		BuyerIdentity: params.BuyerIdentity,
-	}
-	if params.PriceSnapshot != nil {
-		sdkParams.PriceSnapshot = &pancake.PriceInfo{
-			Amount:      params.PriceSnapshot.Amount,
-			TaxCategory: pancake.TaxCategory(params.PriceSnapshot.TaxCategory),
-		}
+	sdkParams, err := buildWaffoPancakeSDKCheckoutParams(params)
+	if err != nil {
+		return nil, err
 	}
 
 	session, err := client.Checkout.Authenticated.Create(ctx, sdkParams)
@@ -174,6 +411,46 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 	if evt.Data.OrderMerchantExternalID != nil {
 		externalID = *evt.Data.OrderMerchantExternalID
 	}
+	refundExternalID := ""
+	if evt.Data.RefundTicketMerchantExternalID != nil {
+		refundExternalID = *evt.Data.RefundTicketMerchantExternalID
+	}
+	paymentID := ""
+	if evt.Data.PaymentID != nil {
+		paymentID = *evt.Data.PaymentID
+	}
+	paymentStatus := ""
+	if evt.Data.PaymentStatus != nil {
+		paymentStatus = *evt.Data.PaymentStatus
+	}
+	paymentMethod := ""
+	if evt.Data.PaymentMethod != nil {
+		paymentMethod = *evt.Data.PaymentMethod
+	}
+	paymentLast4 := ""
+	if evt.Data.PaymentLast4 != nil {
+		paymentLast4 = *evt.Data.PaymentLast4
+	}
+	refundStatus := ""
+	if evt.Data.RefundStatus != nil {
+		refundStatus = *evt.Data.RefundStatus
+	}
+	refundReason := ""
+	if evt.Data.RefundReason != nil {
+		refundReason = *evt.Data.RefundReason
+	}
+	refundCreatedAt := ""
+	if evt.Data.RefundCreatedAt != nil {
+		refundCreatedAt = *evt.Data.RefundCreatedAt
+	}
+	total := ""
+	if evt.Data.Total != nil {
+		total = *evt.Data.Total
+	}
+	orderStatus := ""
+	if evt.Data.OrderStatus != nil {
+		orderStatus = *evt.Data.OrderStatus
+	}
 	return &WaffoPancakeWebhookEvent{
 		ID:        evt.ID,
 		Timestamp: evt.Timestamp,
@@ -182,14 +459,26 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 		StoreID:   evt.StoreID,
 		Mode:      string(evt.Mode),
 		Data: WaffoPancakeWebhookData{
-			OrderID:                       evt.Data.OrderID,
-			OrderMerchantExternalID:       externalID,
-			BuyerEmail:                    evt.Data.BuyerEmail,
-			Currency:                      evt.Data.Currency,
-			Amount:                        evt.Data.Amount,
-			TaxAmount:                     evt.Data.TaxAmount,
-			ProductName:                   evt.Data.ProductName,
-			MerchantProvidedBuyerIdentity: identity,
+			OrderID:                        evt.Data.OrderID,
+			OrderStatus:                    orderStatus,
+			OrderMerchantExternalID:        externalID,
+			RefundTicketMerchantExternalID: refundExternalID,
+			BuyerEmail:                     evt.Data.BuyerEmail,
+			Currency:                       evt.Data.Currency,
+			Amount:                         evt.Data.Amount,
+			TaxAmount:                      evt.Data.TaxAmount,
+			ProductName:                    evt.Data.ProductName,
+			OrderMetadata:                  evt.Data.OrderMetadata,
+			ProductMetadata:                evt.Data.ProductMetadata,
+			MerchantProvidedBuyerIdentity:  identity,
+			PaymentID:                      paymentID,
+			PaymentStatus:                  paymentStatus,
+			PaymentMethod:                  paymentMethod,
+			PaymentLast4:                   paymentLast4,
+			RefundStatus:                   refundStatus,
+			RefundReason:                   refundReason,
+			RefundCreatedAt:                refundCreatedAt,
+			Total:                          total,
 		},
 	}, nil
 }
@@ -221,6 +510,71 @@ func ResolveWaffoPancakeTradeNo(event *WaffoPancakeWebhookEvent) (string, error)
 	return tradeNo, nil
 }
 
+// ResolveWaffoPancakeRefundTradeNo applies the same provider/order binding as
+// ResolveWaffoPancakeTradeNo, but accepts a missing buyer identity. Pancake's
+// refund payload inherits the order external ID, while identity is optional on
+// the SDK type; a signed provider event must not be discarded merely because
+// that optional field was omitted. If present, the identity is still checked.
+func ResolveWaffoPancakeRefundTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
+	if event == nil {
+		return "", fmt.Errorf("missing webhook event")
+	}
+	tradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
+	if tradeNo == "" {
+		return "", fmt.Errorf("missing webhook orderMerchantExternalId")
+	}
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil || topUp.PaymentProvider != model.PaymentProviderWaffoPancake {
+		return "", fmt.Errorf("waffo pancake refund order not found for tradeNo=%s", tradeNo)
+	}
+	// Refunds bypass CompleteExternalTopUp, so repeat its store binding here.
+	// A merchant may have multiple Waffo stores; a signed event for another
+	// store must never be allowed to mutate this order's finance history. Keep
+	// the empty-order exception for legacy rows that predate store evidence.
+	if expectedStore := strings.TrimSpace(topUp.ProviderStoreId); expectedStore != "" &&
+		strings.TrimSpace(event.StoreID) != expectedStore {
+		return "", fmt.Errorf(
+			"waffo pancake refund store mismatch for tradeNo=%s: expected=%q actual=%q",
+			tradeNo,
+			expectedStore,
+			strings.TrimSpace(event.StoreID),
+		)
+	}
+	if topUp.ProviderTransactionId != nil {
+		expectedTransaction := strings.TrimSpace(*topUp.ProviderTransactionId)
+		if expectedTransaction != "" && strings.TrimSpace(event.Data.OrderID) != expectedTransaction {
+			return "", fmt.Errorf(
+				"waffo pancake refund transaction mismatch for tradeNo=%s: expected=%q actual=%q",
+				tradeNo,
+				expectedTransaction,
+				strings.TrimSpace(event.Data.OrderID),
+			)
+		}
+	}
+	if expectedCurrency := strings.ToUpper(strings.TrimSpace(topUp.SettlementCurrency)); expectedCurrency != "" &&
+		strings.ToUpper(strings.TrimSpace(event.Data.Currency)) != expectedCurrency {
+		return "", fmt.Errorf(
+			"waffo pancake refund currency mismatch for tradeNo=%s: expected=%q actual=%q",
+			tradeNo,
+			expectedCurrency,
+			strings.ToUpper(strings.TrimSpace(event.Data.Currency)),
+		)
+	}
+	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
+	if actualIdentity != "" {
+		expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(topUp.UserId)
+		if actualIdentity != expectedIdentity {
+			return "", fmt.Errorf(
+				"waffo pancake refund buyer identity mismatch for tradeNo=%s: expected=%q actual=%q",
+				tradeNo,
+				expectedIdentity,
+				actualIdentity,
+			)
+		}
+	}
+	return tradeNo, nil
+}
+
 // ResolveWaffoPancakeSubscriptionTradeNo is the SubscriptionOrder counterpart
 // of ResolveWaffoPancakeTradeNo.
 func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
@@ -235,6 +589,9 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 	if order == nil || order.PaymentProvider != model.PaymentProviderWaffoPancake {
 		return "", fmt.Errorf("waffo pancake subscription order not found for tradeNo=%s", tradeNo)
 	}
+	if err := validateWaffoPancakeSubscriptionSettlement(event, order.Money); err != nil {
+		return "", fmt.Errorf("waffo pancake subscription settlement mismatch for tradeNo=%s: %w", tradeNo, err)
+	}
 	expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(order.UserId)
 	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
 	if actualIdentity != expectedIdentity {
@@ -244,6 +601,57 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 			expectedIdentity,
 			actualIdentity,
 		)
+	}
+	return tradeNo, nil
+}
+
+func validateWaffoPancakeSubscriptionSettlement(event *WaffoPancakeWebhookEvent, expectedAmount float64) error {
+	expectedStore := strings.TrimSpace(setting.WaffoPancakeStoreID)
+	actualStore := strings.TrimSpace(event.StoreID)
+	if expectedStore == "" || actualStore != expectedStore {
+		return fmt.Errorf("store mismatch: expected=%q actual=%q", expectedStore, actualStore)
+	}
+	if currency := strings.ToUpper(strings.TrimSpace(event.Data.Currency)); currency != "USD" {
+		return fmt.Errorf("currency mismatch: expected=%q actual=%q", "USD", currency)
+	}
+	actualAmount, err := decimal.NewFromString(strings.TrimSpace(event.Data.Amount))
+	if err != nil {
+		return fmt.Errorf("invalid amount: %w", err)
+	}
+	expected := decimal.NewFromFloat(expectedAmount).Round(2)
+	if !actualAmount.Equal(expected) {
+		return fmt.Errorf("amount mismatch: expected=%s actual=%s", expected.StringFixed(2), actualAmount.String())
+	}
+	return nil
+}
+
+// ResolveWaffoPancakeRefundSubscriptionTradeNo is the refund counterpart of
+// ResolveWaffoPancakeSubscriptionTradeNo. Refund payloads may omit the
+// optional buyer identity, so an empty value is accepted while a supplied one
+// is still verified against the original subscription order.
+func ResolveWaffoPancakeRefundSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
+	if event == nil {
+		return "", fmt.Errorf("missing webhook event")
+	}
+	tradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
+	if tradeNo == "" {
+		return "", fmt.Errorf("missing webhook orderMerchantExternalId")
+	}
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	if order == nil || order.PaymentProvider != model.PaymentProviderWaffoPancake {
+		return "", fmt.Errorf("waffo pancake refund subscription order not found for tradeNo=%s", tradeNo)
+	}
+	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
+	if actualIdentity != "" {
+		expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(order.UserId)
+		if actualIdentity != expectedIdentity {
+			return "", fmt.Errorf(
+				"waffo pancake refund subscription buyer identity mismatch for tradeNo=%s: expected=%q actual=%q",
+				tradeNo,
+				expectedIdentity,
+				actualIdentity,
+			)
+		}
 	}
 	return tradeNo, nil
 }
@@ -390,6 +798,9 @@ func CreateWaffoPancakePrimaryPair(ctx context.Context, merchantID, privateKey, 
 // (Stripe-style API-secret UX) and is omitted from the bulk payload.
 func SaveWaffoPancakeConfig(ctx context.Context, merchantID, privateKey, returnURL, storeID, productID string) error {
 	merchantID = strings.TrimSpace(merchantID)
+	if merchantID == "" {
+		merchantID, _ = WaffoPancakeCredentials()
+	}
 	storeID = strings.TrimSpace(storeID)
 	productID = strings.TrimSpace(productID)
 	if merchantID == "" || storeID == "" || productID == "" {
@@ -430,6 +841,73 @@ type WaffoPancakeCatalog struct {
 	Stores []WaffoPancakeCatalogStore `json:"stores"`
 }
 
+type waffoPancakeStoresQuery struct {
+	Stores []WaffoPancakeCatalogStore `json:"stores"`
+}
+
+type waffoPancakeProductsQuery struct {
+	OnetimeProducts []WaffoPancakeCatalogProduct `json:"onetimeProducts"`
+}
+
+func listWaffoPancakeCatalogWithClient(ctx context.Context, client *pancake.Client) (*WaffoPancakeCatalog, error) {
+	storesResponse, err := pancake.GraphQLQuery[waffoPancakeStoresQuery](ctx, client, pancake.GraphQLParams{
+		Query: `query {
+			stores {
+				id
+				name
+				status
+				prodEnabled
+			}
+		}`,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query Waffo Pancake stores: %w", err)
+	}
+	if len(storesResponse.Errors) > 0 {
+		return nil, fmt.Errorf("waffo pancake stores query returned %d errors: %s",
+			len(storesResponse.Errors), storesResponse.Errors[0].Message)
+	}
+
+	stores := storesResponse.Data.Stores
+	for i := range stores {
+		storeID := strings.TrimSpace(stores[i].ID)
+		if storeID == "" {
+			continue
+		}
+		productsResponse, err := pancake.GraphQLQuery[waffoPancakeProductsQuery](ctx, client, pancake.GraphQLParams{
+			Query: `query ($storeId: String!) {
+				onetimeProducts(filter: { storeId: { eq: $storeId }, status: { eq: "active" } }) {
+					id
+					name
+					status
+				}
+			}`,
+			Variables: map[string]any{"storeId": storeID},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query Waffo Pancake products for store %s: %w", storeID, err)
+		}
+		if len(productsResponse.Errors) > 0 {
+			return nil, fmt.Errorf("waffo pancake products query for store %s returned %d errors: %s",
+				storeID, len(productsResponse.Errors), productsResponse.Errors[0].Message)
+		}
+		stores[i].OnetimeProducts = productsResponse.Data.OnetimeProducts
+	}
+
+	// Drop non-active products defensively as well as at the GraphQL filter,
+	// because providers may return legacy rows or ignore an unsupported filter.
+	for i := range stores {
+		active := stores[i].OnetimeProducts[:0]
+		for _, product := range stores[i].OnetimeProducts {
+			if strings.EqualFold(strings.TrimSpace(product.Status), "active") {
+				active = append(active, product)
+			}
+		}
+		stores[i].OnetimeProducts = active
+	}
+	return &WaffoPancakeCatalog{Stores: stores}, nil
+}
+
 // ListWaffoPancakeCatalog queries Pancake's GraphQL `stores` for the
 // merchant's stores + onetime products. A successful call also proves
 // the supplied credentials authenticate (doubles as a credential probe).
@@ -438,46 +916,5 @@ func ListWaffoPancakeCatalog(ctx context.Context, merchantID, privateKey string)
 	if err != nil {
 		return nil, err
 	}
-
-	type queryShape struct {
-		Stores []WaffoPancakeCatalogStore `json:"stores"`
-	}
-	// `limit: 100` because the API returns a single store when limit is
-	// omitted, even for multi-store merchants. Bump to paginated fetches
-	// (via `offset`) if real catalogs ever cross the cap.
-	resp, err := pancake.GraphQLQuery[queryShape](ctx, client, pancake.GraphQLParams{
-		Query: `query {
-			stores(limit: 100) {
-				id
-				name
-				status
-				prodEnabled
-				onetimeProducts {
-					id
-					name
-					status
-				}
-			}
-		}`,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("query Waffo Pancake catalog: %w", err)
-	}
-	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("waffo pancake catalog query returned %d errors: %s",
-			len(resp.Errors), resp.Errors[0].Message)
-	}
-	// Drop non-active products. Operators should only see items they can
-	// actually bind without later hitting "product unavailable" at checkout.
-	stores := resp.Data.Stores
-	for i := range stores {
-		active := stores[i].OnetimeProducts[:0]
-		for _, p := range stores[i].OnetimeProducts {
-			if strings.EqualFold(strings.TrimSpace(p.Status), "active") {
-				active = append(active, p)
-			}
-		}
-		stores[i].OnetimeProducts = active
-	}
-	return &WaffoPancakeCatalog{Stores: stores}, nil
+	return listWaffoPancakeCatalogWithClient(ctx, client)
 }

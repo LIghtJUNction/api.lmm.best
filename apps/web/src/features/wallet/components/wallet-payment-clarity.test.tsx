@@ -534,6 +534,53 @@ describe('wallet payment clarity', () => {
     await unmount(confirmation)
   })
 
+  test('disables a payment method above its credited balance limit', async () => {
+    await i18n.changeLanguage('en')
+    setUsdBillingCurrency()
+    const rendered = await render(
+      <RechargeFormCard
+        topupInfo={{
+          ...topupInfo,
+          pay_methods: [
+            {
+              name: 'LINUX DO Credit',
+              type: 'epay',
+              max_topup: '20',
+            },
+          ],
+        }}
+        presetAmounts={[]}
+        selectedPreset={null}
+        onSelectPreset={() => undefined}
+        topupAmount={25}
+        onTopupAmountChange={() => undefined}
+        paymentAmount={25}
+        calculating={false}
+        onPaymentMethodSelect={() => undefined}
+        paymentLoading={null}
+        redemptionCode=''
+        onRedemptionCodeChange={() => undefined}
+        onRedeem={() => undefined}
+        redeeming={false}
+      />
+    )
+
+    const methodButton = [
+      ...rendered.container.querySelectorAll('button'),
+    ].find((button) => button.textContent?.includes('LINUX DO Credit'))
+    assert.equal(methodButton?.disabled, true)
+    assert.equal(
+      methodButton?.textContent?.includes('Maximum: 20 USD credited'),
+      true
+    )
+    assert.equal(
+      methodButton?.getAttribute('title'),
+      'Maximum top-up amount: 20 USD credited'
+    )
+
+    await unmount(rendered)
+  })
+
   test('applies the current group multiplier to ordinary payment presets', async () => {
     await i18n.changeLanguage('en')
     setUsdBillingCurrency()

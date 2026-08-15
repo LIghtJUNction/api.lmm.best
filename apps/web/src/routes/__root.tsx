@@ -16,16 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient, type QueryClient } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import {
   createRootRouteWithContext,
   Outlet,
   redirect,
   useNavigate,
+  useRouterState,
 } from '@tanstack/react-router'
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 
 import { FeedbackRewardButton } from '@/components/feedback-reward-button'
 import { Footer } from '@/components/layout/components/footer'
@@ -39,7 +40,6 @@ import { getSetupStatus } from '@/features/setup/api'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import {
   bootstrapAuthentication,
-  clearAuthenticatedClientState,
   clearAuthentication,
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
@@ -50,9 +50,20 @@ import {
 import { resolveLegacyRoute } from '@/lib/legacy-route'
 import { useAuthStore } from '@/stores/auth-store'
 
+const PersonaDebugPanel = __LMM_PERSONA_DEBUG__
+  ? lazy(() =>
+      import('@/features/debug/persona-debug-panel').then((module) => ({
+        default: module.PersonaDebugPanel,
+      }))
+    )
+  : null
+
 function RootComponent() {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const isHomeIntroSurface = isHomeIntroPath(pathname)
 
   // Load system configuration (logo, system name, etc.) from backend
   useSystemConfig({ autoLoad: true })
@@ -64,47 +75,40 @@ function RootComponent() {
     }
   }, [])
 
-  useEffect(
-    () =>
-      useAuthStore.subscribe((state, previousState) => {
-        const sid = state.auth.session?.sid
-        const previousSID = previousState.auth.session?.sid
-        if (sid !== previousSID) {
-          queryClient.clear()
-        }
-      }),
-    [queryClient]
-  )
+  useEffect(() => {
+    if (__LMM_PERSONA_DEBUG__) return
+    return subscribeAuthSessionEvents((event) => {
+      const currentSID = useAuthStore.getState().auth.session?.sid
 
-  useEffect(
-    () =>
-      subscribeAuthSessionEvents((event) => {
-        const currentSID = useAuthStore.getState().auth.session?.sid
-
-        if (event.kind === 'authenticated') {
-          if (event.sid === currentSID) return
-          if (currentSID) {
-            clearAuthentication(false)
-          }
-          window.location.reload()
-          return
+      if (event.kind === 'authenticated') {
+        if (event.sid === currentSID) return
+        if (currentSID) {
+          clearAuthentication(false)
         }
+        window.location.reload()
+        return
+      }
 
-        if (currentSID && event.sid === currentSID) {
-          clearAuthenticatedClientState(queryClient, false)
-          void navigate({ to: '/sign-in', replace: true })
-        }
-      }),
-    [navigate, queryClient]
-  )
+      if (currentSID && event.sid === currentSID) {
+        clearAuthentication(false)
+        void navigate({ to: '/sign-in', replace: true })
+      }
+    })
+  }, [navigate])
 
   return (
     <ThemeCustomizationProvider>
       <NavigationProgress />
       <Outlet />
-      <Footer />
-      <FeedbackRewardButton />
+      {isHomeIntroSurface && <Footer />}
+      {isHomeIntroSurface && <FeedbackRewardButton />}
       <Toaster closeButton duration={5000} position='top-center' richColors />
+      {PersonaDebugPanel &&
+      document.documentElement.dataset.personaDebug === 'true' ? (
+        <Suspense fallback={null}>
+          <PersonaDebugPanel />
+        </Suspense>
+      ) : null}
       {import.meta.env.DEV &&
         import.meta.env.VITE_ENABLE_DEVTOOLS === 'true' && (
           <>
@@ -114,6 +118,10 @@ function RootComponent() {
         )}
     </ThemeCustomizationProvider>
   )
+}
+
+function isHomeIntroPath(pathname: string): boolean {
+  return pathname === '/'
 }
 
 // 缓存 setup 状态检查结果，避免每次导航都重复调用 API

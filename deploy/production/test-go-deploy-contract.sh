@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016 # Literal source snippets are intentional contract assertions.
 set -Eeuo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
@@ -28,11 +29,15 @@ if command -v shellcheck >/dev/null 2>&1; then
 fi
 
 for literal in \
-  'ExecStart=/usr/bin/lmm-api-go serve' \
+  'ExecStart=/usr/bin/lmm-api serve' \
   'Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist' \
   'Environment=LMM_DB_MIGRATION_MODE=verify'; do
-  contains "$literal" "$repo/packaging/common/lmm-api/lmm-api-go.service"
+  contains "$literal" "$repo/packaging/common/lmm-api/lmm-api.service"
 done
+contains 'readonly NEW_SERVICE=lmm-api.service' "$here/activate-go-release.sh"
+contains 'readonly LEGACY_SERVICE=lmm-api-go.service' "$here/activate-go-release.sh"
+contains 'readlink -- "$CANONICAL_LAUNCHER"' "$here/activate-go-release.sh"
+contains 'readlink -- /usr/bin/lmm-api' "$here/deploy-go.sh"
 for literal in \
   'lmm-api-go-rollback-$deployment_id.timer' \
   'Persistent=true' \
@@ -43,8 +48,15 @@ for literal in \
 	'discover_database_schema' \
 	'database_schema=%s' \
 	'"$PROBE_BINARY" request' \
-	'run_candidate_migration apply' \
-	'run_candidate_migration verify' \
+	'run_migration apply candidate-apply "$PROBE_BINARY"' \
+	'run_migration verify candidate-verify "$PROBE_BINARY"' \
+	'run_migration verify rollback-verify "$INSTALLED_BINARY"' \
+  'harden_production_environment_config' \
+  'SESSION_COOKIE_SECURE=true' \
+  'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best' \
+  'TRUSTED_PROXIES=127.0.0.1/32,::1/128' \
+  'rollback_layout=%s' \
+  'direct Go upgrade unexpectedly found the split core package' \
   'pacman -Rdd --noconfirm lmm-api' \
   'release_transaction_lock'; do
   contains "$literal" "$here/activate-go-release.sh"
@@ -55,28 +67,61 @@ if rg -n '/var/lib/lmm-api-go/(deploy-work|deploy-backups|deploy-transaction)' "
   fail 'deployment control files remain below the backend-writable StateDirectory'
 fi
 if grep -Fq 'search_path=public' "$here/activate-go-release.sh" \
-  "$repo/packaging/common/lmm-api/lmm-api-go.service"; then
+  "$repo/packaging/common/lmm-api/lmm-api.service"; then
   fail 'production activation or service unit still hard-codes the public schema'
 fi
 contains 'PGOPTIONS="-c search_path=public"' "$repo/packaging/common/lmm-api/lmm-api-go.env"
 for literal in \
   'origin/main' \
   'backup-target-$deployment_id' \
+  'old_version=$(ssh -o BatchMode=yes "$HOST" cat --' \
+  'select(.success == true and .ready == true and (.data.version | type == "string")) | .data.version' \
   'pg_restore --list' \
   'LMM_BACKUP_AGE_IDENTITY_FILE' \
   'decrypted database backup does not match the target copy' \
+  'case $rollback_layout in split|direct)' \
+  'release_controller_owned_transaction_lock' \
+  'controller_transaction_lock_owned=1' \
+  'activation dispatch failed; transaction lock retained for audit' \
+  'observation_epoch=$(ssh -o BatchMode=yes "$HOST" date +%s)' \
+  'nginx_observation_is_clean' \
   'production observation detected an anomaly; rollback timer remains armed' \
   'activate-go-release.sh" confirm'; do
   contains "$literal" "$here/deploy-go.sh"
 done
+contains 'direct:lmm-api-go:/usr/bin/lmm-api-go' "$here/capture-precutover-payload.sh"
+contains '--rollback-layout "$ROLLBACK_LAYOUT"' "$here/promote-production-backups.sh"
+[[ -f $here/precutover-lmm-api-go-direct.PKGBUILD && ! -L $here/precutover-lmm-api-go-direct.PKGBUILD ]] || \
+  fail 'direct Go rollback package template is missing or unsafe'
+for literal in \
+  'chmod 0700 "$capture_root/core-root/etc/lmm-api"' \
+  'chmod 0600 "$capture_root/core-root/etc/lmm-api/lmm-api.env"' \
+  'chmod 0644 "$capture_root/core-root/etc/lmm-api/backend.conf"' \
+  'chmod 0755 "$capture_root/core-root/usr/bin/lmm-api"'; do
+  contains "$literal" "$here/capture-precutover-payload.sh"
+done
+if grep -Fq 'old_version=$(ssh -o BatchMode=yes "$HOST" jq' "$here/deploy-go.sh"; then
+  fail 'pre-cutover version parsing still sends a jq filter through the remote shell'
+fi
+if grep -Fq 'activation_epoch' "$here/deploy-go.sh"; then
+  fail 'stable observation still includes the activation transition window'
+fi
+if grep -Fq '[[ -z $(journalctl --quiet -u nginx.service' "$here/deploy-go.sh"; then
+  fail 'stable observation still treats every public static-file miss as an application failure'
+fi
+if grep -Fq '| pg_restore --list' "$here/deploy-go.sh" || \
+  grep -Fq '| tar -tf -' "$here/deploy-go.sh"; then
+  fail 'encrypted backup verification still risks truncating the age stream'
+fi
 
 if grep -R -nE '(^|[^[:alnum:]_])(curl|wget)([^[:alnum:]_]|$)|SIGKILL|mktemp[^\n]*(/tmp|TMPDIR:-/tmp)' \
   "$here/deploy-go.sh" "$here/activate-go-release.sh" "$here/build-go-package.sh" \
   "$here/capture-precutover-payload.sh" "$here/prepare-production-backup.sh"; then
   fail 'Go production path retains a browser-style client, SIGKILL fallback, or /tmp artifact path'
 fi
-if grep -R -nE 'lmm-api-launcher|backend\.conf.*selector|/usr/lib/lmm-api/backends/go/lmm-api.*ExecStart' \
-  "$repo/packaging/common/lmm-api" "$repo/packaging/local/lmm-api-go" \
+if grep -R --exclude='test-cli-contract.sh' -nE \
+  'lmm-api-launcher|backend\.conf.*selector|/usr/lib/lmm-api/backends/go/lmm-api.*ExecStart' \
+  "$repo/packaging/common/lmm-api" "$repo/packaging/local/lmm-api-go" "$here/precutover-lmm-api-go-direct.PKGBUILD" \
   "$repo"/packaging/aur/*/PKGBUILD "$repo"/packaging/aur/*/.SRCINFO; then
   fail 'new package path retains launcher/provider architecture'
 fi
@@ -97,7 +142,13 @@ fi
 [[ ! -e $side_effect ]] || fail 'malicious environment assignment executed'
 
 TMPDIR=$TMPDIR "$here/test-go-rollback-state-machine.sh"
+TMPDIR=$TMPDIR "$here/test-precutover-capture.sh"
+if command -v makepkg >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then
+  TMPDIR=$TMPDIR "$here/test-precutover-packages.sh"
+else
+  printf 'pre-cutover package reconstruction skipped: Arch makepkg/pacman unavailable\n'
+fi
 "$here/test-backup-promotion-contract.sh"
 "$repo/deploy/test-frontend-release.sh"
 
-printf 'direct lmm-api-go production deployment contract verified\n'
+printf 'canonical lmm-api production deployment contract verified\n'

@@ -50,6 +50,7 @@ const getGroupDefaults = (settings: BillingSettings) => ({
   DefaultUseAutoGroup: settings.DefaultUseAutoGroup,
   GroupSpecialUsableGroup:
     settings['group_ratio_setting.group_special_usable_group'],
+  GroupWarnings: settings['group_ratio_setting.group_warnings'],
 })
 
 const BILLING_SECTIONS = [
@@ -202,6 +203,7 @@ const BILLING_SECTIONS = [
           enabled: settings['checkin_setting.enabled'],
           minQuota: settings['checkin_setting.min_quota'],
           maxQuota: settings['checkin_setting.max_quota'],
+          levelMultipliers: settings['checkin_setting.level_multipliers'],
         }}
       />
     ),

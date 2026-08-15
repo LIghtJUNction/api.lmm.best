@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 	"github.com/samber/lo"
 )
 
@@ -499,7 +499,7 @@ func (m *Message) StringContent() string {
 	case string:
 		return m.Content.(string)
 	case []any:
-		var contentStr string
+		var contentStr strings.Builder
 		for _, contentItem := range m.Content.([]any) {
 			contentMap, ok := contentItem.(map[string]any)
 			if !ok {
@@ -507,11 +507,11 @@ func (m *Message) StringContent() string {
 			}
 			if contentMap["type"] == ContentTypeText {
 				if subStr, ok := contentMap["text"].(string); ok {
-					contentStr += subStr
+					contentStr.WriteString(subStr)
 				}
 			}
 		}
-		return contentStr
+		return contentStr.String()
 	}
 
 	return ""
@@ -883,6 +883,12 @@ type OpenAIResponsesRequest struct {
 	SafetyIdentifier json.RawMessage `json:"safety_identifier,omitempty"`
 	Stream           *bool           `json:"stream,omitempty"`
 	StreamOptions    *StreamOptions  `json:"stream_options,omitempty"`
+	// Some OpenAI-compatible Responses providers accept these optional
+	// sampling controls even though the official API does not document them.
+	// Keep them lossless during Chat Completions <-> Responses conversion;
+	// provider adaptors can explicitly strip them when unsupported.
+	FrequencyPenalty json.RawMessage `json:"frequency_penalty,omitempty"`
+	PresencePenalty  json.RawMessage `json:"presence_penalty,omitempty"`
 	Temperature      *float64        `json:"temperature,omitempty"`
 	Text             json.RawMessage `json:"text,omitempty"`
 	ToolChoice       json.RawMessage `json:"tool_choice,omitempty"`

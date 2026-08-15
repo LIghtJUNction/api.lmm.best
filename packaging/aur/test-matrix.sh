@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
+ROOT=$(git -C "$HERE" rev-parse --show-toplevel)
+readonly ROOT
 readonly SHARED="$HERE/../common/lmm-api"
 readonly PACKAGES=(
   lmm-api-go
@@ -10,6 +12,7 @@ readonly PACKAGES=(
   lmm-api-go-git
   lmm-api-rs-bin
   lmm-api-rs-git
+  lmm-api-web-bin
 )
 
 die() { printf 'test-aur-matrix: %s\n' "$*" >&2; exit 1; }
@@ -29,7 +32,7 @@ contains_srcinfo_prefix() {
 for removed in lmm-api-bin lmm-api-git; do
   [[ ! -e $HERE/$removed/PKGBUILD ]] || die "removed core package still has a PKGBUILD: $removed"
 done
-for removed in lmm-api-launcher backend.conf lmm-api.install lmm-api.service lmm-api.env; do
+for removed in backend.conf lmm-api.install lmm-api-go.service lmm-api.env; do
   [[ ! -e $SHARED/$removed ]] || die "removed launcher/provider asset remains: $removed"
 done
 
@@ -66,7 +69,7 @@ done
 contains_srcinfo lmm-api-rs-bin $'\tconflicts = lmm-api-rs-git'
 contains_srcinfo lmm-api-rs-git $'\tconflicts = lmm-api-rs-bin'
 
-for package in "${PACKAGES[@]}"; do
+for package in lmm-api-go lmm-api-go-bin lmm-api-go-git lmm-api-rs-bin lmm-api-rs-git; do
   for removed_core in lmm-api lmm-api-bin lmm-api-git; do
     contains_srcinfo "$package" $'\tconflicts = '"$removed_core"
   done
@@ -81,22 +84,56 @@ for package in lmm-api-go-bin lmm-api-rs-bin; do
     die "$package invokes a project compiler"
   fi
 done
+grep -Fq '_release_tag="go-v${pkgver}"' "$HERE/lmm-api-go-bin/PKGBUILD" ||
+  die 'Go binary package does not use the independent Go release tag'
+grep -Fq '.github/workflows/release-go.yml@refs/tags/${_release_tag}' \
+  "$HERE/lmm-api-go-bin/PKGBUILD" ||
+  die 'Go binary package does not verify the independent Go release identity'
+for package in lmm-api-web-bin; do
+  pkgbuild="$HERE/$package/PKGBUILD"
+  grep -Fq 'cosign verify-blob' "$pkgbuild" || die "$package lacks Sigstore verification"
+  grep -Fq 'sha256sum' "$pkgbuild" || die "$package lacks SHA-256 verification"
+  grep -Fq 'noextract=(' "$pkgbuild" || die "$package extracts before verification"
+  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-web'
+done
+grep -Fq 'systemctl reload nginx.service' "$HERE/lmm-api-web-bin/lmm-api-web-activate" ||
+  die 'web package activation does not reload nginx'
+if grep -Eq '(^|[[:space:]])curl([[:space:]]|$)' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
+  die 'web package activation performs a network probe inside the package transaction'
+fi
+if grep -Eq 'systemctl (restart|reload) lmm-api' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
+  die 'web package activation controls the backend service'
+fi
 contains_srcinfo lmm-api-go-git $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-grep -Fqx '_commit=3c9b8596716e3bb4f6fb439cfd6e1d168064e892' "$HERE/lmm-api-go/PKGBUILD" ||
+go_release_commit=11217412480e81b58f96f2b9889bd317120ff8f0
+readonly go_release_commit
+grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
+# Pull requests are checked out shallowly without tag refs. Keep the reviewed
+# package version as the deterministic fallback, while still validating the
+# derived value whenever the local checkout has the tag history available.
+readonly reviewed_go_release_pkgver=0.1.1.r490.g112174124
+if go_release_description=$(git -C "$ROOT" describe --long --tags --exclude='web-v*' --abbrev=9 "$go_release_commit" 2>/dev/null); then
+  go_release_pkgver=$(printf '%s\n' "$go_release_description" | \
+    sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g')
+else
+  go_release_pkgver=$reviewed_go_release_pkgver
+fi
+grep -Fqx "pkgver=$go_release_pkgver" "$HERE/lmm-api-go/PKGBUILD" ||
+  die "canonical Go package version does not match pinned revision: $go_release_pkgver"
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 
-grep -Fqx 'ExecStart=/usr/bin/lmm-api-go serve' "$SHARED/lmm-api-go.service" ||
+grep -Fqx 'ExecStart=/usr/bin/lmm-api serve' "$SHARED/lmm-api.service" ||
   die 'Go systemd service does not execute the backend directly'
 grep -Fqx 'Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist' \
-  "$SHARED/lmm-api-go.service" || die 'Go service does not bind the packaged frontend'
-if grep -R -Eq '/usr/bin/lmm-api([^[:alnum:]_-]|$)|lmm-api-launcher|backends/(go|rs)' \
-    "$HERE"/*/PKGBUILD "$SHARED/lmm-api-go.service"; then
-  die 'package layout retains an unsuffixed launcher or provider directory'
+  "$SHARED/lmm-api.service" || die 'Go service does not bind the packaged frontend'
+if grep -R -Eq 'lmm-api-launcher|backends/(go|rs)' \
+    "$HERE"/*/PKGBUILD "$SHARED/lmm-api.service"; then
+  die 'package layout retains a launcher or provider directory'
 fi
 
 : "${TMPDIR:?set TMPDIR to a marker-owned build workspace}"
@@ -105,15 +142,19 @@ cleanup() { rm -rf -- "$tmp"; }
 trap cleanup EXIT
 
 stage="$tmp/stage"
-go_bundle="$stage/go/lmm-api-go-0.1.2-linux-amd64"
-rs_bundle="$stage/rs/lmm-api-rs-0.1.2-linux-amd64"
+go_bin_pkgver=$(sed -n 's/^pkgver=//p' "$HERE/lmm-api-go-bin/PKGBUILD")
+rs_bin_pkgver=$(sed -n 's/^pkgver=//p' "$HERE/lmm-api-rs-bin/PKGBUILD")
+[[ $go_bin_pkgver =~ ^[0-9]+(\.[0-9]+)*$ ]] || die 'Go binary package version is not a fixture-safe release version'
+[[ $rs_bin_pkgver =~ ^[0-9]+(\.[0-9]+)*$ ]] || die 'Rust binary package version is not a fixture-safe release version'
+go_bundle="$stage/go/lmm-api-go-${go_bin_pkgver}-linux-amd64"
+rs_bundle="$stage/rs/lmm-api-rs-${rs_bin_pkgver}-linux-amd64"
 mkdir -p "$go_bundle/frontend-dist" "$rs_bundle"
 printf '#!/bin/sh\n' > "$go_bundle/lmm-api-go"
 printf '#!/bin/sh\n' > "$rs_bundle/lmm-api-rs"
 printf '#!/bin/sh\n' > "$rs_bundle/lmm-db-migrate"
 chmod 0755 "$go_bundle/lmm-api-go" "$rs_bundle/lmm-api-rs" "$rs_bundle/lmm-db-migrate"
 printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
-cp "$SHARED/lmm-api-go.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
+cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
 for bundle in "$go_bundle" "$rs_bundle"; do
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     printf 'fixture\n' > "$bundle/$file"
@@ -142,16 +183,15 @@ done
 
 for packaged_path in \
   pkg-go/usr/bin/lmm-api-go \
-  pkg-go/usr/lib/systemd/system/lmm-api-go.service \
+  pkg-go/usr/lib/systemd/system/lmm-api.service \
   pkg-go/etc/lmm-api-go/lmm-api-go.env \
   pkg-go/usr/share/lmm-api-go/frontend-dist/index.html \
   pkg-rs/usr/bin/lmm-api-rs \
   pkg-rs/usr/bin/lmm-db-migrate; do
   [[ -f $tmp/$packaged_path ]] || die "mock package layout is missing $packaged_path"
 done
-for removed_path in pkg-go/usr/bin/lmm-api pkg-rs/usr/bin/lmm-api; do
-  [[ ! -e $tmp/$removed_path && ! -L $tmp/$removed_path ]] ||
-    die "mock package exposes removed command $removed_path"
-done
+[[ -L $tmp/pkg-go/usr/bin/lmm-api ]] || die 'Go package is missing the canonical provider symlink'
+[[ ! -e $tmp/pkg-rs/usr/bin/lmm-api && ! -L $tmp/pkg-rs/usr/bin/lmm-api ]] ||
+  die 'Rust package exposes the Go provider command'
 
-printf '%s\n' 'five-package direct-backend AUR matrix verified'
+printf '%s\n' 'six-package direct-backend and web AUR matrix verified'

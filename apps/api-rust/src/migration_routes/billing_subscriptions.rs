@@ -7,8 +7,10 @@
 use crate::auth::{AuthErrorKind, DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    body::to_bytes,
+    extract::{Path, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -39,12 +41,27 @@ pub struct BillingSubscriptionsState {
     pg: PgPool,
     valkey: Option<redis::Client>,
     auth: Arc<dyn DashboardAuth>,
+    console_access_gate: bool,
 }
 
 impl BillingSubscriptionsState {
     #[must_use]
     pub fn new(pg: PgPool, valkey: Option<redis::Client>, auth: Arc<dyn DashboardAuth>) -> Self {
-        Self { pg, valkey, auth }
+        Self {
+            pg,
+            valkey,
+            auth,
+            console_access_gate: false,
+        }
+    }
+
+    /// Enables the API-wide ConsoleAccessGate used by the normal listener.
+    /// Module-level contract tests leave this disabled so they can continue
+    /// to exercise the route's direct UserAuth envelope in isolation.
+    #[must_use]
+    pub fn with_console_access_gate(mut self) -> Self {
+        self.console_access_gate = true;
+        self
     }
 }
 
@@ -331,7 +348,7 @@ async fn maybe_reset_subscription(
 
 /// Routes that do not initiate payments or accept provider callbacks.
 pub fn router(state: BillingSubscriptionsState) -> Router {
-    Router::new()
+    let protected = Router::new()
         .route("/api/subscription/plans", get(list_enabled_plans))
         .route("/api/subscription/self", get(subscription_self))
         .route("/api/subscription/self/preference", put(update_preference))
@@ -367,7 +384,102 @@ pub fn router(state: BillingSubscriptionsState) -> Router {
             "/api/subscription/admin/user_subscriptions/{id}/invalidate",
             post(admin_invalidate_subscription),
         )
-        .with_state(state)
+        // Go's user/admin middleware runs before Gin binds JSON. Keep that
+        // ordering at the listener boundary so malformed anonymous writes
+        // cannot become Axum extractor errors before auth is evaluated.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            subscription_auth_boundary,
+        ));
+    protected.with_state(state)
+}
+
+async fn subscription_auth_boundary(
+    State(state): State<BillingSubscriptionsState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !subscription_method_allowed(request.uri().path(), request.method()) {
+        return next.run(request).await;
+    }
+    if state.console_access_gate
+        && let Err(response) = console_access(&state, request.headers()).await
+    {
+        return response;
+    }
+    let is_admin = request.uri().path().starts_with("/api/subscription/admin/");
+    let result = if is_admin {
+        admin(&state, request.headers()).await.map(|_| ())
+    } else {
+        identity(&state, request.headers()).await.map(|_| ())
+    };
+    if let Err(response) = result {
+        return response;
+    }
+    // Gin's UserAuth/AdminAuth middleware adds the current auth-version to
+    // every response after authentication, including extractor and handler
+    // failures. Apply it at the boundary so early returns cannot drift from
+    // the Go contract.
+    with_auth_version(next.run(request).await)
+}
+
+/// Mirrors the API-wide Go ConsoleAccessGate for the normal listener.  The
+/// detailed UserAuth/AdminAuth response remains owned by `identity`/`admin`
+/// after this discovery check has admitted the request.
+async fn console_access(
+    state: &BillingSubscriptionsState,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            let mut fields = value.split_whitespace();
+            let first = fields.next()?;
+            let second = fields.next();
+            if fields.next().is_some() {
+                return None;
+            }
+            match second {
+                Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
+                    Some(token.to_owned())
+                }
+                None if !first.is_empty() => Some(first.to_owned()),
+                _ => None,
+            }
+        })
+        .ok_or_else(console_not_found)?;
+    let user = state
+        .auth
+        .self_user_view_for_optional(SecretString::from(token))
+        .await
+        .map_err(|_| console_not_found())?;
+    user.developer_access_granted
+        .then_some(())
+        .ok_or_else(console_not_found)
+}
+
+fn subscription_method_allowed(path: &str, method: &axum::http::Method) -> bool {
+    use axum::http::Method;
+
+    match path {
+        "/api/subscription/plans" | "/api/subscription/self" => *method == Method::GET,
+        "/api/subscription/self/preference" => *method == Method::PUT,
+        "/api/subscription/admin/plans" => *method == Method::GET || *method == Method::POST,
+        "/api/subscription/admin/bind" => *method == Method::POST,
+        _ if path.ends_with("/subscriptions/reset") => *method == Method::POST,
+        _ if path.ends_with("/invalidate") => *method == Method::POST,
+        _ if path.starts_with("/api/subscription/admin/plans/") => {
+            *method == Method::PUT || *method == Method::PATCH
+        }
+        _ if path.starts_with("/api/subscription/admin/users/") => {
+            *method == Method::GET || *method == Method::POST
+        }
+        _ if path.starts_with("/api/subscription/admin/user_subscriptions/") => {
+            *method == Method::DELETE
+        }
+        _ => false,
+    }
 }
 
 #[derive(Serialize)]
@@ -427,6 +539,10 @@ fn auth_failure(status: StatusCode, code: &'static str, message: &'static str) -
         Json(json!({"success": false, "code": code, "message": message})),
     )
         .into_response()
+}
+
+fn console_not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"}))).into_response()
 }
 
 async fn identity(
@@ -501,9 +617,9 @@ async fn admin(
     Ok(user)
 }
 
-async fn payment_compliance_confirmed(pg: &PgPool) -> Result<bool, sqlx::Error> {
+pub(crate) async fn payment_compliance_confirmed(pg: &PgPool) -> Result<bool, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT key, value FROM options WHERE key IN ('payment_setting.compliance_confirmed', 'payment_setting.compliance_terms_version')",
+        "SELECT key, value FROM options WHERE key IN ('payment_setting.compliance_confirmed', 'payment_setting.compliance_terms_version', 'payment_setting')",
     )
     .fetch_all(pg)
     .await?;
@@ -516,12 +632,26 @@ async fn payment_compliance_confirmed(pg: &PgPool) -> Result<bool, sqlx::Error> 
             ))
         })
         .collect::<Result<HashMap<_, _>, sqlx::Error>>()?;
-    Ok(values
+    let split_options = values
         .get("payment_setting.compliance_confirmed")
         .is_some_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
         && values
             .get("payment_setting.compliance_terms_version")
-            .is_some_and(|value| value == "v1"))
+            .is_some_and(|value| value == "v1");
+    Ok(split_options
+        || values
+            .get("payment_setting")
+            .and_then(|value| serde_json::from_str::<Value>(value).ok())
+            .is_some_and(|value| {
+                value
+                    .get("compliance_confirmed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    && value
+                        .get("compliance_terms_version")
+                        .and_then(Value::as_str)
+                        == Some("v1")
+            }))
 }
 
 fn compliance_message(headers: &HeaderMap) -> &'static str {
@@ -596,7 +726,7 @@ where
 }
 
 #[derive(Serialize)]
-struct PlanView {
+pub(crate) struct PlanView {
     plan: Plan,
 }
 #[derive(Deserialize)]
@@ -778,6 +908,12 @@ async fn plans(pg: &PgPool, enabled_only: bool) -> Result<Vec<Plan>, sqlx::Error
         .iter()
         .map(plan_from_row)
         .collect()
+}
+
+pub(crate) async fn enabled_plan_views(pg: &PgPool) -> Result<Vec<PlanView>, sqlx::Error> {
+    plans(pg, true)
+        .await
+        .map(|plans| plans.into_iter().map(|plan| PlanView { plan }).collect())
 }
 const PLAN_SELECT: &str = "SELECT id, title, COALESCE(subtitle, '') subtitle, price_amount::FLOAT8 price_amount, COALESCE(currency, 'USD') currency, COALESCE(duration_unit, 'month') duration_unit, COALESCE(duration_value, 1) duration_value, COALESCE(custom_seconds, 0) custom_seconds, enabled, COALESCE(sort_order, 0) sort_order, COALESCE(allow_balance_pay, TRUE) allow_balance_pay, COALESCE(allow_wallet_overflow, TRUE) allow_wallet_overflow, COALESCE(stripe_price_id, '') stripe_price_id, COALESCE(creem_product_id, '') creem_product_id, COALESCE(waffo_pancake_product_id, '') waffo_pancake_product_id, COALESCE(max_purchase_per_user, 0) max_purchase_per_user, COALESCE(total_amount, 0) total_amount, COALESCE(upgrade_group, '') upgrade_group, COALESCE(downgrade_group, '') downgrade_group, COALESCE(quota_reset_period, 'never') quota_reset_period, COALESCE(quota_reset_custom_seconds, 0) quota_reset_custom_seconds, COALESCE(created_at, 0) created_at, COALESCE(updated_at, 0) updated_at FROM subscription_plans";
 fn plan_from_row(row: &sqlx::postgres::PgRow) -> Result<Plan, sqlx::Error> {
@@ -966,19 +1102,46 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Go's encoding/json writes an integral float64 without a trailing `.0`.
+/// Preserve that lexical form because the legacy user setting is stored as a
+/// JSON string and can be updated by more than one route family.
+fn serialize_legacy_user_setting(setting: &LegacyUserSetting) -> Result<String, serde_json::Error> {
+    let mut serialized = serde_json::to_string(setting)?;
+    if let Some(marker) = serialized.find("\"quota_warning_threshold\":") {
+        let value_start = marker + "\"quota_warning_threshold\":".len();
+        let value_end = serialized[value_start..]
+            .find([',', '}'])
+            .map_or(serialized.len(), |offset| value_start + offset);
+        let mut number = setting.quota_warning_threshold.to_string();
+        if number.ends_with(".0") {
+            number.truncate(number.len() - 2);
+        }
+        serialized.replace_range(value_start..value_end, &number);
+    }
+    Ok(serialized)
+}
+
 async fn update_preference(
     State(state): State<BillingSubscriptionsState>,
-    headers: HeaderMap,
-    Json(input): Json<PreferenceRequest>,
+    request: Request,
 ) -> Response {
+    let headers = request.headers().clone();
     let user = match identity(&state, &headers).await {
         Ok(user) => user,
         Err(response) => return response,
     };
+    let body = match to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(body) => body,
+        Err(_) => return with_auth_version(failure(StatusCode::OK, "参数错误")),
+    };
+    let input = match parse_preference_request(&body) {
+        Ok(input) => input,
+        Err(()) => return with_auth_version(failure(StatusCode::OK, "参数错误")),
+    };
     let preference = normalize_preference(&input.billing_preference);
     let mut setting = serde_json::from_str::<LegacyUserSetting>(&user.setting).unwrap_or_default();
     setting.billing_preference = preference.to_owned();
-    let setting = match serde_json::to_string(&setting) {
+    let setting = match serialize_legacy_user_setting(&setting) {
         Ok(setting) => setting,
         Err(_) => {
             return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误"));
@@ -986,15 +1149,46 @@ async fn update_preference(
     };
     let updated = sqlx::query("UPDATE users SET setting = $2 WHERE id = $1 AND deleted_at IS NULL")
         .bind(user.id)
-        .bind(setting)
+        .bind(&setting)
         .execute(&state.pg)
         .await;
     match updated {
         Ok(result) if result.rows_affected() == 0 => {
             with_auth_version(failure(StatusCode::NOT_FOUND, "用户不存在"))
         }
-        Ok(_) => with_auth_version(ok(json!({"billing_preference": preference}))),
+        Ok(_) => {
+            // Go updates an existing user hash in place after the durable
+            // setting write. Keep the same cache-aside side effect while
+            // preserving whichever legacy cache schema populated the hash
+            // (the Rust model cache currently uses schema 2, while older Go
+            // deployments may still have schema 4).
+            update_user_setting_cache(&state, user.id, &setting).await;
+            with_auth_version(ok(json!({"billing_preference": preference})))
+        }
         Err(_) => with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
+    }
+}
+
+/// Gin's `ShouldBindJSON` binds into a struct with a zero-value string field:
+/// an omitted or null `billing_preference` is accepted and normalized, unknown
+/// fields are ignored, while a non-string field or a non-object JSON value is
+/// rejected with the legacy HTTP-200 error envelope. Axum's `Json<T>` extractor
+/// has different status/error semantics, so perform that small compatibility
+/// decode after the dashboard auth boundary has run.
+fn parse_preference_request(body: &[u8]) -> Result<PreferenceRequest, ()> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| ())?;
+    match value {
+        Value::Null => Ok(PreferenceRequest {
+            billing_preference: String::new(),
+        }),
+        Value::Object(mut object) => match object.remove("billing_preference") {
+            None | Some(Value::Null) => Ok(PreferenceRequest {
+                billing_preference: String::new(),
+            }),
+            Some(Value::String(billing_preference)) => Ok(PreferenceRequest { billing_preference }),
+            Some(_) => Err(()),
+        },
+        _ => Err(()),
     }
 }
 fn normalize_preference(value: &str) -> &'static str {
@@ -1024,14 +1218,16 @@ async fn subscription_self(
                 .map(normalize_preference)
         })
         .unwrap_or("subscription_first");
-    let all = match subscriptions(&state.pg, user.id, false).await {
-        Ok(subscriptions) => subscriptions,
-        Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
-    };
-    let active = match subscriptions(&state.pg, user.id, true).await {
-        Ok(subscriptions) => subscriptions,
-        Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
-    };
+    // Go's GetSubscriptionSelf deliberately degrades each read failure to an
+    // empty list after UserAuth has succeeded. Preserve that wire contract so
+    // a transient subscription-table failure does not turn a dashboard read
+    // into a different HTTP/error envelope on Rust.
+    let all = subscriptions(&state.pg, user.id, false)
+        .await
+        .unwrap_or_default();
+    let active = subscriptions(&state.pg, user.id, true)
+        .await
+        .unwrap_or_default();
     with_auth_version(ok(
         json!({"billing_preference": preference, "subscriptions": active, "all_subscriptions": all}),
     ))
@@ -1651,6 +1847,55 @@ async fn evict_user_cache(valkey: Option<&redis::Client>, user_id: i64) {
         .query_async(&mut connection)
         .await;
 }
+
+/// Refresh only the setting field of an already-populated legacy user hash.
+///
+/// Go's `UpdateUserSetting` performs this as an auth-version-fenced HSET and
+/// deliberately leaves a cold/missing hash alone. The fence prevents a stale
+/// asynchronous cache fill from overwriting a newer snapshot; preserving the
+/// existing CacheSchema field keeps Rust's schema-2 model cache compatible
+/// with a hash that was populated by either runtime.
+async fn update_user_setting_cache(state: &BillingSubscriptionsState, user_id: i64, setting: &str) {
+    let Some(client) = state.valkey.as_ref() else {
+        return;
+    };
+    let auth_version = match sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(auth_version, 0) FROM users WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pg)
+    .await
+    {
+        Ok(Some(version)) if version > 0 => version,
+        Ok(_) => return,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "subscription preference cache version lookup failed");
+            return;
+        }
+    };
+    let Ok(mut connection) = client.get_multiplexed_async_connection().await else {
+        tracing::warn!(user_id, "subscription preference cache connection failed");
+        return;
+    };
+    // Keep this script in lockstep with Go's updateUserCacheFieldAtVersion:
+    // security fences win, committed floors are monotonic, and a cold cache is
+    // not manufactured by a setting-only update.
+    let script = redis::Script::new(
+        r#"local incoming=tonumber(ARGV[1]); local pending=tonumber(redis.call('GET',KEYS[2]) or '0'); local committed=tonumber(redis.call('GET',KEYS[3]) or '0'); local current=tonumber(redis.call('HGET',KEYS[1],'AuthVersion') or '0'); if pending>incoming or committed>incoming or current>incoming then return 0 end; if committed<incoming then redis.call('SET',KEYS[3],ARGV[1]) end; if pending>0 and pending<=incoming then redis.call('DEL',KEYS[2]) end; if redis.call('EXISTS',KEYS[1])==0 then return 1 end; if current~=incoming then return 1 end; redis.call('HSET',KEYS[1],'Setting',ARGV[2]); return 1"#,
+    );
+    if let Err(error) = script
+        .key(format!("{USER_CACHE_PREFIX}{user_id}"))
+        .key(format!("auth:user:fence:{user_id}"))
+        .key(format!("auth:user:version:{user_id}"))
+        .arg(auth_version)
+        .arg(setting)
+        .invoke_async::<i64>(&mut connection)
+        .await
+    {
+        tracing::warn!(%error, user_id, "subscription preference cache update failed");
+    }
+}
+
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1661,7 +1906,10 @@ fn now() -> i64 {
 mod tests {
     use chrono::{Local, TimeZone};
 
-    use super::{LegacyUserSetting, Plan, end_time, next_reset, normalize_preference};
+    use super::{
+        LegacyUserSetting, Plan, end_time, next_reset, normalize_preference,
+        parse_preference_request,
+    };
 
     fn local_timestamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
         Local
@@ -1710,6 +1958,30 @@ mod tests {
         }
         assert_eq!(normalize_preference("unexpected"), "subscription_first");
         assert_eq!(normalize_preference("quota"), "subscription_first");
+    }
+
+    #[test]
+    fn preference_request_binding_matches_gin_zero_value_contract() {
+        assert_eq!(
+            parse_preference_request(br#"{"billing_preference":" wallet_only "}"#)
+                .expect("valid preference")
+                .billing_preference,
+            " wallet_only "
+        );
+        assert_eq!(
+            parse_preference_request(br#"{}"#)
+                .expect("omitted field is a zero value")
+                .billing_preference,
+            ""
+        );
+        assert_eq!(
+            parse_preference_request(br#"{"billing_preference":null}"#)
+                .expect("null string is a zero value")
+                .billing_preference,
+            ""
+        );
+        assert!(parse_preference_request(br#"{"billing_preference":7}"#).is_err());
+        assert!(parse_preference_request(br#"[]"#).is_err());
     }
 
     #[test]

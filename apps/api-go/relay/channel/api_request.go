@@ -11,14 +11,16 @@ import (
 	"sync"
 	"time"
 
-	common2 "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	common2 "github.com/LIghtJUNction/api.lmm.best/common"
+	appconstant "github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relay/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -100,28 +102,24 @@ var passthroughSkipHeaderNamesLower = map[string]struct{}{
 	"sec-websocket-protocol":   {},
 }
 
-var headerPassthroughRegexCache sync.Map // map[string]*regexp.Regexp
+var headerPassthroughRegexCache = cachex.NewByteCache[*regexp.Regexp](256, 256<<10, func(pattern string, _ *regexp.Regexp) int64 {
+	return int64(len(pattern) + 256)
+})
 
 func getHeaderPassthroughRegex(pattern string) (*regexp.Regexp, error) {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" {
 		return nil, errors.New("empty regex pattern")
 	}
-	if v, ok := headerPassthroughRegexCache.Load(pattern); ok {
-		if re, ok := v.(*regexp.Regexp); ok {
-			return re, nil
-		}
-		headerPassthroughRegexCache.Delete(pattern)
+	if re, ok := headerPassthroughRegexCache.Load(pattern); ok && re != nil {
+		return re, nil
 	}
 	compiled, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, err
 	}
 	actual, _ := headerPassthroughRegexCache.LoadOrStore(pattern, compiled)
-	if re, ok := actual.(*regexp.Regexp); ok {
-		return re, nil
-	}
-	return compiled, nil
+	return actual, nil
 }
 
 func IsHeaderPassthroughRuleKey(key string) bool {
@@ -489,6 +487,7 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 }
 
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	resetUpstreamCompatibilityMarkers(c)
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -538,6 +537,19 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if resp == nil {
 		return nil, errors.New("resp is nil")
 	}
+	resp, err = maybeRetryOpenAICompatibilityError(c, &relayClient, req, info, resp)
+	if err != nil {
+		logger.LogError(c, "compatibility retry failed: "+err.Error())
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("compatibility retry returned a nil response")
+	}
+	if limit := common2.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit); limit > 0 {
+		if err := common2.LimitResponseBody(resp, int64(limit)); err != nil {
+			return nil, err
+		}
+	}
 	if common2.DebugEnabled {
 		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
 		logger.LogDebug(c, fmt.Sprintf(
@@ -554,8 +566,12 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
 
-	_ = req.Body.Close()
-	_ = c.Request.Body.Close()
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	if c.Request != nil && c.Request.Body != nil {
+		_ = c.Request.Body.Close()
+	}
 	return resp, nil
 }
 

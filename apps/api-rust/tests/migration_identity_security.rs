@@ -5,10 +5,11 @@ use axum::{
     body::Body,
     http::{HeaderMap, Request, StatusCode},
 };
+use lmm_api_rs::auth::SecurityProof;
 use lmm_api_rs::migration_routes::identity_security::{
     IdentitySecurityState, MemorySecurityProvider, PgValkeySecurityProvider, SecurityActor,
     SecurityAuthorizer, SecurityCall, SecurityError, SecurityOperation, SecurityProvider,
-    registration_router, router,
+    passkey_read_router, registration_router, router, sessions_read_router,
 };
 use serde_json::json;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -18,6 +19,32 @@ use tower::ServiceExt;
 struct Authorizer {
     user: Result<SecurityActor, SecurityError>,
     admin: Result<SecurityActor, SecurityError>,
+}
+
+#[derive(Clone)]
+struct ProofAuthorizer {
+    actor: SecurityActor,
+    proof: Result<SecurityProof, SecurityError>,
+}
+
+#[async_trait]
+impl SecurityAuthorizer for ProofAuthorizer {
+    async fn user(&self, _: &HeaderMap) -> Result<SecurityActor, SecurityError> {
+        Ok(self.actor.clone())
+    }
+
+    async fn admin(&self, _: &HeaderMap) -> Result<SecurityActor, SecurityError> {
+        Ok(self.actor.clone())
+    }
+
+    async fn issue_security_proof(
+        &self,
+        _: &SecurityActor,
+        _: &str,
+        _: &[String],
+    ) -> Result<SecurityProof, SecurityError> {
+        self.proof.clone()
+    }
 }
 
 #[async_trait]
@@ -55,7 +82,7 @@ fn app(provider: Arc<MemorySecurityProvider>, authorizer: Authorizer) -> axum::R
 async fn registration_router_exposes_only_the_completed_anonymous_registration_slice() {
     let provider = Arc::new(MemorySecurityProvider::new(Ok(serde_json::Value::Null)));
     let response = registration_router(IdentitySecurityState::new(
-        provider,
+        provider.clone(),
         Arc::new(Authorizer {
             user: Err(SecurityError::Unauthorized),
             admin: Err(SecurityError::Unauthorized),
@@ -72,17 +99,46 @@ async fn registration_router_exposes_only_the_completed_anonymous_registration_s
     .await
     .expect("registration response");
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "registration must fail closed until its listener-owned anonymous security policy is configured"
+    );
+    assert!(provider.calls().expect("provider calls").is_empty());
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("registration body");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&body).expect("JSON"),
         json!({
-            "success": true,
-            "message": ""
+            "success": false,
+            "message": "Security service is temporarily unavailable"
         })
     );
+}
+
+#[tokio::test]
+async fn read_only_security_mounts_keep_the_auth_boundary() {
+    for (app, path) in [
+        (
+            sessions_read_router(IdentitySecurityState::with_rejecting_authorizer(Arc::new(
+                MemorySecurityProvider::default(),
+            ))),
+            "/api/user/sessions",
+        ),
+        (
+            passkey_read_router(IdentitySecurityState::with_rejecting_authorizer(Arc::new(
+                MemorySecurityProvider::default(),
+            ))),
+            "/api/user/passkey",
+        ),
+    ] {
+        let response = app
+            .oneshot(Request::get(path).body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
 }
 
 #[tokio::test]
@@ -105,7 +161,7 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
         ("GET", "/api/user/passkey", ""),
         ("GET", "/api/user/sessions", ""),
         ("GET", "/api/verification?email=ada@example.test", ""),
-        ("POST", "/api/user/login/2fa", "{}"),
+        ("POST", "/api/user/login/2fa", r#"{"code":"123456"}"#),
         ("POST", "/api/user/passkey/login/begin", "{}"),
         ("POST", "/api/user/passkey/login/finish", "{}"),
         ("POST", "/api/user/passkey/register/begin", "{}"),
@@ -113,7 +169,11 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
         ("POST", "/api/user/passkey/verify/begin", "{}"),
         ("POST", "/api/user/passkey/verify/finish", "{}"),
         ("POST", "/api/user/register", "{}"),
-        ("POST", "/api/user/reset", "{}"),
+        (
+            "POST",
+            "/api/user/reset",
+            r#"{"email":"ada@example.test","token":"reset-token"}"#,
+        ),
         ("POST", "/api/user/sessions/revoke-others", "{}"),
         ("POST", "/api/verify", "{}"),
     ];
@@ -131,9 +191,14 @@ async fn all_twenty_frozen_candidates_have_the_expected_method_and_shape() {
             )
             .await
             .expect("candidate responds");
-        assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+        let expected_status = if matches!(uri, "/api/user/register" | "/api/verify") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::OK
+        };
+        assert_eq!(response.status(), expected_status, "{method} {uri}");
     }
-    assert_eq!(provider.calls().expect("fake calls").len(), 20);
+    assert_eq!(provider.calls().expect("fake calls").len(), 19);
 }
 
 #[tokio::test]
@@ -263,6 +328,81 @@ async fn unavailable_webauthn_boundary_never_reports_a_fabricated_success() {
     )
     .await
     .expect("response");
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn universal_verify_returns_a_proof_only_after_provider_verification() {
+    let provider = Arc::new(MemorySecurityProvider::new(Ok(json!({
+        "method": "email",
+        "scope": "channel.key.read"
+    }))));
+    let application = router(IdentitySecurityState::new(
+        provider,
+        Arc::new(ProofAuthorizer {
+            actor: user(),
+            proof: Ok(SecurityProof {
+                token: "proof-token".to_owned(),
+                expires_at: 1_900_000_000,
+            }),
+        }),
+    ));
+    let response = application
+        .oneshot(
+            Request::post("/api/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"method":"email","code":"123456","scope":"channel.key.read"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).expect("JSON"),
+        json!({
+            "success": true,
+            "message": "验证成功",
+            "data": {
+                "proof_token": "proof-token",
+                "expires_at": 1_900_000_000_i64,
+                "method": "email",
+                "scope": "channel.key.read"
+            }
+        })
+    );
+}
+
+#[tokio::test]
+async fn universal_verify_rejects_provider_success_without_proof_fields() {
+    let provider = Arc::new(MemorySecurityProvider::new(Ok(json!({"accepted": true}))));
+    let application = router(IdentitySecurityState::new(
+        provider,
+        Arc::new(ProofAuthorizer {
+            actor: user(),
+            proof: Ok(SecurityProof {
+                token: "must-not-be-used".to_owned(),
+                expires_at: 1_900_000_000,
+            }),
+        }),
+    ));
+    let response = application
+        .oneshot(
+            Request::post("/api/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"method":"email","code":"123456","scope":"channel.key.read"}"#,
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

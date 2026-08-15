@@ -3,14 +3,16 @@
 use crate::auth::{DashboardAuth, DashboardUser};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    body::to_bytes,
+    extract::{Extension, Path, Query, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bcrypt::{DEFAULT_COST, hash};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::json;
 use sqlx::{FromRow, PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use std::sync::Arc;
@@ -19,6 +21,8 @@ const ROLE_ADMIN: i64 = 10;
 const ROLE_ROOT: i64 = 100;
 const STATUS_ENABLED: i64 = 1;
 const STATUS_DISABLED: i64 = 2;
+const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
+const MAX_BODY_BYTES: usize = 1 << 20;
 // A pending fence must outlive the normal user-cache TTL.  If Valkey becomes
 // unavailable after a database commit, retaining this fence fails closed until
 // the cache can recover from PostgreSQL rather than re-authorizing an old token.
@@ -43,12 +47,55 @@ pub fn router(state: IdentityAdminState) -> Router {
     Router::new()
         .route(
             "/api/user/",
-            get(list_users).post(create_user).put(update_user),
+            get(list_users)
+                .post(create_user)
+                .put(update_user)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    admin_auth_boundary,
+                )),
         )
-        .route("/api/user/search", get(search_users))
-        .route("/api/user/{id}", get(get_user).delete(delete_user))
-        .route("/api/user/manage", post(manage_user))
+        .route(
+            "/api/user/search",
+            get(search_users).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                admin_auth_boundary,
+            )),
+        )
+        .route(
+            "/api/user/{id}",
+            get(get_user)
+                .delete(delete_user)
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    admin_auth_boundary,
+                )),
+        )
+        .route(
+            "/api/user/manage",
+            post(manage_user).route_layer(middleware::from_fn_with_state(
+                state.clone(),
+                admin_auth_boundary,
+            )),
+        )
         .with_state(state)
+}
+
+async fn admin_auth_boundary(
+    State(state): State<IdentityAdminState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let actor = match administrator(&state, request.headers()).await {
+        Ok(actor) => actor,
+        Err(response) => return response,
+    };
+    request.extensions_mut().insert(actor);
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
 }
 
 #[derive(Serialize)]
@@ -60,21 +107,40 @@ struct Envelope<T: Serialize> {
 }
 
 fn ok<T: Serialize>(data: Option<T>) -> Response {
-    Json(Envelope {
-        success: true,
-        message: String::new(),
-        data,
-    })
-    .into_response()
+    authenticated_response(
+        Json(Envelope {
+            success: true,
+            message: String::new(),
+            data,
+        })
+        .into_response(),
+    )
 }
 fn fail(message: impl Into<String>) -> Response {
-    Json(Envelope::<()> {
-        success: false,
-        message: message.into(),
-        data: None,
-    })
-    .into_response()
+    authenticated_response(
+        Json(Envelope::<()> {
+            success: false,
+            message: message.into(),
+            data: None,
+        })
+        .into_response(),
+    )
 }
+fn authenticated_response(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert("auth-version", HeaderValue::from_static(AUTH_VERSION));
+    response
+}
+
+async fn parse_json_body<T: DeserializeOwned>(request: Request) -> Result<T, Response> {
+    let body = to_bytes(request.into_body(), MAX_BODY_BYTES)
+        .await
+        .map_err(|_| fail("参数错误"))?;
+    let mut decoder = serde_json::Deserializer::from_slice(&body);
+    T::deserialize(&mut decoder).map_err(|_| fail("参数错误"))
+}
+
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -270,12 +336,9 @@ struct Page<T> {
 
 async fn list_users(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(_actor): Extension<DashboardUser>,
     Query(query): Query<PageQuery>,
 ) -> Response {
-    if let Err(response) = administrator(&state, &headers).await {
-        return response;
-    }
     let page = query.page();
     let page_size = query.page_size();
     let offset = (page - 1) * page_size;
@@ -305,12 +368,9 @@ async fn list_users(
 
 async fn search_users(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(_actor): Extension<DashboardUser>,
     Query(query): Query<SearchQuery>,
 ) -> Response {
-    if let Err(response) = administrator(&state, &headers).await {
-        return response;
-    }
     let page = query.page.page();
     let page_size = query.page.page_size();
     let offset = (page - 1) * page_size;
@@ -355,13 +415,9 @@ async fn search_users(
 
 async fn get_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Path(id): Path<i64>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1 AND deleted_at IS NULL");
     match sqlx::query_as::<_, UserView>(&sql)
         .bind(id)
@@ -409,11 +465,11 @@ fn has_invalid_user_text(input: &UserInput) -> bool {
 
 async fn create_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
-    Json(mut input): Json<UserInput>,
+    Extension(actor): Extension<DashboardUser>,
+    request: Request,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
+    let mut input: UserInput = match parse_json_body(request).await {
+        Ok(input) => input,
         Err(response) => return response,
     };
     input.username = input.username.trim().to_owned();
@@ -471,11 +527,11 @@ async fn create_user(
 
 async fn update_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
-    Json(mut input): Json<UserInput>,
+    Extension(actor): Extension<DashboardUser>,
+    request: Request,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
+    let mut input: UserInput = match parse_json_body(request).await {
+        Ok(input) => input,
         Err(response) => return response,
     };
     let Some(id) = input.id.filter(|id| *id > 0) else {
@@ -579,13 +635,9 @@ async fn update_user(
 
 async fn delete_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
+    Extension(actor): Extension<DashboardUser>,
     Path(id): Path<i64>,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
-        Err(response) => return response,
-    };
     let mut transaction = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(_) => return internal(),
@@ -687,11 +739,11 @@ struct Managed {
 
 async fn manage_user(
     State(state): State<IdentityAdminState>,
-    headers: HeaderMap,
-    Json(request): Json<ManageRequest>,
+    Extension(actor): Extension<DashboardUser>,
+    request: Request,
 ) -> Response {
-    let actor = match administrator(&state, &headers).await {
-        Ok(actor) => actor,
+    let request: ManageRequest = match parse_json_body(request).await {
+        Ok(request) => request,
         Err(response) => return response,
     };
     let mut transaction = match state.pool.begin().await {

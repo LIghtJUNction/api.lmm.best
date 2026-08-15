@@ -8,8 +8,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
     Json, Router,
-    extract::{Query, State, rejection::JsonRejection},
+    extract::{Query, Request, State, rejection::JsonRejection},
     http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
@@ -49,14 +50,14 @@ impl ChannelAdminAuthorizer for DashboardChannelAuthorizer {
         headers: &HeaderMap,
         action: ChannelAction,
     ) -> Result<(), ChannelError> {
-        let token = dashboard_credential(headers).ok_or(ChannelError::Unauthorized)?;
+        let token = dashboard_credential(headers).ok_or(ChannelError::ConsoleNotFound)?;
         let user = self
             .auth
-            .self_user(SecretString::from(token.to_owned()))
+            .self_user_view_for_optional(SecretString::from(token.to_owned()))
             .await
-            .map_err(|_| ChannelError::Unauthorized)?;
-        if user.status != STATUS_ENABLED {
-            return Err(ChannelError::Unauthorized);
+            .map_err(|_| ChannelError::ConsoleNotFound)?;
+        if user.id <= 0 || user.status != STATUS_ENABLED || !user.developer_access_granted {
+            return Err(ChannelError::ConsoleNotFound);
         }
         if user.role < ADMIN_ROLE {
             return Err(ChannelError::Forbidden);
@@ -132,7 +133,44 @@ pub fn channel_ops_router(state: ChannelOpsHttpState) -> Router {
         .route("/api/channel/tag", put(edit_tag_channels))
         .route("/api/channel/batch/tag", post(batch_set_channel_tag))
         .route("/api/channel/tag/models", get(get_tag_models))
+        // Go's AdminAuth/RequirePermission middleware runs before Gin binds
+        // JSON. Keep the same listener-owned preflight here so anonymous or
+        // malformed requests receive the legacy auth envelope instead of an
+        // Axum 422 response from a JSON extractor.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            channel_ops_auth_boundary,
+        ))
         .with_state(state)
+}
+
+fn channel_ops_action_for_request(request: &Request) -> ChannelAction {
+    let path = request.uri().path();
+    if request.method() == axum::http::Method::GET {
+        return ChannelAction::Read;
+    }
+    if path == "/api/channel/tag" && request.method() == axum::http::Method::PUT {
+        return ChannelAction::Write;
+    }
+    if path == "/api/channel/batch/tag" {
+        return ChannelAction::Write;
+    }
+    if path == "/api/channel/tag/disabled" || path == "/api/channel/tag/enabled" {
+        return ChannelAction::Operate;
+    }
+    ChannelAction::SensitiveWrite
+}
+
+async fn channel_ops_auth_boundary(
+    axum::extract::State(state): axum::extract::State<ChannelOpsHttpState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let action = channel_ops_action_for_request(&request);
+    if let Err(error) = state.authorizer.authorize(request.headers(), action).await {
+        return error.legacy();
+    }
+    next.run(request).await
 }
 
 #[derive(Debug, Deserialize)]

@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/pkg/cachex"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/hot"
 	"github.com/tidwall/gjson"
@@ -37,7 +37,12 @@ var (
 	channelAffinityUsageCacheStatsOnce  sync.Once
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
-	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
+	// Rules can be edited repeatedly by administrators. Keep compiled regexes
+	// bounded so old rule versions do not accumulate for the process lifetime.
+	channelAffinityRegexCache = hot.NewHotCache[string, *regexp.Regexp](hot.LRU, 512).
+					WithTTL(30 * time.Minute).
+					WithJanitor().
+					Build()
 )
 
 type channelAffinityMeta struct {
@@ -141,35 +146,31 @@ func GetChannelAffinityCacheStats() ChannelAffinityCacheStats {
 		byRuleName[name] = 0
 	}
 
-	keys, err := cache.Keys()
-	if err != nil {
-		common.SysError(fmt.Sprintf("channel affinity cache list keys failed: err=%v", err))
-		keys = nil
-	}
-	total := len(keys)
+	total := 0
 	unknown := 0
-	for _, k := range keys {
+	err := cache.ForEachKey(func(k string) error {
+		total++
 		prefix := channelAffinityCacheNamespace + ":"
 		if !strings.HasPrefix(k, prefix) {
 			unknown++
-			continue
+			return nil
 		}
 		rest := strings.TrimPrefix(k, prefix)
 		parts := strings.Split(rest, ":")
 		if len(parts) < 2 {
 			unknown++
-			continue
+			return nil
 		}
 		ruleName := parts[0]
 		rule, ok := ruleByName[ruleName]
 		if !ok {
 			unknown++
-			continue
+			return nil
 		}
 		if rule.IncludeModelName {
 			if len(parts) < 3 {
 				unknown++
-				continue
+				return nil
 			}
 		}
 		if rule.IncludeUsingGroup {
@@ -179,10 +180,14 @@ func GetChannelAffinityCacheStats() ChannelAffinityCacheStats {
 			}
 			if len(parts) < minParts {
 				unknown++
-				continue
+				return nil
 			}
 		}
 		byRuleName[ruleName]++
+		return nil
+	})
+	if err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cache list keys failed: err=%v", err))
 	}
 
 	return ChannelAffinityCacheStats{
@@ -197,17 +202,11 @@ func GetChannelAffinityCacheStats() ChannelAffinityCacheStats {
 
 func ClearChannelAffinityCacheAll() int {
 	cache := getChannelAffinityCache()
-	keys, err := cache.Keys()
+	deleted, err := cache.DeleteAll()
 	if err != nil {
-		common.SysError(fmt.Sprintf("channel affinity cache list keys failed: err=%v", err))
-		keys = nil
+		common.SysError(fmt.Sprintf("channel affinity cache delete all failed: err=%v", err))
 	}
-	if len(keys) > 0 {
-		if _, err := cache.DeleteMany(keys); err != nil {
-			common.SysError(fmt.Sprintf("channel affinity cache delete many failed: err=%v", err))
-		}
-	}
-	return len(keys)
+	return deleted
 }
 
 func ClearChannelAffinityCacheByRuleName(ruleName string) (int, error) {
@@ -253,16 +252,16 @@ func matchAnyRegexCached(patterns []string, s string) bool {
 		if pattern == "" {
 			continue
 		}
-		re, ok := channelAffinityRegexCache.Load(pattern)
-		if !ok {
+		re, ok, _ := channelAffinityRegexCache.Get(pattern)
+		if !ok || re == nil {
 			compiled, err := regexp.Compile(pattern)
 			if err != nil {
 				continue
 			}
 			re = compiled
-			channelAffinityRegexCache.Store(pattern, re)
+			channelAffinityRegexCache.Set(pattern, re)
 		}
-		if re.(*regexp.Regexp).MatchString(s) {
+		if re.MatchString(s) {
 			return true
 		}
 	}

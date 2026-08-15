@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { QueryClient } from '@tanstack/react-query'
-import axios from 'axios'
+import axios, { type AxiosAdapter } from 'axios'
 import { t } from 'i18next'
 
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
@@ -74,9 +74,15 @@ const authClient = axios.create({
   },
 })
 
+/** Installs the isolated refresh transport used by the development persona lab. */
+export function setDevelopmentAuthRefreshAdapter(adapter: AxiosAdapter): void {
+  authClient.defaults.adapter = adapter
+}
+
 const refreshRaceDelays = [80, 200, 500] as const
 let refreshPromise: Promise<RefreshOutcome> | null = null
 let authEpoch = 0
+let authCache: QueryClient | null = null
 
 class AuthRefreshSupersededError extends Error {
   constructor() {
@@ -150,6 +156,9 @@ export function applyAuthBundle(
   synchronizeTabs = true
 ): void {
   const previousSID = useAuthStore.getState().auth.session?.sid
+  if (previousSID && previousSID !== bundle.session.sid) {
+    authCache?.clear()
+  }
   authEpoch += 1
   useAuthStore.getState().auth.setBundle(bundle)
   if (synchronizeTabs && previousSID !== bundle.session.sid) {
@@ -187,6 +196,7 @@ export function clearAuthentication(
   bootstrapState: AuthBootstrapState = 'complete'
 ): void {
   const sid = useAuthStore.getState().auth.session?.sid
+  authCache?.clear()
   authEpoch += 1
   useAuthStore.getState().auth.reset(bootstrapState)
   if (synchronizeTabs && sid) {
@@ -194,11 +204,19 @@ export function clearAuthentication(
   }
 }
 
+/** Binds the single application query cache to the authentication lifecycle. */
+export function bindAuthCache(queryClient: QueryClient): () => void {
+  authCache = queryClient
+  return () => {
+    if (authCache === queryClient) authCache = null
+  }
+}
+
 export function clearAuthenticatedClientState(
   queryClient: QueryClient,
   synchronizeTabs = true
 ): void {
-  queryClient.clear()
+  if (queryClient !== authCache) queryClient.clear()
   clearAuthentication(synchronizeTabs)
 }
 

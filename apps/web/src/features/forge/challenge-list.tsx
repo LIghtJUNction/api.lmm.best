@@ -69,6 +69,10 @@ export function ChallengeList(props: ChallengeListProps) {
     queryKey: ['forge-challenges'],
     queryFn: listBounties,
     enabled: capabilitiesReady && canReadPublicBounties,
+    // This is a best-effort capability probe.  Retrying a missing optional
+    // route only repeats the request and used to produce a stack of identical
+    // global "Not Found" toasts.
+    retry: false,
   })
   const items = (query.data?.items ?? []).slice(0, limit)
   const capabilitiesLoading = !capabilitiesReady && !capabilitiesError

@@ -4,13 +4,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -19,13 +20,22 @@ import (
 
 const UserNameMaxLength = 20
 
-var userSortColumns = map[string]string{
-	"id":            "id",
-	"username":      "username",
-	"quota":         "quota",
-	"group":         "group",
-	"created_at":    "created_at",
-	"last_login_at": "last_login_at",
+type userSortColumn struct {
+	name       string
+	expression string
+}
+
+var userSortColumns = map[string]userSortColumn{
+	"id":            {name: "id"},
+	"username":      {name: "username"},
+	"quota":         {name: "quota"},
+	"group":         {name: "group"},
+	"created_at":    {name: "created_at"},
+	"last_login_at": {name: "last_login_at"},
+	"topup_quota": {
+		name:       "topup_quota",
+		expression: "COALESCE(user_topup_totals.credited_quota, 0)",
+	},
 }
 
 type UserSortOptions struct {
@@ -50,21 +60,48 @@ func NewUserSortOptions(sortBy string, sortOrder string) UserSortOptions {
 }
 
 func (options UserSortOptions) Apply(query *gorm.DB) *gorm.DB {
-	columnName, ok := userSortColumns[options.SortBy]
+	column, ok := userSortColumns[options.SortBy]
 	if !ok {
-		columnName = "id"
+		column = userSortColumns["id"]
 	}
-	q := query.Order(clause.OrderByColumn{
-		Column: clause.Column{Name: columnName},
-		Desc:   options.SortOrder != "asc",
-	})
-	if columnName != "id" {
+	var q *gorm.DB
+	if column.expression != "" {
+		direction := "ASC"
+		if options.SortOrder != "asc" {
+			direction = "DESC"
+		}
+		q = query.Order(clause.Expr{SQL: column.expression + " " + direction})
+	} else {
+		q = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: column.name},
+			Desc:   options.SortOrder != "asc",
+		})
+	}
+	if column.name != "id" {
 		q = q.Order(clause.OrderByColumn{
 			Column: clause.Column{Name: "id"},
 			Desc:   true,
 		})
 	}
 	return q
+}
+
+// UserTopupMethod is the successful credit a user received through one
+// payment method/provider pair. The values are populated only for
+// administrator-facing user lists.
+type UserTopupMethod struct {
+	Method      string `json:"method"`
+	Provider    string `json:"provider,omitempty"`
+	Quota       int64  `json:"quota"`
+	MoneyMicros int64  `json:"money_micros"`
+	Orders      int64  `json:"orders"`
+}
+
+type UserTopupSummary struct {
+	Quota       int64             `json:"quota"`
+	MoneyMicros int64             `json:"money_micros"`
+	Orders      int64             `json:"orders"`
+	Methods     []UserTopupMethod `json:"methods"`
 }
 
 func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
@@ -74,43 +111,140 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 	return sortOptions[0]
 }
 
+type userTopupAggregate struct {
+	UserID              int     `gorm:"column:user_id"`
+	PaymentMethod       string  `gorm:"column:payment_method"`
+	PaymentProvider     string  `gorm:"column:payment_provider"`
+	CreditedQuota       int64   `gorm:"column:credited_quota"`
+	Money               float64 `gorm:"column:money"`
+	SettledAmountMicros int64   `gorm:"column:settled_amount_micros"`
+	Orders              int64   `gorm:"column:orders"`
+}
+
+func userTopupTotals(tx *gorm.DB) *gorm.DB {
+	return tx.Model(&TopUp{}).
+		Select("user_id, COALESCE(SUM(credited_quota), 0) AS credited_quota").
+		Where("status = ?", common.TopUpStatusSuccess).
+		Group("user_id")
+}
+
+func joinUserTopupTotals(tx, query *gorm.DB) *gorm.DB {
+	return query.Joins(
+		"LEFT JOIN (?) AS user_topup_totals ON user_topup_totals.user_id = users.id",
+		userTopupTotals(tx),
+	)
+}
+
+// PopulateUserTopups adds one bounded aggregate query to an administrator
+// user list. It deliberately groups in SQL so the handler never loads every
+// historical payment row into memory.
+func PopulateUserTopups(users []*User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]int, 0, len(users))
+	for _, user := range users {
+		if user == nil || user.Id <= 0 {
+			continue
+		}
+		ids = append(ids, user.Id)
+		user.TopupSummary = &UserTopupSummary{Methods: []UserTopupMethod{}}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var rows []userTopupAggregate
+	if err := DB.Model(&TopUp{}).
+		Select("user_id, payment_method, payment_provider, COALESCE(SUM(credited_quota), 0) AS credited_quota, COALESCE(SUM(money), 0) AS money, COALESCE(SUM(settled_amount_micros), 0) AS settled_amount_micros, COUNT(*) AS orders").
+		Where("status = ? AND user_id IN ?", common.TopUpStatusSuccess, ids).
+		Group("user_id, payment_method, payment_provider").
+		Order("user_id ASC, payment_method ASC, payment_provider ASC").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+
+	byID := make(map[int]*UserTopupSummary, len(ids))
+	for _, user := range users {
+		if user != nil && user.TopupSummary != nil {
+			byID[user.Id] = user.TopupSummary
+		}
+	}
+	for _, row := range rows {
+		summary := byID[row.UserID]
+		if summary == nil {
+			continue
+		}
+		moneyMicros := row.SettledAmountMicros
+		if moneyMicros <= 0 && row.Money > 0 {
+			moneyMicros = int64(math.Round(row.Money * 1_000_000))
+		}
+		method := UserTopupMethod{
+			Method:      strings.TrimSpace(row.PaymentMethod),
+			Provider:    strings.TrimSpace(row.PaymentProvider),
+			Quota:       row.CreditedQuota,
+			MoneyMicros: moneyMicros,
+			Orders:      row.Orders,
+		}
+		summary.Quota += method.Quota
+		summary.MoneyMicros += method.MoneyMicros
+		summary.Orders += method.Orders
+		summary.Methods = append(summary.Methods, method)
+	}
+	return nil
+}
+
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id                 int                        `json:"id"`
-	Username           string                     `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password           string                     `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword   string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName        string                     `json:"display_name" gorm:"index" validate:"max=20"`
-	Role               int                        `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status             int                        `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email              string                     `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId           string                     `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId          string                     `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId             string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId           string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId         string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode   string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
-	AccessToken        *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota              int                        `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota          int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount       int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group              string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
-	AffCode            string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount           int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota           int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota    int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId          int                        `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt          gorm.DeletedAt             `gorm:"index"`
-	LinuxDOId          string                     `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting            string                     `json:"setting" gorm:"type:text;column:setting"`
-	Remark             string                     `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer     string                     `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt          int64                      `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt        int64                      `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	LastAPIActivityAt  int64                      `json:"last_api_activity_at" gorm:"type:bigint;not null;default:0;column:last_api_activity_at"`
-	TrustLevelOverride *int                       `json:"trust_level_override" gorm:"type:int;column:trust_level_override"`
-	TrustLevelInfo     *TrustLevelInfo            `json:"trust_level_info,omitempty" gorm:"-:all"`
+	Id                            int             `json:"id"`
+	Username                      string          `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password                      string          `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword              string          `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName                   string          `json:"display_name" gorm:"index" validate:"max=20"`
+	Role                          int             `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status                        int             `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email                         string          `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId                      string          `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId                     string          `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId                        string          `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId                      string          `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId                    string          `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode              string          `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
+	AccessToken                   *string         `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota                         int             `json:"quota" gorm:"type:int;default:0"`
+	UsedQuota                     int             `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
+	RequestCount                  int             `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Group                         string          `json:"group" gorm:"type:varchar(64);default:'default'"`
+	AffCode                       string          `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount                      int             `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota                      int             `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota               int             `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId                     int             `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt                     gorm.DeletedAt  `gorm:"index"`
+	LinuxDOId                     string          `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	LinuxDOGamificationScore      float64         `json:"-" gorm:"not null;default:0;column:linux_do_gamification_score"`
+	LinuxDOScoreUpdatedAt         int64           `json:"-" gorm:"type:bigint;not null;default:0;column:linux_do_score_updated_at"`
+	Setting                       string          `json:"setting" gorm:"type:text;column:setting"`
+	Remark                        string          `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer                string          `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt                     int64           `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt                   int64           `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	LastAPIActivityAt             int64           `json:"last_api_activity_at" gorm:"type:bigint;not null;default:0;column:last_api_activity_at"`
+	TrustLevelOverride            *int            `json:"trust_level_override" gorm:"type:int;column:trust_level_override"`
+	TrustLevelInfo                *TrustLevelInfo `json:"trust_level_info,omitempty" gorm:"-:all"`
+	PaymentRestrictionFlags       int             `json:"-" gorm:"type:int;not null;default:0;column:payment_restriction_flags"`
+	AdminPaymentRestrictionFlags  int             `json:"payment_restriction_flags,omitempty" gorm:"-:all"`
+	AdminDisposableEmail          bool            `json:"disposable_email,omitempty" gorm:"-:all"`
+	AdminLinuxDOGamificationScore *float64        `json:"linux_do_gamification_score,omitempty" gorm:"-:all"`
+	AdminLinuxDOScoreUpdatedAt    int64           `json:"linux_do_score_updated_at,omitempty" gorm:"-:all"`
+	AssistantConversationCount    *int64          `json:"assistant_conversation_count,omitempty" gorm:"-:all"`
+	// AssistantProfile is populated only by administrator-facing user
+	// management handlers after the strict lower-role visibility check. It is
+	// never loaded by the normal user serializer or persisted with User.
+	AssistantProfile *AssistantUserProfileSummary `json:"assistant_profile,omitempty" gorm:"-:all"`
+	TopupSummary     *UserTopupSummary            `json:"topup_summary,omitempty" gorm:"-:all"`
+
 	ConsoleActivatedAt int64                      `json:"console_activated_at" gorm:"type:bigint;not null;default:0;column:console_activated_at"`
 	AuthVersion        int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
 	AdminPermissions   map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`
@@ -163,6 +297,35 @@ func UpdateUserAccessToken(id int, token string) error {
 	return nil
 }
 
+var userBindColumns = map[string]bool{
+	"github_id":   true,
+	"discord_id":  true,
+	"oidc_id":     true,
+	"wechat_id":   true,
+	"linux_do_id": true,
+}
+
+// UpdateUserBindColumn changes only a whitelisted OAuth binding column. OAuth
+// callbacks can race with an administrator disabling, demoting, or regrouping
+// the same account; writing a previously loaded User snapshot would otherwise
+// restore those stale fields.
+func UpdateUserBindColumn(userID int, column, value string) error {
+	if userID <= 0 {
+		return errors.New("id 为空！")
+	}
+	if !userBindColumns[column] {
+		return fmt.Errorf("invalid user bind column: %s", column)
+	}
+	result := DB.Model(&User{}).Where("id = ?", userID).Update(column, value)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 func (user *User) GetSetting() dto.UserSetting {
 	setting := dto.UserSetting{}
 	if user.Setting != "" {
@@ -204,9 +367,8 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 
 	// 聊天区域 - 所有用户都可以访问
 	defaultConfig["chat"] = map[string]interface{}{
-		"enabled":    true,
-		"playground": true,
-		"chat":       true,
+		"enabled": true,
+		"chat":    true,
 	}
 
 	// 控制台区域 - 所有用户都可以访问
@@ -370,7 +532,25 @@ func GetMaxUserId() int {
 	return user.Id
 }
 
-func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
+func applyL0UserFilter(tx *gorm.DB, query *gorm.DB) *gorm.DB {
+	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
+	paidTopUpSubquery := successfulExternalPaidTopUpQuery(tx.Model(&TopUp{}).
+		Select("1").
+		Where("top_ups.user_id = users.id")).
+		Where("("+creditedQuotaExpression+") > 0", creditedQuotaArgs...)
+
+	return query.
+		Where("users.role < ?", common.RoleAdminUser).
+		Where(
+			"(users.trust_level_override IS NOT NULL AND users.trust_level_override NOT BETWEEN ? AND ?) OR "+
+				"(users.trust_level_override IS NULL AND users.console_activated_at = 0 AND NOT EXISTS (?))",
+			TrustLevelMinUser+1,
+			TrustLevelMaxUser,
+			paidTopUpSubquery,
+		)
+}
+
+func GetAllUsers(pageInfo *common.PageInfo, onlyL0 bool, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
 	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
@@ -382,8 +562,14 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 		}
 	}()
 
+	query := tx.Unscoped().Model(&User{})
+	query = joinUserTopupTotals(tx, query)
+	if onlyL0 {
+		query = applyL0UserFilter(tx, query)
+	}
+
 	// Get total count within transaction
-	err = tx.Unscoped().Model(&User{}).Count(&total).Error
+	err = query.Count(&total).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -391,7 +577,7 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 
 	// Get paginated users within same transaction
 	order := resolveUserSortOptions(sortOptions)
-	err = order.Apply(tx.Unscoped()).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
+	err = order.Apply(query).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "access_token").Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -407,7 +593,7 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, role *int, status *int, onlyL0 bool, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -425,6 +611,10 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
+	query = joinUserTopupTotals(tx, query)
+	if onlyL0 {
+		query = applyL0UserFilter(tx, query)
+	}
 
 	// 构建搜索条件
 	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
@@ -499,6 +689,28 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	var user User
 	err := DB.Select("id").First(&user, "aff_code = ?", affCode).Error
 	return user.Id, err
+}
+
+func registrationQuotaForEmail(email string) int {
+	if IsDisposableEmail(email) {
+		return 0
+	}
+	return common.QuotaForNewUser
+}
+
+func promotionRewardsAllowedForUser(user *User) bool {
+	return user != nil && !IsDisposableEmail(user.Email)
+}
+
+func promotionRewardsAllowedForUserID(userID int) bool {
+	if userID <= 0 || DB == nil {
+		return false
+	}
+	var user User
+	if err := DB.Select("email").First(&user, "id = ?", userID).Error; err != nil {
+		return false
+	}
+	return promotionRewardsAllowedForUser(&user)
 }
 
 func DeleteUserById(id int) (err error) {
@@ -626,7 +838,7 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
+			user.Quota = registrationQuotaForEmail(user.Email)
 			user.AffCode = common.GetRandomString(4)
 
 			// 初始化用户设置，包括默认的边栏配置
@@ -662,10 +874,12 @@ func (user *User) finishInsert(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
+	newUserEligible := promotionRewardsAllowedForUser(user)
+	if newUserEligible && common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() &&
+		newUserEligible && promotionRewardsAllowedForUserID(inviterId) {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
@@ -690,7 +904,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
+		user.Quota = registrationQuotaForEmail(user.Email)
 		user.AffCode = common.GetRandomString(4)
 
 		// 初始化用户设置
@@ -719,10 +933,12 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
+	newUserEligible := promotionRewardsAllowedForUser(user)
+	if newUserEligible && common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() &&
+		newUserEligible && promotionRewardsAllowedForUserID(inviterId) {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
@@ -902,6 +1118,9 @@ func (user *User) Delete() error {
 		if err != nil {
 			return err
 		}
+		if err := deleteUserAssistantData(tx, user.Id); err != nil {
+			return err
+		}
 		return tx.Delete(user).Error
 	}); err != nil {
 		return err
@@ -933,6 +1152,9 @@ func (user *User) HardDelete() error {
 			}
 		}
 		if err := deleteUserAuthenticationData(tx, user.Id); err != nil {
+			return err
+		}
+		if err := deleteUserAssistantData(tx, user.Id); err != nil {
 			return err
 		}
 		return tx.Unscoped().Delete(user).Error

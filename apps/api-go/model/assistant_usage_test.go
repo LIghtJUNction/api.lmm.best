@@ -1,0 +1,99 @@
+package model
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func TestGetAssistantUsageSummaryAggregatesSafeBreakdowns(t *testing.T) {
+	previousLogDB := LOG_DB
+	previousLogDatabaseType := common.LogDatabaseType()
+	common.SetDatabaseTypes(common.MainDatabaseType(), common.DatabaseTypeSQLite)
+	initCol()
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf(
+		"file:%s?mode=memory&cache=shared",
+		strings.ReplaceAll(t.Name(), "/", "_"),
+	)), &gorm.Config{})
+	require.NoError(t, err)
+	LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&Log{}))
+
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+		common.SetDatabaseTypes(common.MainDatabaseType(), previousLogDatabaseType)
+		initCol()
+		sqlDB, closeErr := db.DB()
+		if closeErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	const userID = 42
+	require.NoError(t, db.Create(&[]Log{
+		{UserId: userID, CreatedAt: 100, Type: LogTypeConsume, ModelName: "model-a", Group: "group-a", PromptTokens: 10, CompletionTokens: 5, Quota: 100},
+		{UserId: userID, CreatedAt: 110, Type: LogTypeConsume, ModelName: "model-a", Group: "group-b", PromptTokens: 20, CompletionTokens: 10, Quota: 200},
+		{UserId: userID, CreatedAt: 120, Type: LogTypeSystem, ModelName: "ignored", Group: "ignored", Quota: 999},
+		{UserId: userID + 1, CreatedAt: 130, Type: LogTypeConsume, ModelName: "other-user", Group: "group-a", Quota: 999},
+	}).Error)
+
+	summary, err := GetAssistantUsageSummary(userID, 90, 120, 20)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), summary.Requests)
+	assert.Equal(t, int64(30), summary.PromptTokens)
+	assert.Equal(t, int64(15), summary.CompletionTokens)
+	assert.Equal(t, int64(45), summary.TotalTokens)
+	assert.Equal(t, int64(300), summary.Quota)
+	require.Len(t, summary.Models, 1)
+	assert.Equal(t, "model-a", summary.Models[0].Name)
+	assert.Equal(t, int64(2), summary.Models[0].Requests)
+	require.Len(t, summary.Groups, 2)
+	assert.Equal(t, "group-a", summary.Groups[0].Name)
+	assert.Equal(t, "group-b", summary.Groups[1].Name)
+}
+
+func TestGetAssistantFundingSummaryFiltersBillingSource(t *testing.T) {
+	previousLogDB := LOG_DB
+	previousLogDatabaseType := common.LogDatabaseType()
+	common.SetDatabaseTypes(common.MainDatabaseType(), common.DatabaseTypeSQLite)
+	initCol()
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf(
+		"file:%s?mode=memory&cache=shared",
+		strings.ReplaceAll(t.Name(), "/", "_"),
+	)), &gorm.Config{})
+	require.NoError(t, err)
+	LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&Log{}))
+
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+		common.SetDatabaseTypes(common.MainDatabaseType(), previousLogDatabaseType)
+		initCol()
+		sqlDB, closeErr := db.DB()
+		if closeErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	const billingUserID = 7
+	require.NoError(t, db.Create(&[]Log{
+		{UserId: billingUserID, CreatedAt: 100, Type: LogTypeConsume, PromptTokens: 10, CompletionTokens: 5, Quota: 100, Other: `{"billing_source":"assistant"}`},
+		{UserId: billingUserID, CreatedAt: 110, Type: LogTypeConsume, PromptTokens: 20, CompletionTokens: 10, Quota: 200, Other: `{"billing_source": "assistant"}`},
+		{UserId: billingUserID, CreatedAt: 120, Type: LogTypeConsume, PromptTokens: 30, CompletionTokens: 15, Quota: 300, Other: `{"billing_source":"wallet"}`},
+		{UserId: billingUserID + 1, CreatedAt: 130, Type: LogTypeConsume, Quota: 999, Other: `{"billing_source":"assistant"}`},
+	}).Error)
+
+	summary, err := GetAssistantFundingSummary(billingUserID, 90, 120)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), summary.Requests)
+	assert.Equal(t, int64(30), summary.PromptTokens)
+	assert.Equal(t, int64(15), summary.CompletionTokens)
+	assert.Equal(t, int64(45), summary.TotalTokens)
+	assert.Equal(t, int64(300), summary.Quota)
+}

@@ -1,7 +1,7 @@
 # Maintainer: LIghtJUNction
 
 pkgname=lmm-api-go
-pkgver=0.1.1.r73.g3c9b85967
+pkgver=0.1.1.r490.g112174124
 pkgrel=1
 pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend'
 arch=('x86_64' 'aarch64')
@@ -17,7 +17,7 @@ conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go-bin' 'lmm-api-go-gi
 backup=('etc/lmm-api-go/lmm-api-go.env')
 options=('!strip')
 
-_commit=3c9b8596716e3bb4f6fb439cfd6e1d168064e892
+_commit=11217412480e81b58f96f2b9889bd317120ff8f0
 source=("lmm-api-go::git+${url}.git#commit=${_commit}")
 sha256sums=('SKIP')
 
@@ -28,7 +28,7 @@ build() {
   (
     cd apps/api-go || return
     CGO_ENABLED=0 go build -trimpath \
-      -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${pkgver}" \
+      -ldflags="-s -w -X github.com/LIghtJUNction/api.lmm.best/common.Version=${pkgver}" \
       -o "${srcdir}/lmm-api-go-bin" .
   )
 }
@@ -39,8 +39,9 @@ package() {
   local file
 
   install -Dm0755 "${srcdir}/lmm-api-go-bin" "${pkgdir}/usr/bin/lmm-api-go"
-  install -Dm0644 "${shared}/lmm-api-go.service" \
-    "${pkgdir}/usr/lib/systemd/system/lmm-api-go.service"
+  ln -s lmm-api-go "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0644 "${shared}/lmm-api.service" \
+    "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
   install -Dm0600 "${shared}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
 

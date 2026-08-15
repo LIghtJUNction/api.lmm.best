@@ -26,6 +26,7 @@ describe('payment method JSON validation', () => {
     assert.equal(
       isValidPaymentMethodData({
         name: 'LINUX DO Credit',
+        max_topup: '20',
         settlement_unit: 'LDC',
         topup_ratio: '0.5',
         type: 'epay',
@@ -47,6 +48,51 @@ describe('payment method JSON validation', () => {
     )
   })
 
+  test('accepts an optional per-payment credited balance limit', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'LINUX DO Credit',
+        type: 'epay',
+        min_topup: '1',
+        max_topup: '20.5',
+      }),
+      true
+    )
+  })
+
+  test('accepts unlock delay and unified audience filters', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'LinuxDO card',
+        type: 'stripe',
+        unlock_after_days: '7',
+        audience_mode: 'include',
+        audience_match: 'any',
+        audience_email_contains: 'linux.do',
+        audience_oauth_provider: 'linuxdo',
+        audience_linuxdo_score_min: '10000',
+        audience_linuxdo_score_max: '20000.5',
+      }),
+      true
+    )
+  })
+
+  test('accepts display, status, group, and role controls', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'VIP card',
+        type: 'stripe',
+        enabled: 'false',
+        description: 'Scheduled maintenance',
+        color: '#123456',
+        audience_mode: 'include',
+        audience_user_group: 'vip, partner',
+        audience_role: 'admin',
+      }),
+      true
+    )
+  })
+
   test('rejects incomplete, unsafe, and non-decimal metadata', () => {
     const base = { name: 'LINUX DO Credit', type: 'epay' }
     for (const value of [
@@ -61,6 +107,25 @@ describe('payment method JSON validation', () => {
       { ...base, topup_ratio: '-1' },
       { ...base, topup_ratio: '1e2' },
       { ...base, topup_ratio: 2 },
+      { ...base, max_topup: '0' },
+      { ...base, max_topup: '-1' },
+      { ...base, max_topup: '1e2' },
+      { ...base, max_topup: 20 },
+      { ...base, min_topup: '50', max_topup: '20' },
+      { ...base, enabled: 'yes' },
+      { ...base, color: 'red' },
+      { ...base, audience_mode: 'include', audience_role: 'owner' },
+      { ...base, unlock_after_days: '-1' },
+      { ...base, unlock_after_days: '1.5' },
+      { ...base, unlock_after_days: 7 },
+      { ...base, audience_mode: 'include' },
+      {
+        ...base,
+        audience_mode: 'include',
+        audience_linuxdo_score_min: '20',
+        audience_linuxdo_score_max: '10',
+      },
+      { ...base, audience_mode: 'sometimes' },
     ]) {
       assert.equal(isValidPaymentMethodData(value), false)
     }

@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/google/uuid"
 )
 
@@ -47,7 +46,7 @@ func FetchCodexWhamUsage(
 	}
 	defer resp.Body.Close()
 
-	body, err = io.ReadAll(resp.Body)
+	body, err = common.ReadResponseBody(resp)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
@@ -89,7 +88,7 @@ func FetchCodexWhamRateLimitResetCredits(
 	}
 	defer resp.Body.Close()
 
-	body, err = io.ReadAll(resp.Body)
+	body, err = common.ReadResponseBody(resp)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
@@ -144,7 +143,7 @@ func ConsumeCodexWhamRateLimitResetCredit(
 	}
 	defer resp.Body.Close()
 
-	body, err = io.ReadAll(resp.Body)
+	body, err = common.ReadResponseBody(resp)
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}

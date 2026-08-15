@@ -979,6 +979,20 @@ For commercial licensing, please contact support@quantumnous.com
   outline-offset: 3px;
 }
 
+.assistant-prompt-input:has([data-slot='input-group-control']:focus-visible) {
+  outline: 2px solid var(--console-clay, var(--forge-clay-light));
+  outline-offset: 3px;
+}
+
+.dark
+  .assistant-prompt-input:has([data-slot='input-group-control']:focus-visible) {
+  outline-color: var(--console-clay, var(--forge-clay-dark));
+}
+
+.assistant-prompt-input [data-slot='input-group-control']:focus-visible {
+  outline: none;
+}
+
 .console-editorial .console-info-panel {
   border: 1px solid color-mix(in oklch, var(--console-info) 44%, transparent);
   background: color-mix(in oklch, var(--console-info) 14%, var(--background));
@@ -1099,6 +1113,22 @@ For commercial licensing, please contact support@quantumnous.com
   ) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+/* The assistant header is intentionally translucent. Keep its blur bounded
+ * and lower on narrow screens so the fixed surface remains inexpensive. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .console-editorial .assistant-glass-surface {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  @media (min-width: 640px) {
+    .console-editorial .assistant-glass-surface {
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+    }
+  }
 }
 
 .setup-editorial {
@@ -1447,35 +1477,34 @@ For commercial licensing, please contact support@quantumnous.com
 
 .playground-editorial .playground-input-shell {
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0;
+  border: 1px solid color-mix(in oklch, var(--foreground) 16%, transparent);
+  border-radius: 1.25rem;
   background: var(--playground-surface);
-  box-shadow: none;
-  transition: border-color 160ms ease;
+  box-shadow:
+    0 1px 0 color-mix(in oklch, var(--foreground) 5%, transparent),
+    0 12px 32px color-mix(in oklch, var(--foreground) 7%, transparent);
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .playground-editorial .playground-input-shell:focus-within {
   border-color: var(--console-clay);
-  box-shadow: none;
+  box-shadow:
+    0 0 0 3px color-mix(in oklch, var(--console-clay) 18%, transparent),
+    0 14px 36px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
 .playground-editorial .playground-input-footer {
   border-top: 1px solid var(--border);
-  background: color-mix(in oklch, var(--muted) 66%, transparent);
+  background: color-mix(in oklch, var(--muted) 48%, transparent);
   backdrop-filter: none;
 }
 
 .playground-editorial .playground-input-tools {
-  border: 1px solid var(--border);
-  border-radius: 0;
-  background: color-mix(in oklch, var(--background) 78%, transparent);
-  box-shadow: none;
-}
-
-.playground-editorial :where(.group.is-user) {
-  border-radius: 0 0 0.5rem 0;
-  border-color: var(--border);
-  background: color-mix(in oklch, var(--accent) 38%, transparent);
+  border: 0;
+  border-radius: 0.75rem;
+  background: transparent;
   box-shadow: none;
 }
 

@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"gorm.io/gorm"
 )
 
@@ -82,6 +82,7 @@ type OpenSourceBountyProject struct {
 	UpdatedAt          int64  `json:"updated_at" gorm:"bigint;not null"`
 	PublishedAt        int64  `json:"published_at" gorm:"bigint;not null;default:0;index"`
 	ClosedAt           int64  `json:"closed_at" gorm:"bigint;not null;default:0"`
+	ArchivedAt         int64  `json:"archived_at" gorm:"bigint;not null;default:0;index"`
 }
 
 func (OpenSourceBountyProject) TableName() string { return "open_source_bounty_projects" }
@@ -690,6 +691,58 @@ func closeOpenSourceBounty(ownerUserId int, projectId int, operation *OpenSource
 	return project, refundedQuota, err
 }
 
+// ArchiveOpenSourceBounty hides a completed or closed bounty from the owner's
+// default project list without deleting its lifecycle, evidence, or ledger.
+// Archiving is intentionally reversible so it cannot be used as a destructive
+// substitute for deleting a draft.
+func ArchiveOpenSourceBounty(ownerUserId int, projectId int) (*OpenSourceBountyProject, error) {
+	return setOpenSourceBountyArchived(ownerUserId, projectId, true)
+}
+
+// UnarchiveOpenSourceBounty restores an archived completed or closed bounty to
+// the owner's active project list.
+func UnarchiveOpenSourceBounty(ownerUserId int, projectId int) (*OpenSourceBountyProject, error) {
+	return setOpenSourceBountyArchived(ownerUserId, projectId, false)
+}
+
+func setOpenSourceBountyArchived(ownerUserId int, projectId int, archived bool) (*OpenSourceBountyProject, error) {
+	if ownerUserId <= 0 || projectId <= 0 {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
+	}
+	var project OpenSourceBountyProject
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).
+			Where("id = ? AND owner_user_id = ?", projectId, ownerUserId).
+			First(&project).Error; err != nil {
+			return bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
+		}
+		if project.Status != OpenSourceBountyStatusCompleted && project.Status != OpenSourceBountyStatusClosed {
+			return bountyError("OPEN_SOURCE_BOUNTY_ARCHIVE_UNAVAILABLE", "only completed or closed bounties can be archived")
+		}
+		alreadyArchived := project.ArchivedAt > 0
+		if alreadyArchived == archived {
+			return nil
+		}
+		updates := map[string]interface{}{"archived_at": int64(0), "updated_at": common.GetTimestamp()}
+		if archived {
+			updates["archived_at"] = common.GetTimestamp()
+		}
+		if err := tx.Model(&project).Updates(updates).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	action := "Unarchived"
+	if archived {
+		action = "Archived"
+	}
+	RecordLog(ownerUserId, LogTypeSystem, fmt.Sprintf("%s open-source bounty %d", action, projectId))
+	return GetOpenSourceBountyProject(projectId)
+}
+
 func GetOpenSourceBountyProject(projectId int) (*OpenSourceBountyProject, error) {
 	var project OpenSourceBountyProject
 	if err := DB.First(&project, "id = ?", projectId).Error; err != nil {
@@ -726,8 +779,8 @@ func openSourceBountyTipNotificationQuery() *gorm.DB {
 		Joins("JOIN open_source_bounty_projects project ON project.id = tip.project_id")
 }
 
-func openSourceBountyNotificationQuery() *gorm.DB {
-	return DB.Table("open_source_bounty_ledgers AS notification").
+func openSourceBountyNotificationQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("open_source_bounty_ledgers AS notification").
 		Select(`notification.id, notification.project_id, notification.challenge_id,
 			notification.user_id AS sender_user_id, sender.username AS sender_username,
 			notification.kind, project.title AS project_title, notification.quota, notification.note,
@@ -749,7 +802,7 @@ func ListOpenSourceBountyNotifications(recipientUserId int, limit int) ([]OpenSo
 		limit = 50
 	}
 	items := make([]OpenSourceBountyNotification, 0)
-	err := openSourceBountyNotificationQuery().
+	err := openSourceBountyNotificationQuery(DB).
 		Where("notification.kind IN ? AND notification.counterparty_user_id = ?", openSourceBountyNotificationKinds(), recipientUserId).
 		Order("notification.created_at DESC, notification.id DESC").Limit(limit).Scan(&items).Error
 	return items, err
@@ -853,6 +906,7 @@ func attachViewerChallenges(views []OpenSourceBountyProjectView, viewerUserId in
 }
 
 func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSourceBountyProjectView, int64, error) {
+	viewerUserId = openSourceBountyPrivateViewerId(viewerUserId)
 	if page < 1 {
 		page = 1
 	}
@@ -880,8 +934,35 @@ func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSou
 }
 
 func ListOwnedOpenSourceBounties(ownerUserId int) ([]OpenSourceBountyProjectView, error) {
+	return ListOwnedOpenSourceBountiesFiltered(ownerUserId, false)
+}
+
+// ListOwnedOpenSourceBountiesLimited is the bounded read used by the
+// assistant. The extra row lets the caller report truncation without
+// materializing an unbounded owner history.
+func ListOwnedOpenSourceBountiesLimited(ownerUserId int, limit int) ([]OpenSourceBountyProjectView, error) {
 	views := make([]OpenSourceBountyProjectView, 0)
-	if err := openSourceBountyProjectQuery().Where("p.owner_user_id = ?", ownerUserId).
+	query := openSourceBountyProjectQuery().Where("p.owner_user_id = ? AND p.archived_at = 0", ownerUserId).
+		Order("p.created_at DESC, p.id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&views).Error; err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
+// ListOwnedOpenSourceBountiesFiltered returns either active (default) or
+// archived owner projects. Keeping the filter in SQL prevents archived rows
+// from consuming pagination/list rendering capacity.
+func ListOwnedOpenSourceBountiesFiltered(ownerUserId int, archived bool) ([]OpenSourceBountyProjectView, error) {
+	views := make([]OpenSourceBountyProjectView, 0)
+	archiveFilter := "p.archived_at = 0"
+	if archived {
+		archiveFilter = "p.archived_at > 0"
+	}
+	if err := openSourceBountyProjectQuery().Where("p.owner_user_id = ? AND "+archiveFilter, ownerUserId).
 		Order("p.created_at DESC, p.id DESC").Scan(&views).Error; err != nil {
 		return nil, err
 	}
@@ -889,6 +970,7 @@ func ListOwnedOpenSourceBounties(ownerUserId int) ([]OpenSourceBountyProjectView
 }
 
 func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBountyProjectDetail, error) {
+	viewerUserId = openSourceBountyPrivateViewerId(viewerUserId)
 	var view OpenSourceBountyProjectView
 	if err := openSourceBountyProjectQuery().Where("p.id = ?", projectId).Scan(&view).Error; err != nil {
 		return nil, err
@@ -896,7 +978,7 @@ func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBoun
 	if view.Id == 0 {
 		return nil, bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
 	}
-	if (view.Status == OpenSourceBountyStatusDraft || view.Status == OpenSourceBountyStatusClosed) && view.OwnerUserId != viewerUserId {
+	if (view.Status == OpenSourceBountyStatusDraft || view.Status == OpenSourceBountyStatusClosed || view.ArchivedAt > 0) && view.OwnerUserId != viewerUserId {
 		return nil, bountyError("OPEN_SOURCE_BOUNTY_NOT_FOUND", "bounty project was not found")
 	}
 	views := []OpenSourceBountyProjectView{view}
@@ -905,7 +987,7 @@ func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBoun
 	}
 	detail := &OpenSourceBountyProjectDetail{Project: views[0], Challenges: []OpenSourceBountyChallengeView{}, Ledger: []OpenSourceBountyLedger{}}
 	if view.OwnerUserId == viewerUserId {
-		if err := openSourceBountyChallengeViewQuery().Where("c.project_id = ?", projectId).
+		if err := openSourceBountyChallengeViewQuery(DB).Where("c.project_id = ?", projectId).
 			Order("c.created_at DESC, c.id DESC").Scan(&detail.Challenges).Error; err != nil {
 			return nil, err
 		}
@@ -945,8 +1027,8 @@ func attachOpenSourceBountyDisputes(views []OpenSourceBountyChallengeView) error
 	return nil
 }
 
-func openSourceBountyChallengeViewQuery() *gorm.DB {
-	return DB.Table("open_source_bounty_challenges AS c").
+func openSourceBountyChallengeViewQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("open_source_bounty_challenges AS c").
 		Select(`c.*, participant.username AS participant_username, p.title AS project_title, p.repository_url, owner.username AS owner_username,
 			COALESCE((SELECT AVG(history.owner_rating_score) FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = false), 0) AS participant_rating_average,
 			(SELECT COUNT(*) FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = false) AS participant_rating_count,
@@ -959,8 +1041,28 @@ func openSourceBountyChallengeViewQuery() *gorm.DB {
 
 func ListAcceptedOpenSourceBounties(participantUserId int) ([]OpenSourceBountyChallengeView, error) {
 	views := make([]OpenSourceBountyChallengeView, 0)
-	if err := openSourceBountyChallengeViewQuery().Where("c.participant_user_id = ?", participantUserId).
+	if err := openSourceBountyChallengeViewQuery(DB).Where("c.participant_user_id = ?", participantUserId).
 		Order("c.updated_at DESC, c.id DESC").Scan(&views).Error; err != nil {
+		return nil, err
+	}
+	if err := attachOpenSourceBountyDisputes(views); err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
+// ListAcceptedOpenSourceBountiesLimited is the bounded assistant read. The
+// extra row is retained so the presentation layer can mark the response as
+// truncated while keeping dispute enrichment bounded as well.
+func ListAcceptedOpenSourceBountiesLimited(participantUserId int, limit int) ([]OpenSourceBountyChallengeView, error) {
+	views := make([]OpenSourceBountyChallengeView, 0)
+	query := openSourceBountyChallengeViewQuery(DB).
+		Where("c.participant_user_id = ?", participantUserId).
+		Order("c.updated_at DESC, c.id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&views).Error; err != nil {
 		return nil, err
 	}
 	if err := attachOpenSourceBountyDisputes(views); err != nil {
@@ -986,36 +1088,42 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 		if project.OwnerUserId == participantUserId {
 			return bountyError("OPEN_SOURCE_BOUNTY_OWNER_CANNOT_ACCEPT", "bounty owner cannot accept their own challenge")
 		}
-		var previousAttempts []OpenSourceBountyChallenge
-		if err := lockForUpdate(tx).Where("project_id = ? AND participant_user_id = ?", projectId, participantUserId).
-			Order("id DESC").Find(&previousAttempts).Error; err != nil {
+		appealCutoff := common.GetTimestamp() - OpenSourceBountyAppealWindowSeconds
+		// Do not materialize every historical attempt for this user/project. A
+		// contributor can accumulate an arbitrary number of rejected attempts,
+		// and the old slice made acceptance memory grow with that history while
+		// issuing one dispute count query per rejected row. The state checks are
+		// equivalent when expressed as bounded existence queries.
+		var activeAttempts int64
+		if err := tx.Model(&OpenSourceBountyChallenge{}).
+			Where("project_id = ? AND participant_user_id = ? AND status IN ?", projectId, participantUserId,
+				[]string{OpenSourceBountyChallengeAccepted, OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved}).
+			Count(&activeAttempts).Error; err != nil {
 			return err
 		}
-		appealCutoff := common.GetTimestamp() - OpenSourceBountyAppealWindowSeconds
-		for _, attempt := range previousAttempts {
-			switch attempt.Status {
-			case OpenSourceBountyChallengeAccepted, OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved:
-				return bountyError("OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", "this bounty already has an active or completed attempt")
-			case OpenSourceBountyChallengeRejected:
-				var openDisputes int64
-				if err := tx.Model(&OpenSourceBountyDispute{}).
-					Where("challenge_id = ? AND status = ?", attempt.Id, OpenSourceBountyDisputeOpen).
-					Count(&openDisputes).Error; err != nil {
-					return err
-				}
-				if openDisputes > 0 {
-					return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
-				}
-				var deniedDisputes int64
-				if err := tx.Model(&OpenSourceBountyDispute{}).
-					Where("challenge_id = ? AND status = ?", attempt.Id, OpenSourceBountyDisputeResolvedDenied).
-					Count(&deniedDisputes).Error; err != nil {
-					return err
-				}
-				if deniedDisputes == 0 && attempt.RejectedAt > appealCutoff {
-					return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
-				}
-			}
+		if activeAttempts > 0 {
+			return bountyError("OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", "this bounty already has an active or completed attempt")
+		}
+
+		var retryPending int64
+		if err := tx.Model(&OpenSourceBountyChallenge{}).
+			Where(`project_id = ? AND participant_user_id = ? AND status = ? AND (
+				(
+					rejected_at > ? AND NOT EXISTS (
+					SELECT 1 FROM open_source_bounty_disputes resolved_dispute
+					WHERE resolved_dispute.challenge_id = open_source_bounty_challenges.id AND resolved_dispute.status = ?
+				)
+				) OR
+				EXISTS (
+					SELECT 1 FROM open_source_bounty_disputes dispute
+					WHERE dispute.challenge_id = open_source_bounty_challenges.id AND dispute.status = ?
+				)
+			)`, projectId, participantUserId, OpenSourceBountyChallengeRejected, appealCutoff, OpenSourceBountyDisputeResolvedDenied, OpenSourceBountyDisputeOpen).
+			Count(&retryPending).Error; err != nil {
+			return err
+		}
+		if retryPending > 0 {
+			return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
 		}
 		var occupied int64
 		if err := tx.Model(&OpenSourceBountyChallenge{}).Where(`project_id = ? AND (

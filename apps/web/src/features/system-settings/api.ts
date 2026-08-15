@@ -20,11 +20,14 @@ import { api } from '@/lib/api'
 
 import type {
   ConfirmPaymentComplianceResponse,
+  DynamicPricingSettingUpdate,
+  DynamicPricingStatusResponse,
   FetchUpstreamRatiosRequest,
   LogCleanupTask,
   SystemOptionsResponse,
   SystemTaskListResponse,
   SystemTaskResponse,
+  UpdateAdvancedSecuritySettingsRequest,
   UpdateOptionRequest,
   UpdateOptionResponse,
   UpstreamChannelsResponse,
@@ -41,6 +44,32 @@ export async function updateSystemOption(request: UpdateOptionRequest) {
   return res.data
 }
 
+export async function getDynamicPricingStatus() {
+  const res = await api.get<DynamicPricingStatusResponse>(
+    '/api/dynamic_pricing/status'
+  )
+  return res.data
+}
+
+export async function updateDynamicPricingSetting(
+  request: DynamicPricingSettingUpdate
+) {
+  const res = await api.put<DynamicPricingStatusResponse>(
+    '/api/dynamic_pricing/setting',
+    request
+  )
+  return res.data
+}
+
+export async function updateAdvancedSecuritySettings(
+  request: UpdateAdvancedSecuritySettingsRequest
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/security/admin/settings',
+    request
+  )
+  return res.data
+}
 export async function confirmPaymentCompliance() {
   const res = await api.post<ConfirmPaymentComplianceResponse>(
     '/api/option/payment_compliance',
@@ -104,4 +133,31 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
     request
   )
   return res.data
+}
+
+export type FinanceExportFormat = 'zip' | 'text'
+
+export interface FinanceExportRange {
+  start?: Date
+  end?: Date
+}
+
+export async function fetchFinanceExport(
+  format: FinanceExportFormat,
+  range?: FinanceExportRange
+) {
+  const params: Record<string, number | string> = { format }
+  if (range?.start) {
+    params.start_timestamp = Math.floor(range.start.getTime() / 1000)
+  }
+  if (range?.end) {
+    params.end_timestamp = Math.floor(range.end.getTime() / 1000)
+  }
+  return api.get<Blob>('/api/finance/export', {
+    params,
+    responseType: 'blob',
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
 }

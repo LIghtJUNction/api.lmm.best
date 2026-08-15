@@ -13,6 +13,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+use crate::{ClientIpKey, RequestContext, auth::CriticalRateLimitOutcome, legacy_empty_response};
 use async_trait::async_trait;
 use axum::{
     Json, Router,
@@ -75,6 +76,15 @@ pub fn router(state: UserTopupState) -> Router {
 #[async_trait]
 pub trait TopupAuthorizer: Send + Sync {
     async fn user_id(&self, headers: &HeaderMap) -> Result<i64, TopupError>;
+
+    /// Applies the same IP-keyed critical limiter that Go attaches to both
+    /// payment-creation routes.  This is intentionally a required adapter
+    /// boundary: a listener cannot compose a live payment route without
+    /// wiring it to the listener-owned PostgreSQL/Valkey auth policy.
+    async fn check_critical_rate_limit(
+        &self,
+        client_ip: &str,
+    ) -> Result<CriticalRateLimitOutcome, TopupError>;
 }
 
 /// Store and completion boundary. Implementations must make `complete` an
@@ -350,11 +360,15 @@ struct PayJson {
 }
 
 async fn epay_pay(State(state): State<UserTopupState>, request: Request) -> Response {
+    let client_ip = critical_client_ip(&request);
     let (parts, body) = request.into_parts();
     let user_id = match state.authorizer.user_id(&parts.headers).await {
         Ok(id) if id > 0 => id,
         _ => return unauthorized(),
     };
+    if let Some(response) = critical_rate_limit(&state, client_ip).await {
+        return response;
+    }
     let Some(body) = read_bounded_body(body).await else {
         return legacy_error("参数错误: request body too large");
     };
@@ -399,11 +413,15 @@ async fn epay_pay(State(state): State<UserTopupState>, request: Request) -> Resp
 }
 
 async fn fastpay_pay(State(state): State<UserTopupState>, request: Request) -> Response {
+    let client_ip = critical_client_ip(&request);
     let (parts, body) = request.into_parts();
     let user_id = match state.authorizer.user_id(&parts.headers).await {
         Ok(id) if id > 0 => id,
         _ => return unauthorized(),
     };
+    if let Some(response) = critical_rate_limit(&state, client_ip).await {
+        return response;
+    }
     if !matches!(state.compliance.is_confirmed().await, Ok(true)) {
         return legacy_error(compliance_message(&parts.headers));
     }
@@ -550,6 +568,45 @@ fn prepared_order_matches(order: &PendingTopup, quote: &QuotedTopup) -> bool {
         && order.payment_method == quote.payment_method
         && order.provider == quote.provider
         && !order.trade_no.is_empty()
+}
+
+fn critical_client_ip(request: &Request) -> Option<String> {
+    request
+        .extensions()
+        .get::<ClientIpKey>()
+        .map(|value| value.0.clone())
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<RequestContext>()
+                .and_then(|context| context.client_ip)
+                .map(|address| address.to_string())
+        })
+}
+
+async fn critical_rate_limit(
+    state: &UserTopupState,
+    client_ip: Option<String>,
+) -> Option<Response> {
+    let Some(client_ip) = client_ip else {
+        return Some(legacy_empty_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        ));
+    };
+    match state.authorizer.check_critical_rate_limit(&client_ip).await {
+        Ok(CriticalRateLimitOutcome::Allowed) => None,
+        Ok(CriticalRateLimitOutcome::Rejected {
+            retry_after_seconds,
+        }) => Some(legacy_empty_response(
+            StatusCode::TOO_MANY_REQUESTS,
+            Some(retry_after_seconds),
+        )),
+        Err(_) => Some(legacy_empty_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        )),
+    }
 }
 
 async fn epay_notify(State(state): State<UserTopupState>, request: Request) -> Response {
@@ -1007,7 +1064,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
-        http::Request,
+        http::{HeaderValue, Request},
     };
     use std::sync::Mutex;
     use tower::ServiceExt;
@@ -1020,6 +1077,13 @@ mod tests {
     impl TopupAuthorizer for RejectingAuthorizer {
         async fn user_id(&self, _: &HeaderMap) -> Result<i64, TopupError> {
             Err(TopupError::Unauthorized)
+        }
+
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, TopupError> {
+            Ok(CriticalRateLimitOutcome::Allowed)
         }
     }
 
@@ -1092,6 +1156,31 @@ mod tests {
     impl TopupAuthorizer for AllowingAuthorizer {
         async fn user_id(&self, _: &HeaderMap) -> Result<i64, TopupError> {
             Ok(42)
+        }
+
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, TopupError> {
+            Ok(CriticalRateLimitOutcome::Allowed)
+        }
+    }
+
+    struct RejectingCriticalAuthorizer;
+
+    #[async_trait]
+    impl TopupAuthorizer for RejectingCriticalAuthorizer {
+        async fn user_id(&self, _: &HeaderMap) -> Result<i64, TopupError> {
+            Ok(42)
+        }
+
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, TopupError> {
+            Ok(CriticalRateLimitOutcome::Rejected {
+                retry_after_seconds: 37,
+            })
         }
     }
 
@@ -1306,15 +1395,14 @@ mod tests {
     }
 
     async fn post_epay(router: Router) -> (StatusCode, Value) {
-        let response = router
-            .oneshot(
-                Request::post("/api/user/pay")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"amount":1,"payment_method":"alipay"}"#))
-                    .unwrap(),
-            )
-            .await
+        let mut request = Request::post("/api/user/pay")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"amount":1,"payment_method":"alipay"}"#))
             .unwrap();
+        request
+            .extensions_mut()
+            .insert(ClientIpKey("203.0.113.9".into()));
+        let response = router.oneshot(request).await.unwrap();
         let status = response.status();
         let body =
             serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap()).unwrap();
@@ -1355,6 +1443,75 @@ mod tests {
         );
         assert_eq!(&*events.lock().unwrap(), &["prepare", "insert"]);
         assert_eq!(*pending_writes.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn payment_critical_limiter_rejects_before_body_or_repository_work() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let pending_writes = Arc::new(Mutex::new(0));
+        let router = router(UserTopupState::new(
+            Arc::new(RejectingCriticalAuthorizer),
+            Arc::new(RecordingRepository {
+                events: Arc::clone(&events),
+                pending_writes: Arc::clone(&pending_writes),
+                fail_insert: false,
+            }),
+            Arc::new(PreparingEpay {
+                events: Arc::clone(&events),
+                fail_prepare: false,
+            }),
+            Arc::new(NoopFastPay),
+            Arc::new(NoopCompliance),
+        ));
+
+        for uri in ["/api/user/pay", "/api/user/fastpay/pay"] {
+            let mut request = Request::post(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"amount":1,"payment_method":"alipay"}"#))
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ClientIpKey("203.0.113.9".into()));
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS, "{uri}");
+            assert_eq!(
+                response.headers().get(header::RETRY_AFTER),
+                Some(&HeaderValue::from_static("37")),
+                "{uri}"
+            );
+            assert!(
+                to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{uri}"
+            );
+        }
+        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(*pending_writes.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn payment_critical_limiter_fails_closed_without_trusted_client_ip() {
+        let (router, events, pending_writes) = epay_app(false, false);
+        let response = router
+            .oneshot(
+                Request::post("/api/user/pay")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"amount":1,"payment_method":"alipay"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(*pending_writes.lock().unwrap(), 0);
     }
 
     #[tokio::test]

@@ -1,9 +1,10 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -349,4 +350,106 @@ func TestSystemTaskUpdatesRequireUnexpiredLock(t *testing.T) {
 	require.NotNil(t, reloaded)
 	assert.Equal(t, SystemTaskStatusRunning, reloaded.Status)
 	assert.Empty(t, reloaded.State)
+}
+
+func TestTaskJSONBudget(t *testing.T) {
+	truncateTables(t)
+	tooLarge := strings.Repeat("x", systemTaskJSONMaxBytes+1)
+
+	_, err := CreateSystemTask(SystemTaskTypeLogCleanup, tooLarge, nil)
+	require.ErrorIs(t, err, common.ErrLimitExceeded)
+
+	task, err := CreateSystemTask(SystemTaskTypeLogCleanup, nil, nil)
+	require.NoError(t, err)
+	runnerID := "runner-json-budget"
+	_, claimed, err := ClaimSystemTask(task.ID, task.Type, runnerID, common.GetTimestamp()+60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, FinishSystemTask(task.TaskID, runnerID, SystemTaskStatusSucceeded, tooLarge, ""))
+
+	stored, err := GetSystemTaskByTaskID(task.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, SystemTaskStatusFailed, stored.Status)
+	assert.Empty(t, stored.Result)
+	assert.Equal(t, "system task result exceeded byte limit", stored.Error)
+	assert.Nil(t, stored.ActiveKey)
+	assert.NoError(t, ReleaseSystemTaskLock(task.TaskID, runnerID))
+}
+
+func TestTaskHistoryPrune(t *testing.T) {
+	truncateTables(t)
+	for index := 0; index < 35; index++ {
+		taskID, err := GenerateSystemTaskID()
+		require.NoError(t, err)
+		require.NoError(t, DB.Create(&SystemTask{
+			TaskID: taskID,
+			Type:   SystemTaskTypeAssistantReview,
+			Status: SystemTaskStatusSucceeded,
+		}).Error)
+	}
+	active := createLegacyPendingSystemTask(t, SystemTaskTypeAssistantReview)
+	other := createLegacyPendingSystemTask(t, SystemTaskTypeLogCleanup)
+	require.NoError(t, DB.Model(other).Updates(map[string]any{
+		"status": SystemTaskStatusSucceeded,
+	}).Error)
+
+	require.NoError(t, PruneTaskHistory(SystemTaskTypeAssistantReview, 30))
+	var terminalCount int64
+	require.NoError(t, DB.Model(&SystemTask{}).
+		Where("type = ? AND status IN ?", SystemTaskTypeAssistantReview, []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}).
+		Count(&terminalCount).Error)
+	assert.EqualValues(t, 30, terminalCount)
+	reloaded, err := GetSystemTaskByTaskID(active.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+	reloaded, err = GetSystemTaskByTaskID(other.TaskID)
+	require.NoError(t, err)
+	require.NotNil(t, reloaded)
+}
+
+func TestListSystemTaskSummariesOmitsLargePayloadAndResult(t *testing.T) {
+	truncateTables(t)
+	large := strings.Repeat("x", systemTaskJSONMaxBytes-1)
+	taskID, err := GenerateSystemTaskID()
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&SystemTask{
+		TaskID:  taskID,
+		Type:    SystemTaskTypeAssistantReview,
+		Status:  SystemTaskStatusSucceeded,
+		Payload: large,
+		State:   `{"progress":42,"detail":"not returned by the list"}`,
+		Result:  large,
+	}).Error)
+
+	tasks, err := ListSystemTaskSummaries(20)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Empty(t, tasks[0].Payload)
+	assert.Empty(t, tasks[0].Result)
+	summary := tasks[0].ToSummaryResponse()
+	assert.Equal(t, map[string]int{"progress": 42}, summary.State)
+}
+
+func TestSystemTaskSummarySkipsOversizedState(t *testing.T) {
+	task := &SystemTask{State: `{"progress":42,"detail":"` + strings.Repeat("x", systemTaskSummaryStateMaxBytes) + `"}`}
+	summary := task.ToSummaryResponse()
+	assert.Nil(t, summary.State)
+}
+
+func TestListSystemTaskSummariesDoesNotSelectOversizedState(t *testing.T) {
+	truncateTables(t)
+	taskID, err := GenerateSystemTaskID()
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&SystemTask{
+		TaskID: taskID,
+		Type:   SystemTaskTypeAssistantReview,
+		Status: SystemTaskStatusSucceeded,
+		State:  `{"progress":42,"detail":"` + strings.Repeat("x", systemTaskSummaryStateMaxBytes) + `"}`,
+	}).Error)
+
+	tasks, err := ListSystemTaskSummaries(20)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Empty(t, tasks[0].State)
 }

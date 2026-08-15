@@ -56,6 +56,7 @@ snapshot() {
     etc/nginx/lmm-api-mime.types \
     etc/nginx/lmm-api-http-map.conf \
     etc/nginx/lmm-api-locations.conf \
+    etc/nginx/lmm-api-region-policy.conf \
     etc/nginx/conf.d/lmm-api-rs-active-upstream.conf \
     etc/nginx/snippets/lmm-api-rs-probe-locations.conf \
     etc/nginx/conf.d/new-api.conf; do

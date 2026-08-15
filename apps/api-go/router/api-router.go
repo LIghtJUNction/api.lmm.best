@@ -1,14 +1,22 @@
 package router
 
 import (
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/controller"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
 
 	// Import oauth package to register providers via init()
-	_ "github.com/QuantumNous/new-api/oauth"
+	_ "github.com/LIghtJUNction/api.lmm.best/oauth"
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	waffoPancakeMutationRequestMaxBytes = 16 << 10
+	// Token mutation payloads contain only bounded metadata (name, group,
+	// optional model/IP limits, or at most 100 IDs).  Keep these key-management
+	// endpoints from handing an unbounded JSON stream to encoding/json.
+	tokenMutationRequestMaxBytes = 16 << 10
 )
 
 func SetApiRouter(router *gin.Engine) {
@@ -18,6 +26,14 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	apiRouter.Use(middleware.ConsoleAccessGate())
+	// Bounty routes have their own L1 boundary and a deliberately public board.
+	// Keep them outside ConsoleAccessGate so L0 callers can browse public data
+	// and receive redacted empty private feeds without a page-wide 404.
+	openSourceBountyApiRouter := router.Group("/api")
+	openSourceBountyApiRouter.Use(middleware.RouteTag("api"))
+	openSourceBountyApiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	openSourceBountyApiRouter.Use(middleware.BodyStorageCleanup())
+	openSourceBountyApiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
 		apiRouter.GET("/setup", controller.GetSetup)
@@ -33,6 +49,44 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/about", controller.GetAbout)
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
+		securityRoute := apiRouter.Group("/security")
+		{
+			// Public policy/statistics intentionally omit matcher patterns,
+			// prompt contents, user identifiers, and per-rule event rows.
+			securityRoute.GET("/policy", controller.GetPublicSecurityPolicy)
+			securityRoute.GET("/stats", controller.GetPublicSecurityStats)
+		}
+		apiRouter.PUT("/security/admin/settings", middleware.RootAuth(), middleware.DisableCache(), controller.UpdateAdvancedSecuritySettings)
+		securityAdminRoute := apiRouter.Group("/security/admin")
+		securityAdminRoute.Use(middleware.AdminAuth())
+		{
+			securityAdminRoute.GET("/policy", controller.GetAdminSecurityPolicy)
+			securityAdminRoute.GET("/stats", controller.GetAdminSecurityStats)
+			securityAdminRoute.GET("/events", controller.ListAdminSecurityEvents)
+			securityAdminRoute.GET("/violation-fee-appeals", middleware.DisableCache(), controller.ListAdminViolationFeeAppeals)
+			securityAdminRoute.POST("/violation-fee-appeals/:id/:action", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ReviewAdminViolationFeeAppeal)
+		}
+		releaseNoteRoute := apiRouter.Group("/release-notes")
+		releaseNoteRoute.Use(middleware.UserAuth())
+		{
+			releaseNoteRoute.GET("/latest", middleware.DisableCache(), controller.GetLatestUnreadReleaseNote)
+			releaseNoteRoute.POST("/:id/read", middleware.DisableCache(), controller.MarkReleaseNoteRead)
+		}
+		releaseNoteAdminRoute := apiRouter.Group("/release-notes/admin")
+		releaseNoteAdminRoute.Use(middleware.AdminAuth())
+		{
+			releaseNoteAdminRoute.GET("", middleware.DisableCache(), controller.ListAdminReleaseNotes)
+			releaseNoteAdminRoute.POST("", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.PublishAdminReleaseNote)
+		}
+		todoRoute := apiRouter.Group("/todos")
+		todoRoute.Use(middleware.UserAuth())
+		{
+			todoRoute.GET("", middleware.DisableCache(), controller.GetUnifiedTodos)
+			todoRoute.POST("/read", middleware.DisableCache(), controller.MarkUnifiedTodosRead)
+		}
+		// Compatibility alias for older edge configurations. New package-managed
+		// Nginx uses /internal/access-ip-policy outside the API rate-limit group.
+		apiRouter.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
@@ -41,6 +95,7 @@ func SetApiRouter(router *gin.Engine) {
 			perfMetricsRoute.GET("", controller.GetPerfMetrics)
 		}
 		apiRouter.GET("/rankings", middleware.HeaderNavModuleAuth("rankings"), controller.GetRankings)
+		apiRouter.GET("/rankings/users", middleware.HeaderNavModuleAuth("rankings"), controller.GetUserUsageRankings)
 		apiRouter.GET("/verification", middleware.EmailVerificationRateLimit(), middleware.TurnstileCheck(), controller.SendEmailVerification)
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.ResetPassword)
@@ -66,6 +121,7 @@ func SetApiRouter(router *gin.Engine) {
 
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UniversalVerify)
+		apiRouter.POST("/verify/email", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.EmailVerificationRateLimit(), middleware.DisableCache(), controller.SendSecurityEmailVerification)
 
 		userRoute := apiRouter.Group("/user")
 		{
@@ -76,6 +132,11 @@ func SetApiRouter(router *gin.Engine) {
 			userRoute.POST("/login/2fa", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.Verify2FALogin)
 			userRoute.POST("/passkey/login/begin", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.PasskeyLoginBegin)
 			userRoute.POST("/passkey/login/finish", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.PasskeyLoginFinish)
+			// Appeal submission accepts either a valid browser session or the
+			// disabled-account password fallback. TryUserAuth is intentionally
+			// used instead of UserAuth so a disabled account can reach the
+			// password-verified path after all sessions were revoked.
+			userRoute.POST("/account-action-requests/appeal", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, middleware.TurnstileCheck(), middleware.TryUserAuth(), controller.SubmitAccountAppeal)
 			//userRoute.POST("/tokenlog", middleware.CriticalRateLimit(), controller.TokenLog)
 			userRoute.POST("/epay/notify", anonymousRequestBodyLimit, controller.EpayNotify)
 			userRoute.GET("/epay/notify", controller.EpayNotify)
@@ -90,7 +151,18 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/sessions/revoke-others", middleware.DisableCache(), controller.RevokeOtherLoginSessions)
 				selfRoute.GET("/self/groups", controller.GetUserGroups)
 				selfRoute.GET("/self", controller.GetSelf)
+				selfRoute.GET("/access-ip", middleware.DisableCache(), controller.GetPersonalAccessIP)
+				selfRoute.PUT("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SetPersonalAccessIP)
+				selfRoute.DELETE("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.DeletePersonalAccessIP)
 				selfRoute.GET("/models", controller.GetUserModels)
+				selfRoute.GET("/onboarding/todo", middleware.DisableCache(), controller.GetL1OnboardingTodo)
+				selfRoute.PATCH("/onboarding/todo", middleware.DisableCache(), controller.PatchL1OnboardingTodo)
+				selfRoute.GET("/developer-access/request", controller.GetDeveloperAccessRequest)
+				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), controller.SubmitDeveloperAccessRequest)
+				selfRoute.GET("/account-action-requests/appeal", middleware.DisableCache(), controller.GetAccountAppeal)
+				selfRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitAccountActionRequest)
+				selfRoute.GET("/violation-fees", middleware.DisableCache(), controller.ListSelfViolationFeeRecords)
+				selfRoute.POST("/violation-fee-appeals", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitViolationFeeAppeal)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
@@ -103,17 +175,18 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
+				selfRoute.POST("/discount-code/validate", middleware.DisableCache(), controller.ValidateDiscountCode)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
-				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
-				selfRoute.POST("/fastpay/pay", middleware.CriticalRateLimit(), controller.RequestFastPay)
-				selfRoute.POST("/amount", controller.RequestAmount)
-				selfRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.RequestStripePay)
-				selfRoute.POST("/stripe/amount", controller.RequestStripeAmount)
-				selfRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.RequestCreemPay)
-				selfRoute.POST("/waffo/amount", controller.RequestWaffoAmount)
-				selfRoute.POST("/waffo/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPay)
-				selfRoute.POST("/waffo-pancake/amount", controller.RequestWaffoPancakeAmount)
-				selfRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
+				selfRoute.POST("/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestEpay)
+				selfRoute.POST("/fastpay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestFastPay)
+				selfRoute.POST("/amount", middleware.PaymentMethodAccessGate(), controller.RequestAmount)
+				selfRoute.POST("/stripe/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestStripePay)
+				selfRoute.POST("/stripe/amount", middleware.PaymentMethodAccessGate(), controller.RequestStripeAmount)
+				selfRoute.POST("/creem/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestCreemPay)
+				selfRoute.POST("/waffo/amount", middleware.PaymentMethodAccessGate(), controller.RequestWaffoAmount)
+				selfRoute.POST("/waffo/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPay)
+				selfRoute.POST("/waffo-pancake/amount", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestWaffoPancakeAmount)
+				selfRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
 				selfRoute.POST("/aff_transfer", middleware.UserCriticalRateLimit("aff-transfer"), controller.TransferAffQuota)
 				selfRoute.PUT("/setting", controller.UpdateUserSetting)
 
@@ -127,6 +200,10 @@ func SetApiRouter(router *gin.Engine) {
 				// Check-in routes
 				selfRoute.GET("/checkin", controller.GetCheckinStatus)
 				selfRoute.POST("/checkin", middleware.TurnstileCheck(), controller.DoCheckin)
+
+				// Compensation gift routes (user)
+				selfRoute.GET("/gift", controller.GetAvailableGifts)
+				selfRoute.POST("/gift/:id/claim", middleware.CriticalRateLimit(), controller.ClaimGift)
 
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
@@ -145,6 +222,13 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
 				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
 				adminRoute.GET("/:id", controller.GetUser)
+				adminRoute.GET("/:id/developer-access/archives", middleware.DisableCache(), controller.ListUserDeveloperAccessRecommendationArchives)
+				adminRoute.GET("/:id/assistant-profile", controller.AdminGetAssistantUserProfile)
+				adminRoute.PUT("/:id/assistant-profile", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), controller.AdminUpdateAssistantUserProfile)
+				adminRoute.GET("/:id/assistant-memories", controller.AdminListMemories)
+				adminRoute.POST("/:id/assistant-memories", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), middleware.CriticalRateLimit(), controller.AdminCreateMemory)
+				adminRoute.PUT("/:id/assistant-memories/:memoryId", middleware.RequestBodyLimit(assistantMutationRequestMaxBytes), middleware.CriticalRateLimit(), controller.AdminUpdateMemory)
+				adminRoute.DELETE("/:id/assistant-memories/:memoryId", middleware.CriticalRateLimit(), controller.AdminDeleteMemory)
 				adminRoute.POST("/", controller.CreateUser)
 				adminRoute.POST("/manage", controller.ManageUser)
 				adminRoute.PUT("/", controller.UpdateUser)
@@ -154,7 +238,39 @@ func SetApiRouter(router *gin.Engine) {
 				// Admin 2FA routes
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
+
 			}
+		}
+		onboardingProofRoute := apiRouter.Group("/onboarding/todo")
+		onboardingProofRoute.Use(middleware.TokenAuth())
+		{
+			onboardingProofRoute.POST("/proof", middleware.DisableCache(), controller.PostL1OnboardingProof)
+		}
+
+		// Admin compensation gift management
+		giftRoute := apiRouter.Group("/gift")
+		giftRoute.Use(middleware.AdminAuth())
+		{
+			giftRoute.GET("/", controller.AdminGetGifts)
+			giftRoute.POST("/", middleware.CriticalRateLimit(), controller.AdminCreateGift)
+			giftRoute.PUT("/:id", middleware.CriticalRateLimit(), controller.AdminUpdateGift)
+			giftRoute.GET("/claims", controller.AdminGetGiftClaims)
+		}
+
+		developerAccessRequestRoute := apiRouter.Group("/developer-access/requests")
+		developerAccessRequestRoute.Use(middleware.AdminAuth())
+		{
+			developerAccessRequestRoute.GET("", controller.ListDeveloperAccessRequests)
+			developerAccessRequestRoute.POST("/:id/approve", middleware.CriticalRateLimit(), controller.ApproveDeveloperAccessRequest)
+			developerAccessRequestRoute.POST("/:id/reject", middleware.CriticalRateLimit(), controller.RejectDeveloperAccessRequest)
+		}
+
+		accountActionRequestRoute := apiRouter.Group("/account-action-requests")
+		accountActionRequestRoute.Use(middleware.AdminAuth())
+		{
+			accountActionRequestRoute.GET("", middleware.DisableCache(), controller.ListAccountActionRequests)
+			accountActionRequestRoute.POST("/:id/approve", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ApproveAccountActionRequest)
+			accountActionRequestRoute.POST("/:id/reject", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RejectAccountActionRequest)
 		}
 
 		// Subscription billing (plans, purchase, admin management)
@@ -164,12 +280,12 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.GET("/plans", controller.GetSubscriptionPlans)
 			subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)
 			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
-			subscriptionRoute.POST("/balance/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBalancePay)
-			subscriptionRoute.POST("/epay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)
-			subscriptionRoute.POST("/fastpay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestFastPay)
-			subscriptionRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
-			subscriptionRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
-			subscriptionRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
+			subscriptionRoute.POST("/balance/pay", middleware.PaymentAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestBalancePay)
+			subscriptionRoute.POST("/epay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)
+			subscriptionRoute.POST("/fastpay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestFastPay)
+			subscriptionRoute.POST("/stripe/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
+			subscriptionRoute.POST("/creem/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
+			subscriptionRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
 		}
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
 		subscriptionAdminRoute.Use(middleware.AdminAuth())
@@ -205,13 +321,27 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
-			optionRoute.GET("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
-			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
-			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
-			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
+			// Credentials must never travel in a query string: URLs are routinely
+			// copied into access logs, browser history, and tracing systems. The
+			// catalog probe accepts an optional JSON body and otherwise resolves
+			// the server-side WAFFO_* credentials.
+			optionRoute.POST("/waffo-pancake/catalog", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.ListWaffoPancakeCatalog)
+			optionRoute.POST("/waffo-pancake/pair", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.CreateWaffoPancakePair)
+			optionRoute.POST("/waffo-pancake/save", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.SaveWaffoPancake)
+			optionRoute.POST("/waffo-pancake/subscription-product", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.CreateWaffoPancakeSubscriptionProduct)
 			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
 
+		dynamicPricingRoute := apiRouter.Group("/dynamic_pricing")
+		dynamicPricingRoute.Use(middleware.AdminAuth())
+		{
+			dynamicPricingRoute.GET("/status", controller.GetDynamicPricingStatus)
+		}
+		dynamicPricingSettingRoute := apiRouter.Group("/dynamic_pricing")
+		dynamicPricingSettingRoute.Use(middleware.RootAuth())
+		{
+			dynamicPricingSettingRoute.PUT("/setting", controller.UpdateDynamicPricingSetting)
+		}
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
 		customOAuthRoute.Use(middleware.RootAuth())
@@ -249,11 +379,11 @@ func SetApiRouter(router *gin.Engine) {
 			tokenRoute.GET("/auto-groups", controller.GetTokenAutoGroups)
 			tokenRoute.GET("/:id", controller.GetToken)
 			tokenRoute.POST("/:id/key", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKey)
-			tokenRoute.POST("/", controller.AddToken)
-			tokenRoute.PUT("/", controller.UpdateToken)
+			tokenRoute.POST("/", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), controller.AddToken)
+			tokenRoute.PUT("/", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), controller.UpdateToken)
 			tokenRoute.DELETE("/:id", controller.DeleteToken)
-			tokenRoute.POST("/batch", controller.DeleteTokenBatch)
-			tokenRoute.POST("/batch/keys", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
+			tokenRoute.POST("/batch", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), controller.DeleteTokenBatch)
+			tokenRoute.POST("/batch/keys", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
 		}
 
 		usageRoute := apiRouter.Group("/usage")
@@ -278,17 +408,28 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 
-		openSourceBountyPublicRoute := apiRouter.Group("/open-source-bounties")
+		discountCodeRoute := apiRouter.Group("/discount-code")
+		discountCodeRoute.Use(middleware.AdminAuth())
+		{
+			discountCodeRoute.GET("/", controller.GetAllDiscountCodes)
+			discountCodeRoute.GET("/search", controller.SearchDiscountCodes)
+			discountCodeRoute.GET("/:id", controller.GetDiscountCode)
+			discountCodeRoute.POST("/", controller.AddDiscountCode)
+			discountCodeRoute.PUT("/", controller.UpdateDiscountCode)
+			discountCodeRoute.DELETE("/:id", controller.DeleteDiscountCode)
+		}
+
+		openSourceBountyPublicRoute := openSourceBountyApiRouter.Group("/open-source-bounties")
 		openSourceBountyPublicRoute.Use(middleware.TryUserAuth())
 		{
 			openSourceBountyPublicRoute.GET("", controller.ListOpenSourceBounties)
 			openSourceBountyPublicRoute.GET("/projects/:id", controller.GetOpenSourceBounty)
+			openSourceBountyPublicRoute.GET("/config", controller.GetOpenSourceBountyConfig)
 		}
 
-		openSourceBountyRoute := apiRouter.Group("/open-source-bounties")
-		openSourceBountyRoute.Use(middleware.UserAuth())
+		openSourceBountyRoute := openSourceBountyApiRouter.Group("/open-source-bounties")
+		openSourceBountyRoute.Use(middleware.UserAuth(), requireOpenSourceBountyDeveloperAccess())
 		{
-			openSourceBountyRoute.GET("/config", controller.GetOpenSourceBountyConfig)
 			openSourceBountyRoute.GET("/mcp-token", middleware.DisableCache(), controller.GetOpenSourceBountyMCPToken)
 			openSourceBountyRoute.POST("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RotateOpenSourceBountyMCPToken)
 			openSourceBountyRoute.DELETE("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevokeOpenSourceBountyMCPToken)
@@ -309,6 +450,8 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/projects/:id/pause", controller.PauseOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/resume", controller.ResumeOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/close", middleware.CriticalRateLimit(), controller.CloseOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/archive", controller.ArchiveOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/unarchive", controller.UnarchiveOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/accept", controller.AcceptOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/submit", controller.SubmitOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/withdraw", controller.WithdrawOpenSourceBountyChallenge)
@@ -319,12 +462,55 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/challenges/:challenge_id/rate-owner", controller.RateOpenSourceBountyOwner)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/disputes", middleware.CriticalRateLimit(), controller.OpenOpenSourceBountyDispute)
 		}
+
+		publicRelayPublicRoute := openSourceBountyApiRouter.Group("/public-relays")
+		publicRelayPublicRoute.Use(middleware.TryUserAuth())
+		{
+			publicRelayPublicRoute.GET("", controller.ListPublicRelayContributions)
+			publicRelayPublicRoute.GET("/config", controller.GetPublicRelayConfig)
+			publicRelayPublicRoute.GET("/:id/reviews", controller.ListPublicRelayReviews)
+		}
+		publicRelayUserRoute := openSourceBountyApiRouter.Group("/public-relays")
+		publicRelayUserRoute.Use(middleware.UserAuth())
+		{
+			publicRelayUserRoute.POST("", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(16<<10), controller.CreatePublicRelayContribution)
+			publicRelayUserRoute.GET("/mine", controller.ListMyPublicRelayContributions)
+			publicRelayUserRoute.GET("/routing", controller.GetPublicRelayRouting)
+			publicRelayUserRoute.PUT("/routing", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.UpdatePublicRelayRouting)
+			publicRelayUserRoute.POST("/:id/report", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.ReportPublicRelayContribution)
+			publicRelayUserRoute.POST("/:id/review", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.RatePublicRelay)
+			publicRelayUserRoute.POST("/:id/tip", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(4<<10), controller.TipPublicRelay)
+			publicRelayUserRoute.POST("/:id/withdraw", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(4<<10), controller.WithdrawPublicRelayContributionReward)
+		}
+		publicRelayAdminRoute := openSourceBountyApiRouter.Group("/public-relays/admin")
+		publicRelayAdminRoute.Use(middleware.AdminAuth())
+		{
+			publicRelayAdminRoute.GET("", controller.ListAdminPublicRelayContributions)
+			publicRelayAdminRoute.POST("/:id/review", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.ReviewAdminPublicRelayContribution)
+			publicRelayAdminRoute.POST("/:id/link-channel/:channel_id", middleware.CriticalRateLimit(), controller.LinkAdminPublicRelayChannel)
+			publicRelayAdminRoute.GET("/reports", controller.ListAdminPublicRelayReports)
+			publicRelayAdminRoute.POST("/reports/:id/review", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.ReviewAdminPublicRelayReport)
+		}
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
+
+		financeRoute := apiRouter.Group("/finance")
+		financeRoute.Use(middleware.AdminAuth(), middleware.DisableCache())
+		{
+			financeRoute.GET("/export", controller.ExportFinancialData)
+			financeRoute.GET("/overview", controller.GetFinanceOverview)
+			financeRoute.GET("/users", controller.GetFinanceUsers)
+			financeRoute.GET("/users/:user_id", controller.GetFinanceUser)
+			financeRoute.GET("/entries", controller.ListFinanceEntries)
+			financeRoute.POST("/entries", controller.CreateFinanceEntry)
+			financeRoute.POST("/entries/:entry_id/reverse", controller.ReverseFinanceEntry)
+			financeRoute.GET("/payment-methods", controller.ListFinancePaymentMethods)
+			financeRoute.PUT("/payment-methods/:method", controller.UpdateFinancePaymentMethod)
+		}
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 

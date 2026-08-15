@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -169,4 +169,8 @@ func (p *DiscordProvider) SetProviderUserID(user *model.User, providerUserID str
 
 func (p *DiscordProvider) GetProviderPrefix() string {
 	return "discord_"
+}
+
+func (p *DiscordProvider) ProviderUserIDColumn() string {
+	return "discord_id"
 }

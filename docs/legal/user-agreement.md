@@ -1,37 +1,78 @@
-# LMM API 用户协议
+# LMM API User Agreement
 
-生效日期：2026 年 8 月 9 日；最后更新：2026 年 8 月 9 日
+Effective date: August 9, 2026.
+Last updated: August 9, 2026.
 
-本协议由 LIghtJUNction（以下简称“我们”）与使用 LMM API、LMM Forge 及相关网站、控制台和开放源代码悬赏功能的用户（以下简称“您”）订立。注册、登录、充值、发布或接受悬赏、创建凭证，或继续使用服务，即表示您已阅读、理解并同意本协议和《隐私政策》。不同意时请停止注册或使用。
+This Agreement is made between LIghtJUNction ("we") and you ("you") as a user of LMM API, LMM Forge, related websites, console, and open-source bounty functions.
 
-## 1. 服务范围
+By registering, logging in, topping up, publishing or accepting bounties, creating credentials, or continuing to use the service, you confirm that you have read, understood, and agreed to this Agreement and the Privacy Policy. If you disagree, stop registration and use of the service.
 
-我们提供账户、开发者控制台、模型 API、用量记录、开放源代码悬赏、交付证据、验收及结算等在线服务。具体功能、可用地区、模型、额度、价格和第三方能力可能变化；以您操作前页面展示的说明为准。第三方模型、支付、代码托管和身份验证服务受其自身条款约束。
+## 1. Service Scope
 
-## 2. 账户与凭证
+We provide online services including account management, developer console, model APIs, usage records, open-source bounty programs, delivery evidence, acceptance, and settlement.
 
-您应提供真实、准确、完整的信息，妥善保管密码、访问令牌和 API 密钥，并对账户下的活动负责。不得出租、转让、共享账户或向无权人员披露凭据。发现未授权访问、异常扣费或安全事件，请立即联系 support@lmm.best；邮件中不要发送密码或完整密钥。
+Available features, regions, models, quota, prices, and third-party capabilities may change. The live page shown before operation is authoritative.
 
-## 3. 合法使用
+Third-party model, payment, code hosting, and authentication services are governed by their own terms.
 
-您只能在有权使用输入、输出和相关数据的前提下使用服务，并应遵守适用法律、出口管制、制裁规定及所选模型提供方的使用政策。不得进行欺诈、侵权、恶意软件传播、绕过访问控制、攻击或压垮平台、未经授权的抓取或商业化提供，也不得提交您无权处理的个人或机密信息。
+## 2. Accounts and Credentials
 
-## 4. 计费、余额与悬赏
+You must provide true, accurate, and complete information. Keep your password, access token, and API key secure. You are responsible for all account activity.
 
-模型用量、充值金额、币种、悬赏奖励、平台费用、退款条件和结算时间以实际确认前展示的价格与订单信息为准。充值不自动续费；请求会按当时公示的计价规则结算。悬赏资金按挑战状态、验收、取消和争议处理规则结算。除法律强制规定、重复扣款、已确认计费错误或服务未交付等情况外，已使用的数字服务余额通常不予退款。
+Do not rent, transfer, share, or disclose credentials to unauthorized people.
 
-## 5. 内容与知识产权
+If unauthorized access, abnormal charges, or security incidents are detected, contact support@lmm.best immediately. Do not send passwords or full keys by email.
 
-您保留对合法提交内容的权利，并授权我们仅在提供、保障、审计和改进服务所需范围内处理这些内容。您应确保输入及输出的使用不侵犯第三方权利。平台软件、界面、文档、商标和标识归其各自权利人所有。
+## 3. Lawful Use
 
-## 6. 可用性与 AI 输出
+Use of the service is limited to content and outputs you are authorized to process.
 
-服务依赖网络及第三方组件，可能维护、中断、变更或下线。AI 输出可能不准确、不完整、过时或与他人相似，不构成法律、医疗、金融或其他专业建议；在依赖前请自行核验。除法律不得限制的责任外，服务按“现状”和“可用”状态提供。
+You must comply with applicable law, export controls, sanctions rules, and your chosen model provider usage policy.
 
-## 7. 暂停、终止与责任
+Prohibited conduct includes fraud, infringement, malware distribution, bypassing access control, attacks, platform overload, unauthorized scraping, or unauthorized commercialization of service outputs, and submitting unauthorized personal or confidential data.
 
-如发生违法、欺诈、滥用、攻击、拒付或重大安全风险，我们可在法律允许范围内限制接口、冻结相关余额、暂停或终止账户，并保留必要记录。因您违反本协议造成我们、其他用户或第三方损失的，您应依法承担责任。我们的累计责任以导致请求的事件发生前十二个月内您实际支付的服务费用为上限，但法律不得限制的责任除外。
+## 4. Billing, Balance, and Bounties
 
-## 8. 联系与争议
+Model usage, top-up amount, currency, bounty reward, platform fee, refund conditions, and settlement timing follow the pricing and order information shown before confirmation.
 
-账单、退款、安全和隐私问题请联系 support@lmm.best。我们会在合理期限内确认并处理。争议首先通过协商解决；协商不成时，适用法律允许的范围内提交有管辖权的法院处理。本协议更新后会在本页面标明新的生效日期；继续使用即视为接受更新内容。
+Top-ups are not auto-renewed.
+
+Requests are billed under rules shown at request time.
+
+Bounty funds are settled by challenge state, acceptance, cancellation, and dispute rules.
+
+Outside mandatory legal cases, duplicate charging, verified billing errors, or non-delivery, used digital balance is generally non-refundable.
+
+## 5. Content and Intellectual Property
+
+You retain rights to lawfully submitted content and authorize us to process such content only as needed for provision, security, audit, and improvement of the service.
+
+You must ensure input and output usage does not infringe third-party rights.
+
+Platform software, interfaces, documentation, trademarks, and logos are owned by their respective rights holders.
+
+## 6. Availability and AI Output
+
+The service depends on network and third-party components and may be maintained, disrupted, changed, or removed.
+
+AI outputs may be inaccurate, incomplete, outdated, or similar to outputs obtained by other users and are not legal, medical, financial, or professional advice. Verify outputs before using them for important decisions.
+
+To the extent permitted by law, the service is provided on an "as-is" and "as-available" basis.
+
+## 7. Suspension, Termination, and Liability
+
+For illegal acts, fraud, abuse, attacks, chargeback fraud, or significant security risks we may, within legal limits, limit interfaces, freeze related balances, and suspend or terminate accounts while preserving required records.
+
+If your breach causes loss to us, other users, or third parties, you must bear corresponding responsibility under applicable law and compensate direct losses and reasonable costs for complaints, claims, investigations, or litigation.
+
+Our aggregate liability for all requests related to this service is capped at the total fees you paid in the 12 months preceding the event that gave rise to the request, except where the law does not allow limits.
+
+## 8. Contact and Dispute Resolution
+
+Contact support@lmm.best for billing, refunds, security, and privacy.
+
+We will confirm and process within a reasonable period.
+
+Disputes should first be resolved by communication. If unresolved, they will be handled by courts with competent jurisdiction within legal scope.
+
+This Agreement revision date is shown on this page; continued use after update means acceptance of revised terms.

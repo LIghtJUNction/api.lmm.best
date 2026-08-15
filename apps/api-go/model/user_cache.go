@@ -4,14 +4,17 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 4
+// Bump this whenever an authorization-relevant field is added to the cache.
+// Older hashes did not carry console activation or trust overrides and would
+// incorrectly downgrade an activated account to L0.
+const userCacheSchemaVersion = 5
 
 type UserBase struct {
 	Id                 int    `json:"id"`

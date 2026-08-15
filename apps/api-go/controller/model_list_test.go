@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -32,6 +32,27 @@ type listModelsResponse struct {
 type userModelsResponse struct {
 	Success bool     `json:"success"`
 	Data    []string `json:"data"`
+}
+
+func TestPublicPreviewModelIDsUseLivePricingCatalog(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	setupModelListControllerTestDB(t)
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"alpha-real-model":1,"zeta-real-model":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios)) })
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{
+			{ModelName: "private-vip-model", EnableGroup: []string{"vip"}},
+			{ModelName: "zeta-real-model", EnableGroup: []string{"all"}},
+			{ModelName: "alpha-real-model", EnableGroup: []string{"default"}},
+			{ModelName: "unpriced-public-model", EnableGroup: []string{"default"}},
+			{ModelName: "zeta-real-model", EnableGroup: []string{"default"}},
+		}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
+
+	require.Equal(t, []string{"alpha-real-model", "zeta-real-model"}, getPublicPreviewModelIDs())
 }
 
 func setupModelListControllerTestDB(t *testing.T) *gorm.DB {

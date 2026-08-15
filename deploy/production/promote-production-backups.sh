@@ -24,6 +24,7 @@ VERIFY_SCRIPT=''
 PRECUTOVER_PAYLOAD=''
 ROLLBACK_CORE_PACKAGE=''
 ROLLBACK_GO_PACKAGE=''
+ROLLBACK_LAYOUT='split'
 while (($#)); do
   case $1 in
     --target-host) TARGET_HOST=${2:?}; shift 2 ;;
@@ -45,9 +46,12 @@ while (($#)); do
     --precutover-payload) PRECUTOVER_PAYLOAD=${2:?}; shift 2 ;;
     --rollback-core-package) ROLLBACK_CORE_PACKAGE=${2:?}; shift 2 ;;
     --rollback-go-package) ROLLBACK_GO_PACKAGE=${2:?}; shift 2 ;;
+    --rollback-layout) ROLLBACK_LAYOUT=${2:?}; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+
+case $ROLLBACK_LAYOUT in split|direct) ;; *) die 'rollback layout must be split or direct' ;; esac
 
 [[ $TARGET_HOST == ArchDmit ]] || die 'target host must be ArchDmit'
 [[ $JUMP_HOST == archczy ]] || die 'jump/off-host must be archczy'
@@ -71,6 +75,19 @@ ssh_bin=${LMM_DEPLOY_SSH_BIN:-ssh}
 scp_bin=${LMM_DEPLOY_SCP_BIN:-scp}
 target_endpoint=root@45.59.187.63
 target_port=222
+[[ $ssh_bin =~ ^[A-Za-z0-9_./-]+$ && $SSH_CONFIG =~ ^[A-Za-z0-9_./-]+$ ]] || \
+  die 'SSH executable and configuration paths must be shell-safe'
+control_root=/run/user/$EUID
+[[ -d $control_root && ! -L $control_root && -w $control_root && $(stat -c '%u' "$control_root") == "$EUID" ]] || \
+  die 'controller runtime directory is missing or unsafe'
+control_digest=$(printf '%s' "$DEPLOYMENT_ID" | sha256sum)
+control_digest=${control_digest%% *}
+control_tag=${control_digest:0:16}
+target_control="$control_root/lmm-api-$control_tag-target-%C"
+jump_control="$control_root/lmm-api-$control_tag-jump-%C"
+# ProxyCommand is expanded once by the target SSH process. Escape %C so the
+# jump SSH process receives it and computes its own deployment-private socket.
+proxy_command="exec $ssh_bin -F $SSH_CONFIG -o BatchMode=yes -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$control_root/lmm-api-$control_tag-jump-%%C -W %h:%p $JUMP_HOST"
 remote_workspace="/var/lib/lmm-api-go-deploy/work/$DEPLOYMENT_ID"
 remote_stage="$remote_workspace/staging"
 target_output="/var/lib/lmm-api-go-deploy/backups/$DEPLOYMENT_ID"
@@ -85,19 +102,48 @@ controller_owned=0
 offhost_owned=0
 target_mirror_owned=0
 offhost_mirror_owned=0
-target_ssh=("$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint")
-offhost_ssh=("$ssh_bin" -F "$SSH_CONFIG" "$JUMP_HOST")
-target_scp=("$scp_bin" -F "$SSH_CONFIG" -o "ProxyJump=$JUMP_HOST" -P "$target_port")
+transaction_lock_claimed=0
+target_ssh=("$ssh_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
+  -o ControlPersist=60 -o "ControlPath=$target_control" -o "ProxyCommand=$proxy_command" \
+  -p "$target_port" "$target_endpoint")
+offhost_ssh=("$ssh_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
+  -o ControlPersist=60 -o "ControlPath=$jump_control" "$JUMP_HOST")
+target_scp=("$scp_bin" -F "$SSH_CONFIG" -o BatchMode=yes -o ControlMaster=auto \
+  -o ControlPersist=60 -o "ControlPath=$target_control" -o "ProxyCommand=$proxy_command" \
+  -P "$target_port")
+
+release_failed_backup_transaction_lock() {
+  "${target_ssh[@]}" bash -s -- "$DEPLOYMENT_ID" <<'EOF'
+set -Eeuo pipefail
+deployment_id=$1
+lock=/var/lib/lmm-api-go-deploy/transaction.lock
+marker="$lock/deployment.env"
+[[ -e $lock || -L $lock ]] || exit 0
+[[ -d $lock && ! -L $lock && -f $marker && ! -L $marker ]] || {
+  printf 'backup transaction lock is unsafe\n' >&2
+  exit 3
+}
+grep -Fqx 'format=1' "$marker"
+grep -Fqx "deployment_id=$deployment_id" "$marker" || {
+  printf 'backup transaction lock ownership changed\n' >&2
+  exit 3
+}
+grep -Fqx 'status=ACTIVE' "$marker"
+rm -f -- "$marker"
+rmdir -- "$lock"
+EOF
+}
 
 cleanup_partial() {
   set +e
-  ((controller_remote_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint" rm -rf -- "$controller_remote"
-  ((offhost_remote_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint" rm -rf -- "$offhost_remote"
-  ((target_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" -J "$JUMP_HOST" -p "$target_port" "$target_endpoint" rm -rf -- "$target_output"
-  ((offhost_owned == 0)) || "$ssh_bin" -F "$SSH_CONFIG" "$JUMP_HOST" rm -rf -- "$OFFHOST_OUTPUT"
+  ((controller_remote_owned == 0)) || "${target_ssh[@]}" rm -rf -- "$controller_remote"
+  ((offhost_remote_owned == 0)) || "${target_ssh[@]}" rm -rf -- "$offhost_remote"
+  ((target_owned == 0)) || "${target_ssh[@]}" rm -rf -- "$target_output"
+  ((offhost_owned == 0)) || "${offhost_ssh[@]}" rm -rf -- "$OFFHOST_OUTPUT"
   ((controller_owned == 0)) || rm -rf -- "$CONTROLLER_OUTPUT"
   ((offhost_mirror_owned == 0)) || rm -rf -- "$offhost_mirror"
   ((target_mirror_owned == 0)) || rm -rf -- "$target_mirror"
+  ((transaction_lock_claimed == 0)) || release_failed_backup_transaction_lock
 }
 on_error() {
   local rc=$?
@@ -106,6 +152,7 @@ on_error() {
 }
 trap on_error ERR
 
+transaction_lock_claimed=1
 "${target_ssh[@]}" bash -s -- "$DEPLOYMENT_ID" <<'EOF'
 set -Eeuo pipefail
 deployment_id=$1
@@ -149,7 +196,8 @@ offhost_remote_owned=1
   "$remote_stage/${PREPARE_SCRIPT##*/}" --deployment-id "$DEPLOYMENT_ID" \
   --precutover-payload "$remote_stage/${PRECUTOVER_PAYLOAD##*/}" \
   --rollback-core-package "$remote_stage/${ROLLBACK_CORE_PACKAGE##*/}" \
-  --rollback-go-package "$remote_stage/${ROLLBACK_GO_PACKAGE##*/}" >/dev/null
+  --rollback-go-package "$remote_stage/${ROLLBACK_GO_PACKAGE##*/}" \
+  --rollback-layout "$ROLLBACK_LAYOUT" >/dev/null
 
 frontend_release=$("${target_ssh[@]}" \
   readlink -- /srv/lmm-api-frontend/current)
@@ -173,14 +221,14 @@ done
 mkdir -m0700 -- "$target_mirror" "$offhost_mirror"
 target_mirror_owned=1
 offhost_mirror_owned=1
-"${target_scp[@]}" -r "$target_endpoint:$target_output/." "$target_mirror/"
+"${target_scp[@]}" -p -r "$target_endpoint:$target_output/." "$target_mirror/"
 controller_owned=1
-"${target_scp[@]}" -r "$target_endpoint:$controller_remote" "$CONTROLLER_OUTPUT"
-"${target_scp[@]}" -r "$target_endpoint:$offhost_remote/." "$offhost_mirror/"
+"${target_scp[@]}" -p -r "$target_endpoint:$controller_remote" "$CONTROLLER_OUTPUT"
+"${target_scp[@]}" -p -r "$target_endpoint:$offhost_remote/." "$offhost_mirror/"
 
 "${offhost_ssh[@]}" install -d -m0700 "${OFFHOST_OUTPUT%/*}"
 offhost_owned=1
-"$scp_bin" -F "$SSH_CONFIG" -r "$offhost_mirror" "$JUMP_HOST:$OFFHOST_OUTPUT"
+"$scp_bin" -F "$SSH_CONFIG" -p -r "$offhost_mirror" "$JUMP_HOST:$OFFHOST_OUTPUT"
 "${offhost_ssh[@]}" bash -s -- "$OFFHOST_OUTPUT" <<'EOF'
 set -Eeuo pipefail
 directory=$1

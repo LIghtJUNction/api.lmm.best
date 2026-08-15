@@ -1,6 +1,6 @@
 package controller
 
-import "github.com/QuantumNous/new-api/model"
+import "github.com/LIghtJUNction/api.lmm.best/model"
 
 func channelHasSensitiveChanges(channel *PatchChannel, origin *model.Channel, requestData map[string]any) bool {
 	if _, ok := requestData["type"]; ok && channel.Type != origin.Type {
@@ -82,12 +82,13 @@ var channelOperationalFields = map[string]struct{}{
 // channelReadOnlyFields lists server-managed/accounting fields that the general
 // channel edit endpoint must ignore even if a client sends them.
 var channelReadOnlyFields = map[string]struct{}{
-	"created_time":         {},
-	"test_time":            {},
-	"response_time":        {},
-	"balance":              {},
-	"balance_updated_time": {},
-	"used_quota":           {},
+	"created_time":                 {},
+	"test_time":                    {},
+	"response_time":                {},
+	"balance":                      {},
+	"balance_updated_time":         {},
+	"used_quota":                   {},
+	"public_relay_contribution_id": {},
 }
 
 func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]any) {
@@ -108,6 +109,9 @@ func clearChannelReadOnlyFields(channel *PatchChannel, requestData map[string]an
 	}
 	if _, ok := requestData["used_quota"]; ok {
 		channel.UsedQuota = 0
+	}
+	if _, ok := requestData["public_relay_contribution_id"]; ok {
+		channel.PublicRelayContributionId = 0
 	}
 }
 

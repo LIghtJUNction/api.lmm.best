@@ -5,7 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -13,7 +14,7 @@ import (
 // operations validate their narrower proof scopes in their controller.
 func SecureVerificationRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !RequireSecurityProof(c, "channel.key.read", []string{"2fa", "passkey"}) {
+		if !RequireSecurityProof(c, "channel.key.read", []string{"email", "2fa", "passkey"}) {
 			return
 		}
 		c.Set("secure_verified", true)
@@ -29,6 +30,15 @@ func RequireSecurityProof(c *gin.Context, requiredScope string, allowedMethods [
 		securityProofError(c, "SECURITY_PROOF_INVALID", "安全验证状态无效")
 		return false
 	}
+	preferredMethods, err := PreferredSecurityProofMethods(identity.UserID)
+	if err != nil {
+		securityProofError(c, "SECURITY_PROOF_INVALID", "安全验证状态无效")
+		return false
+	}
+	// The configured list remains part of the call contract, but the account
+	// policy is authoritative: a bound email must use email verification; an
+	// account without one may use only its existing Passkey.
+	allowedMethods = preferredMethods
 	raw := strings.TrimSpace(c.GetHeader("X-Security-Proof"))
 	if raw == "" {
 		securityProofError(c, "SECURITY_PROOF_REQUIRED", "需要安全验证")
@@ -48,6 +58,27 @@ func RequireSecurityProof(c *gin.Context, requiredScope string, allowedMethods [
 		return false
 	}
 	return true
+}
+
+// PreferredSecurityProofMethods returns the only proof method accepted for
+// sensitive dashboard actions. Email is the primary path when bound, followed
+// by an enabled 2FA factor; Passkey is the compatibility fallback otherwise.
+func PreferredSecurityProofMethods(userID int) ([]string, error) {
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		return nil, err
+	}
+	if model.NormalizeEmail(user.Email) != "" {
+		return []string{"email"}, nil
+	}
+	twoFA, err := model.GetTwoFAByUserId(userID)
+	if err != nil {
+		return nil, err
+	}
+	if twoFA != nil && twoFA.IsEnabled {
+		return []string{"2fa"}, nil
+	}
+	return []string{"passkey"}, nil
 }
 
 func securityProofError(c *gin.Context, code, message string) {

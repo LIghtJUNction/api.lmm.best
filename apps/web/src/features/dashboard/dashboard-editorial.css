@@ -42,11 +42,38 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   --overview-accent-1: var(--forge-ink-light);
   --overview-accent-2: var(--forge-clay-light);
   --overview-accent-3: var(--forge-sage-light);
-  --forge-model-1: var(--forge-ink-light);
-  --forge-model-2: var(--forge-cactus-light);
-  --forge-model-3: var(--forge-clay-light);
-  --forge-model-4: var(--forge-sage-light);
-  --forge-model-5: var(--forge-secondary-light);
+  /*
+   * Dashboard series palette. These are deliberately concrete values instead
+   * of nested var() references because VChart may render on canvas, where CSS
+   * custom properties are not resolved. Every color stays visibly distinct
+   * from the paper/card surface and the sequence alternates hue families so
+   * adjacent model series do not disappear into one another.
+   */
+  --forge-model-1: #0b7285;
+  --forge-model-2: #b24a30;
+  --forge-model-3: #2f5fae;
+  --forge-model-4: #916c00;
+  --forge-model-5: #6d409c;
+  --forge-model-6: #2d7b4b;
+  --forge-model-7: #a43e68;
+  --forge-model-8: #1d718b;
+  --forge-model-9: #8a572a;
+  --forge-model-10: #52658f;
+  --forge-model-11: #783d9e;
+  --forge-model-12: #a9531e;
+  --forge-model-13: #1e785d;
+  --forge-model-14: #466aa3;
+  --forge-model-15: #607d2d;
+  --forge-model-16: #9b4c59;
+  --forge-model-17: #8e7400;
+  --forge-model-18: #7050a0;
+  --forge-model-19: #277d91;
+  --forge-model-20: #96554a;
+  --forge-model-21: #267594;
+  --forge-model-22: #984e8b;
+  --forge-model-23: #4e7d3c;
+  --forge-model-24: #9a6a3a;
+  --forge-chart-hover: #141413;
   --forge-chart-text: color-mix(
     in oklch,
     var(--forge-ink-light) 62%,
@@ -96,11 +123,34 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   --overview-accent-1: var(--forge-foreground-dark);
   --overview-accent-2: var(--forge-clay-dark);
   --overview-accent-3: var(--forge-sage-dark);
-  --forge-model-1: var(--forge-foreground-dark);
-  --forge-model-2: var(--forge-cactus-dark);
-  --forge-model-3: var(--forge-clay-dark);
-  --forge-model-4: var(--forge-sage-dark);
-  --forge-model-5: var(--forge-secondary-dark);
+  /* Keep all 24 categorical series above the dark card surface. The palette
+   * is intentionally brighter than the surrounding editorial background so
+   * stacked bars, area fills, legends, and hover states remain readable. */
+  --forge-model-1: #53d7c1;
+  --forge-model-2: #f18b70;
+  --forge-model-3: #80a8ff;
+  --forge-model-4: #f0c35a;
+  --forge-model-5: #c5a2ff;
+  --forge-model-6: #81d399;
+  --forge-model-7: #ec99bf;
+  --forge-model-8: #75d9ec;
+  --forge-model-9: #e4aa72;
+  --forge-model-10: #aeb9ed;
+  --forge-model-11: #d786b9;
+  --forge-model-12: #ef9b5e;
+  --forge-model-13: #62d5ad;
+  --forge-model-14: #9abfff;
+  --forge-model-15: #b7d88e;
+  --forge-model-16: #e59da5;
+  --forge-model-17: #edd480;
+  --forge-model-18: #cfb3ee;
+  --forge-model-19: #8ed3e3;
+  --forge-model-20: #e8b0a0;
+  --forge-model-21: #68cbe8;
+  --forge-model-22: #e7a7d7;
+  --forge-model-23: #9fd58f;
+  --forge-model-24: #e9c096;
+  --forge-chart-hover: #faf9f5;
   --forge-chart-text: color-mix(
     in oklch,
     var(--forge-foreground-dark) 72%,
@@ -153,67 +203,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 .dashboard-editorial :where(.backdrop-blur, .backdrop-blur-sm) {
   backdrop-filter: none;
-}
-
-.dashboard-editorial-mark {
-  color: var(--dashboard-mark-ink);
-  opacity: 0.92;
-}
-
-.dashboard-editorial-mark-carrier {
-  fill: var(--dashboard-mark-paper);
-  stroke: var(--dashboard-mark-ink);
-  stroke-width: 1.5;
-}
-
-.dashboard-editorial-mark-gesture {
-  fill: none;
-  stroke: var(--dashboard-mark-ink);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 11;
-}
-
-.dashboard-editorial-mark-contour {
-  fill: none;
-  stroke: var(--dashboard-mark-muted);
-  stroke-linecap: round;
-  stroke-width: 1.25;
-}
-
-.dashboard-editorial-mark-accent {
-  fill: var(--dashboard-clay);
-}
-
-.dashboard-analytics-art {
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-height: 8rem;
-  background: var(--dashboard-wash);
-}
-
-.dashboard-analytics-art-carrier {
-  fill: var(--dashboard-mark-paper);
-}
-
-.dashboard-analytics-art-gesture {
-  fill: none;
-  stroke: var(--dashboard-mark-ink);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 18;
-}
-
-.dashboard-analytics-art-contour {
-  fill: none;
-  stroke: var(--dashboard-mark-muted);
-  stroke-linecap: round;
-  stroke-width: 3;
-}
-
-.dashboard-analytics-art-accent {
-  fill: var(--dashboard-clay);
 }
 
 .dashboard-editorial-code {

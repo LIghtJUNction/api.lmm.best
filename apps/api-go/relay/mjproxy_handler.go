@@ -15,20 +15,33 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	relayconstant "github.com/LIghtJUNction/api.lmm.best/relay/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
+	hosttypes "github.com/LIghtJUNction/api.lmm.best/types"
 
 	"github.com/gin-gonic/gin"
 )
+
+func applyMidjourneyPriceRatios(priceData *hosttypes.PriceData) error {
+	if priceData == nil || priceData.Quota <= 0 {
+		return nil
+	}
+	quota, err := common.QuotaFromFloatStrict(priceData.ApplyOtherRatiosToFloat(float64(priceData.Quota)))
+	if err != nil {
+		return err
+	}
+	priceData.Quota = quota
+	return nil
+}
 
 func RelayMidjourneyImage(c *gin.Context) {
 	taskId := c.Param("id")
@@ -87,7 +100,7 @@ func RelayMidjourneyImage(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		responseBody, _ := io.ReadAll(resp.Body)
+		responseBody, _ := common.ReadResponseBody(resp)
 		c.JSON(resp.StatusCode, gin.H{
 			"error": string(responseBody),
 		})
@@ -254,6 +267,9 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			Code:        4,
 			Description: err.Error(),
 		}
+	}
+	if err := applyMidjourneyPriceRatios(&priceData); err != nil {
+		return &dto.MidjourneyResponse{Code: 4, Description: err.Error()}
 	}
 
 	userQuota, err := model.GetUserQuota(info.UserId, false)
@@ -544,6 +560,15 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		consumeQuota = false
 	}
 
+	if setting.ShouldCheckAdvancedSecurityPrompt() && strings.TrimSpace(midjRequest.Prompt) != "" {
+		evaluation := service.EvaluateAdvancedSecurityText(c, relayInfo, midjRequest.Prompt)
+		if evaluation.Blocked() {
+			response := service.MidjourneyErrorWrapper(constant.MjRequestError, "advanced_security_guardrail")
+			response.Result = common.MessageWithRequestId(service.AdvancedSecurityBlockedMessage, c.GetString(common.RequestIdKey))
+			return response
+		}
+	}
+
 	//baseURL := common.ChannelBaseURLs[channelType]
 	requestURL := getMjRequestPath(c.Request.URL.String())
 
@@ -561,6 +586,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			Code:        4,
 			Description: err.Error(),
 		}
+	}
+	if err := applyMidjourneyPriceRatios(&priceData); err != nil {
+		return &dto.MidjourneyResponse{Code: 4, Description: err.Error()}
 	}
 
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)

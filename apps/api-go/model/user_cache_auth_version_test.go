@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -84,6 +84,26 @@ func TestPendingUserAuthFenceRejectsStaleCacheWrite(t *testing.T) {
 
 	assert.ErrorIs(t, err, ErrUserAuthCachePending)
 	assert.False(t, server.Exists(getUserCacheKey(userID)))
+}
+
+func TestUserCachePreservesAuthorizationFields(t *testing.T) {
+	useUserCacheMiniRedis(t)
+	level := 1
+	require.NoError(t, writeUserCache(&UserBase{
+		Id:                 4203,
+		Group:              "default",
+		Username:           "activated",
+		Quota:              10,
+		AuthVersion:        1,
+		TrustLevelOverride: &level,
+		ConsoleActivatedAt: 123456,
+	}, true))
+
+	cached, err := cacheGetUserBase(4203)
+	require.NoError(t, err)
+	require.NotNil(t, cached.TrustLevelOverride)
+	assert.Equal(t, level, *cached.TrustLevelOverride)
+	assert.EqualValues(t, 123456, cached.ConsoleActivatedAt)
 }
 
 func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {

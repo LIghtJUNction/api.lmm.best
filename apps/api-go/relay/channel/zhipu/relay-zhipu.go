@@ -6,16 +6,16 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relay/helper"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -27,13 +27,18 @@ import (
 // https://open.bigmodel.cn/api/paas/v3/model-api/chatglm_std/invoke
 // https://open.bigmodel.cn/api/paas/v3/model-api/chatglm_std/sse-invoke
 
-var zhipuTokens sync.Map
+var zhipuTokens = cachex.NewByteCache[zhipuTokenData](256, 1<<20, func(key string, token zhipuTokenData) int64 {
+	return int64(len(key) + len(token.Token) + 32)
+})
 var expSeconds int64 = 24 * 3600
 
+func zhipuTokenKey(apiKey string) string {
+	return common.GenerateHMAC(apiKey)
+}
+
 func getZhipuToken(apikey string) string {
-	data, ok := zhipuTokens.Load(apikey)
-	if ok {
-		tokenData := data.(zhipuTokenData)
+	key := zhipuTokenKey(apikey)
+	if tokenData, ok := zhipuTokens.Load(key); ok {
 		if time.Now().Before(tokenData.ExpiryTime) {
 			return tokenData.Token
 		}
@@ -69,10 +74,10 @@ func getZhipuToken(apikey string) string {
 		return ""
 	}
 
-	zhipuTokens.Store(apikey, zhipuTokenData{
+	zhipuTokens.SetWithTTL(key, zhipuTokenData{
 		Token:      tokenString,
 		ExpiryTime: expiryTime,
-	})
+	}, time.Until(expiryTime))
 
 	return tokenString
 }
@@ -224,7 +229,7 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 
 func zhipuHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	var zhipuResponse ZhipuResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}

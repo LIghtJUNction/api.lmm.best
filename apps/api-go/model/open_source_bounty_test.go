@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +64,10 @@ func setOpenSourceBountyFeeRateForTest(rate string) {
 func createOpenSourceBountyUser(t *testing.T, db *gorm.DB, username string, quota int, role int) User {
 	t.Helper()
 	user := User{Username: username, Password: "password", AffCode: username, Quota: quota, Role: role, Status: common.UserStatusEnabled}
+	if role < common.RoleAdminUser {
+		levelOne := TrustLevelMinUser + 1
+		user.TrustLevelOverride = &levelOne
+	}
 	require.NoError(t, db.Create(&user).Error)
 	return user
 }
@@ -103,6 +107,44 @@ func TestOpenSourceBountyEmptyListQueriesReturnNonNilSlices(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, disputes)
 	assert.Empty(t, disputes)
+}
+
+func TestOpenSourceBountyL0ViewerGetsOnlyPublicBoardAndDetail(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "l0-public-owner", 10_000, common.RoleCommonUser)
+	viewer := createOpenSourceBountyUser(t, db, "l0-public-viewer", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/l0-public", 1_000, 1))
+	require.NoError(t, err)
+	project, _, err = PublishOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	challenge, err := AcceptOpenSourceBounty(viewer.Id, project.Id, "l0-public-viewer")
+	require.NoError(t, err)
+
+	privateDraft, err := CreateOpenSourceBountyDraft(viewer.Id, openSourceBountyInput("https://github.com/example/l0-private", 500, 1))
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", viewer.Id).Update("trust_level_override", TrustLevelMinUser).Error)
+
+	projects, total, err := ListOpenSourceBounties(viewer.Id, 1, 20)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Len(t, projects, 1)
+	assert.Nil(t, projects[0].ViewerChallenge, "L0 public listing must not expose the viewer's private challenge")
+
+	detail, err := GetOpenSourceBountyDetail(viewer.Id, project.Id)
+	require.NoError(t, err)
+	assert.Nil(t, detail.Project.ViewerChallenge)
+	assert.Empty(t, detail.Challenges)
+	assert.Empty(t, detail.Ledger)
+	_, err = GetOpenSourceBountyDetail(viewer.Id, privateDraft.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_NOT_FOUND", OpenSourceBountyErrorCode(err), "L0 must not retain owner-only draft reads")
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", viewer.Id).Update("trust_level_override", TrustLevelMinUser+1).Error)
+	detail, err = GetOpenSourceBountyDetail(viewer.Id, project.Id)
+	require.NoError(t, err)
+	require.NotNil(t, detail.Project.ViewerChallenge)
+	assert.Equal(t, challenge.Id, detail.Project.ViewerChallenge.Id, "restoring L1 preserves the legitimate personalized public view")
+	_, err = GetOpenSourceBountyDetail(viewer.Id, privateDraft.Id)
+	require.NoError(t, err, "restoring L1 preserves the legitimate owner-only detail view")
 }
 
 func TestOpenSourceBountyBoardRanksByGrossPricePerFix(t *testing.T) {
@@ -221,6 +263,53 @@ func TestOpenSourceBountyLifecycleChargesOwnerAndTransfersEscrow(t *testing.T) {
 	rewardNotifications, err = ListOpenSourceBountyNotifications(participant.Id, 50)
 	require.NoError(t, err)
 	require.Len(t, rewardNotifications, 1, "duplicate approval must not duplicate its notification")
+}
+
+func TestOpenSourceBountyArchiveIsReversibleAndScopedToFinalStates(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	owner := createOpenSourceBountyUser(t, db, "archive-owner", 10_000, common.RoleCommonUser)
+	stranger := createOpenSourceBountyUser(t, db, "archive-stranger", 0, common.RoleCommonUser)
+	project, err := CreateOpenSourceBountyDraft(owner.Id, openSourceBountyInput("https://github.com/example/archive", 1_000, 1))
+	require.NoError(t, err)
+
+	_, err = ArchiveOpenSourceBounty(owner.Id, project.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_ARCHIVE_UNAVAILABLE", OpenSourceBountyErrorCode(err))
+
+	require.NoError(t, db.Model(&OpenSourceBountyProject{}).
+		Where("id = ?", project.Id).
+		Updates(map[string]any{"status": OpenSourceBountyStatusCompleted}).Error)
+
+	active, err := ListOwnedOpenSourceBounties(owner.Id)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	assert.Zero(t, active[0].ArchivedAt)
+
+	_, err = ArchiveOpenSourceBounty(stranger.Id, project.Id)
+	assert.Equal(t, "OPEN_SOURCE_BOUNTY_NOT_FOUND", OpenSourceBountyErrorCode(err))
+
+	archived, err := ArchiveOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	assert.NotZero(t, archived.ArchivedAt)
+	active, err = ListOwnedOpenSourceBounties(owner.Id)
+	require.NoError(t, err)
+	assert.Empty(t, active)
+	archivedItems, err := ListOwnedOpenSourceBountiesFiltered(owner.Id, true)
+	require.NoError(t, err)
+	require.Len(t, archivedItems, 1)
+	assert.Equal(t, project.Id, archivedItems[0].Id)
+
+	// Repeating the same action is safe for retrying clients.
+	repeated, err := ArchiveOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	assert.Equal(t, archived.ArchivedAt, repeated.ArchivedAt)
+
+	unarchived, err := UnarchiveOpenSourceBounty(owner.Id, project.Id)
+	require.NoError(t, err)
+	assert.Zero(t, unarchived.ArchivedAt)
+	active, err = ListOwnedOpenSourceBounties(owner.Id)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	assert.Equal(t, project.Id, active[0].Id)
 }
 
 func TestOpenSourceBountyTipsAndMutualRatings(t *testing.T) {
