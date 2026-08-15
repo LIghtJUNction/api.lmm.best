@@ -16,21 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export type Theme = 'dark' | 'light' | 'system'
-export type ResolvedTheme = Exclude<Theme, 'system'>
+import { createFileRoute } from '@tanstack/react-router'
 
-// The console opens on the warm paper surface. Dark mode remains available
-// through the theme switcher and is preserved for users who already chose it.
-export const DEFAULT_THEME: Theme = 'light'
-export const THEME_COLORS: Record<ResolvedTheme, string> = {
-  dark: '#020817',
-  light: '#faf9f5',
-}
+import { Guide } from '@/features/guide'
 
-export function resolveTheme(
-  theme: Theme,
-  systemPrefersDark: boolean
-): ResolvedTheme {
-  if (theme !== 'system') return theme
-  return systemPrefersDark ? 'dark' : 'light'
-}
+export const Route = createFileRoute('/guide/')({
+  component: Guide,
+})
