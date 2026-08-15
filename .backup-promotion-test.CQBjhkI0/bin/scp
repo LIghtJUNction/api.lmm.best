@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$*" >>"$FAKE_SCP_LOG"
+args=("$@")
+destination=${args[${#args[@]}-1]}
+role=''
+case $destination in
+  */backup-target-*/) role=target; destination=${destination%/} ;;
+  "$FAKE_CONTROLLER_OUTPUT") role=controller ;;
+  */backup-off-host-*/) role=off-host; destination=${destination%/} ;;
+esac
+if [[ -n $role ]]; then
+  mkdir -p -m0700 -- "$destination"
+  encrypted=false
+  [[ $role == controller || $role == off-host ]] && encrypted=true
+  for kind in application frontend configuration database; do
+    suffix=archive
+    [[ $encrypted == true && ( $kind == configuration || $kind == database ) ]] && suffix=age
+    printf '%s-%s\n' "$role" "$kind" >"$destination/$kind.$suffix"
+    chmod 0600 "$destination/$kind.$suffix"
+  done
+  created=$(date -u +%FT%TZ)
+  {
+    printf 'format=1\ncreated_at_utc=%s\ndeployment_id=%s\ncopy_role=%s\n' "$created" "$FAKE_DEPLOYMENT_ID" "$role"
+    printf 'deployment_role=production\nverified_host=arch-dmit\nrelease_id=%s\n' "$FAKE_DEPLOYMENT_ID"
+    printf 'artifact_sha256=%s\ngit_revision=%s\ndatabase_engine=postgres\n' "$FAKE_ARTIFACT_SHA" "$FAKE_REVISION"
+    printf 'core_sha256=%s\nbackend_sha256=%s\n' "$FAKE_CORE_SHA" "$FAKE_BACKEND_SHA"
+    printf 'service_state=active\nfrontend_release=old-release\n'
+    for kind in application frontend configuration database; do
+      suffix=archive
+      [[ $encrypted == true && ( $kind == configuration || $kind == database ) ]] && suffix=age
+      file="$destination/$kind.$suffix"
+      printf '%s_file=%s.%s\n%s_size=%s\n%s_mode=600\n%s_mtime_utc=%s\n' \
+        "$kind" "$kind" "$suffix" "$kind" "$(stat -c %s "$file")" "$kind" "$kind" \
+        "$(date -u -d "@$(stat -c %Y "$file")" +%FT%TZ)"
+      [[ $kind == configuration || $kind == database ]] && printf '%s_encrypted=%s\n' "$kind" "$encrypted"
+    done
+  } >"$destination/manifest.env"
+  sha256sum "$destination"/{application.archive,frontend.archive} \
+    "$destination/configuration.$([[ $encrypted == true ]] && printf age || printf archive)" \
+    "$destination/database.$([[ $encrypted == true ]] && printf age || printf archive)" | \
+    sed "s|$destination/||" >"$destination/SHA256SUMS"
+fi
+[[ -z ${FAKE_SCP_FAIL_MATCH:-} || $* != *"$FAKE_SCP_FAIL_MATCH"* ]] || exit 91
+exit 0
