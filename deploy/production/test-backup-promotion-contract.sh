@@ -168,7 +168,7 @@ rm -rf -- "$tmp/controller-work/staging/backup-target-promotion-test" \
 # cleanup trap must never issue a removal for that destination.
 : >"$FAKE_SSH_LOG"
 : >"$FAKE_SCP_LOG"
-export FAKE_PREEXISTING_MATCH=/var/lib/lmm-api-go/deploy-backups/preexisting-target
+export FAKE_PREEXISTING_MATCH=/var/lib/lmm-api-go-deploy/backups/preexisting-target
 expect_fail run_promoter preexisting-target "$tmp/controller-preexisting-target" \
   /var/backups/lmm-api/preexisting-target
 if grep -Fq "rm -rf -- $FAKE_PREEXISTING_MATCH" "$FAKE_SSH_LOG"; then
@@ -206,11 +206,11 @@ unset FAKE_SCP_FAIL_MATCH
 [[ ! -e $failure_controller ]] || fail 'invocation-owned controller partial was retained'
 [[ ! -e $tmp/controller-work/staging/backup-target-$failure_id ]] || fail 'invocation-owned target mirror was retained'
 [[ ! -e $tmp/controller-work/staging/backup-off-host-$failure_id ]] || fail 'invocation-owned off-host mirror was retained'
-grep -Fq "rm -rf -- /var/lib/lmm-api-go/deploy-backups/$failure_id" "$FAKE_SSH_LOG" || \
+grep -Fq "rm -rf -- /var/lib/lmm-api-go-deploy/backups/$failure_id" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned target partial was not removed'
 grep -Fq "rm -rf -- $failure_offhost" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned off-host partial was not removed'
-grep -Fq "rm -rf -- /var/lib/lmm-api-go/deploy-work/$failure_id/staging/controller-copy" "$FAKE_SSH_LOG" || \
+grep -Fq "rm -rf -- /var/lib/lmm-api-go-deploy/work/$failure_id/staging/controller-copy" "$FAKE_SSH_LOG" || \
   fail 'invocation-owned target-side controller partial was not removed'
 
 printf 'backup promotion contract verified\n'

@@ -71,9 +71,9 @@ ssh_bin=${LMM_DEPLOY_SSH_BIN:-ssh}
 scp_bin=${LMM_DEPLOY_SCP_BIN:-scp}
 target_endpoint=root@45.59.187.63
 target_port=222
-remote_workspace="/var/lib/lmm-api-go/deploy-work/$DEPLOYMENT_ID"
+remote_workspace="/var/lib/lmm-api-go-deploy/work/$DEPLOYMENT_ID"
 remote_stage="$remote_workspace/staging"
-target_output="/var/lib/lmm-api-go/deploy-backups/$DEPLOYMENT_ID"
+target_output="/var/lib/lmm-api-go-deploy/backups/$DEPLOYMENT_ID"
 controller_remote="$remote_stage/controller-copy"
 offhost_remote="$remote_stage/offhost-copy"
 target_mirror="$CONTROLLER_WORKSPACE/staging/backup-target-$DEPLOYMENT_ID"
@@ -109,8 +109,8 @@ trap on_error ERR
 "${target_ssh[@]}" bash -s -- "$DEPLOYMENT_ID" <<'EOF'
 set -Eeuo pipefail
 deployment_id=$1
-workspace="/var/lib/lmm-api-go/deploy-work/$deployment_id"
-lock=/var/lib/lmm-api-go/deploy-transaction.lock
+workspace="/var/lib/lmm-api-go-deploy/work/$deployment_id"
+lock=/var/lib/lmm-api-go-deploy/transaction.lock
 lock_marker="$lock/deployment.env"
 for command in age bash chmod install pg_dump pg_restore readlink sha256sum tar; do
   command -v "$command" >/dev/null 2>&1 || { echo "required backup command is unavailable: $command" >&2; exit 2; }
@@ -123,7 +123,9 @@ else
   grep -Fqx "deployment_id=$deployment_id" "$lock_marker"
   grep -Fqx 'status=ACTIVE' "$lock_marker"
 fi
-install -d -m0700 "$workspace" "$workspace/staging" /var/lib/lmm-api-go/deploy-backups
+install -d -o root -g root -m0700 /var/lib/lmm-api-go-deploy /var/lib/lmm-api-go-deploy/work \
+  /var/lib/lmm-api-go-deploy/backups
+install -d -m0700 "$workspace" "$workspace/staging"
 printf 'format=1\ndeployment_id=%s\nrole=target\nworkspace=%s\ncreated_at_utc=%s\n' \
   "$deployment_id" "$workspace" "$(date -u +%FT%TZ)" >"$workspace/.lmm-deploy-workspace"
 chmod 0600 "$workspace/.lmm-deploy-workspace"

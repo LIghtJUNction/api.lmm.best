@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly EXPECTED_HOST=arch-dmit
-readonly WORK_ROOT=/var/lib/lmm-api-go/deploy-work
+readonly WORK_ROOT=/var/lib/lmm-api-go-deploy/work
 
 die() { printf 'capture-precutover-payload: %s\n' "$*" >&2; exit 2; }
 
