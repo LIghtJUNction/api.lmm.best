@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	userRankingRevisionSingletonID = 1
-	userRankingCreateCallback      = "lmm:user-ranking-revision:create"
-	userRankingUpdateCallback      = "lmm:user-ranking-revision:update"
-	userRankingDeleteCallback      = "lmm:user-ranking-revision:delete"
+	userRankingRevisionSingletonID       = 1
+	userRankingCreateCallback            = "lmm:user-ranking-revision:create"
+	userRankingCaptureUpdateCallback     = "lmm:user-ranking-revision:capture-update"
+	userRankingBumpUpdateCallback        = "lmm:user-ranking-revision:bump-update"
+	userRankingDeleteCallback            = "lmm:user-ranking-revision:delete"
+	userRankingUpdateRelevantInstanceKey = "lmm:user-ranking-revision:update-relevant"
 )
 
 var userRankingVisibilityFields = []string{
@@ -76,8 +78,13 @@ func RegisterUserRankingRevisionCallbacks(db *gorm.DB) error {
 			return fmt.Errorf("register user ranking create callback: %w", err)
 		}
 	}
-	if db.Callback().Update().Get(userRankingUpdateCallback) == nil {
-		if err := db.Callback().Update().After("gorm:after_update").Before("gorm:commit_or_rollback_transaction").Register(userRankingUpdateCallback, bumpUserRankingRevisionAfterUpdate); err != nil {
+	if db.Callback().Update().Get(userRankingCaptureUpdateCallback) == nil {
+		if err := db.Callback().Update().After("gorm:before_update").Before("gorm:update").Register(userRankingCaptureUpdateCallback, captureUserRankingRevisionUpdate); err != nil {
+			return fmt.Errorf("register user ranking update capture callback: %w", err)
+		}
+	}
+	if db.Callback().Update().Get(userRankingBumpUpdateCallback) == nil {
+		if err := db.Callback().Update().After("gorm:after_update").Before("gorm:commit_or_rollback_transaction").Register(userRankingBumpUpdateCallback, bumpUserRankingRevisionAfterUpdate); err != nil {
 			return fmt.Errorf("register user ranking update callback: %w", err)
 		}
 	}
@@ -122,8 +129,18 @@ func bumpUserRankingRevisionAfterCreate(tx *gorm.DB) {
 	}
 }
 
+func captureUserRankingRevisionUpdate(tx *gorm.DB) {
+	if userRankingStatement(tx) && userRankingUpdateTouchesVisibility(tx) {
+		tx.InstanceSet(userRankingUpdateRelevantInstanceKey, true)
+	}
+}
+
 func bumpUserRankingRevisionAfterUpdate(tx *gorm.DB) {
-	if userRankingStatement(tx) && tx.RowsAffected > 0 && userRankingUpdateTouchesVisibility(tx) {
+	if !userRankingStatement(tx) || tx.RowsAffected <= 0 {
+		return
+	}
+	relevant, ok := tx.InstanceGet(userRankingUpdateRelevantInstanceKey)
+	if ok && relevant == true {
 		bumpUserRankingRevision(tx)
 	}
 }

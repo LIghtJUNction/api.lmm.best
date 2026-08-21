@@ -45,6 +45,27 @@ func TestUserRankingRevisionTracksOnlyVisibilityWrites(t *testing.T) {
 		assert.Equal(t, before+1, requireUserRankingRevision(t, db), "visibility update %d must advance monotonically", index)
 	}
 
+	var current User
+	require.NoError(t, db.First(&current, user.Id).Error)
+	beforeStructUpdate := requireUserRankingRevision(t, db)
+	require.NoError(t, db.Model(&current).Updates(User{DisplayName: "Struct update name"}).Error)
+	assert.Equal(t, beforeStructUpdate+1, requireUserRankingRevision(t, db), "struct Updates must be captured before GORM mutates Statement.Model")
+
+	var edited User
+	require.NoError(t, db.First(&edited, user.Id).Error)
+	edited.DisplayName = "UpdateWithTx name"
+	beforeUpdateWithTx := requireUserRankingRevision(t, db)
+	require.NoError(t, edited.UpdateWithTx(db, false))
+	assert.Equal(t, beforeUpdateWithTx+1, requireUserRankingRevision(t, db), "User.UpdateWithTx must invalidate cached public identity")
+
+	beforeUpdateColumn := requireUserRankingRevision(t, db)
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).UpdateColumn("display_name", "").Error)
+	assert.Equal(t, beforeUpdateColumn+1, requireUserRankingRevision(t, db), "UpdateColumn must not bypass privacy invalidation")
+
+	beforeUnrelatedColumn := requireUserRankingRevision(t, db)
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).UpdateColumn("quota", 20).Error)
+	assert.Equal(t, beforeUnrelatedColumn, requireUserRankingRevision(t, db), "unrelated UpdateColumn must not invalidate rankings")
+
 	beforeDelete := requireUserRankingRevision(t, db)
 	require.NoError(t, db.Delete(&user).Error)
 	assert.Equal(t, beforeDelete+1, requireUserRankingRevision(t, db))
