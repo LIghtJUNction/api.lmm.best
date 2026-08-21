@@ -64,19 +64,23 @@ func parseStatusFilter(statusParam string) int {
 	}
 }
 
-func clearChannelInfo(c *gin.Context, channel *model.Channel) {
+func canViewChannelSecrets(c *gin.Context) bool {
+	return authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSecretView)
+}
+
+func clearChannelInfo(channel *model.Channel, canViewSecrets bool) {
 	if channel.ChannelInfo.IsMultiKey {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
 		channel.ChannelInfo.MultiKeyDisabledTime = nil
 	}
-	if !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+	if !canViewSecrets {
 		clearChannelSensitiveInfo(channel)
 	}
 }
 
 // clearChannelSensitiveInfo removes provider configuration that may contain
 // credentials. ChannelRead is intentionally sufficient for channel inventory,
-// but these values are only visible to callers trusted to edit them.
+// but these values require the independent ChannelSecretView permission.
 func clearChannelSensitiveInfo(channel *model.Channel) {
 	channel.Key = ""
 	channel.BaseURL = nil
@@ -162,6 +166,7 @@ func GetChannelOps(c *gin.Context) {
 }
 
 func GetAllChannels(c *gin.Context) {
+	canViewSecrets := canViewChannelSecrets(c)
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
@@ -230,7 +235,7 @@ func GetAllChannels(c *gin.Context) {
 	}
 
 	for _, datum := range channelData {
-		clearChannelInfo(c, datum)
+		clearChannelInfo(datum, canViewSecrets)
 	}
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
@@ -337,6 +342,7 @@ func FixChannelsAbilities(c *gin.Context) {
 }
 
 func SearchChannels(c *gin.Context) {
+	canViewSecrets := canViewChannelSecrets(c)
 	keyword := c.Query("keyword")
 	group := c.Query("group")
 	modelKeyword := c.Query("model")
@@ -362,6 +368,7 @@ func SearchChannels(c *gin.Context) {
 			typeFilter,
 			pageInfo.GetStartIdx(),
 			pageInfo.GetPageSize(),
+			canViewSecrets,
 			idSort,
 			sortOptions,
 		)
@@ -373,7 +380,7 @@ func SearchChannels(c *gin.Context) {
 			return
 		}
 		for _, datum := range result.Channels {
-			clearChannelInfo(c, datum)
+			clearChannelInfo(datum, canViewSecrets)
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -388,7 +395,7 @@ func SearchChannels(c *gin.Context) {
 	}
 
 	channelData := make([]*model.Channel, 0)
-	tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
+	tags, err := model.SearchTags(keyword, group, modelKeyword, canViewSecrets, idSort)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -465,7 +472,7 @@ func SearchChannels(c *gin.Context) {
 	pagedData := channelData[startIdx:endIdx]
 
 	for _, datum := range pagedData {
-		clearChannelInfo(c, datum)
+		clearChannelInfo(datum, canViewSecrets)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -492,7 +499,7 @@ func GetChannel(c *gin.Context) {
 		return
 	}
 	if channel != nil {
-		clearChannelInfo(c, channel)
+		clearChannelInfo(channel, canViewChannelSecrets(c))
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1223,7 +1230,7 @@ func UpdateChannel(c *gin.Context) {
 		"changed_fields": changedFields,
 	})
 	channel.Key = ""
-	clearChannelInfo(&channel.Channel)
+	clearChannelInfo(&channel.Channel, canViewChannelSecrets(c))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
