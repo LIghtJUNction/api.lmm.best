@@ -18,6 +18,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 package service
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +28,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"golang.org/x/sync/singleflight"
 )
 
 type UserUsageRankingsResponse struct {
@@ -56,30 +59,86 @@ type userUsageCandidate struct {
 }
 
 type userUsageRankingCacheItem struct {
-	expiresAt time.Time
-	data      *UserUsageRankingsResponse
+	expiresAt             time.Time
+	visibilityFingerprint string
+	data                  *UserUsageRankingsResponse
 }
 
+const userUsageRankingStabilityAttempts = 3
+
 var (
-	userUsageRankingCacheMu sync.Mutex
+	userUsageRankingCacheMu sync.RWMutex
 	userUsageRankingCache   = map[string]userUsageRankingCacheItem{}
+	userUsageRankingFlights singleflight.Group
 )
 
-func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, error) {
+func GetUserUsageRankingsSnapshot(ctx context.Context, period string) (*UserUsageRankingsResponse, error) {
 	config, err := rankingConfig(period)
 	if err != nil {
 		return nil, err
 	}
-
-	now := time.Now()
-	// Keep the lock while rebuilding so concurrent public requests cannot all
-	// trigger the same expensive database aggregation on a cache miss.
-	userUsageRankingCacheMu.Lock()
-	defer userUsageRankingCacheMu.Unlock()
-	if item, ok := userUsageRankingCache[config.id]; ok && now.Before(item.expiresAt) {
-		return item.data, nil
+	if ctx == nil {
+		return nil, fmt.Errorf("get user usage rankings: nil context")
 	}
 
+	resultChannel := userUsageRankingFlights.DoChan(config.id, func() (any, error) {
+		return getUserUsageRankingsSnapshot(ctx, config)
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultChannel:
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		data, ok := result.Val.(*UserUsageRankingsResponse)
+		if !ok || data == nil {
+			return nil, fmt.Errorf("unexpected user rankings cache result")
+		}
+		return data, nil
+	}
+}
+
+func getUserUsageRankingsSnapshot(ctx context.Context, config rankingPeriodConfig) (*UserUsageRankingsResponse, error) {
+	for attempt := 0; attempt < userUsageRankingStabilityAttempts; attempt++ {
+		visibilityFingerprint, err := model.UserRankingVisibilityFingerprint(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read user ranking visibility: %w", err)
+		}
+
+		now := time.Now()
+		userUsageRankingCacheMu.RLock()
+		item, ok := userUsageRankingCache[config.id]
+		userUsageRankingCacheMu.RUnlock()
+		if ok && now.Before(item.expiresAt) && item.visibilityFingerprint == visibilityFingerprint {
+			return item.data, nil
+		}
+
+		data, err := buildUserUsageRankingsSnapshot(ctx, config, now)
+		if err != nil {
+			return nil, fmt.Errorf("build user usage rankings: %w", err)
+		}
+		stableFingerprint, err := model.UserRankingVisibilityFingerprint(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("recheck user ranking visibility: %w", err)
+		}
+		if stableFingerprint != visibilityFingerprint {
+			continue
+		}
+
+		userUsageRankingCacheMu.Lock()
+		userUsageRankingCache[config.id] = userUsageRankingCacheItem{
+			expiresAt:             time.Now().Add(rankingCacheTTL),
+			visibilityFingerprint: stableFingerprint,
+			data:                  data,
+		}
+		userUsageRankingCacheMu.Unlock()
+		return data, nil
+	}
+	return nil, fmt.Errorf("user ranking visibility changed while building the snapshot")
+}
+
+func buildUserUsageRankingsSnapshot(ctx context.Context, config rankingPeriodConfig, now time.Time) (*UserUsageRankingsResponse, error) {
 	startTime, endTime := rankingTimeRange(config, now)
 	candidates := make([]userUsageCandidate, 0, rankingLeaderboardLimit)
 	var totalTokens int64
@@ -87,7 +146,7 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 	participantCount := 0
 	anonymousParticipantCount := 0
 
-	err = model.IterateUserRankingRows(startTime, endTime, func(row model.UserRankingRow) error {
+	err := model.IterateUserRankingRows(ctx, startTime, endTime, func(row model.UserRankingRow) error {
 		if row.Status != common.UserStatusEnabled {
 			return nil
 		}
@@ -152,7 +211,7 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 		})
 	}
 
-	data := &UserUsageRankingsResponse{
+	return &UserUsageRankingsResponse{
 		Period:                    config.id,
 		UpdatedAt:                 now.Unix(),
 		TotalTokens:               totalTokens,
@@ -160,12 +219,7 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 		ParticipantCount:          participantCount,
 		AnonymousParticipantCount: anonymousParticipantCount,
 		Users:                     rows,
-	}
-	userUsageRankingCache[config.id] = userUsageRankingCacheItem{
-		expiresAt: now.Add(rankingCacheTTL),
-		data:      data,
-	}
-	return data, nil
+	}, nil
 }
 
 func userUsageCandidateBetter(left, right userUsageCandidate) bool {

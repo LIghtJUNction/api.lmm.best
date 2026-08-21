@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,14 +13,9 @@ import (
 )
 
 func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
-	userUsageRankingCacheMu.Lock()
-	userUsageRankingCache = map[string]userUsageRankingCacheItem{}
-	userUsageRankingCacheMu.Unlock()
+	resetUserUsageRankingCache(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.QuotaData{}))
 	t.Cleanup(func() {
-		userUsageRankingCacheMu.Lock()
-		userUsageRankingCache = map[string]userUsageRankingCacheItem{}
-		userUsageRankingCacheMu.Unlock()
 		model.DB.Exec("DELETE FROM quota_data")
 		model.DB.Exec("DELETE FROM users")
 	})
@@ -72,7 +68,7 @@ func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
 		{UserID: 105, CreatedAt: createdAt, Count: 1, TokenUsed: 50},
 	}).Error)
 
-	result, err := GetUserUsageRankingsSnapshot("week")
+	result, err := GetUserUsageRankingsSnapshot(context.Background(), "week")
 	require.NoError(t, err)
 	assert.Equal(t, "week", result.Period)
 	assert.Equal(t, int64(450), result.TotalTokens)
@@ -101,9 +97,72 @@ func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
 	assert.Equal(t, int64(50), result.Users[2].TotalTokens)
 	assert.Equal(t, int64(1), result.Users[2].Requests)
 	assert.InDelta(t, 1.0/9.0, result.Users[2].Share, 0.0001)
+
+	publicSettings := public.GetSetting()
+	publicSettings.UsageLeaderboardVisibility = dto.UsageLeaderboardVisibilityHidden
+	require.NoError(t, model.UpdateUserSetting(public.Id, publicSettings))
+
+	privateResult, err := GetUserUsageRankingsSnapshot(context.Background(), "week")
+	require.NoError(t, err)
+	assert.NotSame(t, result, privateResult)
+	assert.Equal(t, int64(150), privateResult.TotalTokens)
+	assert.Equal(t, int64(3), privateResult.TotalRequests)
+	assert.Equal(t, 2, privateResult.ParticipantCount)
+	assert.Equal(t, 2, privateResult.AnonymousParticipantCount)
+	require.Len(t, privateResult.Users, 2)
+	assert.NotContains(t, []string{privateResult.Users[0].Name, privateResult.Users[1].Name}, "Public user")
 }
 
 func TestGetUserUsageRankingsSnapshotCachesPeriod(t *testing.T) {
+	resetUserUsageRankingCache(t)
+	ctx := context.Background()
+	fingerprint, err := model.UserRankingVisibilityFingerprint(ctx)
+	require.NoError(t, err)
+
+	cached := &UserUsageRankingsResponse{Period: "year", UpdatedAt: 123}
+	userUsageRankingCacheMu.Lock()
+	userUsageRankingCache["year"] = userUsageRankingCacheItem{
+		expiresAt:             time.Now().Add(time.Minute),
+		visibilityFingerprint: fingerprint,
+		data:                  cached,
+	}
+	userUsageRankingCacheMu.Unlock()
+
+	result, err := GetUserUsageRankingsSnapshot(ctx, "year")
+	require.NoError(t, err)
+	assert.Same(t, cached, result)
+}
+
+func TestGetUserUsageRankingsSnapshotIgnoresExpiredCache(t *testing.T) {
+	resetUserUsageRankingCache(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.QuotaData{}))
+	ctx := context.Background()
+	fingerprint, err := model.UserRankingVisibilityFingerprint(ctx)
+	require.NoError(t, err)
+
+	expired := &UserUsageRankingsResponse{Period: "today", UpdatedAt: 123}
+	userUsageRankingCacheMu.Lock()
+	userUsageRankingCache["today"] = userUsageRankingCacheItem{
+		expiresAt:             time.Now().Add(-time.Minute),
+		visibilityFingerprint: fingerprint,
+		data:                  expired,
+	}
+	userUsageRankingCacheMu.Unlock()
+
+	result, err := GetUserUsageRankingsSnapshot(ctx, "today")
+	require.NoError(t, err)
+	assert.NotSame(t, expired, result)
+
+	userUsageRankingCacheMu.RLock()
+	cached := userUsageRankingCache["today"]
+	userUsageRankingCacheMu.RUnlock()
+	assert.Same(t, result, cached.data)
+	assert.True(t, cached.expiresAt.After(time.Now()))
+	assert.Equal(t, fingerprint, cached.visibilityFingerprint)
+}
+
+func resetUserUsageRankingCache(t *testing.T) {
+	t.Helper()
 	userUsageRankingCacheMu.Lock()
 	userUsageRankingCache = map[string]userUsageRankingCacheItem{}
 	userUsageRankingCacheMu.Unlock()
@@ -112,16 +171,4 @@ func TestGetUserUsageRankingsSnapshotCachesPeriod(t *testing.T) {
 		userUsageRankingCache = map[string]userUsageRankingCacheItem{}
 		userUsageRankingCacheMu.Unlock()
 	})
-
-	cached := &UserUsageRankingsResponse{Period: "year", UpdatedAt: 123}
-	userUsageRankingCacheMu.Lock()
-	userUsageRankingCache["year"] = userUsageRankingCacheItem{
-		expiresAt: time.Now().Add(time.Minute),
-		data:      cached,
-	}
-	userUsageRankingCacheMu.Unlock()
-
-	result, err := GetUserUsageRankingsSnapshot("year")
-	require.NoError(t, err)
-	assert.Same(t, cached, result)
 }
