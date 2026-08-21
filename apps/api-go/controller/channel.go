@@ -64,11 +64,28 @@ func parseStatusFilter(statusParam string) int {
 	}
 }
 
-func clearChannelInfo(channel *model.Channel) {
+func clearChannelInfo(c *gin.Context, channel *model.Channel) {
 	if channel.ChannelInfo.IsMultiKey {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
 		channel.ChannelInfo.MultiKeyDisabledTime = nil
 	}
+	if !authz.Can(c.GetInt("id"), c.GetInt("role"), authz.ChannelSensitiveWrite) {
+		clearChannelSensitiveInfo(channel)
+	}
+}
+
+// clearChannelSensitiveInfo removes provider configuration that may contain
+// credentials. ChannelRead is intentionally sufficient for channel inventory,
+// but these values are only visible to callers trusted to edit them.
+func clearChannelSensitiveInfo(channel *model.Channel) {
+	channel.Key = ""
+	channel.BaseURL = nil
+	channel.OpenAIOrganization = nil
+	channel.HeaderOverride = nil
+	channel.ParamOverride = nil
+	channel.Setting = nil
+	channel.Other = ""
+	channel.OtherSettings = ""
 }
 
 func channelIDsFromChannels(channels []*model.Channel) []int {
@@ -213,7 +230,7 @@ func GetAllChannels(c *gin.Context) {
 	}
 
 	for _, datum := range channelData {
-		clearChannelInfo(datum)
+		clearChannelInfo(c, datum)
 	}
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
@@ -356,7 +373,7 @@ func SearchChannels(c *gin.Context) {
 			return
 		}
 		for _, datum := range result.Channels {
-			clearChannelInfo(datum)
+			clearChannelInfo(c, datum)
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -448,7 +465,7 @@ func SearchChannels(c *gin.Context) {
 	pagedData := channelData[startIdx:endIdx]
 
 	for _, datum := range pagedData {
-		clearChannelInfo(datum)
+		clearChannelInfo(c, datum)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -475,7 +492,7 @@ func GetChannel(c *gin.Context) {
 		return
 	}
 	if channel != nil {
-		clearChannelInfo(channel)
+		clearChannelInfo(c, channel)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

@@ -129,6 +129,41 @@ func TestClearChannelReadOnlyFields(t *testing.T) {
 	assert.Equal(t, "default", channel.Group)
 }
 
+func TestClearChannelSensitiveInfo(t *testing.T) {
+	baseURL := "https://proxy-user:proxy-pass@example.com"
+	organization := "secret-organization"
+	headerOverride := `{"Authorization":"Bearer secret"}`
+	paramOverride := `{"api_key":"secret"}`
+	setting := `{"credential":"secret"}`
+	channel := &model.Channel{
+		Type:               1,
+		Key:                "secret-key",
+		BaseURL:            &baseURL,
+		OpenAIOrganization: &organization,
+		HeaderOverride:     &headerOverride,
+		ParamOverride:      &paramOverride,
+		Setting:            &setting,
+		Other:              "secret-other",
+		OtherSettings:      `{"proxy":"secret"}`,
+		Name:               "preserved channel name",
+		Models:             "gpt-4o",
+	}
+
+	clearChannelSensitiveInfo(channel)
+
+	assert.Empty(t, channel.Key)
+	assert.Nil(t, channel.BaseURL)
+	assert.Nil(t, channel.OpenAIOrganization)
+	assert.Nil(t, channel.HeaderOverride)
+	assert.Nil(t, channel.ParamOverride)
+	assert.Nil(t, channel.Setting)
+	assert.Empty(t, channel.Other)
+	assert.Empty(t, channel.OtherSettings)
+	assert.Equal(t, 1, channel.Type)
+	assert.Equal(t, "preserved channel name", channel.Name)
+	assert.Equal(t, "gpt-4o", channel.Models)
+}
+
 func TestUpdateChannelRejectsStatusField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
