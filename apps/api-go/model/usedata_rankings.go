@@ -2,10 +2,7 @@ package model
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -45,64 +42,6 @@ type UserRankingRow struct {
 	DisplayName string
 	Status      int
 	Setting     string
-}
-
-type userRankingVisibilityFingerprintRow struct {
-	ID          int    `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	Status      int    `json:"status"`
-	Setting     string `json:"setting"`
-	Deleted     bool   `json:"deleted"`
-}
-
-// UserRankingVisibilityFingerprint returns a stable digest of every user field
-// that can affect the public leaderboard. Cache hits compare this digest before
-// serving a snapshot so privacy changes made by another API instance take
-// effect without waiting for the usage-aggregation TTL.
-func UserRankingVisibilityFingerprint(ctx context.Context) (string, error) {
-	if DB == nil {
-		return "", fmt.Errorf("fingerprint user ranking visibility: %w", gorm.ErrInvalidData)
-	}
-	if ctx == nil {
-		return "", fmt.Errorf("fingerprint user ranking visibility: nil context")
-	}
-
-	rows, err := DB.WithContext(ctx).
-		Unscoped().
-		Model(&User{}).
-		Select("id, username, display_name, status, setting, deleted_at").
-		Order("id ASC").
-		Rows()
-	if err != nil {
-		return "", fmt.Errorf("query user ranking visibility: %w", err)
-	}
-	defer rows.Close()
-
-	digest := sha256.New()
-	encoder := json.NewEncoder(digest)
-	for rows.Next() {
-		var id, status int
-		var username, displayName, setting sql.NullString
-		var deletedAt gorm.DeletedAt
-		if err := rows.Scan(&id, &username, &displayName, &status, &setting, &deletedAt); err != nil {
-			return "", fmt.Errorf("scan user ranking visibility: %w", err)
-		}
-		if err := encoder.Encode(userRankingVisibilityFingerprintRow{
-			ID:          id,
-			Username:    username.String,
-			DisplayName: displayName.String,
-			Status:      status,
-			Setting:     setting.String,
-			Deleted:     deletedAt.Valid,
-		}); err != nil {
-			return "", fmt.Errorf("encode user ranking visibility: %w", err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("iterate user ranking visibility: %w", err)
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func GetRankingQuotaTotals(startTime int64, endTime int64) ([]RankingQuotaTotal, error) {

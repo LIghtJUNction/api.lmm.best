@@ -59,12 +59,20 @@ type userUsageCandidate struct {
 }
 
 type userUsageRankingCacheItem struct {
-	expiresAt             time.Time
-	visibilityFingerprint string
-	data                  *UserUsageRankingsResponse
+	expiresAt time.Time
+	revision  int64
+	data      *UserUsageRankingsResponse
 }
 
-const userUsageRankingStabilityAttempts = 3
+type userUsageRankingFlightResult struct {
+	revision int64
+	data     *UserUsageRankingsResponse
+}
+
+const (
+	userUsageRankingStabilityAttempts = 3
+	userUsageRankingBuildTimeout      = 30 * time.Second
+)
 
 var (
 	userUsageRankingCacheMu sync.RWMutex
@@ -81,61 +89,80 @@ func GetUserUsageRankingsSnapshot(ctx context.Context, period string) (*UserUsag
 		return nil, fmt.Errorf("get user usage rankings: nil context")
 	}
 
-	resultChannel := userUsageRankingFlights.DoChan(config.id, func() (any, error) {
-		return getUserUsageRankingsSnapshot(ctx, config)
-	})
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case result := <-resultChannel:
-		if result.Err != nil {
-			return nil, result.Err
+	for attempt := 0; attempt < userUsageRankingStabilityAttempts; attempt++ {
+		resultChannel := userUsageRankingFlights.DoChan(config.id, func() (any, error) {
+			buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), userUsageRankingBuildTimeout)
+			defer cancel()
+			return getUserUsageRankingsSnapshot(buildCtx, config)
+		})
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-resultChannel:
+			if result.Err != nil {
+				return nil, result.Err
+			}
+			flightResult, ok := result.Val.(userUsageRankingFlightResult)
+			if !ok || flightResult.data == nil {
+				return nil, fmt.Errorf("unexpected user rankings cache result")
+			}
+			current, err := userUsageRankingFlightIsCurrent(ctx, flightResult)
+			if err != nil {
+				return nil, err
+			}
+			if current {
+				return flightResult.data, nil
+			}
 		}
-		data, ok := result.Val.(*UserUsageRankingsResponse)
-		if !ok || data == nil {
-			return nil, fmt.Errorf("unexpected user rankings cache result")
-		}
-		return data, nil
 	}
+	return nil, fmt.Errorf("user ranking visibility changed while returning the snapshot")
 }
 
-func getUserUsageRankingsSnapshot(ctx context.Context, config rankingPeriodConfig) (*UserUsageRankingsResponse, error) {
+func userUsageRankingFlightIsCurrent(ctx context.Context, result userUsageRankingFlightResult) (bool, error) {
+	currentRevision, err := model.CurrentUserRankingRevision(ctx)
+	if err != nil {
+		return false, fmt.Errorf("validate user ranking revision: %w", err)
+	}
+	return currentRevision == result.revision, nil
+}
+
+func getUserUsageRankingsSnapshot(ctx context.Context, config rankingPeriodConfig) (userUsageRankingFlightResult, error) {
 	for attempt := 0; attempt < userUsageRankingStabilityAttempts; attempt++ {
-		visibilityFingerprint, err := model.UserRankingVisibilityFingerprint(ctx)
+		revision, err := model.CurrentUserRankingRevision(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("read user ranking visibility: %w", err)
+			return userUsageRankingFlightResult{}, fmt.Errorf("read user ranking revision: %w", err)
 		}
 
 		now := time.Now()
 		userUsageRankingCacheMu.RLock()
 		item, ok := userUsageRankingCache[config.id]
 		userUsageRankingCacheMu.RUnlock()
-		if ok && now.Before(item.expiresAt) && item.visibilityFingerprint == visibilityFingerprint {
-			return item.data, nil
+		if ok && now.Before(item.expiresAt) && item.revision == revision {
+			return userUsageRankingFlightResult{revision: revision, data: item.data}, nil
 		}
 
 		data, err := buildUserUsageRankingsSnapshot(ctx, config, now)
 		if err != nil {
-			return nil, fmt.Errorf("build user usage rankings: %w", err)
+			return userUsageRankingFlightResult{}, fmt.Errorf("build user usage rankings: %w", err)
 		}
-		stableFingerprint, err := model.UserRankingVisibilityFingerprint(ctx)
+		stableRevision, err := model.CurrentUserRankingRevision(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("recheck user ranking visibility: %w", err)
+			return userUsageRankingFlightResult{}, fmt.Errorf("recheck user ranking revision: %w", err)
 		}
-		if stableFingerprint != visibilityFingerprint {
+		if stableRevision != revision {
 			continue
 		}
 
 		userUsageRankingCacheMu.Lock()
 		userUsageRankingCache[config.id] = userUsageRankingCacheItem{
-			expiresAt:             time.Now().Add(rankingCacheTTL),
-			visibilityFingerprint: stableFingerprint,
-			data:                  data,
+			expiresAt: time.Now().Add(rankingCacheTTL),
+			revision:  stableRevision,
+			data:      data,
 		}
 		userUsageRankingCacheMu.Unlock()
-		return data, nil
+		return userUsageRankingFlightResult{revision: stableRevision, data: data}, nil
 	}
-	return nil, fmt.Errorf("user ranking visibility changed while building the snapshot")
+	return userUsageRankingFlightResult{}, fmt.Errorf("user ranking visibility changed while building the snapshot")
 }
 
 func buildUserUsageRankingsSnapshot(ctx context.Context, config rankingPeriodConfig, now time.Time) (*UserUsageRankingsResponse, error) {
