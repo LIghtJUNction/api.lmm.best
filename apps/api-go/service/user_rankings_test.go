@@ -12,8 +12,14 @@ import (
 )
 
 func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
+	userUsageRankingCacheMu.Lock()
+	userUsageRankingCache = map[string]userUsageRankingCacheItem{}
+	userUsageRankingCacheMu.Unlock()
 	require.NoError(t, model.DB.AutoMigrate(&model.QuotaData{}))
 	t.Cleanup(func() {
+		userUsageRankingCacheMu.Lock()
+		userUsageRankingCache = map[string]userUsageRankingCacheItem{}
+		userUsageRankingCacheMu.Unlock()
 		model.DB.Exec("DELETE FROM quota_data")
 		model.DB.Exec("DELETE FROM users")
 	})
@@ -95,4 +101,27 @@ func TestGetUserUsageRankingsSnapshotHonorsVisibility(t *testing.T) {
 	assert.Equal(t, int64(50), result.Users[2].TotalTokens)
 	assert.Equal(t, int64(1), result.Users[2].Requests)
 	assert.InDelta(t, 1.0/9.0, result.Users[2].Share, 0.0001)
+}
+
+func TestGetUserUsageRankingsSnapshotCachesPeriod(t *testing.T) {
+	userUsageRankingCacheMu.Lock()
+	userUsageRankingCache = map[string]userUsageRankingCacheItem{}
+	userUsageRankingCacheMu.Unlock()
+	t.Cleanup(func() {
+		userUsageRankingCacheMu.Lock()
+		userUsageRankingCache = map[string]userUsageRankingCacheItem{}
+		userUsageRankingCacheMu.Unlock()
+	})
+
+	cached := &UserUsageRankingsResponse{Period: "year", UpdatedAt: 123}
+	userUsageRankingCacheMu.Lock()
+	userUsageRankingCache["year"] = userUsageRankingCacheItem{
+		expiresAt: time.Now().Add(time.Minute),
+		data:      cached,
+	}
+	userUsageRankingCacheMu.Unlock()
+
+	result, err := GetUserUsageRankingsSnapshot("year")
+	require.NoError(t, err)
+	assert.Same(t, cached, result)
 }

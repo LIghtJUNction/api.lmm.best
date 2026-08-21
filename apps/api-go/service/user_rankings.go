@@ -20,6 +20,7 @@ package service
 import (
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -54,6 +55,16 @@ type userUsageCandidate struct {
 	tokens    int64
 }
 
+type userUsageRankingCacheItem struct {
+	expiresAt time.Time
+	data      *UserUsageRankingsResponse
+}
+
+var (
+	userUsageRankingCacheMu sync.Mutex
+	userUsageRankingCache   = map[string]userUsageRankingCacheItem{}
+)
+
 func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, error) {
 	config, err := rankingConfig(period)
 	if err != nil {
@@ -61,6 +72,14 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 	}
 
 	now := time.Now()
+	// Keep the lock while rebuilding so concurrent public requests cannot all
+	// trigger the same expensive database aggregation on a cache miss.
+	userUsageRankingCacheMu.Lock()
+	defer userUsageRankingCacheMu.Unlock()
+	if item, ok := userUsageRankingCache[config.id]; ok && now.Before(item.expiresAt) {
+		return item.data, nil
+	}
+
 	startTime, endTime := rankingTimeRange(config, now)
 	candidates := make([]userUsageCandidate, 0, rankingLeaderboardLimit)
 	var totalTokens int64
@@ -133,7 +152,7 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 		})
 	}
 
-	return &UserUsageRankingsResponse{
+	data := &UserUsageRankingsResponse{
 		Period:                    config.id,
 		UpdatedAt:                 now.Unix(),
 		TotalTokens:               totalTokens,
@@ -141,7 +160,12 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 		ParticipantCount:          participantCount,
 		AnonymousParticipantCount: anonymousParticipantCount,
 		Users:                     rows,
-	}, nil
+	}
+	userUsageRankingCache[config.id] = userUsageRankingCacheItem{
+		expiresAt: now.Add(rankingCacheTTL),
+		data:      data,
+	}
+	return data, nil
 }
 
 func userUsageCandidateBetter(left, right userUsageCandidate) bool {
