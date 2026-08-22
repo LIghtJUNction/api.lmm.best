@@ -234,7 +234,7 @@ describe('L0 onboarding assistant experience', () => {
       )
       assert.ok(
         document.querySelector(
-          'button:not([aria-label="Submit"]):not([data-testid="assistant-collapse"])'
+          'button:not([aria-label="Send"]):not([data-testid="assistant-collapse"])'
         )
       )
 
@@ -272,9 +272,8 @@ describe('L0 onboarding assistant experience', () => {
       assert.ok(textarea)
       await setTextareaValue(textarea, '甲')
 
-      const submit = document.querySelector<HTMLButtonElement>(
-        'button[aria-label="Submit"]'
-      )
+      const submit =
+        document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')
       assert.ok(submit)
       assert.equal(submit.disabled, false)
       assert.equal(textarea.getAttribute('aria-invalid'), 'false')
