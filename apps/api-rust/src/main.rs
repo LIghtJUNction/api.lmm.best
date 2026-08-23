@@ -11,6 +11,7 @@ use lmm_api_rs::{
     auth::{AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth},
     migration_routes::{
         access_ip::{AccessIpState, router as access_ip_router},
+        account_action::{AccountActionState, router as account_action_router},
         admin_catalog::{
             AdminCatalogState, DashboardAdminCatalogAuthorizer, PgCatalogProvider,
             router as admin_catalog_router,
@@ -50,8 +51,12 @@ use lmm_api_rs::{
         developer_access::{DeveloperAccessState, router as developer_access_router},
         discount_code::{DiscountCodeState, router as discount_code_router},
         dynamic_pricing::{DynamicPricingState, router as dynamic_pricing_router},
+        finance::{FinanceState, router as finance_router},
         finance_export::{FinanceExportState, router as finance_export_router},
         gifts::{GiftState, router as gift_router},
+        hero_sms::{
+            DisabledHeroSmsGateway, HeroSmsState, ReqwestHeroSmsGateway, router as hero_sms_router,
+        },
         identity_2fa::{Identity2FAState, router as identity_2fa_router},
         identity_admin::{IdentityAdminState, router as identity_admin_router},
         identity_federation::{
@@ -139,11 +144,14 @@ use lmm_api_rs::{
             OpenAiRelayHttpState, OpenAiUpstreamClient, PgOpenAiRelayService, openai_relay_router,
         },
         release_notes::{ReleaseNoteState, router as release_note_router},
+        security_admin::{SecurityAdminState, router as security_admin_router},
         security_overview::{SecurityOverviewState, router as security_overview_router},
         system_config::{
             DashboardRootAuthorizer, HttpProjectUpdateClient, HttpWaffoPancakeGateway,
             ProcessRuntimeOptions, SystemConfigHttpState, system_config_router,
         },
+        unified_todo::{UnifiedTodoState, router as unified_todo_router},
+        user_assistant_admin::{UserAssistantAdminState, router as user_assistant_admin_router},
         user_rankings::{UserRankingsState, router as user_rankings_router},
         verify_email::{
             PgSmtpSecurityEmailSender, ValkeyVerificationCodeStore, VerifyEmailState,
@@ -589,9 +597,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let account_action = http::api_global_rate_limited_surface(
+            &app_state,
+            account_action_router(AccountActionState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+                config.auth_session_secret.clone(),
+            )),
+        );
+        let hero_sms_gateway: Arc<dyn lmm_api_rs::migration_routes::hero_sms::HeroSmsGateway> =
+            if local_acceptance {
+                Arc::new(DisabledHeroSmsGateway)
+            } else {
+                Arc::new(
+                    ReqwestHeroSmsGateway::production(config.dependency_timeout)
+                        .map_err(|_| io::Error::other("failed to initialize HeroSMS client"))?,
+                )
+            };
+        let hero_sms = http::api_global_rate_limited_surface(
+            &app_state,
+            hero_sms_router(HeroSmsState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+                hero_sms_gateway,
+            )),
+        );
         let finance_export = http::api_global_rate_limited_surface(
             &app_state,
             finance_export_router(FinanceExportState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let finance = http::api_global_rate_limited_surface(
+            &app_state,
+            finance_router(FinanceState::new(pg.clone(), Arc::clone(&auth))),
         );
         let release_notes = http::api_global_rate_limited_surface(
             &app_state,
@@ -600,6 +638,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let security_overview = http::api_global_rate_limited_surface(
             &app_state,
             security_overview_router(SecurityOverviewState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let security_admin = http::api_global_rate_limited_surface(
+            &app_state,
+            security_admin_router(SecurityAdminState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let unified_todo = http::api_global_rate_limited_surface(
+            &app_state,
+            unified_todo_router(UnifiedTodoState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let user_assistant_admin = http::api_global_rate_limited_surface(
+            &app_state,
+            user_assistant_admin_router(UserAssistantAdminState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+            )),
         );
         let access_ip = http::api_global_rate_limited_surface(
             &app_state,
@@ -917,9 +970,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(control_admin)
             .merge(assistant_reads)
             .merge(developer_access)
+            .merge(account_action)
+            .merge(hero_sms)
             .merge(finance_export)
+            .merge(finance)
             .merge(release_notes)
             .merge(security_overview)
+            .merge(security_admin)
+            .merge(unified_todo)
+            .merge(user_assistant_admin)
             .merge(access_ip)
             .merge(user_rankings)
             .merge(gifts)
