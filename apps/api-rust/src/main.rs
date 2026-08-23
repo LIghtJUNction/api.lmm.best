@@ -11,6 +11,7 @@ use lmm_api_rs::{
     auth::{AuthConfig, AuthHttpState, DashboardAuth, PgValkeyDashboardAuth},
     migration_routes::{
         access_ip::{AccessIpState, router as access_ip_router},
+        account_action::{AccountActionState, router as account_action_router},
         admin_catalog::{
             AdminCatalogState, DashboardAdminCatalogAuthorizer, PgCatalogProvider,
             router as admin_catalog_router,
@@ -48,8 +49,13 @@ use lmm_api_rs::{
             IoNetDeploymentJobRunner, PgValkeyDeploymentProvider, router as deployment_router,
         },
         developer_access::{DeveloperAccessState, router as developer_access_router},
+        discount_code::{DiscountCodeState, router as discount_code_router},
+        dynamic_pricing::{DynamicPricingState, router as dynamic_pricing_router},
         finance_export::{FinanceExportState, router as finance_export_router},
         gifts::{GiftState, router as gift_router},
+        hero_sms::{
+            DisabledHeroSmsGateway, HeroSmsState, ReqwestHeroSmsGateway, router as hero_sms_router,
+        },
         identity_2fa::{Identity2FAState, router as identity_2fa_router},
         identity_admin::{IdentityAdminState, router as identity_admin_router},
         identity_federation::{
@@ -586,6 +592,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let account_action = http::api_global_rate_limited_surface(
+            &app_state,
+            account_action_router(AccountActionState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+                config.auth_session_secret.clone(),
+            )),
+        );
+        let hero_sms_gateway: Arc<dyn lmm_api_rs::migration_routes::hero_sms::HeroSmsGateway> =
+            if local_acceptance {
+                Arc::new(DisabledHeroSmsGateway)
+            } else {
+                Arc::new(
+                    ReqwestHeroSmsGateway::production(config.dependency_timeout)
+                        .map_err(|_| io::Error::other("failed to initialize HeroSMS client"))?,
+                )
+            };
+        let hero_sms = http::api_global_rate_limited_surface(
+            &app_state,
+            hero_sms_router(HeroSmsState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+                hero_sms_gateway,
+            )),
+        );
         let finance_export = http::api_global_rate_limited_surface(
             &app_state,
             finance_export_router(FinanceExportState::new(pg.clone(), Arc::clone(&auth))),
@@ -609,6 +641,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let gifts = http::api_global_rate_limited_surface(
             &app_state,
             gift_router(GiftState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+            )),
+        );
+        let discount_code = http::api_global_rate_limited_surface(
+            &app_state,
+            discount_code_router(DiscountCodeState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let dynamic_pricing = http::api_global_rate_limited_surface(
+            &app_state,
+            dynamic_pricing_router(DynamicPricingState::new(
                 pg.clone(),
                 valkey.clone(),
                 Arc::clone(&auth),
@@ -898,12 +942,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(control_admin)
             .merge(assistant_reads)
             .merge(developer_access)
+            .merge(account_action)
+            .merge(hero_sms)
             .merge(finance_export)
             .merge(release_notes)
             .merge(security_overview)
             .merge(access_ip)
             .merge(user_rankings)
             .merge(gifts)
+            .merge(discount_code)
+            .merge(dynamic_pricing)
             .merge(subscription_balance_pay)
             .merge(billing_provider_payments)
             .merge(billing_webhooks)
