@@ -21,6 +21,7 @@ pub mod deployment;
 pub mod developer_access;
 pub mod discount_code;
 pub mod dynamic_pricing;
+pub mod finance;
 pub mod finance_export;
 pub mod gifts;
 pub mod hero_sms;

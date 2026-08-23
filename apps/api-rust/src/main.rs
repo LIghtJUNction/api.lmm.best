@@ -51,6 +51,7 @@ use lmm_api_rs::{
         developer_access::{DeveloperAccessState, router as developer_access_router},
         discount_code::{DiscountCodeState, router as discount_code_router},
         dynamic_pricing::{DynamicPricingState, router as dynamic_pricing_router},
+        finance::{FinanceState, router as finance_router},
         finance_export::{FinanceExportState, router as finance_export_router},
         gifts::{GiftState, router as gift_router},
         hero_sms::{
@@ -142,11 +143,14 @@ use lmm_api_rs::{
             OpenAiRelayHttpState, OpenAiUpstreamClient, PgOpenAiRelayService, openai_relay_router,
         },
         release_notes::{ReleaseNoteState, router as release_note_router},
+        security_admin::{SecurityAdminState, router as security_admin_router},
         security_overview::{SecurityOverviewState, router as security_overview_router},
         system_config::{
             DashboardRootAuthorizer, HttpProjectUpdateClient, HttpWaffoPancakeGateway,
             ProcessRuntimeOptions, SystemConfigHttpState, system_config_router,
         },
+        unified_todo::{UnifiedTodoState, router as unified_todo_router},
+        user_assistant_admin::{UserAssistantAdminState, router as user_assistant_admin_router},
         user_rankings::{UserRankingsState, router as user_rankings_router},
         verify_email::{
             PgSmtpSecurityEmailSender, ValkeyVerificationCodeStore, VerifyEmailState,
@@ -622,6 +626,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &app_state,
             finance_export_router(FinanceExportState::new(pg.clone(), Arc::clone(&auth))),
         );
+        let finance = http::api_global_rate_limited_surface(
+            &app_state,
+            finance_router(FinanceState::new(pg.clone(), Arc::clone(&auth))),
+        );
         let release_notes = http::api_global_rate_limited_surface(
             &app_state,
             release_note_router(ReleaseNoteState::new(pg.clone(), Arc::clone(&auth))),
@@ -629,6 +637,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let security_overview = http::api_global_rate_limited_surface(
             &app_state,
             security_overview_router(SecurityOverviewState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let security_admin = http::api_global_rate_limited_surface(
+            &app_state,
+            security_admin_router(SecurityAdminState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let unified_todo = http::api_global_rate_limited_surface(
+            &app_state,
+            unified_todo_router(UnifiedTodoState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let user_assistant_admin = http::api_global_rate_limited_surface(
+            &app_state,
+            user_assistant_admin_router(UserAssistantAdminState::new(
+                pg.clone(),
+                Arc::clone(&auth),
+            )),
         );
         let access_ip = http::api_global_rate_limited_surface(
             &app_state,
@@ -945,8 +968,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(account_action)
             .merge(hero_sms)
             .merge(finance_export)
+            .merge(finance)
             .merge(release_notes)
             .merge(security_overview)
+            .merge(security_admin)
+            .merge(unified_todo)
+            .merge(user_assistant_admin)
             .merge(access_ip)
             .merge(user_rankings)
             .merge(gifts)
