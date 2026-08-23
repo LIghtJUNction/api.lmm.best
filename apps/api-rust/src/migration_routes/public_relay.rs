@@ -356,6 +356,7 @@ async fn create_contribution(
         Err(PublicRelayError::Database(message)) => {
             with_auth_version(api_error(message))
         }
+        Err(error) => with_auth_version(api_error(error.to_string())),
     }
 }
 
@@ -474,6 +475,7 @@ async fn rate_public_relay(
             public_relay_failure(StatusCode::UNPROCESSABLE_ENTITY, code, &message),
         ),
         Err(PublicRelayError::Database(message)) => with_auth_version(api_error(message)),
+        Err(error) => with_auth_version(api_error(error.to_string())),
     }
 }
 
@@ -526,6 +528,7 @@ async fn tip_public_relay(
             public_relay_failure(StatusCode::UNPROCESSABLE_ENTITY, code, &message),
         ),
         Err(PublicRelayError::Database(message)) => with_auth_version(api_error(message)),
+        Err(error) => with_auth_version(api_error(error.to_string())),
     }
 }
 
@@ -619,6 +622,7 @@ async fn report_public_relay(
             public_relay_failure(StatusCode::UNPROCESSABLE_ENTITY, code, &message),
         ),
         Err(PublicRelayError::Database(message)) => with_auth_version(api_error(message)),
+        Err(error) => with_auth_version(api_error(error.to_string())),
     }
 }
 
@@ -671,9 +675,9 @@ async fn list_admin(
         return response;
     }
     let status = query_value(raw_query.as_deref(), "status")
-        .map(str::trim)
+        .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase);
+        .map(|value| value.to_ascii_lowercase());
     let limit = query_value(raw_query.as_deref(), "limit")
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|limit| *limit > 0)
@@ -746,6 +750,7 @@ async fn review_admin_contribution(
             public_relay_failure(StatusCode::UNPROCESSABLE_ENTITY, code, &message),
         ),
         Err(PublicRelayError::Database(message)) => with_auth_version(api_error(message)),
+        Err(error) => with_auth_version(api_error(error.to_string())),
     }
 }
 
@@ -788,6 +793,7 @@ async fn link_admin_channel(
             public_relay_failure(StatusCode::UNPROCESSABLE_ENTITY, code, &message),
         ),
         Err(PublicRelayError::Database(message)) => with_auth_version(api_error(message)),
+        Err(error) => with_auth_version(api_error(error.to_string())),
     }
 }
 
@@ -800,9 +806,9 @@ async fn list_admin_reports(
         return response;
     }
     let status = query_value(raw_query.as_deref(), "status")
-        .map(str::trim)
+        .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase);
+        .map(|value| value.to_ascii_lowercase());
     let limit = query_value(raw_query.as_deref(), "limit")
         .and_then(|value| value.parse::<i64>().ok())
         .filter(|limit| *limit > 0)
@@ -2054,9 +2060,9 @@ fn parse_positive_id(raw: &str) -> Result<i64, Response> {
         })
 }
 
-fn query_value<'a>(raw_query: Option<&'a str>, key: &str) -> Option<&'a str> {
+fn query_value(raw_query: Option<&str>, key: &str) -> Option<String> {
     form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes())
-        .find_map(|(candidate, value)| (candidate == key).then_some(value))
+        .find_map(|(candidate, value)| (candidate == key).then_some(value.into_owned()))
 }
 
 fn client_ip(request: &Request) -> String {

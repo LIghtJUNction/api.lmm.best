@@ -65,6 +65,7 @@ use lmm_api_rs::{
             bindings_router as identity_federation_bindings_router,
             oauth_email_bind_router as identity_federation_oauth_email_bind_router,
             oauth_external_provider_router as identity_federation_oauth_external_router,
+            oauth_login_start_router as identity_federation_oauth_login_start_router,
             oauth_state_router as identity_federation_oauth_state_router,
         },
         identity_profile::{ProfileState, router as identity_profile_router},
@@ -115,6 +116,7 @@ use lmm_api_rs::{
         missing_relay_misc_new::{
             FailClosedRelayMiscService, MissingRelayMiscState, missing_relay_misc_router,
         },
+        mcp::{McpHttpState, mcp_router},
         missing_relay_models_billing::{ModelLookupState, PgStaticModelLookup},
         missing_relay_video::{
             FailClosedRelayVideoService, RelayVideoHttpState, missing_relay_video_router,
@@ -142,6 +144,10 @@ use lmm_api_rs::{
         relay_misc_postgres::PgRelayMiscService,
         relay_openai::{
             OpenAiRelayHttpState, OpenAiUpstreamClient, PgOpenAiRelayService, openai_relay_router,
+        },
+        responses_websocket::{
+            ResponsesWebSocketState, UnconfiguredResponsesWebSocketService,
+            router as responses_websocket_router,
         },
         release_notes::{ReleaseNoteState, router as release_note_router},
         security_admin::{SecurityAdminState, router as security_admin_router},
@@ -501,7 +507,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let identity_federation_oauth_external = http::api_global_rate_limited_surface(
             &app_state,
-            identity_federation_oauth_external_router(federation_state),
+            identity_federation_oauth_external_router(federation_state.clone()),
+        );
+        let identity_federation_oauth_login_start = http::api_global_rate_limited_surface(
+            &app_state,
+            identity_federation_oauth_login_start_router(federation_state),
         );
         let identity_2fa = identity_2fa_router(
             Identity2FAState::new(pg.clone(), valkey.clone(), auth_impl.clone())
@@ -580,6 +590,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pg.clone(),
                 valkey.clone(),
                 Arc::clone(&auth),
+                config.auth_session_secret.clone(),
                 AssistantRateLimitConfig {
                     enabled: config.auth_critical_rate_limit_enabled,
                     max_requests: config.auth_critical_rate_limit,
@@ -860,6 +871,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let relay_misc_new = missing_relay_misc_router(MissingRelayMiscState::new(Arc::new(
             FailClosedRelayMiscService::new(),
         )));
+        let responses_websocket = responses_websocket_router(ResponsesWebSocketState::new(
+            Arc::new(UnconfiguredResponsesWebSocketService),
+        ));
+        let mcp = http::api_global_rate_limited_surface(
+            &app_state,
+            mcp_router(McpHttpState::new(
+                pg.clone(),
+                valkey.clone(),
+                config.dependency_timeout,
+            )),
+        );
         let model_lookup_state = ModelLookupState::new(
             Arc::new(PgStaticModelLookup::with_current_policy(
                 pg.clone(),
@@ -962,6 +984,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(identity_federation_oauth_state)
             .merge(identity_federation_oauth_email_bind)
             .merge(identity_federation_oauth_external)
+            .merge(identity_federation_oauth_login_start)
             .merge(identity_2fa)
             .merge(channel_core)
             .merge(channel_ops)
@@ -1004,6 +1027,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(relay_media_tasks)
             .merge(relay_video)
             .merge(relay_misc_new)
+            .merge(responses_websocket)
+            .merge(mcp)
             .merge(relay_anthropic_gemini)
             .merge(relay_media)
             .merge(relay_misc_active)
