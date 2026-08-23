@@ -48,6 +48,8 @@ use lmm_api_rs::{
             IoNetDeploymentJobRunner, PgValkeyDeploymentProvider, router as deployment_router,
         },
         developer_access::{DeveloperAccessState, router as developer_access_router},
+        discount_code::{DiscountCodeState, router as discount_code_router},
+        dynamic_pricing::{DynamicPricingState, router as dynamic_pricing_router},
         finance_export::{FinanceExportState, router as finance_export_router},
         gifts::{GiftState, router as gift_router},
         identity_2fa::{Identity2FAState, router as identity_2fa_router},
@@ -121,6 +123,7 @@ use lmm_api_rs::{
             observability_performance_router, observability_read_router,
         },
         open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
+        public_relay::{PublicRelayState, router as public_relay_router},
         relay_anthropic_gemini::{
             RelayHttpState as AnthropicGeminiHttpState, router_with_model_lookup,
         },
@@ -614,6 +617,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&auth),
             )),
         );
+        let discount_code = http::api_global_rate_limited_surface(
+            &app_state,
+            discount_code_router(DiscountCodeState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let dynamic_pricing = http::api_global_rate_limited_surface(
+            &app_state,
+            dynamic_pricing_router(DynamicPricingState::new(
+                pg.clone(),
+                valkey.clone(),
+                Arc::clone(&auth),
+            )),
+        );
         // Balance purchases are the first payment write family whose complete
         // ledger is local to PostgreSQL. The provider-capable checkout and
         // callback routes remain separately frozen until their Go SDK
@@ -744,6 +759,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let open_source_bounties = http::api_global_rate_limited_surface(
             &app_state,
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth))),
+        );
+        let public_relays = http::api_global_rate_limited_surface(
+            &app_state,
+            public_relay_router(PublicRelayState::new(pg.clone(), Arc::clone(&auth))),
         );
         // OpenAI-compatible and media relay routes use the same PostgreSQL
         // token/channel authority as the rest of the normal listener.  Keep
@@ -904,6 +923,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(access_ip)
             .merge(user_rankings)
             .merge(gifts)
+            .merge(discount_code)
+            .merge(dynamic_pricing)
             .merge(subscription_balance_pay)
             .merge(billing_provider_payments)
             .merge(billing_webhooks)
@@ -918,6 +939,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(observability_performance)
             .merge(observability_force_gc)
             .merge(open_source_bounties)
+            .merge(public_relays)
             .merge(relay_openai)
             .merge(relay_midjourney)
             .merge(relay_media_tasks)
