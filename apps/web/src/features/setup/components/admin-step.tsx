@@ -46,9 +46,7 @@ export function AdminStep({ form, rootInitialized }: AdminStepProps) {
         <Alert className='console-status-info-surface'>
           <AlertDescription className='flex items-start gap-2'>
             <ShieldCheck className='console-status-info-icon mt-0.5 size-4' />
-            {t(
-              'Verify the existing administrator account to finish setup.'
-            )}
+            {t('Verify the existing administrator account to finish setup.')}
           </AlertDescription>
         </Alert>
         <div className='grid gap-4 sm:grid-cols-2'>

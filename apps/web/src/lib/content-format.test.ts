@@ -19,11 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import {
-  isHttpUrl,
-  isSafeHttpUrl,
-  isSafeResourceUrl,
-} from './content-format'
+import { isHttpUrl, isSafeHttpUrl, isSafeResourceUrl } from './content-format'
 
 describe('safe URL helpers', () => {
   test('accepts http and https URLs without credentials', () => {

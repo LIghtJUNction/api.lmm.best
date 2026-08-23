@@ -4997,15 +4997,13 @@ const setupRootVerificationTranslations = {
     'Verify the existing administrator account to finish setup.':
       '请验证现有管理员账号以完成初始化。',
     'Enter the existing administrator password': '输入现有管理员密码',
-    'Please enter the existing administrator password':
-      '请输入现有管理员密码',
+    'Please enter the existing administrator password': '请输入现有管理员密码',
   },
   'zh-TW': {
     'Verify the existing administrator account to finish setup.':
       '請驗證現有管理員帳號以完成初始化。',
     'Enter the existing administrator password': '輸入現有管理員密碼',
-    'Please enter the existing administrator password':
-      '請輸入現有管理員密碼',
+    'Please enter the existing administrator password': '請輸入現有管理員密碼',
   },
   fr: {
     'Verify the existing administrator account to finish setup.':
@@ -5018,8 +5016,7 @@ const setupRootVerificationTranslations = {
   ja: {
     'Verify the existing administrator account to finish setup.':
       'セットアップを完了するには、既存の管理者アカウントを確認してください。',
-    'Enter the existing administrator password':
-      '既存の管理者パスワードを入力',
+    'Enter the existing administrator password': '既存の管理者パスワードを入力',
     'Please enter the existing administrator password':
       '既存の管理者パスワードを入力してください',
   },

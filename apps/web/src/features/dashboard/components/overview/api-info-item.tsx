@@ -111,15 +111,15 @@ export function ApiInfoItemComponent(props: ApiInfoItemProps) {
           </Button>
 
           {safeUrl ? (
-          <Button
-            variant='ghost'
-            size='sm'
-            onClick={() => openExternalSpeedTest(item.url)}
-            className='hidden size-7 p-0 sm:inline-flex'
-            title={t('External Speed Test')}
-          >
-            <Gauge className='size-3.5' />
-          </Button>
+            <Button
+              variant='ghost'
+              size='sm'
+              onClick={() => openExternalSpeedTest(item.url)}
+              className='hidden size-7 p-0 sm:inline-flex'
+              title={t('External Speed Test')}
+            >
+              <Gauge className='size-3.5' />
+            </Button>
           ) : null}
 
           <CopyButton
@@ -133,17 +133,17 @@ export function ApiInfoItemComponent(props: ApiInfoItemProps) {
           />
 
           {safeUrl ? (
-          <Button
-            variant='ghost'
-            size='sm'
-            className='hidden size-7 p-0 sm:inline-flex'
-            title={t('Open in New Tab')}
-            render={
-              <a href={item.url} target='_blank' rel='noopener noreferrer' />
-            }
-          >
-            <ExternalLink className='size-3.5' />
-          </Button>
+            <Button
+              variant='ghost'
+              size='sm'
+              className='hidden size-7 p-0 sm:inline-flex'
+              title={t('Open in New Tab')}
+              render={
+                <a href={item.url} target='_blank' rel='noopener noreferrer' />
+              }
+            >
+              <ExternalLink className='size-3.5' />
+            </Button>
           ) : null}
         </div>
       </div>

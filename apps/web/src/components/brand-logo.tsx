@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { LmmBrandMark } from '@/components/lmm-brand-mark'
-import { isSafeResourceUrl } from '@/lib/content-format'
 import { DEFAULT_LOGO } from '@/lib/constants'
+import { isSafeResourceUrl } from '@/lib/content-format'
 
 type BrandLogoProps = {
   /** An empty or default value renders the built-in inline mark. */
