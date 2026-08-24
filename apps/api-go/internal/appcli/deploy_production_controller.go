@@ -41,6 +41,9 @@ type productionReleaseControllerState struct {
 	OffhostBackup    string    `json:"offhost_backup,omitempty"`
 	Version          string    `json:"version,omitempty"`
 	RollbackTimer    string    `json:"rollback_timer,omitempty"`
+	ActivationUnit   string    `json:"activation_unit,omitempty"`
+	DispatchAttempts int       `json:"dispatch_attempts,omitempty"`
+	DispatchObserved bool      `json:"dispatch_observed,omitempty"`
 	UpdatedUTC       time.Time `json:"updated_utc"`
 }
 
@@ -54,6 +57,8 @@ type productionReleaseControllerResult struct {
 	ControllerBackup string `json:"controller_backup,omitempty"`
 	OffhostBackup    string `json:"offhost_backup,omitempty"`
 	RollbackTimer    string `json:"rollback_timer,omitempty"`
+	ActivationUnit   string `json:"activation_unit,omitempty"`
+	DispatchAttempts int    `json:"dispatch_attempts,omitempty"`
 	Workspace        string `json:"workspace"`
 }
 
@@ -266,18 +271,14 @@ func (runtime *productionReleaseRuntime) promote(ctx context.Context, options pr
 			return productionReleaseControllerResult{}, err
 		}
 	}
-	if state.Phase == productionReleasePhaseStaged || state.Phase == productionReleasePhaseBackupsReady {
-		applyArgs := runtime.productionApplyArguments(plan, state)
-		state.Phase = productionReleasePhaseActivationDispatched
-		state.UpdatedUTC = utcSecond(runtime.now())
-		if err := writeProductionReleaseControllerState(plan, state); err != nil {
+	if state.Phase == productionReleasePhaseStaged ||
+		state.Phase == productionReleasePhaseBackupsReady ||
+		state.Phase == productionReleasePhaseActivationDispatched {
+		if err := runtime.dispatchProductionActivation(ctx, plan, &state); err != nil {
 			return productionReleaseControllerResult{}, err
 		}
-		if _, err := runtime.ssh(ctx, plan.TargetAlias, 20*time.Minute, applyArgs...); err != nil {
-			return productionReleaseControllerResult{}, fmt.Errorf("production activation failed or became transport-ambiguous; transaction retained and must be inspected with status: %w", err)
-		}
 	}
-	status, err := runtime.readRemoteReleaseStatus(ctx, plan, state)
+	status, err := runtime.awaitRemoteReleaseStatus(ctx, plan, &state)
 	if err != nil {
 		return productionReleaseControllerResult{}, err
 	}
@@ -346,7 +347,7 @@ func (runtime *productionReleaseRuntime) productionApplyArguments(plan productio
 	remoteStage := filepath.Join(state.RemoteWorkspace, "staging")
 	remoteProbe := filepath.Join(remoteStage, filepath.Base(plan.ProbeBinary.Path))
 	arguments := []string{
-		"systemd-run", "--quiet", "--wait", "--collect", "--unit", "lmm-api-deploy-" + plan.DeploymentID,
+		"systemd-run", "--quiet", "--wait", "--collect", "--unit", productionActivationUnit(plan.DeploymentID),
 		"--property=Type=oneshot", "--property=TimeoutStartSec=18min",
 		remoteProbe, "deploy", "production", "apply",
 		"--workspace", state.RemoteWorkspace,
@@ -381,6 +382,120 @@ func (runtime *productionReleaseRuntime) productionApplyArguments(plan productio
 		arguments = append(arguments, "--preserve-edge-policy")
 	}
 	return arguments
+}
+
+func (runtime *productionReleaseRuntime) remoteDispatchEvidence(ctx context.Context, plan productionReleasePlan, state productionReleaseControllerState) (productionDispatchEvidence, error) {
+	remoteProbe := filepath.Join(state.RemoteWorkspace, "staging", filepath.Base(plan.ProbeBinary.Path))
+	output, err := runtime.ssh(ctx, plan.TargetAlias, 30*time.Second,
+		remoteProbe, "deploy", "production", "dispatch-evidence",
+		"--workspace", state.RemoteWorkspace, "--unit", state.ActivationUnit)
+	if err != nil {
+		return productionDispatchEvidence{}, fmt.Errorf("reconcile production activation dispatch: %w", err)
+	}
+	var evidence productionDispatchEvidence
+	if err := json.Unmarshal(output, &evidence); err != nil ||
+		evidence.Format != 1 || evidence.DeploymentID != plan.DeploymentID ||
+		evidence.Unit != state.ActivationUnit || evidence.UnitLoadState == "" {
+		return productionDispatchEvidence{}, errors.New("production activation dispatch evidence is invalid")
+	}
+	return evidence, nil
+}
+
+func productionDispatchHasEvidence(evidence productionDispatchEvidence) bool {
+	return evidence.UnitPresent || evidence.ManifestPresent || evidence.StatusPresent
+}
+
+func (runtime *productionReleaseRuntime) dispatchProductionActivation(ctx context.Context, plan productionReleasePlan, state *productionReleaseControllerState) error {
+	expectedUnit := productionActivationUnit(plan.DeploymentID)
+	if state.Phase == productionReleasePhaseActivationDispatched {
+		if state.ActivationUnit != expectedUnit || state.DispatchAttempts < 1 || state.DispatchAttempts > 2 {
+			return errors.New("persisted activation dispatch identity is incomplete")
+		}
+		evidence, err := runtime.remoteDispatchEvidence(ctx, plan, *state)
+		if err != nil {
+			return err
+		}
+		if productionDispatchHasEvidence(evidence) {
+			state.DispatchObserved = true
+			state.UpdatedUTC = utcSecond(runtime.now())
+			return writeProductionReleaseControllerState(plan, *state)
+		}
+		if state.DispatchObserved || state.DispatchAttempts >= 2 {
+			return errors.New("activation dispatch has no remote evidence and its single redispatch is exhausted")
+		}
+	}
+	for state.DispatchAttempts < 2 {
+		state.Phase = productionReleasePhaseActivationDispatched
+		state.ActivationUnit = expectedUnit
+		state.DispatchAttempts++
+		state.UpdatedUTC = utcSecond(runtime.now())
+		if err := writeProductionReleaseControllerState(plan, *state); err != nil {
+			return err
+		}
+		applyArgs := runtime.productionApplyArguments(plan, *state)
+		if _, err := runtime.ssh(ctx, plan.TargetAlias, 20*time.Minute, applyArgs...); err == nil {
+			state.DispatchObserved = true
+			state.UpdatedUTC = utcSecond(runtime.now())
+			return writeProductionReleaseControllerState(plan, *state)
+		} else {
+			evidence, reconcileErr := runtime.remoteDispatchEvidence(ctx, plan, *state)
+			if reconcileErr != nil {
+				return fmt.Errorf("production activation became transport-ambiguous and reconciliation failed: dispatch=%v reconcile=%w", err, reconcileErr)
+			}
+			if productionDispatchHasEvidence(evidence) {
+				state.DispatchObserved = true
+				state.UpdatedUTC = utcSecond(runtime.now())
+				if writeErr := writeProductionReleaseControllerState(plan, *state); writeErr != nil {
+					return writeErr
+				}
+				return nil
+			}
+			if state.DispatchAttempts >= 2 {
+				return fmt.Errorf("production activation failed before remote acceptance after the single safe redispatch: %w", err)
+			}
+		}
+	}
+	return errors.New("activation dispatch retry invariant failed")
+}
+
+func (runtime *productionReleaseRuntime) awaitRemoteReleaseStatus(ctx context.Context, plan productionReleasePlan, state *productionReleaseControllerState) (productionStatus, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	for {
+		status, err := runtime.readRemoteReleaseStatus(waitCtx, plan, *state)
+		if err == nil {
+			return status, nil
+		}
+		evidence, reconcileErr := runtime.remoteDispatchEvidence(waitCtx, plan, *state)
+		if reconcileErr != nil {
+			return productionStatus{}, fmt.Errorf("observe production activation: status=%v evidence=%w", err, reconcileErr)
+		}
+		if !productionDispatchHasEvidence(evidence) {
+			return productionStatus{}, errors.New("accepted production activation lost its unit, manifest, and status evidence")
+		}
+		state.DispatchObserved = true
+		state.UpdatedUTC = utcSecond(runtime.now())
+		if writeErr := writeProductionReleaseControllerState(plan, *state); writeErr != nil {
+			return productionStatus{}, writeErr
+		}
+		if waitErr := runtime.waitForDispatchObservation(waitCtx, 2*time.Second); waitErr != nil {
+			return productionStatus{}, fmt.Errorf("wait for production activation status: %w", waitErr)
+		}
+	}
+}
+
+func (runtime *productionReleaseRuntime) waitForDispatchObservation(ctx context.Context, delay time.Duration) error {
+	if runtime.wait != nil {
+		return runtime.wait(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (runtime *productionReleaseRuntime) readRemoteReleaseStatus(ctx context.Context, plan productionReleasePlan, state productionReleaseControllerState) (productionStatus, error) {
@@ -762,6 +877,19 @@ func validateProductionReleaseControllerState(plan productionReleasePlan, planSH
 	if state.UpdatedUTC.IsZero() || state.UpdatedUTC.Location() != time.UTC || state.UpdatedUTC.Nanosecond() != 0 {
 		return errors.New("controller release state timestamp is invalid")
 	}
+	if state.DispatchAttempts < 0 || state.DispatchAttempts > 2 ||
+		(state.DispatchObserved && state.DispatchAttempts == 0) {
+		return errors.New("controller release state dispatch attempts are invalid")
+	}
+	if state.ActivationUnit != "" && state.ActivationUnit != productionActivationUnit(plan.DeploymentID) {
+		return errors.New("controller release state activation unit is invalid")
+	}
+	if (state.DispatchAttempts > 0) != (state.ActivationUnit != "") {
+		return errors.New("controller release state dispatch identity is incomplete")
+	}
+	if state.Phase == productionReleasePhaseActivationDispatched && state.DispatchAttempts == 0 {
+		return errors.New("controller release state activation phase lacks a dispatch attempt")
+	}
 	for _, path := range []string{state.TargetBackup, state.ControllerBackup, state.OffhostBackup} {
 		if path != "" && !filepath.IsAbs(path) {
 			return errors.New("controller release state contains a non-absolute backup path")
@@ -781,6 +909,8 @@ func releaseControllerResult(plan productionReleasePlan, state productionRelease
 		ControllerBackup: state.ControllerBackup,
 		OffhostBackup:    state.OffhostBackup,
 		RollbackTimer:    state.RollbackTimer,
+		ActivationUnit:   state.ActivationUnit,
+		DispatchAttempts: state.DispatchAttempts,
 		Workspace:        state.RemoteWorkspace,
 	}
 }

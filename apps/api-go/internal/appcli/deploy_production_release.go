@@ -115,6 +115,7 @@ type productionReleasePlanResult struct {
 type productionReleaseRuntime struct {
 	runner productionCommandRunner
 	now    func() time.Time
+	wait   func(context.Context, time.Duration) error
 }
 
 func runProductionReleasePlan(args []string, stdout, stderr io.Writer) int {
