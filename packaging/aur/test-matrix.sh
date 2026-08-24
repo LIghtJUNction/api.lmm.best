@@ -162,10 +162,12 @@ contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-go_release_commit=c5f84b3337cb6d4840c754fa1d40066962f8fd97
+go_release_commit=1db462ebe08cc99e32014d478eb866e85af3badd
 readonly go_release_commit
 grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
+git -C "$ROOT" merge-base --is-ancestor "$go_release_commit" origin/main ||
+  die 'canonical Go source pin is not reachable from main'
 readonly go_source_pkgver_epoch=0.1.20
 readonly last_published_go_source_pkgver=0.1.19.r1279.g0c463f094
 go_release_pkgver="$go_source_pkgver_epoch.r$(git -C "$ROOT" rev-list --count "$go_release_commit").g$(git -C "$ROOT" rev-parse --short=9 "$go_release_commit")"
