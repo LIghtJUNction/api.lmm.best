@@ -85,7 +85,7 @@ type Deferred<T> = {
 
 type PendingRequest = {
   url: string
-  response: Deferred<unknown>
+  response: { promise: Promise<unknown> }
 }
 
 function deferred<T>(): Deferred<T> {
@@ -108,10 +108,7 @@ function installDeferredTransport(requests: PendingRequest[]) {
   }) as typeof api.get
 }
 
-function plansResponse(
-  id: number,
-  title: string
-): ApiResponse<PlanRecord[]> {
+function plansResponse(id: number, title: string): ApiResponse<PlanRecord[]> {
   return {
     success: true,
     data: [
