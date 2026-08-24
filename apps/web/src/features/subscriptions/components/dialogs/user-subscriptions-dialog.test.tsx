@@ -65,7 +65,10 @@ const { api } = await import('@/lib/api')
 const { UserSubscriptionsDialog } = await import('./user-subscriptions-dialog')
 
 const originalGet = api.get
+const originalPost = api.post
+const originalDelete = api.delete
 const originalToastError = toast.error
+const originalToastSuccess = toast.success
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -150,7 +153,8 @@ async function flush() {
 
 function dialogElement(
   open: boolean,
-  user: { id: number; username?: string } | null
+  user: { id: number; username?: string } | null,
+  onSuccess?: () => void
 ) {
   return (
     <I18nextProvider i18n={i18n}>
@@ -158,6 +162,7 @@ function dialogElement(
         open={open}
         user={user}
         onOpenChange={() => undefined}
+        onSuccess={onSuccess}
       />
     </I18nextProvider>
   )
@@ -165,13 +170,14 @@ function dialogElement(
 
 async function renderDialog(
   open: boolean,
-  user: { id: number; username?: string } | null
+  user: { id: number; username?: string } | null,
+  onSuccess?: () => void
 ) {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
   await act(async () => {
-    root.render(dialogElement(open, user))
+    root.render(dialogElement(open, user, onSuccess))
     await flush()
   })
   return { container, root }
@@ -180,10 +186,11 @@ async function renderDialog(
 async function rerenderDialog(
   root: ReturnType<typeof createRoot>,
   open: boolean,
-  user: { id: number; username?: string } | null
+  user: { id: number; username?: string } | null,
+  onSuccess?: () => void
 ) {
   await act(async () => {
-    root.render(dialogElement(open, user))
+    root.render(dialogElement(open, user, onSuccess))
     await flush()
   })
 }
@@ -199,9 +206,81 @@ function dialogText() {
   return document.body.textContent ?? ''
 }
 
+function installImmediateReads() {
+  const requests: string[] = []
+  api.get = (async (url: string) => {
+    requests.push(url)
+    if (url === '/api/subscription/admin/plans') {
+      return { data: plansResponse(11, 'Plan') }
+    }
+    const userMatch = url.match(
+      /^\/api\/subscription\/admin\/users\/(\d+)\/subscriptions$/
+    )
+    assert.ok(userMatch, `Unexpected GET request: ${url}`)
+    const userId = Number(userMatch[1])
+    return {
+      data: subscriptionsResponse(userId * 111, userId, 11),
+    }
+  }) as typeof api.get
+  return requests
+}
+
+async function clickElement(element: Element | undefined | null) {
+  assert.ok(element instanceof HTMLElement, 'interactive element was not found')
+  await act(async () => {
+    element.click()
+    await flush()
+  })
+}
+
+function elementWithText(selector: string, text: string) {
+  return [...document.querySelectorAll(selector)].find(
+    (element) => element.textContent?.trim() === text
+  )
+}
+
+async function selectFirstPlan() {
+  await clickElement(document.querySelector('[role="combobox"]'))
+  await clickElement(document.querySelector('[role="option"]'))
+}
+
+async function chooseRowAction(label: string) {
+  await clickElement(document.querySelector('button[aria-label="Actions"]'))
+  await clickElement(elementWithText('[role="menuitem"]', label))
+}
+
+async function confirmDialogAction(label: string) {
+  await clickElement(elementWithText('button', label))
+}
+
+function captureMutationEffects() {
+  const successes: unknown[] = []
+  const errors: unknown[] = []
+  let onSuccessCalls = 0
+  toast.success = ((message: unknown) => {
+    successes.push(message)
+    return 'success-toast'
+  }) as typeof toast.success
+  toast.error = ((message: unknown) => {
+    errors.push(message)
+    return 'error-toast'
+  }) as typeof toast.error
+  return {
+    successes,
+    errors,
+    onSuccess: () => {
+      onSuccessCalls += 1
+    },
+    onSuccessCalls: () => onSuccessCalls,
+  }
+}
+
 afterEach(() => {
   api.get = originalGet
+  api.post = originalPost
+  api.delete = originalDelete
   toast.error = originalToastError
+  toast.success = originalToastSuccess
   document.body.replaceChildren()
 })
 
@@ -258,6 +337,50 @@ describe('UserSubscriptionsDialog request isolation', () => {
       assert.match(dialogText(), /202/)
       assert.doesNotMatch(dialogText(), /A plan/)
       assert.doesNotMatch(dialogText(), /101/)
+    } finally {
+      await unmountDialog(rendered)
+    }
+  })
+
+  test('clears a rendered previous-user row immediately on switch', async () => {
+    const plansA = deferred<ApiResponse<PlanRecord[]>>()
+    const subsA = deferred<ApiResponse<UserSubscriptionRecord[]>>()
+    const plansB = deferred<ApiResponse<PlanRecord[]>>()
+    const subsB = deferred<ApiResponse<UserSubscriptionRecord[]>>()
+    installDeferredTransport([
+      { url: '/api/subscription/admin/plans', response: plansA },
+      {
+        url: '/api/subscription/admin/users/1/subscriptions',
+        response: subsA,
+      },
+      { url: '/api/subscription/admin/plans', response: plansB },
+      {
+        url: '/api/subscription/admin/users/2/subscriptions',
+        response: subsB,
+      },
+    ])
+
+    const rendered = await renderDialog(true, { id: 1, username: 'A' })
+    try {
+      await act(async () => {
+        plansA.resolve(plansResponse(10, 'A plan'))
+        subsA.resolve(subscriptionsResponse(101, 1, 10))
+        await flush()
+      })
+      assert.match(dialogText(), /A plan/)
+      assert.match(dialogText(), /101/)
+
+      await rerenderDialog(rendered.root, true, { id: 2, username: 'B' })
+      assert.match(dialogText(), /Loading\.\.\./)
+      assert.doesNotMatch(dialogText(), /101/)
+
+      await act(async () => {
+        plansB.resolve(plansResponse(20, 'B plan'))
+        subsB.resolve(subscriptionsResponse(202, 2, 20))
+        await flush()
+      })
+      assert.match(dialogText(), /B plan/)
+      assert.match(dialogText(), /202/)
     } finally {
       await unmountDialog(rendered)
     }
@@ -322,6 +445,178 @@ describe('UserSubscriptionsDialog request isolation', () => {
     } finally {
       await unmountDialog(rendered)
     }
+  })
+
+  test('does not revive the previous user after a deferred create completes', async () => {
+    const requests = installImmediateReads()
+    const mutation = deferred<unknown>()
+    let postCalls = 0
+    api.post = (async (url: string) => {
+      postCalls += 1
+      assert.equal(url, '/api/subscription/admin/users/1/subscriptions')
+      return mutation.promise
+    }) as typeof api.post
+    const effects = captureMutationEffects()
+    const rendered = await renderDialog(
+      true,
+      { id: 1, username: 'A' },
+      effects.onSuccess
+    )
+    try {
+      assert.match(dialogText(), /111/)
+      await selectFirstPlan()
+      await clickElement(elementWithText('button', 'Add subscription'))
+      assert.equal(postCalls, 1)
+
+      await rerenderDialog(
+        rendered.root,
+        true,
+        { id: 2, username: 'B' },
+        effects.onSuccess
+      )
+      assert.match(dialogText(), /222/)
+      assert.doesNotMatch(dialogText(), /111/)
+      assert.equal(requests.length, 4)
+
+      await act(async () => {
+        mutation.resolve({
+          data: { success: true, data: { message: 'created A' } },
+        })
+        await flush()
+      })
+      assert.match(dialogText(), /222/)
+      assert.doesNotMatch(dialogText(), /111/)
+      assert.equal(requests.length, 4)
+      assert.deepEqual(effects.successes, [])
+      assert.deepEqual(effects.errors, [])
+      assert.equal(effects.onSuccessCalls(), 0)
+    } finally {
+      await unmountDialog(rendered)
+    }
+  })
+
+  test('suppresses a deferred invalidate completion after close', async () => {
+    const requests = installImmediateReads()
+    const mutation = deferred<unknown>()
+    let postCalls = 0
+    api.post = (async (url: string) => {
+      postCalls += 1
+      assert.equal(
+        url,
+        '/api/subscription/admin/user_subscriptions/111/invalidate'
+      )
+      return mutation.promise
+    }) as typeof api.post
+    const effects = captureMutationEffects()
+    const rendered = await renderDialog(
+      true,
+      { id: 1, username: 'A' },
+      effects.onSuccess
+    )
+    try {
+      await chooseRowAction('Invalidate')
+      await confirmDialogAction('Continue')
+      assert.equal(postCalls, 1)
+
+      await rerenderDialog(
+        rendered.root,
+        false,
+        { id: 1, username: 'A' },
+        effects.onSuccess
+      )
+      await act(async () => {
+        mutation.reject(new Error('stale invalidate failed'))
+        await flush()
+      })
+      assert.equal(requests.length, 2)
+      assert.deepEqual(effects.successes, [])
+      assert.deepEqual(effects.errors, [])
+      assert.equal(effects.onSuccessCalls(), 0)
+    } finally {
+      await unmountDialog(rendered)
+    }
+  })
+
+  test('does not let a deferred delete affect the same user after reopen', async () => {
+    const requests = installImmediateReads()
+    const mutation = deferred<unknown>()
+    let deleteCalls = 0
+    api.delete = (async (url: string) => {
+      deleteCalls += 1
+      assert.equal(url, '/api/subscription/admin/user_subscriptions/111')
+      return mutation.promise
+    }) as typeof api.delete
+    const effects = captureMutationEffects()
+    const rendered = await renderDialog(
+      true,
+      { id: 1, username: 'A' },
+      effects.onSuccess
+    )
+    try {
+      await chooseRowAction('Delete')
+      await confirmDialogAction('Continue')
+      assert.equal(deleteCalls, 1)
+
+      await rerenderDialog(
+        rendered.root,
+        false,
+        { id: 1, username: 'A' },
+        effects.onSuccess
+      )
+      await rerenderDialog(
+        rendered.root,
+        true,
+        { id: 1, username: 'A reopened' },
+        effects.onSuccess
+      )
+      assert.match(dialogText(), /111/)
+      assert.equal(requests.length, 4)
+
+      await act(async () => {
+        mutation.resolve({ data: { success: true } })
+        await flush()
+      })
+      assert.match(dialogText(), /111/)
+      assert.equal(requests.length, 4)
+      assert.deepEqual(effects.successes, [])
+      assert.deepEqual(effects.errors, [])
+      assert.equal(effects.onSuccessCalls(), 0)
+    } finally {
+      await unmountDialog(rendered)
+    }
+  })
+
+  test('suppresses a deferred reset completion after unmount', async () => {
+    const requests = installImmediateReads()
+    const mutation = deferred<unknown>()
+    let postCalls = 0
+    api.post = (async (url: string) => {
+      postCalls += 1
+      assert.equal(url, '/api/subscription/admin/users/1/subscriptions/reset')
+      return mutation.promise
+    }) as typeof api.post
+    const effects = captureMutationEffects()
+    const rendered = await renderDialog(
+      true,
+      { id: 1, username: 'A' },
+      effects.onSuccess
+    )
+
+    await chooseRowAction('Reset quota')
+    await confirmDialogAction('Reset quota')
+    assert.equal(postCalls, 1)
+    await unmountDialog(rendered)
+    await act(async () => {
+      mutation.resolve({
+        data: { success: true, data: { reset_count: 1 } },
+      })
+      await flush()
+    })
+    assert.equal(requests.length, 2)
+    assert.deepEqual(effects.successes, [])
+    assert.deepEqual(effects.errors, [])
+    assert.equal(effects.onSuccessCalls(), 0)
+    assert.equal(dialogText(), '')
   })
 
   test('invalidates responses from a closed dialog before reopening it', async () => {
