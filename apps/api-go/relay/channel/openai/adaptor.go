@@ -502,6 +502,13 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 			// Process all image files
 			for i, fileHeader := range imageFiles {
+				// Determine MIME type before opening or forwarding the file. Unsupported
+				// extensions must fail locally rather than being mislabeled upstream.
+				mimeType, err := detectImageMimeType(fileHeader.Filename)
+				if err != nil {
+					return nil, err
+				}
+
 				file, err := fileHeader.Open()
 				if err != nil {
 					return nil, fmt.Errorf("failed to open image file %d: %w", i, err)
@@ -512,9 +519,6 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				if len(imageFiles) > 1 {
 					fieldName = "image[]"
 				}
-
-				// Determine MIME type based on file extension
-				mimeType := detectImageMimeType(fileHeader.Filename)
 
 				// Create a form file with the appropriate content type
 				h := make(textproto.MIMEHeader)
@@ -536,14 +540,17 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 			// Handle mask file if present
 			if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
+				// Validate the extension before opening or forwarding the mask file.
+				mimeType, err := detectImageMimeType(maskFiles[0].Filename)
+				if err != nil {
+					return nil, err
+				}
+
 				maskFile, err := maskFiles[0].Open()
 				if err != nil {
 					return nil, errors.New("failed to open mask file")
 				}
 				// 复制完立即关闭，避免在循环内使用 defer 占用资源
-
-				// Determine MIME type for mask file
-				mimeType := detectImageMimeType(maskFiles[0].Filename)
 
 				// Create a form file with the appropriate content type
 				h := make(textproto.MIMEHeader)
@@ -581,23 +588,18 @@ func isJSONRequest(c *gin.Context) bool {
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
 }
 
-// detectImageMimeType determines the MIME type based on the file extension
-func detectImageMimeType(filename string) string {
+// detectImageMimeType determines the MIME type based on the file extension.
+func detectImageMimeType(filename string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
 	case ".jpg", ".jpeg":
-		return "image/jpeg"
+		return "image/jpeg", nil
 	case ".png":
-		return "image/png"
+		return "image/png", nil
 	case ".webp":
-		return "image/webp"
+		return "image/webp", nil
 	default:
-		// Try to detect from extension if possible
-		if strings.HasPrefix(ext, ".jp") {
-			return "image/jpeg"
-		}
-		// Default to png as a fallback
-		return "image/png"
+		return "", fmt.Errorf("unsupported image format %q; supported formats: .jpg, .jpeg, .png, .webp", ext)
 	}
 }
 

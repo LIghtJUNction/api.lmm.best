@@ -66,6 +66,7 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		require.Equal(t, "true", replayedRequest.PostForm.Get("stream"))
 		require.Equal(t, "3", replayedRequest.PostForm.Get("partial_images"))
 		require.Len(t, replayedRequest.MultipartForm.File["image"], 1)
+		require.Equal(t, "image/png", replayedRequest.MultipartForm.File["image"][0].Header.Get("Content-Type"))
 
 		file, err := replayedRequest.MultipartForm.File["image"][0].Open()
 		require.NoError(t, err)
