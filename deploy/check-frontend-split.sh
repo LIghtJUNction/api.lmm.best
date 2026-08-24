@@ -99,6 +99,10 @@ assert_literal 'auth_request_set $lmm_access_policy_result $upstream_http_x_lmm_
 assert_literal 'X-LMM-CN-Source $lmm_cn_source;' "$region_policy"
 assert_literal 'X-LMM-Access-Policy $lmm_access_policy_result;' "$region_policy"
 assert_literal 'X-LMM-Internal-Error access-policy;' "$region_policy"
+assert_literal 'X-LMM-Original-URI $request_uri;' "$region_policy"
+assert_literal 'X-LMM-Original-Accept $http_accept;' "$region_policy"
+assert_literal 'proxy_set_header Authorization "";' "$region_policy"
+assert_literal 'proxy_set_header Cookie "";' "$region_policy"
 assert_literal 'deploy production edge-policy install|verify' "$repo/apps/api-go/internal/appcli/deploy.go"
 if grep -Fq 'location ^~ /dashboard/' "$config"; then
   fail 'broad /dashboard/ proxy would swallow frontend dashboard routes'
