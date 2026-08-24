@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
-	"path/filepath"
 	"strings"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -502,9 +501,8 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 			// Process all image files
 			for i, fileHeader := range imageFiles {
-				// Determine MIME type before opening or forwarding the file. Unsupported
-				// extensions must fail locally rather than being mislabeled upstream.
-				mimeType, err := detectImageMimeType(fileHeader.Filename)
+				// Determine MIME type from a bounded byte prefix before forwarding.
+				mimeType, err := relaycommon.DetectSupportedImageUploadMediaType(fileHeader)
 				if err != nil {
 					return nil, err
 				}
@@ -540,8 +538,8 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 			// Handle mask file if present
 			if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
-				// Validate the extension before opening or forwarding the mask file.
-				mimeType, err := detectImageMimeType(maskFiles[0].Filename)
+				// Determine the mask MIME type from bytes rather than its filename.
+				mimeType, err := relaycommon.DetectSupportedImageUploadMediaType(maskFiles[0])
 				if err != nil {
 					return nil, err
 				}
@@ -586,21 +584,6 @@ func isJSONRequest(c *gin.Context) bool {
 		return false
 	}
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
-}
-
-// detectImageMimeType determines the MIME type based on the file extension.
-func detectImageMimeType(filename string) (string, error) {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".jpg", ".jpeg":
-		return "image/jpeg", nil
-	case ".png":
-		return "image/png", nil
-	case ".webp":
-		return "image/webp", nil
-	default:
-		return "", fmt.Errorf("unsupported image format %q; supported formats: .jpg, .jpeg, .png, .webp", ext)
-	}
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {

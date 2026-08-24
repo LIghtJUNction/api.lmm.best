@@ -14,50 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDetectImageMimeType(t *testing.T) {
-	tests := []struct {
-		name     string
-		filename string
-		wantType string
-		wantErr  string
-	}{
-		{name: "jpeg uppercase", filename: "input.JPEG", wantType: "image/jpeg"},
-		{name: "jpg uppercase", filename: "input.JPG", wantType: "image/jpeg"},
-		{name: "png uppercase", filename: "input.PNG", wantType: "image/png"},
-		{name: "webp uppercase", filename: "input.WEBP", wantType: "image/webp"},
-		{
-			name:     "heic is unsupported",
-			filename: "input.HEIC",
-			wantErr:  `unsupported image format ".heic"; supported formats: .jpg, .jpeg, .png, .webp`,
-		},
-		{
-			name:     "extensionless is unsupported",
-			filename: "input",
-			wantErr:  `unsupported image format ""; supported formats: .jpg, .jpeg, .png, .webp`,
-		},
-		{
-			name:     "unknown extension is unsupported",
-			filename: "input.gif",
-			wantErr:  `unsupported image format ".gif"; supported formats: .jpg, .jpeg, .png, .webp`,
-		},
-	}
+var testPNGBytes = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+var testHEICBytes = []byte{0, 0, 0, 0x18, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := detectImageMimeType(tt.filename)
-			if tt.wantErr != "" {
-				require.EqualError(t, err, tt.wantErr)
-				require.Empty(t, got)
-				return
-			}
-
-			require.NoError(t, err)
-			require.Equal(t, tt.wantType, got)
-		})
-	}
-}
-
-func TestConvertImageRequestRejectsUnsupportedMaskFormat(t *testing.T) {
+func TestConvertImageRequestRejectsUnsupportedMaskContent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var body bytes.Buffer
@@ -65,11 +25,11 @@ func TestConvertImageRequestRejectsUnsupportedMaskFormat(t *testing.T) {
 	require.NoError(t, writer.WriteField("model", "gpt-image-1"))
 	imagePart, err := writer.CreateFormFile("image", "input.png")
 	require.NoError(t, err)
-	_, err = imagePart.Write([]byte("fake png"))
+	_, err = imagePart.Write(testPNGBytes)
 	require.NoError(t, err)
-	maskPart, err := writer.CreateFormFile("mask", "mask.heic")
+	maskPart, err := writer.CreateFormFile("mask", "mask.png")
 	require.NoError(t, err)
-	_, err = maskPart.Write([]byte("fake heic"))
+	_, err = maskPart.Write(testHEICBytes)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -82,18 +42,18 @@ func TestConvertImageRequestRejectsUnsupportedMaskFormat(t *testing.T) {
 	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{Model: "gpt-image-1"})
 
 	require.Nil(t, converted)
-	require.EqualError(t, err, `unsupported image format ".heic"; supported formats: .jpg, .jpeg, .png, .webp`)
+	require.EqualError(t, err, `unsupported image content type "application/octet-stream"; supported formats: JPEG, PNG, WebP`)
 }
 
-func TestConvertImageRequestRejectsUnsupportedImageFormat(t *testing.T) {
+func TestConvertImageRequestRejectsUnsupportedImageContent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	require.NoError(t, writer.WriteField("model", "gpt-image-1"))
-	part, err := writer.CreateFormFile("image", "input.heic")
+	part, err := writer.CreateFormFile("image", "input.png")
 	require.NoError(t, err)
-	_, err = part.Write([]byte("fake image"))
+	_, err = part.Write(testHEICBytes)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -106,5 +66,5 @@ func TestConvertImageRequestRejectsUnsupportedImageFormat(t *testing.T) {
 	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{Model: "gpt-image-1"})
 
 	require.Nil(t, converted)
-	require.EqualError(t, err, `unsupported image format ".heic"; supported formats: .jpg, .jpeg, .png, .webp`)
+	require.EqualError(t, err, `unsupported image content type "application/octet-stream"; supported formats: JPEG, PNG, WebP`)
 }
