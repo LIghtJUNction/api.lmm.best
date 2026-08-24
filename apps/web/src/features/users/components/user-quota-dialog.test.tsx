@@ -19,7 +19,9 @@ import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 
-const domWindow = new Window({ url: 'https://console.example.test/admin/users' })
+const domWindow = new Window({
+  url: 'https://console.example.test/admin/users',
+})
 for (const key of [
   'window',
   'document',
@@ -83,9 +85,9 @@ async function flushEffects() {
 }
 
 function findButton(text: string) {
-  const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
-    (candidate) => candidate.textContent?.includes(text)
-  )
+  const button = [
+    ...document.querySelectorAll<HTMLButtonElement>('button'),
+  ].find((candidate) => candidate.textContent?.includes(text))
   assert.ok(button, `Could not find button containing ${text}`)
   return button
 }

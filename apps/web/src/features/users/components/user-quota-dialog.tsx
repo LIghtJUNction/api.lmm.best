@@ -67,8 +67,11 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const currencyLabel = getCurrencyLabel()
   const tokensOnly = currencyMeta.kind === 'tokens'
 
-  const { amountValue, quotaValue, isValid: isAmountValid } =
-    getAmountValidation(amount, mode)
+  const {
+    amountValue,
+    quotaValue,
+    isValid: isAmountValid,
+  } = getAmountValidation(amount, mode)
 
   const getPreviewText = () => {
     const current = props.currentQuota
