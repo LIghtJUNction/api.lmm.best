@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -52,33 +52,13 @@ export function ChangePasswordDialog({
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [formData, setFormData] = useState(EMPTY_FORM_DATA)
-  const pendingCloseReset = useRef(false)
 
   useEffect(() => {
-    if (loading) {
-      if (!open) pendingCloseReset.current = true
-      return
-    }
-
-    if (!open || pendingCloseReset.current) {
-      pendingCloseReset.current = false
-      setFormData(EMPTY_FORM_DATA)
-    }
-  }, [loading, open])
+    if (!open) setFormData(EMPTY_FORM_DATA)
+  }, [open])
 
   const handleChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
-  }
-
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      if (loading) {
-        pendingCloseReset.current = true
-      } else {
-        setFormData(EMPTY_FORM_DATA)
-      }
-    }
-    onOpenChange(nextOpen)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -119,7 +99,7 @@ export function ChangePasswordDialog({
 
       if (response.success) {
         toast.success(t('Password changed successfully'))
-        handleOpenChange(false)
+        onOpenChange(false)
       } else {
         toast.error(response.message || t('Failed to change password'))
       }
@@ -135,7 +115,7 @@ export function ChangePasswordDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={handleOpenChange}
+      onOpenChange={onOpenChange}
       title={t('Change Password')}
       description={
         <>
@@ -150,7 +130,7 @@ export function ChangePasswordDialog({
           <Button
             type='button'
             variant='outline'
-            onClick={() => handleOpenChange(false)}
+            onClick={() => onOpenChange(false)}
             disabled={loading}
           >
             {t('Cancel')}
