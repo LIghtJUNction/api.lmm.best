@@ -57,6 +57,34 @@ func TestDetectImageMimeType(t *testing.T) {
 	}
 }
 
+func TestConvertImageRequestRejectsUnsupportedMaskFormat(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "gpt-image-1"))
+	imagePart, err := writer.CreateFormFile("image", "input.png")
+	require.NoError(t, err)
+	_, err = imagePart.Write([]byte("fake png"))
+	require.NoError(t, err)
+	maskPart, err := writer.CreateFormFile("mask", "mask.heic")
+	require.NoError(t, err)
+	_, err = maskPart.Write([]byte("fake heic"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	require.NoError(t, c.Request.ParseMultipartForm(32<<20))
+
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits}
+	converted, err := (&Adaptor{}).ConvertImageRequest(c, info, dto.ImageRequest{Model: "gpt-image-1"})
+
+	require.Nil(t, converted)
+	require.EqualError(t, err, `unsupported image format ".heic"; supported formats: .jpg, .jpeg, .png, .webp`)
+}
+
 func TestConvertImageRequestRejectsUnsupportedImageFormat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
