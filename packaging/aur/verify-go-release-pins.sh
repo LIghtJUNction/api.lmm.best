@@ -9,7 +9,8 @@ readonly API_ROOT=${GITHUB_API_URL:-https://api.github.com}
 readonly PKGBUILD="$HERE/lmm-api-go-bin/PKGBUILD"
 readonly SRCINFO="$HERE/lmm-api-go-bin/.SRCINFO"
 readonly SOURCE_PKGBUILD="$HERE/lmm-api-go/PKGBUILD"
-readonly PUBLISHED_SOURCE_FLOOR=0.1.19.r1279.g0c463f094
+readonly VERSION_CHECK="$HERE/check-candidate-version.sh"
+readonly PUBLISHED_SOURCE_FLOOR=0.1.19.r1279.g0c463f094-1
 readonly CURL_RETRY_ARGS=(--retry 4 --retry-all-errors --retry-delay 2 --connect-timeout 15)
 
 fail() {
@@ -44,6 +45,7 @@ download_asset() {
 for command in cosign curl git jq makepkg sha256sum sort vercmp; do
   command -v "$command" >/dev/null 2>&1 || fail "required command is unavailable: $command"
 done
+[[ -x $VERSION_CHECK ]] || fail 'AUR candidate version checker is missing or not executable'
 : "${TMPDIR:?set TMPDIR to a marker-owned verification workspace}"
 work=$(mktemp -d "$TMPDIR/lmm-go-release-pins.XXXXXXXX")
 cleanup() { rm -rf -- "$work"; }
@@ -113,17 +115,21 @@ for arch in amd64 arm64; do
 done
 
 source_pkgver=$(sed -n 's/^pkgver=//p' "$SOURCE_PKGBUILD")
-(( $(vercmp "$PUBLISHED_SOURCE_FLOOR" "$source_pkgver") < 0 )) ||
-  fail "source pkgver is not newer than the published floor: $PUBLISHED_SOURCE_FLOOR"
+source_pkgrel=$(sed -n 's/^pkgrel=//p' "$SOURCE_PKGBUILD")
+[[ -n $source_pkgver && $source_pkgrel =~ ^[1-9][0-9]*$ ]] ||
+  fail 'source PKGBUILD has an invalid pkgver or pkgrel'
+source_candidate="$source_pkgver-$source_pkgrel"
+(( $(vercmp "$PUBLISHED_SOURCE_FLOOR" "$source_candidate") < 0 )) ||
+  fail "source package version is not newer than the published floor: $PUBLISHED_SOURCE_FLOOR"
 aur_json=$(curl --fail --location --silent --show-error "${CURL_RETRY_ARGS[@]}" --max-time 60 \
   'https://aur.archlinux.org/rpc/v5/info?arg[]=lmm-api-go&arg[]=lmm-api-go-bin')
 for package in lmm-api-go lmm-api-go-bin; do
   published=$(jq -r --arg package "$package" '.results[] | select(.Name == $package) | .Version' <<<"$aur_json")
   [[ -n $published && $published != null ]] || fail "AUR did not report $package"
-  candidate=$source_pkgver
+  candidate=$source_candidate
   [[ $package == lmm-api-go-bin ]] && candidate="$pkgver-1"
-  (( $(vercmp "$published" "$candidate") <= 0 )) ||
-    fail "$package candidate $candidate is older than published $published"
+  "$VERSION_CHECK" "$package" "$candidate" "$published" >/dev/null ||
+    fail "$package candidate failed the published-version contract"
 done
 
 printf 'latest Go release, AUR monotonicity, checksums, and Sigstore pins verified: %s\n' "$latest_tag"

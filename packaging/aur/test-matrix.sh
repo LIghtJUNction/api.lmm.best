@@ -54,6 +54,10 @@ done
 local_helper="$HERE/../local/lmm-api-go/lmm-api-cli-phase.sh"
 [[ -L $local_helper && $(realpath -e "$local_helper") == "$CLI_PHASE_HELPER" ]] ||
   die 'local Go package does not use the canonical CLI phase helper'
+for script in check-candidate-version.sh export-go-package-base.sh test-export-go-package-base.sh; do
+  bash -n "$HERE/$script"
+done
+"$HERE/test-export-go-package-base.sh"
 
 for package in "${PACKAGES[@]}"; do
   pkgbuild="$HERE/$package/PKGBUILD"
@@ -169,12 +173,21 @@ grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
 git -C "$ROOT" merge-base --is-ancestor "$go_release_commit" origin/main ||
   die 'canonical Go source pin is not reachable from main'
 readonly go_source_pkgver_epoch=0.1.20
-readonly last_published_go_source_pkgver=0.1.19.r1279.g0c463f094
+readonly last_published_go_source_version=0.1.19.r1279.g0c463f094-1
 go_release_pkgver="$go_source_pkgver_epoch.r$(git -C "$ROOT" rev-list --count "$go_release_commit").g$(git -C "$ROOT" rev-parse --short=9 "$go_release_commit")"
+go_release_pkgrel=$(sed -n 's/^pkgrel=//p' "$HERE/lmm-api-go/PKGBUILD")
+[[ $go_release_pkgrel =~ ^[1-9][0-9]*$ ]] || die 'canonical Go package has an invalid pkgrel'
+go_release_version="$go_release_pkgver-$go_release_pkgrel"
 grep -Fqx "pkgver=$go_release_pkgver" "$HERE/lmm-api-go/PKGBUILD" ||
   die "canonical Go package version does not match pinned revision: $go_release_pkgver"
-(( $(vercmp "$last_published_go_source_pkgver" "$go_release_pkgver") < 0 )) ||
-  die "canonical Go package version is not newer than the published floor: $last_published_go_source_pkgver"
+(( $(vercmp "$last_published_go_source_version" "$go_release_version") < 0 )) ||
+  die "canonical Go package version is not newer than the published floor: $last_published_go_source_version"
+"$HERE/check-candidate-version.sh" lmm-api-go "$go_release_version" "$go_release_version" >/dev/null ||
+  die 'AUR exact source candidate was rejected'
+if "$HERE/check-candidate-version.sh" lmm-api-go "$go_release_version" \
+  "$go_release_pkgver-$((go_release_pkgrel + 1))" >/dev/null 2>&1; then
+  die 'AUR source candidate accepted a strictly newer published pkgrel'
+fi
 grep -Fqx '_source_pkgver_epoch=0.1.20' "$HERE/lmm-api-go-git/PKGBUILD" ||
   die 'Git Go package lost the monotonic source-version epoch'
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'

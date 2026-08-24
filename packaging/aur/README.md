@@ -59,6 +59,15 @@ TMPDIR="$TMPDIR" bash deploy/production/test-release-artifact-contract.sh
 ```
 
 Regenerate every changed tracked `.SRCINFO` with
-`makepkg --printsrcinfo > .SRCINFO` and compare it before commit. When copying a
-recipe into its standalone AUR package base, copy `lmm-api-cli-phase.sh` with
-`cp -L` and require its pinned SHA-256; never publish the monorepo symlink.
+`makepkg --printsrcinfo > .SRCINFO` and compare it before commit. Export a Go
+recipe into a new standalone package-base directory only through the canonical
+stager:
+
+```bash
+packaging/aur/export-go-package-base.sh lmm-api-go-bin "$DESTINATION"
+```
+
+The destination must not already exist. The stager restricts the file
+inventory, verifies the canonical helper digest, and materializes
+`lmm-api-cli-phase.sh` as a regular file. Never copy or publish the monorepo
+symlink directly.

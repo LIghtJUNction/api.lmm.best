@@ -282,11 +282,7 @@ func (runtime *productionReleaseRuntime) promote(ctx context.Context, options pr
 	if err != nil {
 		return productionReleaseControllerResult{}, err
 	}
-	state.Phase = status.Phase
-	state.Version = status.Version
-	state.RollbackTimer = status.RollbackTimer
-	state.UpdatedUTC = utcSecond(runtime.now())
-	if err := writeProductionReleaseControllerState(plan, state); err != nil {
+	if err := persistRemoteReleaseControllerStatus(plan, &state, status, runtime.now()); err != nil {
 		return productionReleaseControllerResult{}, err
 	}
 	expected := "CONFIRMED"
@@ -333,14 +329,18 @@ func (runtime *productionReleaseRuntime) control(ctx context.Context, action str
 	if err != nil {
 		return productionReleaseControllerResult{}, err
 	}
-	state.Phase = status.Phase
-	state.Version = status.Version
-	state.RollbackTimer = status.RollbackTimer
-	state.UpdatedUTC = utcSecond(runtime.now())
-	if err := writeProductionReleaseControllerState(plan, state); err != nil {
+	if err := persistRemoteReleaseControllerStatus(plan, &state, status, runtime.now()); err != nil {
 		return productionReleaseControllerResult{}, err
 	}
 	return releaseControllerResult(plan, state), nil
+}
+
+func persistRemoteReleaseControllerStatus(plan productionReleasePlan, state *productionReleaseControllerState, status productionStatus, now time.Time) error {
+	state.Phase = status.Phase
+	state.Version = status.Version
+	state.RollbackTimer = status.RollbackTimer
+	state.UpdatedUTC = utcSecond(now)
+	return writeProductionReleaseControllerState(plan, *state)
 }
 
 func (runtime *productionReleaseRuntime) productionApplyArguments(plan productionReleasePlan, state productionReleaseControllerState) []string {
@@ -903,6 +903,7 @@ func validateProductionReleaseControllerState(plan productionReleasePlan, planSH
 		"ROLLED_BACK":           true,
 		"FAILED_PREARM":         true,
 		"ROLLBACK_FAILED":       true,
+		"ABORTED":               true,
 	}
 	if !phases[state.Phase] {
 		return errors.New("controller release state phase is invalid")
