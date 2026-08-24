@@ -34,6 +34,11 @@ write_fixture success
 LMM_CHECK_RUNS_FILE="$tmp/checks.json" LMM_CHECK_MAX_ATTEMPTS=1 \
   bash "$SCRIPT" "$REVISION" >/dev/null
 
+jq '.check_runs += [{id:9999,name:"Release artifact contract",status:"in_progress",conclusion:null,app:{slug:"github-actions"}}]' \
+  "$tmp/checks.json" >"$tmp/tag-duplicate.json"
+LMM_CHECK_RUNS_FILE="$tmp/tag-duplicate.json" LMM_CHECK_MAX_ATTEMPTS=1 \
+  bash "$SCRIPT" "$REVISION" >/dev/null
+
 failed_name='Release artifact contract'
 write_fixture success "$failed_name"
 if LMM_CHECK_RUNS_FILE="$tmp/checks.json" LMM_CHECK_MAX_ATTEMPTS=1 \

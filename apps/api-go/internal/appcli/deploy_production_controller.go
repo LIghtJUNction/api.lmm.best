@@ -463,8 +463,19 @@ func (runtime *productionReleaseRuntime) awaitRemoteReleaseStatus(ctx context.Co
 	defer cancel()
 	for {
 		status, err := runtime.readRemoteReleaseStatus(waitCtx, plan, *state)
-		if err == nil {
+		if err == nil && productionActivationStatusTerminal(status.Phase) {
 			return status, nil
+		}
+		if err == nil {
+			state.DispatchObserved = true
+			state.UpdatedUTC = utcSecond(runtime.now())
+			if writeErr := writeProductionReleaseControllerState(plan, *state); writeErr != nil {
+				return productionStatus{}, writeErr
+			}
+			if waitErr := runtime.waitForDispatchObservation(waitCtx, 2*time.Second); waitErr != nil {
+				return productionStatus{}, fmt.Errorf("wait for terminal production activation status: %w", waitErr)
+			}
+			continue
 		}
 		evidence, reconcileErr := runtime.remoteDispatchEvidence(waitCtx, plan, *state)
 		if reconcileErr != nil {
@@ -481,6 +492,15 @@ func (runtime *productionReleaseRuntime) awaitRemoteReleaseStatus(ctx context.Co
 		if waitErr := runtime.waitForDispatchObservation(waitCtx, 2*time.Second); waitErr != nil {
 			return productionStatus{}, fmt.Errorf("wait for production activation status: %w", waitErr)
 		}
+	}
+}
+
+func productionActivationStatusTerminal(phase string) bool {
+	switch phase {
+	case "AWAITING_CONFIRMATION", "CONFIRMED", "ROLLED_BACK", "FAILED_PREARM", "ROLLBACK_FAILED", "ABORTED":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -817,12 +837,29 @@ func loadProductionReleaseControllerState(plan productionReleasePlan, planSHA256
 	if err := decoder.Decode(&state); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return productionReleaseControllerState{}, false, errors.New("controller release state is invalid")
 	}
-	if err := validateProductionReleaseControllerState(plan, planSHA256, state); err != nil {
-		return productionReleaseControllerState{}, false, err
-	}
 	canonical, err := canonicalProductionReleaseControllerState(state)
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return productionReleaseControllerState{}, false, errors.New("controller release state is not canonical JSON")
+	}
+	migrated := false
+	if state.Format == 1 {
+		if state.ActivationUnit != "" || state.DispatchAttempts != 0 || state.DispatchObserved {
+			return productionReleaseControllerState{}, false, errors.New("legacy controller release state contains unsupported dispatch fields")
+		}
+		state.Format = productionReleaseStateFormat
+		if state.Phase == productionReleasePhaseActivationDispatched {
+			state.ActivationUnit = productionActivationUnit(plan.DeploymentID)
+			state.DispatchAttempts = 1
+		}
+		migrated = true
+	}
+	if err := validateProductionReleaseControllerState(plan, planSHA256, state); err != nil {
+		return productionReleaseControllerState{}, false, err
+	}
+	if migrated {
+		if err := writeProductionReleaseControllerState(plan, state); err != nil {
+			return productionReleaseControllerState{}, false, fmt.Errorf("migrate controller release state: %w", err)
+		}
 	}
 	return state, true, nil
 }

@@ -20,8 +20,8 @@ pkgbase = lmm-api-go-git
 	depends = util-linux
 	optdepends = postgresql: production database
 	optdepends = valkey: cache, rate limiting, and login sessions
-	provides = lmm-api=0.1.20.r1294.gc5f84b333
-	provides = lmm-api-go=0.1.20.r1294.gc5f84b333
+	provides = lmm-api
+	provides = lmm-api-go
 	conflicts = lmm-api
 	conflicts = lmm-api-bin
 	conflicts = lmm-api-git

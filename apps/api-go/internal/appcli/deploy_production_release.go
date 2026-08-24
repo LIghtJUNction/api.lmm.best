@@ -24,7 +24,7 @@ const (
 	productionOffhostExpectedHost     = "archczy"
 	productionOffhostRoot             = "/home/arch/.local/state/lmm-api-production-backups"
 	productionReleasePlanFormat       = 1
-	productionReleaseStateFormat      = 1
+	productionReleaseStateFormat      = 2
 	productionReleasePlanFilename     = "release-plan.json"
 	productionReleasePlanHashFilename = "release-plan.sha256"
 	productionReleaseStateFilename    = "release-state.json"

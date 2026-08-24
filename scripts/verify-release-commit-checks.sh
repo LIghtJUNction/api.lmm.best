@@ -41,7 +41,11 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
   for name in "${required[@]}"; do
     record=$(jq -c --arg name "$name" '
       [.check_runs[] | select(.name == $name and .app.slug == "github-actions")]
-      | if length == 0 then null else max_by(.id) end
+      | if length == 0 then null
+        elif any(.conclusion == "success") then
+          [.[] | select(.conclusion == "success")] | max_by(.id)
+        else max_by(.id)
+        end
     ' <<<"$checks")
     if [[ $record == null ]]; then
       pending+=("$name (missing)")

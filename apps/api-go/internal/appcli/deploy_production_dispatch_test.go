@@ -4,11 +4,33 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+type productionDispatchStatusRunner struct {
+	phases []string
+	calls  int
+}
+
+func (runner *productionDispatchStatusRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
+	if command.Name != commandSSH || len(command.Args) < 7 {
+		return nil, errors.New("unexpected status test command")
+	}
+	remote := command.Args[3:]
+	if len(remote) >= 4 && remote[1] == "deploy" && remote[2] == "production" && remote[3] == "status" {
+		index := runner.calls
+		if index >= len(runner.phases) {
+			index = len(runner.phases) - 1
+		}
+		runner.calls++
+		return json.Marshal(productionStatus{Phase: runner.phases[index]})
+	}
+	return nil, errors.New("unexpected status test remote command")
+}
 
 type productionDispatchFaultRunner struct {
 	evidence       productionDispatchEvidence
@@ -35,6 +57,72 @@ func (runner *productionDispatchFaultRunner) Run(_ context.Context, command prod
 		return append(encoded, '\n'), err
 	}
 	return nil, errors.New("unexpected remote dispatch test command")
+}
+
+func TestAwaitRemoteReleaseStatusWaitsForTerminalPhase(t *testing.T) {
+	const deploymentID = "prod-20260824T115800Z-status-fixture"
+	controllerWorkspace := t.TempDir()
+	plan := productionReleasePlan{
+		Format: productionReleasePlanFormat, DeploymentID: deploymentID,
+		ControllerWorkspace: controllerWorkspace, TargetAlias: productionTargetAlias,
+		ProbeBinary: productionReleaseFilePlan{Path: filepath.Join(controllerWorkspace, "lmm-api")},
+	}
+	state := productionReleaseControllerState{
+		Format: productionReleaseStateFormat, DeploymentID: deploymentID,
+		PlanSHA256: strings.Repeat("c", 64), Phase: productionReleasePhaseActivationDispatched,
+		RemoteWorkspace: filepath.Join(defaultProductionPaths().WorkRoot, deploymentID),
+		ActivationUnit:  productionActivationUnit(deploymentID), DispatchAttempts: 1,
+		UpdatedUTC: time.Date(2026, 8, 24, 11, 58, 0, 0, time.UTC),
+	}
+	runner := &productionDispatchStatusRunner{phases: []string{"PREPARING", "DEPLOYING_GO", "AWAITING_CONFIRMATION"}}
+	waits := 0
+	runtime := &productionReleaseRuntime{
+		runner: runner,
+		now:    func() time.Time { return time.Date(2026, 8, 24, 11, 59, 0, 0, time.UTC) },
+		wait:   func(context.Context, time.Duration) error { waits++; return nil },
+	}
+	status, err := runtime.awaitRemoteReleaseStatus(context.Background(), plan, &state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "AWAITING_CONFIRMATION" || runner.calls != 3 || waits != 2 {
+		t.Fatalf("status=%#v calls=%d waits=%d", status, runner.calls, waits)
+	}
+}
+
+func TestLoadProductionReleaseControllerStateMigratesLegacyDispatch(t *testing.T) {
+	const deploymentID = "prod-20260824T115900Z-legacy-dispatch"
+	controllerWorkspace := t.TempDir()
+	planSHA256 := strings.Repeat("b", 64)
+	plan := productionReleasePlan{
+		Format: productionReleasePlanFormat, DeploymentID: deploymentID,
+		ControllerWorkspace: controllerWorkspace,
+	}
+	legacy := productionReleaseControllerState{
+		Format: 1, DeploymentID: deploymentID, PlanSHA256: planSHA256,
+		Phase:           productionReleasePhaseActivationDispatched,
+		RemoteWorkspace: filepath.Join(defaultProductionPaths().WorkRoot, deploymentID),
+		UpdatedUTC:      time.Date(2026, 8, 24, 11, 59, 0, 0, time.UTC),
+	}
+	raw, err := canonicalProductionReleaseControllerState(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(controllerWorkspace, productionReleaseStateFilename), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	migrated, exists, err := loadProductionReleaseControllerState(plan, planSHA256)
+	if err != nil || !exists {
+		t.Fatalf("load legacy state: exists=%t err=%v", exists, err)
+	}
+	if migrated.Format != productionReleaseStateFormat || migrated.DispatchAttempts != 1 ||
+		migrated.ActivationUnit != productionActivationUnit(deploymentID) || migrated.DispatchObserved {
+		t.Fatalf("migrated state=%#v", migrated)
+	}
+	persisted, err := os.ReadFile(filepath.Join(controllerWorkspace, productionReleaseStateFilename))
+	if err != nil || !strings.Contains(string(persisted), `"dispatch_attempts": 1`) {
+		t.Fatalf("persisted migrated state=%s err=%v", persisted, err)
+	}
 }
 
 func TestProductionActivationDispatchFaultReconciliation(t *testing.T) {

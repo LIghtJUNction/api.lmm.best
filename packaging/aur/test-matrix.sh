@@ -80,6 +80,11 @@ for package in lmm-api-go lmm-api-go-bin lmm-api-go-git; do
     die "$package applies the T1 deploy-package transition during T0"
   fi
 done
+contains_srcinfo lmm-api-go-git $'\tprovides = lmm-api'
+contains_srcinfo lmm-api-go-git $'\tprovides = lmm-api-go'
+if grep -Eq $'^\tprovides = lmm-api(-go)?=' "$HERE/lmm-api-go-git/.SRCINFO"; then
+  die 'Git Go package embeds a stale bootstrap version in provides'
+fi
 contains_srcinfo lmm-api-go-bin $'\tconflicts = lmm-api-go-git'
 contains_srcinfo lmm-api-go-git $'\tconflicts = lmm-api-go-bin'
 for variant in lmm-api-go-bin lmm-api-go-git; do
