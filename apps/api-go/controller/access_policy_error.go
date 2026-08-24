@@ -120,7 +120,12 @@ func accessPolicyAPIPath(path string) bool {
 	}
 
 	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	return len(segments) >= 2 && segments[0] != "" && segments[1] == "mj"
+	if len(segments) < 2 || segments[0] == "" || segments[1] != "mj" {
+		return false
+	}
+	// These ^~ frontend prefixes win before the dynamic /:mode/mj Nginx
+	// regex, so their matching paths must keep the browser-facing HTML page.
+	return segments[0] != "oauth" && segments[0] != "static"
 }
 
 type accessPolicyErrorDetails struct {

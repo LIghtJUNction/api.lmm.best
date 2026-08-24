@@ -40,7 +40,16 @@ func TestAccessPolicyAPIPathMatchesNginxBackendFamilies(t *testing.T) {
 			assert.True(t, accessPolicyAPIPath(path))
 		})
 	}
-	for _, path := range []string{"/", "/pricing", "/v1beta-docs", "/apiary", "/foo/mjpeg"} {
+	for _, path := range []string{
+		"/",
+		"/pricing",
+		"/v1beta-docs",
+		"/apiary",
+		"/foo/mjpeg",
+		"/oauth/mj",
+		"/oauth/mj/callback",
+		"/static/mj/asset.js",
+	} {
 		t.Run("browser "+path, func(t *testing.T) {
 			assert.False(t, accessPolicyAPIPath(path))
 		})
@@ -219,15 +228,17 @@ func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
 	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
 	assert.Contains(t, response.Header().Get("Content-Type"), "application/json")
 
-	jsonHeaders[accessPolicyOriginalURIHeader] = "/"
-	jsonHeaders[accessPolicyOriginalAcceptHeader] = "application/json; q=0, text/html"
-	status, response = request("127.0.0.1:42000", jsonHeaders)
-	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
-	assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
-	assert.Empty(t, response.Header().Get("Access-Control-Allow-Origin"))
-	assert.Empty(t, response.Header().Get("Access-Control-Allow-Credentials"))
-	assert.Equal(t, "Accept, Origin", response.Header().Get("Vary"))
-	assert.NotContains(t, response.Body.String(), "must-not-leak")
+	for _, frontendURI := range []string{"/", "/oauth/mj", "/static/mj/asset.js"} {
+		jsonHeaders[accessPolicyOriginalURIHeader] = frontendURI
+		jsonHeaders[accessPolicyOriginalAcceptHeader] = "application/json; q=0, text/html"
+		status, response = request("127.0.0.1:42000", jsonHeaders)
+		require.Equal(t, http.StatusUnavailableForLegalReasons, status)
+		assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
+		assert.Empty(t, response.Header().Get("Access-Control-Allow-Origin"))
+		assert.Empty(t, response.Header().Get("Access-Control-Allow-Credentials"))
+		assert.Equal(t, "Accept, Origin", response.Header().Get("Vary"))
+		assert.NotContains(t, response.Body.String(), "must-not-leak")
+	}
 
 	status, _ = request("127.0.0.1:42000", map[string]string{
 		"X-LMM-Internal-Error": accessPolicyErrorHeader,

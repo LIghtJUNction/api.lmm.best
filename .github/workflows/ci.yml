@@ -63,6 +63,13 @@ jobs:
           bash scripts/test-verify-release-commit-checks.sh
           node --test scripts/release.test.mjs
 
+      - name: Test Nginx API preflight policy
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes nginx
+          shellcheck deploy/test-nginx-access-policy-preflight.sh
+          bash deploy/check-frontend-split.sh
+
   release-artifact-contract:
     name: Release artifact contract
     runs-on: ubuntu-latest
