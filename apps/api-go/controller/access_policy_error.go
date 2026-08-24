@@ -77,7 +77,7 @@ func accessPolicyWantsJSON(c *gin.Context) bool {
 	if queryStart := strings.IndexByte(originalURI, '?'); queryStart >= 0 {
 		originalURI = originalURI[:queryStart]
 	}
-	if originalURI == "/v1" || strings.HasPrefix(originalURI, "/v1/") {
+	if accessPolicyAPIPath(originalURI) {
 		return true
 	}
 
@@ -97,6 +97,30 @@ func accessPolicyWantsJSON(c *gin.Context) bool {
 		}
 	}
 	return false
+}
+
+func accessPolicyAPIPath(path string) bool {
+	for _, prefix := range []string{
+		"/api",
+		"/mcp",
+		"/v1",
+		"/v1beta",
+		"/pg",
+		"/mj",
+		"/suno",
+		"/kling/v1",
+		"/jimeng",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	if path == "/dashboard/billing/subscription" || path == "/dashboard/billing/usage" {
+		return true
+	}
+
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	return len(segments) >= 2 && segments[0] != "" && segments[1] == "mj"
 }
 
 type accessPolicyErrorDetails struct {

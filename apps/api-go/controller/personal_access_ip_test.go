@@ -21,6 +21,32 @@ func TestLoopbackPeerAcceptsOnlyLoopbackAddresses(t *testing.T) {
 	assert.False(t, loopbackPeer("not-an-address"))
 }
 
+func TestAccessPolicyAPIPathMatchesNginxBackendFamilies(t *testing.T) {
+	for _, path := range []string{
+		"/api/status",
+		"/mcp",
+		"/v1/models",
+		"/v1beta/models/gemini:generateContent",
+		"/pg/chat/completions",
+		"/mj/submit",
+		"/suno/generate",
+		"/kling/v1/videos",
+		"/jimeng/generations",
+		"/dashboard/billing/subscription",
+		"/dashboard/billing/usage",
+		"/openai/mj/image/task",
+	} {
+		t.Run(path, func(t *testing.T) {
+			assert.True(t, accessPolicyAPIPath(path))
+		})
+	}
+	for _, path := range []string{"/", "/pricing", "/v1beta-docs", "/apiary", "/foo/mjpeg"} {
+		t.Run("browser "+path, func(t *testing.T) {
+			assert.False(t, accessPolicyAPIPath(path))
+		})
+	}
+}
+
 func TestPersonalAccessIPCompatibilityEndpointIsRetired(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
