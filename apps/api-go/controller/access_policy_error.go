@@ -41,9 +41,10 @@ func GetAccessPolicyErrorPage(c *gin.Context) {
 	c.Header(common.RequestIdKey, requestID)
 	c.Header("Cache-Control", "private, no-store, max-age=0")
 	c.Header("Pragma", "no-cache")
-	c.Header("Vary", "Accept")
+	c.Header("Vary", "Accept, Origin")
 	c.Header("X-Content-Type-Options", "nosniff")
 	if accessPolicyWantsJSON(c) {
+		applyAccessPolicyJSONCORS(c)
 		c.JSON(http.StatusUnavailableForLegalReasons, gin.H{
 			"error": gin.H{
 				"code":       accessPolicyRejectedErrorCode,
@@ -61,6 +62,14 @@ func GetAccessPolicyErrorPage(c *gin.Context) {
 	}
 	page := accessPolicyErrorPage(language, accessPolicyErrorDiagnostics(c, requestID))
 	c.Data(http.StatusUnavailableForLegalReasons, "text/html; charset=utf-8", []byte(page))
+}
+
+func applyAccessPolicyJSONCORS(c *gin.Context) {
+	if strings.TrimSpace(c.GetHeader("Origin")) == "" {
+		return
+	}
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Expose-Headers", common.RequestIdKey)
 }
 
 func accessPolicyWantsJSON(c *gin.Context) bool {

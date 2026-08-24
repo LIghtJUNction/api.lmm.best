@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -159,11 +160,16 @@ func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
 	}
 	jsonHeaders[accessPolicyOriginalURIHeader] = "/v1/models?debug=1"
 	jsonHeaders[accessPolicyOriginalAcceptHeader] = "*/*"
+	jsonHeaders["Origin"] = "https://sdk.example"
 	jsonHeaders["Authorization"] = "Bearer must-not-leak"
 	jsonHeaders["Cookie"] = "session=must-not-leak"
 	status, response = request("127.0.0.1:42000", jsonHeaders)
 	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
 	assert.Contains(t, response.Header().Get("Content-Type"), "application/json")
+	assert.Equal(t, "*", response.Header().Get("Access-Control-Allow-Origin"))
+	assert.Empty(t, response.Header().Get("Access-Control-Allow-Credentials"))
+	assert.Equal(t, common.RequestIdKey, response.Header().Get("Access-Control-Expose-Headers"))
+	assert.Equal(t, "Accept, Origin", response.Header().Get("Vary"))
 	assert.Less(t, response.Body.Len(), 512)
 	assert.NotContains(t, response.Body.String(), "must-not-leak")
 	assert.NotContains(t, response.Body.String(), "203.0.113.42")
@@ -192,6 +198,9 @@ func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
 	status, response = request("127.0.0.1:42000", jsonHeaders)
 	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
 	assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
+	assert.Empty(t, response.Header().Get("Access-Control-Allow-Origin"))
+	assert.Empty(t, response.Header().Get("Access-Control-Allow-Credentials"))
+	assert.Equal(t, "Accept, Origin", response.Header().Get("Vary"))
 	assert.NotContains(t, response.Body.String(), "must-not-leak")
 
 	status, _ = request("127.0.0.1:42000", map[string]string{
