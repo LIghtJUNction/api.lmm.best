@@ -3,8 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-ROOT=$(git -C "$HERE" rev-parse --show-toplevel)
-readonly HERE ROOT
+readonly HERE
 readonly REPOSITORY=${GITHUB_REPOSITORY:-LIghtJUNction/api.lmm.best}
 readonly API_ROOT=${GITHUB_API_URL:-https://api.github.com}
 readonly PKGBUILD="$HERE/lmm-api-go-bin/PKGBUILD"
@@ -60,9 +59,20 @@ latest_tag=$(api_get "$API_ROOT/repos/$REPOSITORY/releases?per_page=100" |
 [[ $latest_tag == "go-v$pkgver" ]] ||
   fail "binary package is not pinned to the latest Go release: $latest_tag"
 
-git -C "$ROOT" fetch --force --no-tags origin "refs/tags/$latest_tag:refs/tags/$latest_tag" >/dev/null 2>&1 || true
-git -C "$ROOT" tag -v "$latest_tag" >"$work/tag-verification.log" 2>&1 ||
-  fail "$latest_tag is not a valid signed tag"
+tag_ref=$(api_get "$API_ROOT/repos/$REPOSITORY/git/ref/tags/$latest_tag")
+tag_object_sha=$(jq -r '.object.sha' <<<"$tag_ref")
+[[ $(jq -r '.object.type' <<<"$tag_ref") == tag && $tag_object_sha =~ ^[0-9a-f]{40}$ ]] ||
+  fail "$latest_tag is not an annotated tag"
+tag_object=$(api_get "$API_ROOT/repos/$REPOSITORY/git/tags/$tag_object_sha")
+tag_revision=$(jq -r '.object.sha' <<<"$tag_object")
+[[ $(jq -r '.verification.verified' <<<"$tag_object") == true &&
+   $(jq -r '.object.type' <<<"$tag_object") == commit && $tag_revision =~ ^[0-9a-f]{40}$ ]] ||
+  fail "$latest_tag is not a GitHub-verified signed commit tag"
+comparison=$(api_get "$API_ROOT/repos/$REPOSITORY/compare/$tag_revision...main")
+case $(jq -r '.status' <<<"$comparison") in
+  ahead|identical) ;;
+  *) fail "$latest_tag does not identify an ancestor of main" ;;
+esac
 release_json="$work/release.json"
 api_get "$API_ROOT/repos/$REPOSITORY/releases/tags/$latest_tag" >"$release_json"
 [[ $(jq -r '.draft' "$release_json") == false && $(jq -r '.prerelease' "$release_json") == false ]] ||
