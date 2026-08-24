@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Ban, Plus, RotateCcw, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -127,6 +127,7 @@ export function UserSubscriptionsDialog(props: Props) {
     type: 'invalidate' | 'delete'
     subId: number
   } | null>(null)
+  const requestGenerationRef = useRef(0)
 
   const planTitleMap = useMemo(() => {
     const map = new Map<number, string>()
@@ -137,26 +138,40 @@ export function UserSubscriptionsDialog(props: Props) {
   }, [plans])
 
   const loadData = useCallback(async () => {
-    if (!props.user?.id) return
+    const userId = props.user?.id
+    if (!props.open || !userId) return
+
+    const requestGeneration = ++requestGenerationRef.current
+    const isLatestRequest = () =>
+      requestGenerationRef.current === requestGeneration
+
     setLoading(true)
     try {
       const [plansRes, subsRes] = await Promise.all([
         getAdminPlans(),
-        getUserSubscriptions(props.user.id),
+        getUserSubscriptions(userId),
       ])
+      if (!isLatestRequest()) return
       if (plansRes.success) setPlans(plansRes.data || [])
       if (subsRes.success) setSubs(subsRes.data || [])
     } catch {
-      toast.error(t('Loading failed'))
+      if (isLatestRequest()) toast.error(t('Loading failed'))
     } finally {
-      setLoading(false)
+      if (isLatestRequest()) setLoading(false)
     }
-  }, [props.user?.id, t])
+  }, [props.open, props.user?.id, t])
 
   useEffect(() => {
-    if (props.open && props.user?.id) {
-      setSelectedPlanId('')
-      loadData()
+    if (!props.open || !props.user?.id) {
+      requestGenerationRef.current += 1
+      return
+    }
+
+    setSelectedPlanId('')
+    void loadData()
+
+    return () => {
+      requestGenerationRef.current += 1
     }
   }, [props.open, props.user?.id, loadData])
 
