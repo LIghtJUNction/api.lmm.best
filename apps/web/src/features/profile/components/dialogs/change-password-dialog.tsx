@@ -57,6 +57,11 @@ export function ChangePasswordDialog({
     if (!open) setFormData(EMPTY_FORM_DATA)
   }, [open])
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) setFormData(EMPTY_FORM_DATA)
+    onOpenChange(nextOpen)
+  }
+
   const handleChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
@@ -99,7 +104,7 @@ export function ChangePasswordDialog({
 
       if (response.success) {
         toast.success(t('Password changed successfully'))
-        onOpenChange(false)
+        handleOpenChange(false)
       } else {
         toast.error(response.message || t('Failed to change password'))
       }
@@ -115,7 +120,7 @@ export function ChangePasswordDialog({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       title={t('Change Password')}
       description={
         <>
@@ -130,7 +135,7 @@ export function ChangePasswordDialog({
           <Button
             type='button'
             variant='outline'
-            onClick={() => onOpenChange(false)}
+            onClick={() => handleOpenChange(false)}
             disabled={loading}
           >
             {t('Cancel')}
