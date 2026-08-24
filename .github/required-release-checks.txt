@@ -1,0 +1,12 @@
+Workflow and resource-safety contracts
+Release artifact contract
+Go default backend, relaykit, and static build
+Rust backend formatting, lint, and tests
+Web checks, route manifest, and production build
+AUR direct-backend package contract
+Go and Rust route/behavior alignment gates
+Analyze (actions)
+Analyze (go)
+Analyze (javascript-typescript)
+Analyze (python)
+Analyze (rust)

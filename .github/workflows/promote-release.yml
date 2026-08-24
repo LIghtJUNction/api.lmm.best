@@ -8,6 +8,7 @@ on:
 
 permissions:
   actions: write
+  checks: read
   contents: write
 
 concurrency:
@@ -51,6 +52,8 @@ jobs:
             echo 'VERSION did not change in this revision; no release promotion is required.'
             exit 0
           fi
+
+          GITHUB_TOKEN=$GH_TOKEN bash scripts/verify-release-commit-checks.sh "$revision"
 
           version=$(tr -d '[:space:]' < VERSION)
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
