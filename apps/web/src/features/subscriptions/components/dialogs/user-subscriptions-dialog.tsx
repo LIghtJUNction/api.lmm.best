@@ -164,9 +164,12 @@ export function UserSubscriptionsDialog(props: Props) {
   useEffect(() => {
     if (!props.open || !props.user?.id) {
       requestGenerationRef.current += 1
+      setSubs([])
+      setLoading(false)
       return
     }
 
+    setSubs([])
     setSelectedPlanId('')
     void loadData()
 

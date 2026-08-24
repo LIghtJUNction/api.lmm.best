@@ -20,7 +20,6 @@ import assert from 'node:assert/strict'
 import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
-import type { ReactNode } from 'react'
 
 import type {
   ApiResponse,
@@ -239,6 +238,8 @@ describe('UserSubscriptionsDialog request isolation', () => {
     const rendered = await renderDialog(true, { id: 1, username: 'A' })
     try {
       await rerenderDialog(rendered.root, true, { id: 2, username: 'B' })
+      assert.match(dialogText(), /Loading\.\.\./)
+      assert.doesNotMatch(dialogText(), /101/)
 
       await act(async () => {
         plansB.resolve(plansResponse(20, 'B plan'))
