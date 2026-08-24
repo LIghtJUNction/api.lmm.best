@@ -463,7 +463,7 @@ func (runtime *productionReleaseRuntime) awaitRemoteReleaseStatus(ctx context.Co
 	defer cancel()
 	for {
 		status, err := runtime.readRemoteReleaseStatus(waitCtx, plan, *state)
-		if err == nil && productionActivationStatusTerminal(status.Phase) {
+		if err == nil && productionActivationStatusTerminalForPlan(plan, status) {
 			return status, nil
 		}
 		if err == nil {
@@ -493,6 +493,13 @@ func (runtime *productionReleaseRuntime) awaitRemoteReleaseStatus(ctx context.Co
 			return productionStatus{}, fmt.Errorf("wait for production activation status: %w", waitErr)
 		}
 	}
+}
+
+func productionActivationStatusTerminalForPlan(plan productionReleasePlan, status productionStatus) bool {
+	if status.Phase == "AWAITING_CONFIRMATION" && !plan.ManualConfirm && status.AutoConfirm {
+		return false
+	}
+	return productionActivationStatusTerminal(status.Phase)
 }
 
 func productionActivationStatusTerminal(phase string) bool {

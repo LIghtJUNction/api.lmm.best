@@ -12,8 +12,8 @@ import (
 )
 
 type productionDispatchStatusRunner struct {
-	phases []string
-	calls  int
+	statuses []productionStatus
+	calls    int
 }
 
 func (runner *productionDispatchStatusRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
@@ -23,11 +23,11 @@ func (runner *productionDispatchStatusRunner) Run(_ context.Context, command pro
 	remote := command.Args[3:]
 	if len(remote) >= 4 && remote[1] == "deploy" && remote[2] == "production" && remote[3] == "status" {
 		index := runner.calls
-		if index >= len(runner.phases) {
-			index = len(runner.phases) - 1
+		if index >= len(runner.statuses) {
+			index = len(runner.statuses) - 1
 		}
 		runner.calls++
-		return json.Marshal(productionStatus{Phase: runner.phases[index]})
+		return json.Marshal(runner.statuses[index])
 	}
 	return nil, errors.New("unexpected status test remote command")
 }
@@ -71,7 +71,8 @@ func TestAwaitRemoteReleaseStatusWaitsForTerminalPhase(t *testing.T) {
 	plan := productionReleasePlan{
 		Format: productionReleasePlanFormat, DeploymentID: deploymentID,
 		ControllerWorkspace: controllerWorkspace, TargetAlias: productionTargetAlias,
-		ProbeBinary: productionReleaseFilePlan{Path: filepath.Join(controllerWorkspace, "lmm-api")},
+		ProbeBinary:   productionReleaseFilePlan{Path: filepath.Join(controllerWorkspace, "lmm-api")},
+		ManualConfirm: true,
 	}
 	state := productionReleaseControllerState{
 		Format: productionReleaseStateFormat, DeploymentID: deploymentID,
@@ -80,7 +81,11 @@ func TestAwaitRemoteReleaseStatusWaitsForTerminalPhase(t *testing.T) {
 		ActivationUnit:  productionActivationUnit(deploymentID), DispatchAttempts: 1,
 		UpdatedUTC: time.Date(2026, 8, 24, 11, 58, 0, 0, time.UTC),
 	}
-	runner := &productionDispatchStatusRunner{phases: []string{"PREPARING", "DEPLOYING_GO", "AWAITING_CONFIRMATION"}}
+	runner := &productionDispatchStatusRunner{statuses: []productionStatus{
+		{Phase: "PREPARING"},
+		{Phase: "DEPLOYING_GO"},
+		{Phase: "AWAITING_CONFIRMATION"},
+	}}
 	waits := 0
 	runtime := &productionReleaseRuntime{
 		runner: runner,
@@ -92,6 +97,42 @@ func TestAwaitRemoteReleaseStatusWaitsForTerminalPhase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if status.Phase != "AWAITING_CONFIRMATION" || runner.calls != 3 || waits != 2 {
+		t.Fatalf("status=%#v calls=%d waits=%d", status, runner.calls, waits)
+	}
+}
+
+func TestAwaitRemoteReleaseStatusContinuesAutoConfirmObservation(t *testing.T) {
+	const deploymentID = "prod-20260824T115815Z-auto-confirm-fixture"
+	controllerWorkspace := t.TempDir()
+	plan := productionReleasePlan{
+		Format: productionReleasePlanFormat, DeploymentID: deploymentID,
+		ControllerWorkspace: controllerWorkspace, TargetAlias: productionTargetAlias,
+		ProbeBinary:   productionReleaseFilePlan{Path: filepath.Join(controllerWorkspace, "lmm-api")},
+		ManualConfirm: false,
+	}
+	state := productionReleaseControllerState{
+		Format: productionReleaseStateFormat, DeploymentID: deploymentID,
+		PlanSHA256: strings.Repeat("f", 64), Phase: productionReleasePhaseActivationDispatched,
+		RemoteWorkspace: filepath.Join(defaultProductionPaths().WorkRoot, deploymentID),
+		ActivationUnit:  productionActivationUnit(deploymentID), DispatchAttempts: 1,
+		UpdatedUTC: time.Date(2026, 8, 24, 11, 58, 15, 0, time.UTC),
+	}
+	runner := &productionDispatchStatusRunner{statuses: []productionStatus{
+		{Phase: "AWAITING_CONFIRMATION", AutoConfirm: true},
+		{Phase: "AWAITING_CONFIRMATION", AutoConfirm: true},
+		{Phase: "CONFIRMED", AutoConfirm: true},
+	}}
+	waits := 0
+	runtime := &productionReleaseRuntime{
+		runner: runner,
+		now:    func() time.Time { return time.Date(2026, 8, 24, 11, 59, 15, 0, time.UTC) },
+		wait:   func(context.Context, time.Duration) error { waits++; return nil },
+	}
+	status, err := runtime.awaitRemoteReleaseStatus(context.Background(), plan, &state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "CONFIRMED" || runner.calls != 3 || waits != 2 {
 		t.Fatalf("status=%#v calls=%d waits=%d", status, runner.calls, waits)
 	}
 }

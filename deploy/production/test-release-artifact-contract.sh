@@ -6,6 +6,7 @@ ROOT=$(git -C "$HERE" rev-parse --show-toplevel)
 readonly HERE ROOT
 readonly GO_WORKFLOW="$ROOT/.github/workflows/release-go.yml"
 readonly WEB_WORKFLOW="$ROOT/.github/workflows/release-web.yml"
+readonly PROMOTE_WORKFLOW="$ROOT/.github/workflows/promote-release.yml"
 readonly GO_PKGBUILD="$ROOT/packaging/aur/lmm-api-go-bin/PKGBUILD"
 readonly WEB_PKGBUILD="$ROOT/packaging/aur/lmm-api-web-bin/PKGBUILD"
 
@@ -22,7 +23,7 @@ reject_literal() {
   ! grep -Fq -- "$literal" "$file" || fail "$message"
 }
 
-for file in "$GO_WORKFLOW" "$WEB_WORKFLOW" "$GO_PKGBUILD" "$WEB_PKGBUILD"; do
+for file in "$GO_WORKFLOW" "$WEB_WORKFLOW" "$PROMOTE_WORKFLOW" "$GO_PKGBUILD" "$WEB_PKGBUILD"; do
   [[ -f $file ]] || fail "missing contract input: $file"
 done
 
@@ -53,6 +54,10 @@ for gate in 'git merge-base --is-ancestor' 'git rev-list -n 1' \
   'cosign sign-blob' 'cosign verify-blob' 'sha256sum --check'; do
   require_literal "$GO_WORKFLOW" "$gate" "Go release omits gate: $gate"
 done
+require_literal "$GO_WORKFLOW" 'actions: read' \
+  'Go release verifier cannot read workflow runs'
+require_literal "$PROMOTE_WORKFLOW" 'timeout-minutes: 15' \
+  'promotion job timeout does not cover the full governance poll budget'
 
 # The next Web archive has the same revision generator and remains sole owner
 # of the immutable frontend payload.
