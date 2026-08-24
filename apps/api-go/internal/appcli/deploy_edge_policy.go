@@ -166,6 +166,8 @@ func (runtime *productionRuntime) validateEdgePolicyAssets(assetRoot string) err
 		{name: "nginx/http-map.conf", need: "geoip2 /var/lib/geoip2/DBIP-Country-Lite.mmdb {"},
 		{name: "nginx/new-api.conf", need: "include /etc/nginx/lmm-api-region-policy.conf;"},
 		{name: "nginx/lmm-api-region-policy.conf", need: "auth_request /internal/access-ip-policy;"},
+		{name: "nginx/lmm-api-region-policy.conf", need: "proxy_set_header X-LMM-Original-URI $request_uri;"},
+		{name: "nginx/lmm-api-region-policy.conf", need: "proxy_set_header X-LMM-Original-Accept $http_accept;"},
 	} {
 		content, err := os.ReadFile(filepath.Join(assetRoot, check.name))
 		if err != nil || !strings.Contains(string(content), check.need) {

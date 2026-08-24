@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -151,6 +152,47 @@ func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
 	assert.Contains(t, body, "IPv4")
 	assert.Contains(t, body, "route_reject")
 	assert.NotContains(t, body, "符合条件的账号")
+
+	jsonHeaders := make(map[string]string, len(validHeaders)+4)
+	for name, value := range validHeaders {
+		jsonHeaders[name] = value
+	}
+	jsonHeaders[accessPolicyOriginalURIHeader] = "/v1/models?debug=1"
+	jsonHeaders[accessPolicyOriginalAcceptHeader] = "*/*"
+	jsonHeaders["Authorization"] = "Bearer must-not-leak"
+	jsonHeaders["Cookie"] = "session=must-not-leak"
+	status, response = request("127.0.0.1:42000", jsonHeaders)
+	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
+	assert.Contains(t, response.Header().Get("Content-Type"), "application/json")
+	assert.Less(t, response.Body.Len(), 512)
+	assert.NotContains(t, response.Body.String(), "must-not-leak")
+	assert.NotContains(t, response.Body.String(), "203.0.113.42")
+	var payload struct {
+		Error struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id"`
+			Type      string `json:"type"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.Equal(t, accessPolicyRejectedErrorCode, payload.Error.Code)
+	assert.Equal(t, accessPolicyRejectedMessage, payload.Error.Message)
+	assert.Equal(t, accessPolicyRejectedErrorType, payload.Error.Type)
+	assert.NotEmpty(t, payload.Error.RequestID)
+
+	jsonHeaders[accessPolicyOriginalURIHeader] = "/api/status"
+	jsonHeaders[accessPolicyOriginalAcceptHeader] = "text/plain, application/problem+json; q=0.9"
+	status, response = request("127.0.0.1:42000", jsonHeaders)
+	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
+	assert.Contains(t, response.Header().Get("Content-Type"), "application/json")
+
+	jsonHeaders[accessPolicyOriginalURIHeader] = "/"
+	jsonHeaders[accessPolicyOriginalAcceptHeader] = "application/json; q=0, text/html"
+	status, response = request("127.0.0.1:42000", jsonHeaders)
+	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
+	assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
+	assert.NotContains(t, response.Body.String(), "must-not-leak")
 
 	status, _ = request("127.0.0.1:42000", map[string]string{
 		"X-LMM-Internal-Error": accessPolicyErrorHeader,

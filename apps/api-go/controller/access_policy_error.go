@@ -3,8 +3,10 @@ package controller
 import (
 	"fmt"
 	"html/template"
+	"mime"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,9 +15,14 @@ import (
 )
 
 const (
-	accessPolicyErrorHeader  = "access-policy"
-	accessPolicyResultHeader = "X-LMM-Access-Policy"
-	accessPolicyDenied       = "denied"
+	accessPolicyErrorHeader          = "access-policy"
+	accessPolicyResultHeader         = "X-LMM-Access-Policy"
+	accessPolicyOriginalURIHeader    = "X-LMM-Original-URI"
+	accessPolicyOriginalAcceptHeader = "X-LMM-Original-Accept"
+	accessPolicyDenied               = "denied"
+	accessPolicyRejectedErrorCode    = "IP_ACCESS_ROUTE_REJECTED"
+	accessPolicyRejectedErrorType    = "access_policy_error"
+	accessPolicyRejectedMessage      = "Request rejected by IP access policy."
 )
 
 // GetAccessPolicyErrorPage renders the edge-policy response through the Go
@@ -30,17 +37,57 @@ func GetAccessPolicyErrorPage(c *gin.Context) {
 		return
 	}
 
+	requestID := accessPolicyRequestID(c)
+	c.Header(common.RequestIdKey, requestID)
+	c.Header("Cache-Control", "private, no-store, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Vary", "Accept")
+	c.Header("X-Content-Type-Options", "nosniff")
+	if accessPolicyWantsJSON(c) {
+		c.JSON(http.StatusUnavailableForLegalReasons, gin.H{
+			"error": gin.H{
+				"code":       accessPolicyRejectedErrorCode,
+				"message":    accessPolicyRejectedMessage,
+				"request_id": requestID,
+				"type":       accessPolicyRejectedErrorType,
+			},
+		})
+		return
+	}
+
 	language := "zh"
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.GetHeader("Accept-Language"))), "en") {
 		language = "en"
 	}
-	requestID := accessPolicyRequestID(c)
-	c.Header(common.RequestIdKey, requestID)
 	page := accessPolicyErrorPage(language, accessPolicyErrorDiagnostics(c, requestID))
-	c.Header("Cache-Control", "private, no-store, max-age=0")
-	c.Header("Pragma", "no-cache")
-	c.Header("X-Content-Type-Options", "nosniff")
 	c.Data(http.StatusUnavailableForLegalReasons, "text/html; charset=utf-8", []byte(page))
+}
+
+func accessPolicyWantsJSON(c *gin.Context) bool {
+	originalURI := strings.TrimSpace(c.GetHeader(accessPolicyOriginalURIHeader))
+	if queryStart := strings.IndexByte(originalURI, '?'); queryStart >= 0 {
+		originalURI = originalURI[:queryStart]
+	}
+	if originalURI == "/v1" || strings.HasPrefix(originalURI, "/v1/") {
+		return true
+	}
+
+	for mediaRange := range strings.SplitSeq(strings.ToLower(c.GetHeader(accessPolicyOriginalAcceptHeader)), ",") {
+		mediaType, parameters, err := mime.ParseMediaType(strings.TrimSpace(mediaRange))
+		if err != nil {
+			continue
+		}
+		if quality, ok := parameters["q"]; ok {
+			parsedQuality, err := strconv.ParseFloat(quality, 64)
+			if err != nil || parsedQuality <= 0 {
+				continue
+			}
+		}
+		if mediaType == "application/json" || mediaType == "text/json" || strings.HasSuffix(mediaType, "+json") {
+			return true
+		}
+	}
+	return false
 }
 
 type accessPolicyErrorDetails struct {

@@ -76,6 +76,8 @@ func TestEdgePolicyInstallBacksUpRemovesLegacyAndRestores(t *testing.T) {
 			candidate += "include /etc/nginx/lmm-api-region-policy.conf;\n"
 		case "region-policy":
 			candidate += "auth_request /internal/access-ip-policy;\n"
+			candidate += "proxy_set_header X-LMM-Original-URI $request_uri;\n"
+			candidate += "proxy_set_header X-LMM-Original-Accept $http_accept;\n"
 		}
 		if err := os.WriteFile(assetPath, []byte(candidate), 0o644); err != nil {
 			t.Fatal(err)
