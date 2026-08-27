@@ -116,7 +116,8 @@ const rootElement = document.querySelector<HTMLElement>('#root')
 if (!rootElement) {
   throw new Error('Root element not found')
 }
-// Set document.title and favicon from cached status, then refresh from network
+// Set the document title from cached status, then refresh from network.
+// The favicon stays pinned to the static entry mark (/lmm-forge-mark.svg).
 ;(function initSystemBranding() {
   try {
     if (typeof window === 'undefined' || typeof document === 'undefined') return
