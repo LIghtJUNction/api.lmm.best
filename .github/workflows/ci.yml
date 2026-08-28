@@ -69,6 +69,13 @@ jobs:
           bash scripts/test-verify-release-commit-checks.sh
           node --test scripts/release.test.mjs
 
+      - name: Validate lmm-api-rs online installer
+        run: |
+          shellcheck \
+            apps/web/public/install.sh \
+            apps/web/scripts/test-lmm-api-rs-installers.sh
+          bash apps/web/scripts/test-lmm-api-rs-installers.sh
+
       - name: Validate real integration gate contracts
         run: |
           shellcheck \
@@ -82,6 +89,52 @@ jobs:
             deploy/test-nginx-access-policy-preflight.sh \
             deploy/test-nginx-mime.sh
           bash deploy/check-frontend-split.sh
+
+  installer-cross-platform:
+    name: Installer / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-latest
+          - platform: macos
+            runner: macos-latest
+          - platform: windows
+            runner: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate POSIX installer plans
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bash -n apps/web/public/install.sh
+          bash apps/web/public/install.sh --method cargo --dry-run
+          bash apps/web/public/install.sh --method release --dry-run
+
+      - name: Parse and validate PowerShell installer plans
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path apps/web/public/install.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+          ./apps/web/public/install.ps1 -Method cargo -DryRun
+          ./apps/web/public/install.ps1 -Method release -DryRun
 
   release-artifact-contract:
     name: Release artifact contract
@@ -141,6 +194,11 @@ jobs:
         run: |
           bun run --filter @lmm/web build
           bun run --filter @lmm/web bundle:check
+
+      - name: Verify public installers are shipped verbatim
+        run: |
+          cmp apps/web/public/install.sh apps/web/dist/install.sh
+          cmp apps/web/public/install.ps1 apps/web/dist/install.ps1
 
       - name: Install production contract tools
         run: |
