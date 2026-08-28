@@ -183,6 +183,11 @@ preflight() {
 api_paths=(
   /api/status
   /api
+  /.well-known/oauth-authorization-server
+  /oauth/authorize
+  /oauth/device/code
+  /oauth/token
+  /oauth/revoke
   /mcp
   /mcp/tools
   /v1
@@ -228,7 +233,7 @@ fi
 
 # Frontend routes and lookalike prefixes are not API preflights and therefore
 # must not gain the OPTIONS exception.
-for path in /oauth/mj /static/mj/asset.js /apiary; do
+for path in /oauth/consent /oauth/device /oauth/mj /static/mj/asset.js /apiary; do
   status=$(curl --silent --show-error --unix-socket "$socket" \
     --request OPTIONS --output /dev/null \
     --header 'Origin: https://browser.example' \

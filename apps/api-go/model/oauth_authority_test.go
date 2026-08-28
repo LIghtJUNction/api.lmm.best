@@ -5,9 +5,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOAuthHashVectorsMatchTheRustAuthorityContract(t *testing.T) {
+	previous := common.SessionSecret
+	common.SessionSecret = "oauth-contract-test-session-secret"
+	t.Cleanup(func() { common.SessionSecret = previous })
+
+	assert.Equal(t,
+		"bdce4c4b125c53d8d191a6c988bb84fd3ac703fa913fa5797250f8d516271562",
+		authFlowTokenHash("authorization-request-token"),
+	)
+	assert.Equal(t,
+		"b09a2fff0bc85028977df6ab0370080c18e4f6d7d12d9830bbd31d64c646b1c2",
+		oauthOpaqueHash("access-token", "access-token-value"),
+	)
+}
 
 func resetOAuthTables(t *testing.T) {
 	t.Helper()

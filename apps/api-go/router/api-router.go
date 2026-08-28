@@ -84,9 +84,9 @@ func SetApiRouter(router *gin.Engine) {
 		// pi-lens-ignore: compiler:UndeclaredImportedName
 		oauthBootstrapResource.GET("/keys", middleware.OAuthAccessAuth(service.OAuthScopeApiKeysList), middleware.DisableCache(), controller.ListOAuthBootstrapAPIKeys)
 		// pi-lens-ignore: compiler:UndeclaredImportedName
-		oauthBootstrapResource.POST("/keys", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysCreate), middleware.DisableCache(), controller.CreateOAuthBootstrapAPIKey)
+		oauthBootstrapResource.POST("/keys", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysCreate), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.CreateOAuthBootstrapAPIKey)
 		// pi-lens-ignore: compiler:UndeclaredImportedName
-		oauthBootstrapResource.POST("/keys/:id/reveal", middleware.CriticalRateLimit(), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysReveal), middleware.DisableCache(), controller.RevealOAuthBootstrapAPIKey)
+		oauthBootstrapResource.POST("/keys/:id/reveal", middleware.OAuthAccessAuth(service.OAuthScopeApiKeysReveal), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevealOAuthBootstrapAPIKey)
 	}
 
 	apiRouter := router.Group("/api")
@@ -177,12 +177,12 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.ResetPassword)
 		// OAuth routes - specific routes must come before :provider wildcard
 		firstPartyOAuthDashboardRoute := apiRouter.Group("/oauth/authorization")
-		firstPartyOAuthDashboardRoute.Use(middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache())
+		firstPartyOAuthDashboardRoute.Use(middleware.UserAuth(), middleware.DisableCache())
 		{
 			firstPartyOAuthDashboardRoute.GET("/:request", controller.GetOAuthAuthorizationRequest)
-			firstPartyOAuthDashboardRoute.POST("/:request", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.DecideOAuthAuthorization)
+			firstPartyOAuthDashboardRoute.POST("/:request", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.CriticalRateLimit(), controller.DecideOAuthAuthorization)
 		}
-		apiRouter.POST("/oauth/device", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.DecideOAuthDeviceAuthorization)
+		apiRouter.POST("/oauth/device", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.DecideOAuthDeviceAuthorization)
 		apiRouter.POST("/oauth/state", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.GenerateOAuthCode)
 		// Email/code binding is a compact JSON mutation. Bound it before auth so
 		// an authenticated caller cannot make encoding/json grow the heap with an

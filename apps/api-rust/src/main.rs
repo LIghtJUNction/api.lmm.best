@@ -126,6 +126,7 @@ use lmm_api_rs::{
         missing_relay_video::{
             FailClosedRelayVideoService, RelayVideoHttpState, missing_relay_video_router,
         },
+        oauth_authority::{OAuthAuthorityState, router as oauth_authority_router},
         observability::{
             DashboardObservabilityAuthorizer, ObservabilityAuthorizer, ObservabilityState,
             PgDiskCacheMaintenance, PgObservabilityStore, PgReadOnlyObservabilityTokenAuthorizer,
@@ -242,6 +243,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|value| value.parse::<bool>().ok())
         .unwrap_or(false);
     let turnstile = config.auth_turnstile.resolve_public(&initial_options)?;
+    let oauth_issuer = initial_options
+        .get("ServerAddress")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| "http://127.0.0.1:3000".to_owned());
     let runtime_options = ProcessRuntimeOptions::new(initial_options)
         .with_protocol_rollout(config.protocol_rollout.clone())
         .await
@@ -303,13 +309,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&models_service) as Arc<dyn lmm_api_rs::models::ModelsService>,
         version.clone(),
     );
-    let api_token_service = PgValkeyApiTokenService::new(pg.clone(), valkey.clone())
-        .with_cache_ttl(config.models_cache_ttl)
-        .with_crypto_secret(config.crypto_secret.expose_secret())
-        .with_console_activation_on_create(!config.test_instance)
-        .with_auto_groups_cache(!config.test_instance);
+    let api_token_service = Arc::new(
+        PgValkeyApiTokenService::new(pg.clone(), valkey.clone())
+            .with_cache_ttl(config.models_cache_ttl)
+            .with_crypto_secret(config.crypto_secret.expose_secret())
+            .with_console_activation_on_create(!config.test_instance)
+            .with_auto_groups_cache(!config.test_instance),
+    );
     let api_token = ApiTokenMount::new(
-        ApiTokenHttpState::new(Arc::new(api_token_service)),
+        ApiTokenHttpState::new(Arc::clone(&api_token_service)),
         Arc::clone(&auth),
         valkey.clone(),
         config.dependency_timeout,
@@ -836,6 +844,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_console_access_gate(Arc::clone(&auth)),
         );
+        let oauth_authority = http::api_global_rate_limited_surface(
+            &app_state,
+            oauth_authority_router(
+                OAuthAuthorityState::new(
+                    pg.clone(),
+                    Arc::clone(&auth),
+                    Arc::clone(&api_token_service),
+                    config.auth_session_secret.clone(),
+                    &oauth_issuer,
+                )
+                .map_err(io::Error::other)?,
+            ),
+        );
         let open_source_bounties = http::api_global_rate_limited_surface(
             &app_state,
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth))),
@@ -1036,6 +1057,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(observability_disk_cache)
             .merge(observability_performance)
             .merge(observability_force_gc)
+            .merge(oauth_authority)
             .merge(open_source_bounties)
             .merge(public_relays)
             .merge(relay_openai)

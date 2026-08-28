@@ -160,7 +160,10 @@ impl SchemaBackend for PostgresSchemaBackend<'_> {
         tokio::time::timeout(self.timeout, sqlx::query(query).execute(self.pg))
             .await
             .map_err(|_| failed("schema"))?
-            .map_err(|_| failed("schema"))?;
+            .map_err(|error| {
+                tracing::warn!(%error, query, "schema readiness query failed");
+                failed("schema")
+            })?;
         Ok(())
     }
 }

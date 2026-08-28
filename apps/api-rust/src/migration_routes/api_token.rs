@@ -53,6 +53,36 @@ pub struct ApiTokenPrincipal {
     pub preferred_language: Option<&'static str>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct OAuthApiTokenSummary {
+    pub id: i64,
+    pub name: String,
+    pub status: i64,
+    pub created_time: i64,
+    pub accessed_time: i64,
+    pub expired_time: i64,
+    pub group: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OAuthApiTokenSecret {
+    #[serde(flatten)]
+    pub summary: OAuthApiTokenSummary,
+    pub key: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum OAuthApiTokenError {
+    #[error("invalid API key name")]
+    InvalidName,
+    #[error("API key limit reached")]
+    Limit,
+    #[error("API key not found")]
+    NotFound,
+    #[error("API key storage unavailable")]
+    Unavailable,
+}
+
 #[derive(Clone)]
 pub struct ApiTokenHttpState {
     service: Arc<PgValkeyApiTokenService>,
@@ -178,6 +208,144 @@ impl PgValkeyApiTokenService {
     pub fn with_auto_groups_cache(mut self, enabled: bool) -> Self {
         self.include_auto_groups_cache = enabled;
         self
+    }
+
+    pub async fn oauth_list(
+        &self,
+        user_id: i64,
+    ) -> Result<Vec<OAuthApiTokenSummary>, OAuthApiTokenError> {
+        if user_id <= 0 {
+            return Err(OAuthApiTokenError::NotFound);
+        }
+        let rows = sqlx::query(
+            "SELECT id, name, status, created_time, accessed_time, expired_time, COALESCE(\"group\", 'default') AS \"group\" FROM tokens WHERE user_id = $1 AND deleted_at IS NULL ORDER BY id DESC",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pg)
+        .await
+        .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        rows.iter().map(oauth_api_token_summary_from_row).collect()
+    }
+
+    pub async fn oauth_create(
+        &self,
+        user_id: i64,
+        requested_name: &str,
+    ) -> Result<OAuthApiTokenSecret, OAuthApiTokenError> {
+        if user_id <= 0 {
+            return Err(OAuthApiTokenError::NotFound);
+        }
+        let mut name = requested_name.trim().to_owned();
+        if name.is_empty() {
+            name = format!("lmm-api-rs {}", chrono::Utc::now().format("%Y-%m-%d"));
+        }
+        if name.chars().count() > MAX_TOKEN_NAME_BYTES {
+            return Err(OAuthApiTokenError::InvalidName);
+        }
+
+        let settings = self.token_settings().await;
+        let key = generate_key();
+        let now = unix_now();
+        let mut tx = self
+            .pg
+            .begin()
+            .await
+            .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        let owner = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL AND status = 1 FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        if owner.is_none() {
+            return Err(OAuthApiTokenError::NotFound);
+        }
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        if count >= settings.max_user_tokens {
+            return Err(OAuthApiTokenError::Limit);
+        }
+
+        let has_auto_groups_column = self
+            .has_auto_groups_column()
+            .await
+            .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        let id = if has_auto_groups_column {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry, auto_groups) VALUES ($1,$2,1,$3,$4,$4,-1,0,TRUE,FALSE,'','',0,'default',FALSE,'') RETURNING id",
+            )
+            .bind(user_id)
+            .bind(&key)
+            .bind(&name)
+            .bind(now)
+            .fetch_one(&mut *tx)
+            .await
+        } else {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry) VALUES ($1,$2,1,$3,$4,$4,-1,0,TRUE,FALSE,'','',0,'default',FALSE) RETURNING id",
+            )
+            .bind(user_id)
+            .bind(&key)
+            .bind(&name)
+            .bind(now)
+            .fetch_one(&mut *tx)
+            .await
+        }
+        .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        if self.console_activation_on_create {
+            sqlx::query(
+                "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
+            )
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        }
+        tx.commit()
+            .await
+            .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        Ok(OAuthApiTokenSecret {
+            summary: OAuthApiTokenSummary {
+                id,
+                name,
+                status: 1,
+                created_time: now,
+                accessed_time: now,
+                expired_time: -1,
+                group: "default".to_owned(),
+            },
+            key,
+        })
+    }
+
+    pub async fn oauth_reveal(
+        &self,
+        user_id: i64,
+        id: i64,
+    ) -> Result<OAuthApiTokenSecret, OAuthApiTokenError> {
+        if user_id <= 0 || id <= 0 {
+            return Err(OAuthApiTokenError::NotFound);
+        }
+        let row = sqlx::query(
+            "SELECT id, name, status, created_time, accessed_time, expired_time, COALESCE(\"group\", 'default') AS \"group\", key FROM tokens WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&self.pg)
+        .await
+        .map_err(|_| OAuthApiTokenError::Unavailable)?
+        .ok_or(OAuthApiTokenError::NotFound)?;
+        let summary = oauth_api_token_summary_from_row(&row)?;
+        let key = row
+            .try_get::<String, _>("key")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        Ok(OAuthApiTokenSecret { summary, key })
     }
 
     async fn cache_connection(&self) -> Result<MultiplexedConnection, TokenError> {
@@ -2241,6 +2409,34 @@ fn like_pattern(input: &str) -> Result<String, TokenError> {
     }
     Ok(escaped)
 }
+fn oauth_api_token_summary_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<OAuthApiTokenSummary, OAuthApiTokenError> {
+    Ok(OAuthApiTokenSummary {
+        id: row
+            .try_get("id")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+        name: row
+            .try_get("name")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+        status: row
+            .try_get("status")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+        created_time: row
+            .try_get("created_time")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+        accessed_time: row
+            .try_get("accessed_time")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+        expired_time: row
+            .try_get("expired_time")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+        group: row
+            .try_get("group")
+            .map_err(|_| OAuthApiTokenError::Unavailable)?,
+    })
+}
+
 fn generate_key() -> String {
     rand::rng()
         .sample_iter(&Alphanumeric)

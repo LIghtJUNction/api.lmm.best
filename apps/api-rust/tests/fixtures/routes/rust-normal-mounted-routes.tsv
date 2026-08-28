@@ -1,4 +1,5 @@
 # method	path	source evidence
+GET	/.well-known/oauth-authorization-server	apps/api-rust/src/main.rs:oauth_authority
 GET	/:mode/mj/image/:id	apps/api-rust/src/main.rs:relay_midjourney
 POST	/:mode/mj/insight-face/swap	apps/api-rust/src/main.rs:relay_midjourney
 POST	/:mode/mj/submit/action	apps/api-rust/src/main.rs:relay_midjourney
@@ -163,6 +164,12 @@ POST	/api/models/sync_upstream	apps/api-rust/src/main.rs
 GET	/api/models/sync_upstream/preview	apps/api-rust/src/main.rs
 GET	/api/notice	apps/api-rust/src/http.rs:193
 GET	/api/oauth/:provider	apps/api-rust/src/main.rs:identity_federation_oauth_external
+GET	/api/oauth/authorization/:request	apps/api-rust/src/main.rs:oauth_authority
+POST	/api/oauth/authorization/:request	apps/api-rust/src/main.rs:oauth_authority
+GET	/api/oauth/bootstrap/keys	apps/api-rust/src/main.rs:oauth_authority
+POST	/api/oauth/bootstrap/keys	apps/api-rust/src/main.rs:oauth_authority
+POST	/api/oauth/bootstrap/keys/:id/reveal	apps/api-rust/src/main.rs:oauth_authority
+POST	/api/oauth/device	apps/api-rust/src/main.rs:oauth_authority
 POST	/api/oauth/email/bind	apps/api-rust/src/main.rs:identity_federation_oauth_email_bind
 POST	/api/oauth/state	apps/api-rust/src/main.rs:identity_federation_oauth_state
 GET	/api/oauth/telegram/bind/:flow_token	apps/api-rust/src/main.rs:identity_federation_oauth_external
@@ -472,6 +479,10 @@ POST	/mj/submit/video	apps/api-rust/src/main.rs:relay_midjourney
 GET	/mj/task/:id/fetch	apps/api-rust/src/main.rs:relay_midjourney
 GET	/mj/task/:id/image-seed	apps/api-rust/src/main.rs:relay_midjourney
 POST	/mj/task/list-by-condition	apps/api-rust/src/main.rs:relay_midjourney
+GET	/oauth/authorize	apps/api-rust/src/main.rs:oauth_authority
+POST	/oauth/device/code	apps/api-rust/src/main.rs:oauth_authority
+POST	/oauth/revoke	apps/api-rust/src/main.rs:oauth_authority
+POST	/oauth/token	apps/api-rust/src/main.rs:oauth_authority
 POST	/pg/chat/completions	apps/api-rust/src/main.rs:relay_misc_new
 POST	/pg/images/edits	apps/api-rust/src/main.rs:relay_misc_new
 POST	/pg/images/generations	apps/api-rust/src/main.rs:relay_misc_new

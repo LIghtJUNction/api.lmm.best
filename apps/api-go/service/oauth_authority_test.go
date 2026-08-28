@@ -10,6 +10,7 @@ import (
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -140,10 +141,63 @@ func TestOAuthBootstrapAPIKeyCreateListAndReveal(t *testing.T) {
 }
 
 // pi-lens-ignore: go-test-functions
+// pi-lens-ignore: go-test-functions
+func TestOAuthBootstrapAPIKeyCreationEnforcesTheTransactionalLimit(t *testing.T) {
+	resetOAuthServiceState(t)
+	require.NoError(t, model.DB.Exec("DELETE FROM tokens").Error)
+	require.NoError(t, model.DB.Exec("DELETE FROM users").Error)
+	user := model.User{Username: "oauth-key-limit-owner", Status: common.UserStatusEnabled, Role: common.RoleCommonUser}
+	require.NoError(t, model.DB.Create(&user).Error)
+
+	settings := operation_setting.GetTokenSetting()
+	previousLimit := settings.MaxUserTokens
+	settings.MaxUserTokens = 1
+	t.Cleanup(func() { settings.MaxUserTokens = previousLimit })
+
+	_, err := CreateOAuthBootstrapAPIKey(user.Id, "first", time.Now().UTC())
+	require.NoError(t, err)
+	second, err := CreateOAuthBootstrapAPIKey(user.Id, "second", time.Now().UTC())
+	assert.Nil(t, second)
+	assert.ErrorIs(t, err, ErrOAuthAPIKeyLimit)
+	count, err := model.CountUserTokens(user.Id)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count)
+}
+
+func TestOAuthIssuerRequiresHTTPSOrAnExactLoopbackIP(t *testing.T) {
+	original := system_setting.ServerAddress
+	t.Cleanup(func() { system_setting.ServerAddress = original })
+
+	for _, valid := range []string{
+		"https://api.example.test/",
+		"http://127.0.0.1:3000",
+		"http://[::1]:3000",
+	} {
+		system_setting.ServerAddress = valid
+		issuer, err := OAuthIssuer()
+		require.NoError(t, err, valid)
+		assert.False(t, strings.HasSuffix(issuer, "/"))
+	}
+	for _, invalid := range []string{
+		"http://localhost:3000",
+		"http://127.0.0.2:3000",
+		"ftp://127.0.0.1:3000",
+		"https://user@example.test",
+		"https://api.example.test?next=evil",
+	} {
+		system_setting.ServerAddress = invalid
+		_, err := OAuthIssuer()
+		assert.Error(t, err, invalid)
+	}
+}
+
 func TestOAuthLoopbackRedirectValidationIsExact(t *testing.T) {
 	assert.True(t, validOAuthRedirectURI("http://127.0.0.1:49152/oauth/callback"))
 	assert.True(t, validOAuthRedirectURI("http://[::1]:49152/oauth/callback"))
 	assert.False(t, validOAuthRedirectURI("http://localhost:49152/oauth/callback"))
+	assert.False(t, validOAuthRedirectURI("http://127.0.0.2:49152/oauth/callback"))
+	assert.False(t, validOAuthRedirectURI("http://127.1:49152/oauth/callback"))
+	assert.False(t, validOAuthRedirectURI("http://[::ffff:127.0.0.1]:49152/oauth/callback"))
 	assert.False(t, validOAuthRedirectURI("http://127.0.0.1:80/oauth/callback"))
 	assert.False(t, validOAuthRedirectURI("http://127.0.0.1:49152/other"))
 	assert.False(t, validOAuthRedirectURI("http://127.0.0.1:49152/oauth/callback?next=evil"))

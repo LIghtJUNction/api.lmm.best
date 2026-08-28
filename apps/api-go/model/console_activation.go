@@ -12,6 +12,8 @@ import (
 
 const existingUsersL1BackfillOptionKey = "migration.existing_users_l1.v1"
 
+var ErrUserTokenLimitReached = errors.New("user token limit reached")
+
 // ConsoleActivationNeedsLegacyBackfill must be sampled before AutoMigrate.
 // A missing column means every row already present belongs to a pre-rollout
 // account and must retain full console access after the column is added.
@@ -69,6 +71,40 @@ func InitializeExistingUsersL1Backfill() error {
 	})
 }
 
+// InsertTokenWithinLimitAndActivateConsole serializes credential creation per
+// user so concurrent OAuth bootstrap requests cannot exceed the configured
+// limit. The user row is also revalidated inside the transaction.
+func InsertTokenWithinLimitAndActivateConsole(token *Token, limit int) error {
+	if token == nil || token.UserId <= 0 {
+		return gorm.ErrInvalidData
+	}
+	if limit <= 0 {
+		return ErrUserTokenLimitReached
+	}
+	now := time.Now().Unix()
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var owner User
+		if err := lockForUpdate(tx).
+			Where("id = ? AND status = ?", token.UserId, common.UserStatusEnabled).
+			First(&owner).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&Token{}).Where("user_id = ?", token.UserId).Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= int64(limit) {
+			return ErrUserTokenLimitReached
+		}
+		return insertTokenAndActivateConsole(tx, token, now)
+	})
+	if err != nil {
+		return err
+	}
+	invalidateTokenOwnerCache(token.UserId)
+	return nil
+}
+
 // InsertTokenAndActivateConsole commits the first credential and permanent
 // console activation together. Deleting every credential later does not
 // revoke the activation timestamp.
@@ -77,19 +113,26 @@ func InsertTokenAndActivateConsole(token *Token) error {
 		return gorm.ErrInvalidData
 	}
 	now := time.Now().Unix()
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(token).Error; err != nil {
-			return err
-		}
-		return tx.Model(&User{}).
-			Where("id = ? AND console_activated_at = ?", token.UserId, 0).
-			Update("console_activated_at", now).Error
-	})
-	if err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		return insertTokenAndActivateConsole(tx, token, now)
+	}); err != nil {
 		return err
 	}
-	if err := invalidateUserCache(token.UserId); err != nil {
-		common.SysLog("failed to invalidate user cache after console activation: " + err.Error())
-	}
+	invalidateTokenOwnerCache(token.UserId)
 	return nil
+}
+
+func insertTokenAndActivateConsole(tx *gorm.DB, token *Token, now int64) error {
+	if err := tx.Create(token).Error; err != nil {
+		return err
+	}
+	return tx.Model(&User{}).
+		Where("id = ? AND console_activated_at = ?", token.UserId, 0).
+		Update("console_activated_at", now).Error
+}
+
+func invalidateTokenOwnerCache(userID int) {
+	if err := invalidateUserCache(userID); err != nil {
+		common.SysLog("failed to invalidate user cache after credential creation: " + err.Error())
+	}
 }

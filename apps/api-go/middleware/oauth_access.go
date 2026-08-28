@@ -61,7 +61,11 @@ func OAuthAccessAuth(requiredScopes ...string) gin.HandlerFunc {
 func writeOAuthAccessError(c *gin.Context, code, description string) {
 	c.Header("WWW-Authenticate", `Bearer realm="api.lmm.best", error="`+code+`"`)
 	c.Header("Cache-Control", "no-store")
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+	status := http.StatusUnauthorized
+	if code == "insufficient_scope" {
+		status = http.StatusForbidden
+	}
+	c.AbortWithStatusJSON(status, gin.H{
 		"error":             code,
 		"error_description": description,
 	})

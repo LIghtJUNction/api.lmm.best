@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -149,7 +148,7 @@ func OAuthIssuer() (string, error) {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", fmt.Errorf("configure a valid OAuth server address: %w", ErrOAuthInvalidRequest)
 	}
-	if parsed.Scheme != "https" && !isLoopbackHostname(parsed.Hostname()) {
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHostname(parsed.Hostname())) {
 		return "", fmt.Errorf("oauth issuer requires https: %w", ErrOAuthInvalidRequest)
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
@@ -457,8 +456,7 @@ func validOAuthRedirectURI(value string) bool {
 }
 
 func isLoopbackHostname(host string) bool {
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return host == "127.0.0.1" || host == "::1"
 }
 
 func validOAuthState(value string) bool {

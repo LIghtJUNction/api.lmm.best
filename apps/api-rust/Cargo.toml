@@ -50,6 +50,7 @@ secrecy = { version = "0.10.3", features = ["serde"] }
 sha2 = "0.10.9"
 rust_decimal = { version = "1.40.0", default-features = false, features = ["std"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros"] }
+sqlx-postgres = { version = "0.8.6", default-features = false, features = ["chrono"] }
 thiserror = "2.0.12"
 subtle = "2.6.1"
 tokio = { version = "1.47.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -98,6 +99,7 @@ serde_json.workspace = true
 sha2.workspace = true
 rust_decimal.workspace = true
 sqlx.workspace = true
+sqlx-postgres.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

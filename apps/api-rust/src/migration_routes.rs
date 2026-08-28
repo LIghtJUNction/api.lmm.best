@@ -57,6 +57,7 @@ pub mod missing_identity_waffo;
 pub mod missing_relay_misc_new;
 pub mod missing_relay_models_billing;
 pub mod missing_relay_video;
+pub mod oauth_authority;
 pub mod observability;
 pub mod open_source_bounties;
 pub mod public_relay;

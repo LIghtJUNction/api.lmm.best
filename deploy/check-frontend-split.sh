@@ -17,7 +17,18 @@ for route in '/api/' '/v1/' '/v1beta/' '/pg/' '/mj/' '/suno/' '/kling/v1/' '/jim
   assert_literal "$route" "$config"
 done
 assert_literal '^/[^/]+/mj(?:/|$)' "$config"
-assert_literal 'location ^~ /oauth/' "$config"
+for route in \
+  '/.well-known/oauth-authorization-server' \
+  '/oauth/authorize' \
+  '/oauth/device/code' \
+  '/oauth/token' \
+  '/oauth/revoke'; do
+  assert_literal "location = $route" "$config"
+done
+assert_literal 'location ^~ /oauth/ { try_files /index.html =404;' "$config"
+if grep -Fq 'location = /oauth/device {' "$config" || grep -Fq 'location = /oauth/consent {' "$config"; then
+  fail 'OAuth consent and device confirmation must remain frontend routes'
+fi
 assert_literal 'include /etc/nginx/lmm-api-mime.types;' "$config"
 assert_literal 'default_type application/octet-stream;' "$config"
 if grep -Fq 'include /etc/nginx/mime.types;' "$config"; then

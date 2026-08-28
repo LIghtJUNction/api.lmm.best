@@ -57,13 +57,6 @@ func CreateOAuthBootstrapAPIKey(userId int, name string, now time.Time) (*OAuthB
 	if len([]rune(name)) > 50 {
 		return nil, ErrOAuthAPIKeyName
 	}
-	count, err := model.CountUserTokens(userId)
-	if err != nil {
-		return nil, fmt.Errorf("count oauth bootstrap api keys: %w", err)
-	}
-	if int(count) >= operation_setting.GetMaxUserTokens() {
-		return nil, ErrOAuthAPIKeyLimit
-	}
 	key, err := common.GenerateKey()
 	if err != nil {
 		return nil, fmt.Errorf("generate oauth bootstrap api key: %w", err)
@@ -74,7 +67,10 @@ func CreateOAuthBootstrapAPIKey(userId int, name string, now time.Time) (*OAuthB
 		CreatedTime: timestamp, AccessedTime: timestamp, ExpiredTime: -1,
 		UnlimitedQuota: true, Group: "default", CrossGroupRetry: false,
 	}
-	if err := model.InsertTokenAndActivateConsole(&token); err != nil {
+	if err := model.InsertTokenWithinLimitAndActivateConsole(&token, operation_setting.GetMaxUserTokens()); err != nil {
+		if errors.Is(err, model.ErrUserTokenLimitReached) {
+			return nil, ErrOAuthAPIKeyLimit
+		}
 		return nil, fmt.Errorf("create oauth bootstrap api key: %w", err)
 	}
 	return &OAuthBootstrapAPIKeySecret{
