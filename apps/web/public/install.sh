@@ -149,7 +149,7 @@ verify_sigstore_if_available() {
   if command_exists cosign; then
     cosign verify-blob \
       --bundle "$sigstore_bundle" \
-      --certificate-identity-regexp '^https://github.com/LIghtJUNction/api\.lmm\.best/\.github/workflows/release\.yml@refs/tags/v[0-9A-Za-z.-]+$' \
+      --certificate-identity-regexp '^https://github.com/LIghtJUNction/api\.lmm\.best/\.github/workflows/release-rust\.yml@refs/tags/cli-v[0-9A-Za-z.-]+$' \
       --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
       "$sigstore_archive" >/dev/null
   else
@@ -161,7 +161,7 @@ install_release() {
   platform=$(release_platform)
   artifact="lmm-api-rs-${VERSION}-${platform}"
   archive="${artifact}.tar.gz"
-  base="${REPOSITORY}/releases/download/v${VERSION}"
+  base="${REPOSITORY}/releases/download/cli-v${VERSION}"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/lmm-api-rs-install.XXXXXXXX")
   trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
   download "$base/$archive" "$tmp/$archive"
@@ -190,7 +190,7 @@ install_cargo() {
   command_exists cargo || { echo "cargo is unavailable" >&2; return 1; }
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/lmm-api-rs-cargo.XXXXXXXX")
   trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
-  cargo install --locked --git "$REPOSITORY" --tag "v$VERSION" \
+  cargo install --locked --git "$REPOSITORY" --tag "cli-v$VERSION" \
     --root "$tmp/root" lmm-api-rs
   [ -f "$tmp/root/bin/lmm-api-rs" ] || { echo "cargo did not produce lmm-api-rs" >&2; return 1; }
   if [ -L "$INSTALL_DIR" ]; then
@@ -213,7 +213,7 @@ selected=$(select_method)
 if $DRY_RUN; then
   case "$selected" in
     aur) printf '%s -S --needed lmm-api-rs-bin\n' "$(aur_helper 2>/dev/null || printf '<paru-or-yay>')" ;;
-    cargo) printf 'cargo install --locked --git %s --tag v%s lmm-api-rs\n' "$REPOSITORY" "$VERSION" ;;
+    cargo) printf 'cargo install --locked --git %s --tag cli-v%s lmm-api-rs\n' "$REPOSITORY" "$VERSION" ;;
     release) printf 'download and verify lmm-api-rs-%s-%s.tar.gz\n' "$VERSION" "$(release_platform)" ;;
   esac
   printf 'lmm-api symlink: unchanged\n'

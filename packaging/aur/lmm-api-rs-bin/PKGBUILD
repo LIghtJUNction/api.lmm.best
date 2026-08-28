@@ -1,53 +1,85 @@
-# Maintainer: LIghtJUNction
-
+# Maintainer: LIghtJUNction <lightjunction@users.noreply.github.com>
 pkgname=lmm-api-rs-bin
 pkgver=0.1.6
 pkgrel=1
-pkgdesc='LMM API Rust backend and database migrator (prebuilt)'
-arch=('x86_64')
+pkgdesc='LMM API Rust client/server, bootstrap commands, and database migrator (prebuilt)'
+arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/api.lmm.best'
 license=('AGPL-3.0-or-later')
 depends=('gcc-libs' 'glibc')
 makedepends=('cosign')
-optdepends=('postgresql: PostgreSQL database' 'valkey: cache and rate-limit service')
+optdepends=(
+  'postgresql: PostgreSQL database when running the server'
+  'valkey: cache and rate-limit service when running the server'
+)
 provides=("lmm-api-rs=${pkgver}")
-conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-rs' 'lmm-api-rs-git')
+conflicts=('lmm-api-rs' 'lmm-api-rs-git')
 options=('!strip')
 
-_release_tag="v${pkgver}"
-_artifact="lmm-api-rs-${pkgver}-linux-amd64"
+_release_tag="cli-v${pkgver}"
+case "$CARCH" in
+  x86_64) _asset_platform=linux-amd64 ;;
+  aarch64) _asset_platform=linux-arm64 ;;
+  *) error "unsupported architecture: $CARCH"; return 1 ;;
+esac
+_artifact="lmm-api-rs-${pkgver}-${_asset_platform}"
 _release_base="${url}/releases/download/${_release_tag}"
-source=(
-  "${_artifact}.tar.gz::${_release_base}/${_artifact}.tar.gz"
-  "${_artifact}.tar.gz.sha256::${_release_base}/${_artifact}.tar.gz.sha256"
-  "${_artifact}.tar.gz.sigstore.json::${_release_base}/${_artifact}.tar.gz.sigstore.json"
+
+source_x86_64=(
+  "lmm-api-rs-${pkgver}-linux-amd64.tar.gz::${_release_base}/lmm-api-rs-${pkgver}-linux-amd64.tar.gz"
+  "lmm-api-rs-${pkgver}-linux-amd64.tar.gz.sha256::${_release_base}/lmm-api-rs-${pkgver}-linux-amd64.tar.gz.sha256"
+  "lmm-api-rs-${pkgver}-linux-amd64.tar.gz.sigstore.json::${_release_base}/lmm-api-rs-${pkgver}-linux-amd64.tar.gz.sigstore.json"
 )
-noextract=("${_artifact}.tar.gz")
-sha256sums=('SKIP' 'SKIP' 'SKIP')
+source_aarch64=(
+  "lmm-api-rs-${pkgver}-linux-arm64.tar.gz::${_release_base}/lmm-api-rs-${pkgver}-linux-arm64.tar.gz"
+  "lmm-api-rs-${pkgver}-linux-arm64.tar.gz.sha256::${_release_base}/lmm-api-rs-${pkgver}-linux-arm64.tar.gz.sha256"
+  "lmm-api-rs-${pkgver}-linux-arm64.tar.gz.sigstore.json::${_release_base}/lmm-api-rs-${pkgver}-linux-arm64.tar.gz.sigstore.json"
+)
+sha256sums_x86_64=('SKIP' 'SKIP' 'SKIP')
+sha256sums_aarch64=('SKIP' 'SKIP' 'SKIP')
+noextract=(
+  "lmm-api-rs-${pkgver}-linux-amd64.tar.gz"
+  "lmm-api-rs-${pkgver}-linux-arm64.tar.gz"
+)
 
 prepare() {
+  cd "$srcdir" || return
   local archive="${_artifact}.tar.gz"
+  local checksum_file="${archive}.sha256"
+  local bundle="${archive}.sigstore.json"
   local expected actual
 
-  expected=$(awk 'NR == 1 { print $1 }' "${archive}.sha256")
-  [[ ${expected} =~ ^[[:xdigit:]]{64}$ ]] || return 1
-  actual=$(sha256sum "${archive}")
-  [[ ${actual%% *} == "${expected}" ]] || return 1
+  expected=$(awk -v name="$archive" '$2 == name || $2 == "*" name { print $1; exit }' "$checksum_file")
+  [[ $expected =~ ^[[:xdigit:]]{64}$ ]] || {
+    error "release checksum is missing or malformed for $archive"
+    return 1
+  }
+  actual=$(sha256sum "$archive" | awk '{print $1}')
+  [[ $actual == "$expected" ]] || {
+    error "release checksum mismatch for $archive"
+    return 1
+  }
+
   cosign verify-blob \
-    --bundle "${archive}.sigstore.json" \
-    --certificate-identity \
-      "${url}/.github/workflows/release.yml@refs/tags/${_release_tag}" \
+    --bundle "$bundle" \
+    --certificate-identity "https://github.com/LIghtJUNction/api.lmm.best/.github/workflows/release-rust.yml@refs/tags/${_release_tag}" \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-    "${archive}"
-  bsdtar -xf "${archive}"
+    "$archive"
+
+  tar -tzf "$archive" | awk -v root="${_artifact}/" '
+    index($0, root) != 1 || $0 ~ /(^|\/)\.\.($|\/)/ || $0 ~ /^\// { exit 1 }
+  ' || {
+    error "unsafe release archive layout"
+    return 1
+  }
+  tar -xzf "$archive"
 }
 
 package() {
-  local bundle="${srcdir}/${_artifact}"
-  install -Dm0755 "${bundle}/lmm-api-rs" "${pkgdir}/usr/bin/lmm-api-rs"
-  install -Dm0755 "${bundle}/lmm-db-migrate" "${pkgdir}/usr/bin/lmm-db-migrate"
-  for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
-    install -Dm0644 "${bundle}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
-  done
-  install -Dm0644 "${bundle}/REVISION" "${pkgdir}/usr/share/doc/${pkgname}/REVISION"
+  install -Dm0755 "$srcdir/${_artifact}/lmm-api-rs" "$pkgdir/usr/bin/lmm-api-rs"
+  install -Dm0755 "$srcdir/${_artifact}/lmm-db-migrate" "$pkgdir/usr/bin/lmm-db-migrate"
+  install -Dm0644 "$srcdir/${_artifact}/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 "$srcdir/${_artifact}/NOTICE" "$pkgdir/usr/share/doc/$pkgname/NOTICE"
+  install -Dm0644 "$srcdir/${_artifact}/THIRD-PARTY-LICENSES.md" \
+    "$pkgdir/usr/share/doc/$pkgname/THIRD-PARTY-LICENSES.md"
 }

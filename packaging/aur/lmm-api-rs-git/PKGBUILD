@@ -3,15 +3,15 @@
 pkgname=lmm-api-rs-git
 pkgver=0.1.1.r7.g24093b139
 pkgrel=1
-pkgdesc='LMM API Rust backend and database migrator (git)'
-arch=('x86_64')
+pkgdesc='LMM API Rust client/server, bootstrap commands, and database migrator (git)'
+arch=('x86_64' 'aarch64')
 url='https://github.com/LIghtJUNction/api.lmm.best'
 license=('AGPL-3.0-or-later')
 depends=('gcc-libs' 'glibc' 'sqlite')
 makedepends=('cargo' 'git')
 optdepends=('postgresql: PostgreSQL database' 'valkey: cache and rate-limit service')
 provides=('lmm-api-rs')
-conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-rs' 'lmm-api-rs-bin')
+conflicts=('lmm-api-rs' 'lmm-api-rs-bin')
 options=('!strip')
 source=('lmm-api-rs::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main')
 sha256sums=('SKIP')

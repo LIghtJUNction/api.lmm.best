@@ -56,7 +56,7 @@ CARGO_LOG="$cargo_log" PATH="$fake_bin:$system_path" HOME="$fixture/home" \
   "$installer" --method cargo --version 9.8.7 --install-dir "$cargo_destination"
 [[ -x $cargo_destination/lmm-api-rs ]]
 [[ ! -e $cargo_destination/lmm-api && ! -L $cargo_destination/lmm-api ]]
-grep -F -- '--locked --git https://github.com/LIghtJUNction/api.lmm.best --tag v9.8.7' "$cargo_log" >/dev/null
+grep -F -- '--locked --git https://github.com/LIghtJUNction/api.lmm.best --tag cli-v9.8.7' "$cargo_log" >/dev/null
 
 dry_output=$(PATH="$fake_bin:$system_path" HOME="$fixture/home" "$installer" \
   --method cargo --version 9.8.7 --install-dir "$fixture/dry" --dry-run)

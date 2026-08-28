@@ -101,7 +101,7 @@ function Assert-SigstoreIfAvailable([string]$Archive, [string]$Bundle) {
     if (Test-Command "cosign") {
         & cosign verify-blob `
             --bundle $Bundle `
-            --certificate-identity-regexp '^https://github.com/LIghtJUNction/api\.lmm\.best/\.github/workflows/release\.yml@refs/tags/v[0-9A-Za-z.-]+$' `
+            --certificate-identity-regexp '^https://github.com/LIghtJUNction/api\.lmm\.best/\.github/workflows/release-rust\.yml@refs/tags/cli-v[0-9A-Za-z.-]+$' `
             --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' `
             $Archive | Out-Null
         if ($LASTEXITCODE -ne 0) {
@@ -132,7 +132,7 @@ function Install-FromCargo {
     }
     $temporary = New-TemporaryDirectory
     try {
-        & cargo install --locked --git $Repository --tag "v$Version" --root (Join-Path $temporary "root") lmm-api-rs
+        & cargo install --locked --git $Repository --tag "cli-v$Version" --root (Join-Path $temporary "root") lmm-api-rs
         if ($LASTEXITCODE -ne 0) {
             throw "cargo install failed"
         }
@@ -151,7 +151,7 @@ function Install-FromRelease {
     $platform = Get-ReleasePlatform
     $artifact = "lmm-api-rs-$Version-$platform"
     $archiveName = "$artifact.tar.gz"
-    $base = "$Repository/releases/download/v$Version"
+    $base = "$Repository/releases/download/cli-v$Version"
     $temporary = New-TemporaryDirectory
     try {
         $archive = Join-Path $temporary $archiveName
@@ -191,7 +191,7 @@ function Install-FromRelease {
 $selected = Get-SelectedMethod
 if ($DryRun) {
     switch ($selected) {
-        "cargo" { Write-Output "cargo install --locked --git $Repository --tag v$Version lmm-api-rs" }
+        "cargo" { Write-Output "cargo install --locked --git $Repository --tag cli-v$Version lmm-api-rs" }
         "release" { Write-Output "download and verify lmm-api-rs-$Version-$(Get-ReleasePlatform).tar.gz" }
     }
     Write-Output "lmm-api link or shim: unchanged"

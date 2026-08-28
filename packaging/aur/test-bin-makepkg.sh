@@ -256,7 +256,7 @@ for binary in lmm-api-rs lmm-db-migrate; do
 done
 add_metadata "$rs_bundle"
 create_archive "$rs_work" "$rs_artifact"
-pin_fixture_hashes "$rs_work/PKGBUILD" sha256sums \
+pin_fixture_hashes "$rs_work/PKGBUILD" sha256sums_x86_64 \
   "$rs_work/${rs_artifact}.tar.gz" \
   "$rs_work/${rs_artifact}.tar.gz.sha256" \
   "$rs_work/${rs_artifact}.tar.gz.sigstore.json"

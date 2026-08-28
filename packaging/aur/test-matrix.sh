@@ -138,11 +138,23 @@ done
 contains_srcinfo lmm-api-rs-bin $'\tconflicts = lmm-api-rs-git'
 contains_srcinfo lmm-api-rs-git $'\tconflicts = lmm-api-rs-bin'
 
-for package in lmm-api-go lmm-api-go-bin lmm-api-go-git lmm-api-rs-bin lmm-api-rs-git; do
+for package in lmm-api-go lmm-api-go-bin lmm-api-go-git; do
   for removed_core in lmm-api lmm-api-bin lmm-api-git; do
     contains_srcinfo "$package" $'\tconflicts = '"$removed_core"
   done
 done
+for package in lmm-api-rs-bin lmm-api-rs-git; do
+  for selectable_name in lmm-api lmm-api-bin lmm-api-git lmm-api-go lmm-api-go-bin lmm-api-go-git; do
+    if grep -Fqx $'\tconflicts = '"$selectable_name" "$HERE/$package/.SRCINFO"; then
+      die "$package prevents Go/Rust provider coexistence via $selectable_name"
+    fi
+  done
+  if grep -Eq $'^\tprovides = lmm-api(=|$)' "$HERE/$package/.SRCINFO"; then
+    die "$package incorrectly owns the backend-selection name"
+  fi
+done
+contains_srcinfo lmm-api-rs-bin $'\tarch = aarch64'
+contains_srcinfo lmm-api-rs-git $'\tarch = aarch64'
 
 for package in lmm-api-go-bin lmm-api-rs-bin; do
   pkgbuild="$HERE/$package/PKGBUILD"
@@ -160,6 +172,13 @@ grep -Fq '_release_tag="go-v${pkgver}"' "$HERE/lmm-api-go-bin/PKGBUILD" ||
 grep -Fq '.github/workflows/release-go.yml@refs/tags/${_release_tag}' \
   "$HERE/lmm-api-go-bin/PKGBUILD" ||
   die 'Go binary package does not verify the independent Go release identity'
+# shellcheck disable=SC2016 # Deliberately inspect PKGBUILD source literals.
+grep -Fq '_release_tag="cli-v${pkgver}"' "$HERE/lmm-api-rs-bin/PKGBUILD" ||
+  die 'Rust binary package does not use the independent Rust release tag'
+# shellcheck disable=SC2016 # Deliberately inspect PKGBUILD source literals.
+grep -Fq '.github/workflows/release-rust.yml@refs/tags/${_release_tag}' \
+  "$HERE/lmm-api-rs-bin/PKGBUILD" ||
+  die 'Rust binary package does not verify the independent Rust release identity'
 pkgbuild="$HERE/lmm-api-web-bin/PKGBUILD"
 grep -Fq 'cosign verify-blob' "$pkgbuild" || die 'lmm-api-web-bin lacks Sigstore verification'
 grep -Fq 'sha256sum' "$pkgbuild" || die 'lmm-api-web-bin lacks SHA-256 verification'
@@ -314,6 +333,7 @@ printf 'fixture archive\n' >"$stage/go-next/lmm-api-go-${go_bin_pkgver}-linux-am
 (
   srcdir="$stage/rs"
   pkgdir="$tmp/pkg-rs"
+  CARCH=x86_64
   # shellcheck disable=SC1091
   source "$HERE/lmm-api-rs-bin/PKGBUILD"
   package
@@ -405,6 +425,6 @@ for pkgbuild in "$HERE/lmm-api-go/PKGBUILD" "$HERE/lmm-api-go-git/PKGBUILD" "$HE
     die "Go package does not apply the shared CLI phase install contract: $pkgbuild"
 done
 [[ ! -e $tmp/pkg-rs/usr/bin/lmm-api && ! -L $tmp/pkg-rs/usr/bin/lmm-api ]] ||
-  die 'Rust package exposes the Go provider command'
+  die 'Rust package incorrectly owns the backend-selection symlink'
 
-printf '%s\n' 'single-CLI split backend and Web AUR matrix verified'
+printf '%s\n' 'coexisting provider binaries and Web AUR matrix verified'
