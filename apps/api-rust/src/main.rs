@@ -1,3 +1,4 @@
+mod bootstrap_cli;
 mod config;
 mod http;
 mod probes;
@@ -214,6 +215,9 @@ impl ControlTaskStatusProbe for ListenerControlTaskStatusProbe {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if bootstrap_cli::run_from_env()? == bootstrap_cli::Dispatch::Completed {
+        return Ok(());
+    }
     lmm_observability::init()?;
     let config = Config::from_env()?;
     let protocol_registry = Arc::new(validated_current_registry().map_err(|error| {
