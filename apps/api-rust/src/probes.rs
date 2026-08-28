@@ -65,6 +65,11 @@ FROM advanced_security_events WHERE FALSE"#,
     "SELECT user_id, ip, created_at, updated_at FROM personal_access_ips WHERE FALSE",
 ];
 
+const OAUTH_AUTHORITY_SCHEMA_SELECTS: &[&str] = &[
+    "SELECT id, device_code_hash, user_code_hash, client_id, scopes, status, user_id, interval_seconds, last_polled_at, created_at, expires_at, consumed_at FROM oauth_device_grants WHERE FALSE",
+    "SELECT id, token_hash, kind, family_id, client_id, user_id, scopes, created_at, expires_at, consumed_at, revoked_at FROM oauth_grant_tokens WHERE FALSE",
+];
+
 pub struct InfrastructureProbe {
     pg: PgPool,
     valkey: redis::Client,
@@ -185,6 +190,11 @@ async fn schema_compatible_with(
             backend.verify_select(query).await?;
         }
     }
+    if schema_contract >= 4 {
+        for query in OAUTH_AUTHORITY_SCHEMA_SELECTS {
+            backend.verify_select(query).await?;
+        }
+    }
     Ok(())
 }
 
@@ -210,7 +220,10 @@ mod tests {
         }
 
         async fn verify_select(&self, query: &'static str) -> Result<(), ProbeError> {
-            self.seen.lock().expect("mock schema lock").push(query);
+            self.seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(query);
             if self.failing_query == Some(query) {
                 Err(failed("schema"))
             } else {
@@ -221,20 +234,31 @@ mod tests {
 
     fn backend(failing_query: Option<&'static str>) -> MockSchemaBackend {
         MockSchemaBackend {
-            range: (1, 3),
+            range: (1, 4),
             failing_query,
             seen: Mutex::new(Vec::new()),
         }
     }
 
+    fn required_probe_error<T>(
+        result: Result<T, ProbeError>,
+    ) -> Result<ProbeError, std::io::Error> {
+        result
+            .err()
+            .ok_or_else(|| std::io::Error::other("probe unexpectedly succeeded"))
+    }
+
     #[tokio::test]
-    async fn schema_readiness_verifies_every_mounted_route_select() {
+    async fn schema_readiness_verifies_every_mounted_route_select()
+    -> Result<(), Box<dyn std::error::Error>> {
         let backend = backend(None);
-        schema_compatible_with(&backend, 2)
-            .await
-            .expect("compatible status schema");
+        schema_compatible_with(&backend, 2).await?;
         assert_eq!(
-            backend.seen.lock().expect("mock schema lock").as_slice(),
+            backend
+                .seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_slice(),
             [
                 STATUS_SCHEMA_SELECTS,
                 AUTH_SCHEMA_SELECTS,
@@ -243,10 +267,12 @@ mod tests {
             ]
             .concat()
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn schema_readiness_fails_when_any_mounted_route_select_is_missing_or_denied() {
+    async fn schema_readiness_fails_when_any_mounted_route_select_is_missing_or_denied()
+    -> Result<(), Box<dyn std::error::Error>> {
         for query in STATUS_SCHEMA_SELECTS
             .iter()
             .chain(AUTH_SCHEMA_SELECTS)
@@ -254,38 +280,65 @@ mod tests {
             .chain(OPEN_SOURCE_BOUNTY_SCHEMA_SELECTS)
         {
             let backend = backend(Some(query));
-            let error = schema_compatible_with(&backend, 2)
-                .await
-                .expect_err("missing table, column, or SELECT grant must fail readiness");
+            let error = required_probe_error(schema_compatible_with(&backend, 2).await)?;
             assert_eq!(error.dependency, "schema", "query: {query}");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn contract_three_requires_the_bounty_archive_column() {
+    async fn contract_three_requires_the_bounty_archive_column()
+    -> Result<(), Box<dyn std::error::Error>> {
         let backend = backend(Some(CURRENT_DASHBOARD_SCHEMA_SELECTS[0]));
-        let error = schema_compatible_with(&backend, 3)
-            .await
-            .expect_err("contract 3 must fail closed without archived_at");
+        let error = required_probe_error(schema_compatible_with(&backend, 3).await)?;
 
         assert_eq!(error.dependency, "schema");
         assert_eq!(
-            backend.seen.lock().expect("mock schema lock").last(),
+            backend
+                .seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .last(),
             Some(&CURRENT_DASHBOARD_SCHEMA_SELECTS[0])
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn schema_readiness_rejects_an_incompatible_reader_before_status_selects() {
+    async fn contract_four_requires_the_oauth_authority_tables()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend = backend(Some(OAUTH_AUTHORITY_SCHEMA_SELECTS[0]));
+        let error = required_probe_error(schema_compatible_with(&backend, 4).await)?;
+
+        assert_eq!(error.dependency, "schema");
+        assert_eq!(
+            backend
+                .seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .last(),
+            Some(&OAUTH_AUTHORITY_SCHEMA_SELECTS[0])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn schema_readiness_rejects_an_incompatible_reader_before_status_selects()
+    -> Result<(), Box<dyn std::error::Error>> {
         let backend = MockSchemaBackend {
             range: (3, 4),
             failing_query: None,
             seen: Mutex::new(Vec::new()),
         };
-        let error = schema_compatible_with(&backend, 2)
-            .await
-            .expect_err("reader version outside contract must fail");
+        let error = required_probe_error(schema_compatible_with(&backend, 2).await)?;
         assert_eq!(error.dependency, "schema");
-        assert!(backend.seen.lock().expect("mock schema lock").is_empty());
+        assert!(
+            backend
+                .seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
+        Ok(())
     }
 }

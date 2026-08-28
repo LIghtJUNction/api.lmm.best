@@ -11,6 +11,8 @@ use crate::MigrationError;
 pub const BOUNTY_SCHEMA_CONTRACT_ID: i64 = 2;
 /// The first schema contract that supports current dashboard workflow data.
 pub const CURRENT_DASHBOARD_SCHEMA_CONTRACT_ID: i64 = 3;
+/// The first schema contract that supports the first-party OAuth authority.
+pub const OAUTH_AUTHORITY_SCHEMA_CONTRACT_ID: i64 = 4;
 
 #[derive(Clone, Copy)]
 struct ColumnRequirement {
@@ -449,6 +451,99 @@ pub fn verify_current_dashboard_schema(
     Ok(())
 }
 
+const OAUTH_DEVICE_GRANT_COLUMNS: &[ColumnRequirement] = &[
+    column("id", "bigint", None),
+    column("device_code_hash", "character", Some(64)),
+    column("user_code_hash", "character", Some(64)),
+    column("client_id", "character varying", Some(64)),
+    column("scopes", "text", None),
+    column("status", "character varying", Some(16)),
+    column("user_id", "bigint", None),
+    column("interval_seconds", "bigint", None),
+    nullable_column("last_polled_at", "timestamp with time zone", None),
+    column("created_at", "timestamp with time zone", None),
+    column("expires_at", "timestamp with time zone", None),
+    nullable_column("consumed_at", "timestamp with time zone", None),
+];
+
+const OAUTH_GRANT_TOKEN_COLUMNS: &[ColumnRequirement] = &[
+    column("id", "bigint", None),
+    column("token_hash", "character", Some(64)),
+    column("kind", "character varying", Some(16)),
+    column("family_id", "character", Some(36)),
+    column("client_id", "character varying", Some(64)),
+    column("user_id", "bigint", None),
+    column("scopes", "text", None),
+    column("created_at", "timestamp with time zone", None),
+    column("expires_at", "timestamp with time zone", None),
+    nullable_column("consumed_at", "timestamp with time zone", None),
+    nullable_column("revoked_at", "timestamp with time zone", None),
+];
+
+/// Verifies the contract-4 OAuth authority tables and unique credential hashes.
+pub fn verify_oauth_authority_schema(
+    transaction: &mut Transaction<'_>,
+    schema: &str,
+) -> Result<(), MigrationError> {
+    for &(table, columns) in &[
+        ("oauth_device_grants", OAUTH_DEVICE_GRANT_COLUMNS),
+        ("oauth_grant_tokens", OAUTH_GRANT_TOKEN_COLUMNS),
+    ] {
+        for requirement in columns {
+            let row = transaction
+                .query_opt(
+                    "SELECT data_type, character_maximum_length, is_nullable FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3",
+                    &[&schema, &table, &requirement.name],
+                )?
+                .ok_or_else(|| {
+                    MigrationError::Manifest(format!(
+                        "forward schema is missing column {table}.{}",
+                        requirement.name
+                    ))
+                })?;
+            let data_type: String = row.get(0);
+            let length: Option<i32> = row.get(1);
+            let is_nullable: String = row.get(2);
+            if data_type != requirement.data_type
+                || length != requirement.character_maximum_length
+                || (is_nullable == "YES") != requirement.nullable
+            {
+                return Err(MigrationError::Manifest(format!(
+                    "forward schema column mismatch for {table}.{}",
+                    requirement.name
+                )));
+            }
+        }
+    }
+    for &(table, index) in &[
+        (
+            "oauth_device_grants",
+            "idx_oauth_device_grants_device_code_hash",
+        ),
+        (
+            "oauth_device_grants",
+            "idx_oauth_device_grants_user_code_hash",
+        ),
+        ("oauth_grant_tokens", "idx_oauth_grant_tokens_token_hash"),
+    ] {
+        let index_definition: Option<String> = transaction
+            .query_opt(
+                "SELECT indexdef FROM pg_catalog.pg_indexes WHERE schemaname = $1 AND tablename = $2 AND indexname = $3",
+                &[&schema, &table, &index],
+            )?
+            .map(|row| row.get(0));
+        if !index_definition
+            .as_deref()
+            .is_some_and(|definition| definition.starts_with("CREATE UNIQUE INDEX"))
+        {
+            return Err(MigrationError::Manifest(format!(
+                "forward schema is missing compatible unique index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -474,10 +569,11 @@ mod tests {
     }
 
     #[test]
-    fn contract_two_sql_is_schema_bound_and_lists_the_inventory() {
+    fn contract_two_sql_is_schema_bound_and_lists_the_inventory()
+    -> Result<(), Box<dyn std::error::Error>> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../migrations/0002_open_source_bounty_schema.sql");
-        let sql = fs::read_to_string(path).expect("read contract-2 migration");
+        let sql = fs::read_to_string(path)?;
         assert!(sql.contains("__LMM_APP_SCHEMA__"));
         assert!(!sql.contains("public."));
         for &(table, _) in TABLES {
@@ -486,13 +582,15 @@ mod tests {
                 "contract-2 SQL does not mention {table}"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn contract_three_sql_is_schema_bound_and_adds_current_dashboard_schema() {
+    fn contract_three_sql_is_schema_bound_and_adds_current_dashboard_schema()
+    -> Result<(), Box<dyn std::error::Error>> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../migrations/0003_current_dashboard_schema.sql");
-        let sql = fs::read_to_string(path).expect("read contract-3 migration");
+        let sql = fs::read_to_string(path)?;
 
         assert!(sql.contains("__LMM_APP_SCHEMA__.open_source_bounty_projects"));
         assert!(sql.contains("ADD COLUMN IF NOT EXISTS archived_at BIGINT"));
@@ -512,5 +610,24 @@ mod tests {
         assert!(sql.contains("idx_personal_access_ips_ip"));
         assert!(sql.contains("user_id BIGINT PRIMARY KEY"));
         assert!(!sql.contains("public."));
+        Ok(())
+    }
+
+    #[test]
+    fn contract_four_sql_is_schema_bound_and_adds_oauth_authority()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../migrations/0004_oauth_authority.sql");
+        let sql = fs::read_to_string(path)?;
+
+        assert!(sql.contains("__LMM_APP_SCHEMA__.oauth_device_grants"));
+        assert!(sql.contains("__LMM_APP_SCHEMA__.oauth_grant_tokens"));
+        assert!(sql.contains("idx_oauth_device_grants_device_code_hash"));
+        assert!(sql.contains("idx_oauth_device_grants_user_code_hash"));
+        assert!(sql.contains("idx_oauth_grant_tokens_token_hash"));
+        assert!(sql.contains("oauth_device_grants_status_check"));
+        assert!(sql.contains("oauth_grant_tokens_kind_check"));
+        assert!(!sql.contains("public."));
+        Ok(())
     }
 }
