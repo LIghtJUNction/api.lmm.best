@@ -40,6 +40,8 @@ import { Route as PricingIndexRouteImport } from './routes/pricing/index'
 import { Route as RankingsIndexRouteImport } from './routes/rankings/index'
 import { Route as SecurityIndexRouteImport } from './routes/security/index'
 import { Route as SetupIndexRouteImport } from './routes/setup/index'
+import { Route as authOauthConsentRouteImport } from './routes/(auth)/oauth_/consent'
+import { Route as authOauthDeviceRouteImport } from './routes/(auth)/oauth_/device'
 import { Route as authUserResetRouteImport } from './routes/(auth)/user/reset'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedChatManagementIndexRouteImport } from './routes/_authenticated/chat-management/index'
@@ -240,6 +242,16 @@ const SetupIndexRoute = SetupIndexRouteImport.update({
   id: '/setup/',
   path: '/setup/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const authOauthConsentRoute = authOauthConsentRouteImport.update({
+  id: '/oauth_/consent',
+  path: '/oauth/consent',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authOauthDeviceRoute = authOauthDeviceRouteImport.update({
+  id: '/oauth_/device',
+  path: '/oauth/device',
+  getParentRoute: () => authRouteRoute,
 } as any)
 const authUserResetRoute = authUserResetRouteImport.update({
   id: '/user/reset',
@@ -542,6 +554,8 @@ export interface FileRoutesByFullPath {
   '/rankings/': typeof RankingsIndexRoute
   '/security/': typeof SecurityIndexRoute
   '/setup/': typeof SetupIndexRoute
+  '/oauth/consent': typeof authOauthConsentRoute
+  '/oauth/device': typeof authOauthDeviceRoute
   '/user/reset': typeof authUserResetRoute
   '/chat/$chatId': typeof AuthenticatedChatChatIdRoute
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
@@ -618,6 +632,8 @@ export interface FileRoutesByTo {
   '/rankings': typeof RankingsIndexRoute
   '/security': typeof SecurityIndexRoute
   '/setup': typeof SetupIndexRoute
+  '/oauth/consent': typeof authOauthConsentRoute
+  '/oauth/device': typeof authOauthDeviceRoute
   '/user/reset': typeof authUserResetRoute
   '/chat/$chatId': typeof AuthenticatedChatChatIdRoute
   '/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
@@ -698,6 +714,8 @@ export interface FileRoutesById {
   '/rankings/': typeof RankingsIndexRoute
   '/security/': typeof SecurityIndexRoute
   '/setup/': typeof SetupIndexRoute
+  '/(auth)/oauth_/consent': typeof authOauthConsentRoute
+  '/(auth)/oauth_/device': typeof authOauthDeviceRoute
   '/(auth)/user/reset': typeof authUserResetRoute
   '/_authenticated/chat/$chatId': typeof AuthenticatedChatChatIdRoute
   '/_authenticated/dashboard/$section': typeof AuthenticatedDashboardSectionRoute
@@ -777,6 +795,8 @@ export interface FileRouteTypes {
     | '/rankings/'
     | '/security/'
     | '/setup/'
+    | '/oauth/consent'
+    | '/oauth/device'
     | '/user/reset'
     | '/chat/$chatId'
     | '/dashboard/$section'
@@ -853,6 +873,8 @@ export interface FileRouteTypes {
     | '/rankings'
     | '/security'
     | '/setup'
+    | '/oauth/consent'
+    | '/oauth/device'
     | '/user/reset'
     | '/chat/$chatId'
     | '/dashboard/$section'
@@ -932,6 +954,8 @@ export interface FileRouteTypes {
     | '/rankings/'
     | '/security/'
     | '/setup/'
+    | '/(auth)/oauth_/consent'
+    | '/(auth)/oauth_/device'
     | '/(auth)/user/reset'
     | '/_authenticated/chat/$chatId'
     | '/_authenticated/dashboard/$section'
@@ -1223,6 +1247,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/setup/'
       preLoaderRoute: typeof SetupIndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/(auth)/oauth_/consent': {
+      id: '/(auth)/oauth_/consent'
+      path: '/oauth/consent'
+      fullPath: '/oauth/consent'
+      preLoaderRoute: typeof authOauthConsentRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/oauth_/device': {
+      id: '/(auth)/oauth_/device'
+      path: '/oauth/device'
+      fullPath: '/oauth/device'
+      preLoaderRoute: typeof authOauthDeviceRouteImport
+      parentRoute: typeof authRouteRoute
     }
     '/(auth)/user/reset': {
       id: '/(auth)/user/reset'
@@ -1558,6 +1596,8 @@ interface authRouteRouteChildren {
   authSignInRoute: typeof authSignInRoute
   authSignUpRoute: typeof authSignUpRoute
   authSignupRoute: typeof authSignupRoute
+  authOauthConsentRoute: typeof authOauthConsentRoute
+  authOauthDeviceRoute: typeof authOauthDeviceRoute
   authUserResetRoute: typeof authUserResetRoute
 }
 
@@ -1570,6 +1610,8 @@ const authRouteRouteChildren: authRouteRouteChildren = {
   authSignInRoute: authSignInRoute,
   authSignUpRoute: authSignUpRoute,
   authSignupRoute: authSignupRoute,
+  authOauthConsentRoute: authOauthConsentRoute,
+  authOauthDeviceRoute: authOauthDeviceRoute,
   authUserResetRoute: authUserResetRoute,
 }
 

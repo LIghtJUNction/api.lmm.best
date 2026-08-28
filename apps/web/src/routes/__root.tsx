@@ -174,7 +174,12 @@ const NON_BLOCKING_PUBLIC_PATHS = [
   '/oauth',
 ] as const
 
+const AUTHENTICATED_OAUTH_PATHS = ['/oauth/consent', '/oauth/device'] as const
+
 function isNonBlockingPublicPath(pathname: string): boolean {
+  if (AUTHENTICATED_OAUTH_PATHS.includes(pathname as (typeof AUTHENTICATED_OAUTH_PATHS)[number])) {
+    return false
+  }
   return NON_BLOCKING_PUBLIC_PATHS.some(
     (path) =>
       pathname === path || (path !== '/' && pathname.startsWith(`${path}/`))
