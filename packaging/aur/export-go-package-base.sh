@@ -6,7 +6,7 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly HERE
 CANONICAL_HELPER="$(cd -- "$HERE/../common/lmm-api" && pwd -P)/lmm-api-cli-phase.sh"
 readonly CANONICAL_HELPER
-readonly CANONICAL_HELPER_SHA256=2b93864b302a7901a4688fd5b7df9b7e262f193a666a915718f434db20054935
+readonly CANONICAL_HELPER_SHA256=4b8756419bc644ea62e05be72626345cbb27b582192539b732a4cda4431ad54b
 
 fail() {
   printf 'export-go-package-base: %s\n' "$*" >&2

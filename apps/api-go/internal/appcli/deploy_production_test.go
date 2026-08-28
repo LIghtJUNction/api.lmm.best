@@ -19,7 +19,7 @@ func TestProductionDeploymentDefaultsUseCanonicalBackendCLI(t *testing.T) {
 	if productionMemoryFileName != "20-memory.conf" || filepath.Join(paths.PackagedDropInDir, productionMemoryFileName) != "/usr/lib/systemd/system/lmm-api.service.d/20-memory.conf" {
 		t.Fatalf("package-owned memory path=%q", filepath.Join(paths.PackagedDropInDir, productionMemoryFileName))
 	}
-	if paths.OperatorBinary != "/usr/bin/lmm-api" || paths.InstalledBinary != "/usr/bin/lmm-api" ||
+	if paths.OperatorBinary != "/usr/bin/lmm-api" || paths.InstalledBinary != "/usr/bin/lmm-api-go" ||
 		paths.LegacyGoBinary != "/usr/bin/lmm-api-go" || paths.LegacyDeployBinary != "/usr/bin/lmm-api-deploy" ||
 		paths.RunuserBinary != "/usr/bin/runuser" || paths.ParuBinary != "/usr/bin/paru" {
 		t.Fatalf("production binaries=%#v", paths)

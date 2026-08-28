@@ -668,6 +668,7 @@ func (runtime *productionReleaseRuntime) verifySignedPackageLayout(ctx context.C
 	}
 	legacyAlias := false
 	legacyReverseAlias := false
+	providerSelection := false
 	if err := filepath.WalkDir(packageRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -696,6 +697,13 @@ func (runtime *productionReleaseRuntime) verifySignedPackageLayout(ctx context.C
 				return fmt.Errorf("package symlink header type mismatch: %s", relative)
 			}
 			switch {
+			case packageName == productionAURPackageName && relative == "usr/bin/lmm-api":
+				target, err := os.Readlink(path)
+				if err != nil || target != "lmm-api-go" || archiveHeader.Link != target {
+					return errors.New("backend-selection symlink has an unsafe target")
+				}
+				providerSelection = true
+				return nil
 			case packageName == productionAURPackageName && relative == "usr/bin/lmm-api-go" && !preT0Legacy:
 				target, err := os.Readlink(path)
 				if err != nil || target != "lmm-api" || archiveHeader.Link != target {
@@ -719,7 +727,9 @@ func (runtime *productionReleaseRuntime) verifySignedPackageLayout(ctx context.C
 		}
 		mappedRelative := relative
 		if preT0Legacy && relative == "usr/bin/lmm-api-go" {
-			mappedRelative = "usr/bin/lmm-api"
+			if _, signedProvider := expected[relative]; !signedProvider {
+				mappedRelative = "usr/bin/lmm-api"
+			}
 		}
 		packageFiles[mappedRelative] = path
 		packageFileHeaders[mappedRelative] = archiveHeader
@@ -770,11 +780,17 @@ func (runtime *productionReleaseRuntime) verifySignedPackageLayout(ctx context.C
 	}
 	canonicalExecutable := filepath.Join(packageRoot, "usr/bin/lmm-api")
 	if packageName == productionAURPackageName {
-		if cliPhase == productionCLIPhaseT1 && (legacyAlias || legacyReverseAlias) {
+		if providerSelection && (legacyAlias || legacyReverseAlias) {
+			return errors.New("Go package mixes forward and reverse CLI symlinks")
+		}
+		if cliPhase == productionCLIPhaseT1 && !providerSelection && (legacyAlias || legacyReverseAlias) {
 			return errors.New("T1 package still exposes the legacy CLI compatibility link")
 		}
-		if cliPhase == productionCLIPhaseT0 && !legacyAlias && !legacyReverseAlias {
+		if cliPhase == productionCLIPhaseT0 && !providerSelection && !legacyAlias && !legacyReverseAlias {
 			return errors.New("T0 rollback package lacks the legacy CLI compatibility link")
+		}
+		if providerSelection {
+			canonicalExecutable = filepath.Join(packageRoot, "usr/bin/lmm-api-go")
 		}
 	}
 	if packageName == productionWebPackageName {
@@ -1169,8 +1185,10 @@ func signedPackageMember(packageName, relative string) (packageRelative string, 
 		}
 	}
 	switch {
-	case relative == "lmm-api" || relative == "lmm-api-go":
+	case relative == "lmm-api":
 		return "usr/bin/lmm-api", false, nil
+	case relative == "lmm-api-go":
+		return "usr/bin/lmm-api-go", false, nil
 	case relative == "lmm-api.service":
 		return "usr/lib/systemd/system/lmm-api.service", false, nil
 	case relative == "lmm-api-go.env":

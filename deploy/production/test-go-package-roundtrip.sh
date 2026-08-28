@@ -98,9 +98,9 @@ if "${query_args[@]}" -Qq | grep -Fxq lmm-api; then
   exit 1
 fi
 [[ $("${query_args[@]}" -Q lmm-api-go-bin 2>/dev/null) == "lmm-api-go-bin $candidate_version-1" ]]
-[[ -x $pacman_root/usr/bin/lmm-api ]]
-[[ -L $pacman_root/usr/bin/lmm-api-go ]]
-[[ $(readlink "$pacman_root/usr/bin/lmm-api-go") == lmm-api ]]
+[[ -x $pacman_root/usr/bin/lmm-api-go && ! -L $pacman_root/usr/bin/lmm-api-go ]]
+[[ -L $pacman_root/usr/bin/lmm-api ]]
+[[ $(readlink "$pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
 [[ ! -e $pacman_root/usr/bin/lmm-api-deploy ]]
 [[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go") == 700 ]]
 [[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go/lmm-api-go.env") == 600 ]]
@@ -167,8 +167,9 @@ fakeroot -- "${direct_install[@]}" -U "$old_direct" >/dev/null
 fakeroot -- "${direct_install[@]}" -Rdd lmm-api-go >/dev/null
 fakeroot -- "${direct_install[@]}" -U "$new_go" >/dev/null
 [[ $("${direct_query[@]}" -Q lmm-api-go-bin 2>/dev/null) == "lmm-api-go-bin $candidate_version-1" ]]
-[[ $("$direct_pacman_root/usr/bin/lmm-api") == "$candidate_version" ]]
-[[ -L $direct_pacman_root/usr/bin/lmm-api-go ]]
+[[ -L $direct_pacman_root/usr/bin/lmm-api ]]
+[[ $(readlink "$direct_pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
+[[ -f $direct_pacman_root/usr/bin/lmm-api-go && ! -L $direct_pacman_root/usr/bin/lmm-api-go ]]
 [[ $("$direct_pacman_root/usr/bin/lmm-api-go") == "$candidate_version" ]]
 fakeroot -- "${direct_install[@]}" -Rdd lmm-api-go-bin >/dev/null
 fakeroot -- "${direct_install[@]}" -U "$old_direct" >/dev/null
@@ -204,7 +205,7 @@ lmm_cli_phase_apply_metadata "\$_lmm_cli_phase" "\$pkgver" \\
   'lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-git'
 options=('!strip')
 package() {
-  install -Dm0755 /usr/bin/true "\${pkgdir}/usr/bin/lmm-api"
+  install -Dm0755 /usr/bin/true "\${pkgdir}/usr/bin/lmm-api-go"
   lmm_cli_phase_install_compatibility_alias "\$_lmm_cli_phase" "\$pkgdir"
   install -Dm0644 "$repo/packaging/common/lmm-api/lmm-api.service" \\
     "\${pkgdir}/usr/lib/systemd/system/lmm-api.service"
@@ -265,7 +266,8 @@ transition_query=(pacman "${transition_common[@]}")
 fakeroot -- "${transition_install[@]}" -U "$legacy_deploy_package" "$t0_package" >/dev/null
 [[ $("${transition_query[@]}" -Q lmm-api-go-bin 2>/dev/null) == 'lmm-api-go-bin 0.1.59-1' ]]
 [[ $("${transition_query[@]}" -Q lmm-api-deploy-bin 2>/dev/null) == 'lmm-api-deploy-bin 0.1.57-1' ]]
-[[ -x $transition_pacman_root/usr/bin/lmm-api && -L $transition_pacman_root/usr/bin/lmm-api-go ]]
+[[ -L $transition_pacman_root/usr/bin/lmm-api && -x $transition_pacman_root/usr/bin/lmm-api-go && ! -L $transition_pacman_root/usr/bin/lmm-api-go ]]
+[[ $(readlink "$transition_pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
 [[ -x $transition_pacman_root/usr/bin/lmm-api-deploy ]]
 [[ -f $transition_pacman_root/usr/lib/systemd/system/lmm-api.service ]]
 [[ -f $transition_pacman_root/etc/sudoers.d/lmm-api-operator ]]
@@ -279,15 +281,15 @@ if "${transition_query[@]}" -Qq | grep -Fxq lmm-api-deploy-bin; then
   printf 'go-package-roundtrip: controller removal left the legacy deploy package installed\n' >&2
   exit 1
 fi
-[[ -x $transition_pacman_root/usr/bin/lmm-api ]]
-[[ ! -e $transition_pacman_root/usr/bin/lmm-api-go && ! -e $transition_pacman_root/usr/bin/lmm-api-deploy ]]
+[[ -L $transition_pacman_root/usr/bin/lmm-api ]]
+[[ -x $transition_pacman_root/usr/bin/lmm-api-go && ! -L $transition_pacman_root/usr/bin/lmm-api-go && ! -e $transition_pacman_root/usr/bin/lmm-api-deploy ]]
 [[ -f $transition_pacman_root/usr/lib/systemd/system/lmm-api.service ]]
 [[ -f $transition_pacman_root/etc/sudoers.d/lmm-api-operator ]]
 
 fakeroot -- "${transition_install[@]}" -U "$t0_package" >/dev/null
 [[ $("${transition_query[@]}" -Q lmm-api-go-bin 2>/dev/null) == 'lmm-api-go-bin 0.1.59-1' ]]
-[[ -x $transition_pacman_root/usr/bin/lmm-api && -L $transition_pacman_root/usr/bin/lmm-api-go ]]
-[[ $(readlink "$transition_pacman_root/usr/bin/lmm-api-go") == lmm-api ]]
+[[ -L $transition_pacman_root/usr/bin/lmm-api && -x $transition_pacman_root/usr/bin/lmm-api-go && ! -L $transition_pacman_root/usr/bin/lmm-api-go ]]
+[[ $(readlink "$transition_pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
 [[ ! -e $transition_pacman_root/usr/bin/lmm-api-deploy ]]
 [[ -f $transition_pacman_root/usr/lib/systemd/system/lmm-api.service ]]
 [[ -f $transition_pacman_root/etc/sudoers.d/lmm-api-operator ]]

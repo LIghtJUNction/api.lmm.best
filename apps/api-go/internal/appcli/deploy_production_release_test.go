@@ -132,13 +132,13 @@ func TestPackageReleaseVersionRejectsMissingPkgrel(t *testing.T) {
 }
 
 type productionCanonicalPackageMetadataRunner struct {
-	requestedLegacy bool
+	requestedSelection bool
 }
 
 func (runner *productionCanonicalPackageMetadataRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
 	switch command.Name {
 	case commandPacman:
-		return []byte(productionAURPackageName + " 0.1.58-1\n"), nil
+		return []byte(productionAURPackageName + " 0.1.70-1\n"), nil
 	case commandBsdtar:
 		if len(command.Args) != 3 || command.Args[0] != "-xOf" {
 			return nil, errors.New("unexpected bsdtar arguments")
@@ -151,25 +151,27 @@ func (runner *productionCanonicalPackageMetadataRunner) Run(_ context.Context, c
 			return []byte(strings.Repeat("b", 64) + "\n"), nil
 		case strings.HasSuffix(member, "/RELEASE_ASSET_SHA256"):
 			return []byte(strings.Repeat("c", 64) + "\n"), nil
-		case member == "usr/bin/lmm-api":
-			return []byte("canonical-cli"), nil
+		case strings.HasSuffix(member, "/CLI_TRANSITION_PHASE"):
+			return []byte(productionCLIPhaseT1 + "\n"), nil
 		case member == "usr/bin/lmm-api-go":
-			runner.requestedLegacy = true
-			return nil, errors.New("legacy member must not be read")
+			return []byte("go-provider"), nil
+		case member == "usr/bin/lmm-api":
+			runner.requestedSelection = true
+			return nil, errors.New("selection symlink must not be read")
 		}
 	}
 	return nil, errors.New("unexpected command")
 }
 
-func TestPackageMetadataReadsCanonicalCLIWithoutFollowingCompatibilitySymlink(t *testing.T) {
+func TestPackageMetadataReadsProviderWithoutFollowingSelectionSymlink(t *testing.T) {
 	runner := &productionCanonicalPackageMetadataRunner{}
 	runtime := &productionRuntime{runner: runner}
-	metadata, err := runtime.packageMetadata(context.Background(), "/safe/lmm-api-go-bin-0.1.58-1-x86_64.pkg.tar.zst", productionAURPackageName)
+	metadata, err := runtime.packageMetadata(context.Background(), "/safe/lmm-api-go-bin-0.1.70-1-x86_64.pkg.tar.zst", productionAURPackageName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.requestedLegacy {
-		t.Fatal("package metadata read the compatibility symlink after finding the canonical CLI")
+	if runner.requestedSelection {
+		t.Fatal("package metadata read the selection symlink after finding the provider binary")
 	}
 	if metadata.ReleaseAssetSHA256 != strings.Repeat("c", 64) || !productionSHA256Pattern.MatchString(metadata.BinarySHA256) {
 		t.Fatalf("metadata=%#v", metadata)

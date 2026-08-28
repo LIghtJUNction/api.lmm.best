@@ -29,7 +29,7 @@ if command -v shellcheck >/dev/null 2>&1; then
 fi
 
 for literal in \
-  'ExecStart=/usr/bin/lmm-api serve' \
+  'ExecStart=/usr/bin/lmm-api-go serve' \
   'Environment=LMM_API_FRONTEND_DIR=/srv/lmm-api-frontend/current' \
   'Environment=LMM_DB_MIGRATION_MODE=verify'; do
   contains "$literal" "$repo/packaging/common/lmm-api/lmm-api.service"

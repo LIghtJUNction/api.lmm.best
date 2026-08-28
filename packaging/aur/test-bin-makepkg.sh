@@ -114,8 +114,8 @@ sed -i \
   -e "s/^pkgver=.*/pkgver=${go_next_version}/" \
   -e "s/^_lmm_declared_cli_phase=.*/_lmm_declared_cli_phase='t0'/" \
   "$go_next_work/PKGBUILD"
-printf '#!/bin/sh\nexit 0\n' >"$go_next_bundle/lmm-api"
-chmod 0755 "$go_next_bundle/lmm-api"
+printf '#!/bin/sh\nexit 0\n' >"$go_next_bundle/lmm-api-go"
+chmod 0755 "$go_next_bundle/lmm-api-go"
 cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" \
   "$SHARED/lmm-api-memory.conf" "$SHARED/lmm-api-operator.sysusers" \
   "$SHARED/lmm-api-operator.tmpfiles" "$SHARED/lmm-api-operator.sudoers" \
@@ -184,8 +184,10 @@ for spec in \
     fi
   done
 done
-[[ $(readlink "$next_extract/usr/bin/lmm-api-go") == lmm-api ]] ||
-  die 'explicit T0 package has an unsafe compatibility link'
+[[ -f $next_extract/usr/bin/lmm-api-go && ! -L $next_extract/usr/bin/lmm-api-go ]] ||
+  die 'explicit T0 package does not ship a real Go provider binary'
+[[ $(readlink "$next_extract/usr/bin/lmm-api") == lmm-api-go ]] ||
+  die 'explicit T0 package has an unsafe backend-selection link'
 
 # A package-base declaration that disagrees with the signed release phase must
 # fail in prepare(), before any archive can be promoted.

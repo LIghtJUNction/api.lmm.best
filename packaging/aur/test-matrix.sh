@@ -42,7 +42,7 @@ done
 
 CLI_PHASE_HELPER=$(realpath -e "$SHARED/lmm-api-cli-phase.sh")
 readonly CLI_PHASE_HELPER
-readonly CLI_PHASE_HELPER_SHA256=2b93864b302a7901a4688fd5b7df9b7e262f193a666a915718f434db20054935
+readonly CLI_PHASE_HELPER_SHA256=4b8756419bc644ea62e05be72626345cbb27b582192539b732a4cda4431ad54b
 [[ -f $CLI_PHASE_HELPER && ! -L $CLI_PHASE_HELPER ]] || die 'canonical CLI phase helper is missing'
 BINARY_T1_RELEASE=$(sed -n 's/^readonly LMM_CLI_T1_RELEASE=//p' "$CLI_PHASE_HELPER")
 readonly BINARY_T1_RELEASE
@@ -86,18 +86,17 @@ binary_cli_phase=$(
   die 'Go binary package declares an invalid CLI transition phase'
 for package in lmm-api-go lmm-api-go-bin lmm-api-go-git; do
   contains_srcinfo_prefix "$package" $'\tprovides = lmm-api'
-  if [[ $package == lmm-api-go-bin && $binary_cli_phase == t1 ]]; then
-    if grep -Fq $'\tprovides = lmm-api-go' "$HERE/$package/.SRCINFO"; then
-      die "$package retains the removed legacy CLI capability"
-    fi
+  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-go'
+  package_phase=t1
+  if [[ $package == lmm-api-go-bin ]]; then
+    package_phase=$binary_cli_phase
+  fi
+  if [[ $package_phase == t1 ]]; then
     contains_srcinfo "$package" $'\tconflicts = lmm-api-deploy-bin'
     contains_srcinfo "$package" $'\treplaces = lmm-api-deploy-bin'
-  else
-    contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-go'
-    if grep -Fq $'\tconflicts = lmm-api-deploy-bin' "$HERE/$package/.SRCINFO" ||
-      grep -Fq $'\treplaces = lmm-api-deploy-bin' "$HERE/$package/.SRCINFO"; then
-      die "$package applies the T1 deploy-package transition during T0"
-    fi
+  elif grep -Fq $'\tconflicts = lmm-api-deploy-bin' "$HERE/$package/.SRCINFO" ||
+    grep -Fq $'\treplaces = lmm-api-deploy-bin' "$HERE/$package/.SRCINFO"; then
+    die "$package applies the T1 deploy-package transition during T0"
   fi
   contains_srcinfo "$package" $'\tbackup = etc/lmm-api-go/lmm-api-go.env'
 done
@@ -119,7 +118,7 @@ declare -a conflicts replaces provides
     'lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-git'
   [[ " ${conflicts[*]} " == *' lmm-api-deploy-bin '* ]] || die 'T1 Go package does not conflict with the legacy deploy package'
   [[ " ${replaces[*]} " == *' lmm-api-deploy-bin '* ]] || die 'T1 Go package does not replace the legacy deploy package'
-  [[ " ${provides[*]} " != *' lmm-api-go='* ]] || die 'T1 Go package still provides the legacy CLI capability'
+  [[ " ${provides[*]} " == *' lmm-api-go='* ]] || die 'T1 Go package lost its real provider capability'
 )
 (
   # A newly versioned bootstrap remains T0 when its signed package phase says
@@ -238,8 +237,8 @@ grep -Fqx '_source_pkgver_epoch=0.1.20' "$HERE/lmm-api-go-git/PKGBUILD" ||
   die 'Git Go package lost the monotonic source-version epoch'
 contains_srcinfo lmm-api-rs-git $'\tmakedepends = cargo'
 
-grep -Fqx 'ExecStart=/usr/bin/lmm-api serve' "$SHARED/lmm-api.service" ||
-  die 'Go systemd service does not execute the backend directly'
+grep -Fqx 'ExecStart=/usr/bin/lmm-api-go serve' "$SHARED/lmm-api.service" ||
+  die 'Go systemd service does not execute the real provider binary'
 grep -Fqx 'Environment=LMM_API_FRONTEND_DIR=/srv/lmm-api-frontend/current' \
   "$SHARED/lmm-api.service" || die 'Go service does not use the split web activation link'
 expected_memory=$'[Service]\nMemoryAccounting=yes\nMemoryHigh=320M\nMemoryMax=384M\nMemorySwapMax=256M\nEnvironment=GOMEMLIMIT=256MiB'
@@ -266,10 +265,10 @@ rs_bundle="$stage/rs/lmm-api-rs-${rs_bin_pkgver}-linux-amd64"
 mkdir -p "$go_bundle/frontend-dist" "$go_bundle/edge-policy/nginx" \
   "$go_next_bundle/edge-policy/nginx" "$rs_bundle"
 printf '#!/bin/sh\n' >"$go_bundle/lmm-api-go"
-printf '#!/bin/sh\n' >"$go_next_bundle/lmm-api"
+printf '#!/bin/sh\n' >"$go_next_bundle/lmm-api-go"
 printf '#!/bin/sh\n' >"$rs_bundle/lmm-api-rs"
 printf '#!/bin/sh\n' >"$rs_bundle/lmm-db-migrate"
-chmod 0755 "$go_bundle/lmm-api-go" "$go_next_bundle/lmm-api" \
+chmod 0755 "$go_bundle/lmm-api-go" "$go_next_bundle/lmm-api-go" \
   "$rs_bundle/lmm-api-rs" "$rs_bundle/lmm-db-migrate"
 printf '<!doctype html>\n' >"$go_bundle/frontend-dist/index.html"
 for bundle in "$go_bundle" "$go_next_bundle"; do
@@ -361,13 +360,13 @@ printf 'fixture archive\n' >"$web_src/lmm-api-web-${web_pkgver}.tar.gz"
 )
 
 for packaged_path in \
-  pkg-go-legacy/usr/bin/lmm-api \
+  pkg-go-legacy/usr/bin/lmm-api-go \
   pkg-go-legacy/usr/lib/systemd/system/lmm-api.service \
   pkg-go-legacy/etc/lmm-api-go/lmm-api-go.env \
   pkg-go-legacy/usr/share/lmm-api-go/frontend-dist/index.html \
-  pkg-go-t0/usr/bin/lmm-api \
+  pkg-go-t0/usr/bin/lmm-api-go \
   pkg-go-t0/usr/lib/sysusers.d/lmm-api-operator.conf \
-  pkg-go-t1/usr/bin/lmm-api \
+  pkg-go-t1/usr/bin/lmm-api-go \
   pkg-go-t1/usr/lib/systemd/system/lmm-api.service.d/20-memory.conf \
   pkg-go-t1/usr/lib/sysusers.d/lmm-api-operator.conf \
   pkg-go-t1/usr/lib/tmpfiles.d/lmm-api-operator.conf \
@@ -380,17 +379,17 @@ for packaged_path in \
   pkg-web-next/usr/share/lmm-api-web/frontend-dist/index.html \
   pkg-web-next/usr/share/doc/lmm-api-web-bin/API_ROUTE_CONTRACT_REVISION \
   pkg-web-next/usr/share/doc/lmm-api-web-bin/RELEASE_ASSET_SHA256; do
-  [[ -f $tmp/$packaged_path ]] || die "mock package layout is missing $packaged_path"
+  [[ -f $tmp/$packaged_path && ! -L $tmp/$packaged_path ]] ||
+    die "mock package real-file layout is missing $packaged_path"
 done
-for root in pkg-go-legacy pkg-go-t0; do
-  [[ -L $tmp/$root/usr/bin/lmm-api-go ]] || die "$root lacks the T0 compatibility symlink"
-  [[ $(readlink "$tmp/$root/usr/bin/lmm-api-go") == lmm-api ]] ||
-    die "$root compatibility symlink does not resolve to the canonical CLI"
+for root in pkg-go-legacy pkg-go-t0 pkg-go-t1; do
+  [[ -L $tmp/$root/usr/bin/lmm-api ]] || die "$root lacks the backend-selection symlink"
+  [[ $(readlink "$tmp/$root/usr/bin/lmm-api") == lmm-api-go ]] ||
+    die "$root backend-selection symlink does not resolve to lmm-api-go"
 done
-[[ ! -e $tmp/pkg-go-t1/usr/bin/lmm-api-go ]] || die 'T1 Go package still exposes lmm-api-go'
 [[ ! -e $tmp/pkg-go-t1/usr/bin/lmm-api-deploy ]] || die 'T1 Go package exposes lmm-api-deploy'
-[[ $(find "$tmp/pkg-go-t1/usr/bin" -mindepth 1 -maxdepth 1 -printf '%f\n') == lmm-api ]] ||
-  die 'T1 Go package exposes more than one public backend CLI'
+[[ $(find "$tmp/pkg-go-t1/usr/bin" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) == $'lmm-api\nlmm-api-go' ]] ||
+  die 'Go package does not expose exactly one provider binary and one selection link'
 [[ $(stat -c '%a' "$tmp/pkg-go-t1/etc/sudoers.d/lmm-api-operator") == 440 ]] ||
   die 'integrated operator sudoers policy mode is not 0440'
 visudo -cf "$tmp/pkg-go-t1/etc/sudoers.d/lmm-api-operator" >/dev/null ||

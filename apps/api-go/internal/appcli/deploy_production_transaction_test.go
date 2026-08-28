@@ -21,7 +21,7 @@ type fakeProductionRunner struct {
 
 	goCandidate, goRollback                                     string
 	webCandidate, webRollback                                   string
-	probeBinary, installedBinary                                string
+	probeBinary, installedBinary, operatorBinary                string
 	frontendRoot                                                string
 	oldWebIndex, newWebIndex                                    string
 	oldVersion, newVersion                                      string
@@ -343,6 +343,27 @@ func (runner *fakeProductionRunner) runuser(args []string) ([]byte, error) {
 	case productionAURPackageName:
 		runner.events = append(runner.events, "paru-go")
 		runner.installedGoVersion, runner.installedGoRevision = version, revision
+		if err := os.RemoveAll(runner.installedBinary); err != nil {
+			return nil, err
+		}
+		if err := os.RemoveAll(runner.operatorBinary); err != nil {
+			return nil, err
+		}
+		if version == runner.newVersion {
+			if err := os.WriteFile(runner.installedBinary, []byte("go-provider"), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.Symlink(filepath.Base(runner.installedBinary), runner.operatorBinary); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := os.WriteFile(runner.operatorBinary, []byte("legacy-canonical"), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.Symlink(filepath.Base(runner.operatorBinary), runner.installedBinary); err != nil {
+				return nil, err
+			}
+		}
 		if err := os.WriteFile(runner.goRevisionFile, []byte(revision+"\n"), 0o644); err != nil {
 			return nil, err
 		}
@@ -489,8 +510,9 @@ func newProductionFixture(t *testing.T) productionFixture {
 	paths.ConfigDir = filepath.Join(root, "etc", "lmm-api-go")
 	paths.DropInDir = filepath.Join(root, "etc", "systemd", "lmm-api.service.d")
 	paths.PackagedDropInDir = filepath.Join(root, "usr", "lib", "systemd", "lmm-api.service.d")
-	paths.InstalledBinary = filepath.Join(root, "usr", "bin", "lmm-api")
-	paths.LegacyGoBinary = filepath.Join(root, "usr", "bin", "lmm-api-go")
+	paths.InstalledBinary = filepath.Join(root, "usr", "bin", "lmm-api-go")
+	paths.OperatorBinary = filepath.Join(root, "usr", "bin", "lmm-api")
+	paths.LegacyGoBinary = paths.InstalledBinary
 	paths.LegacyDeployBinary = filepath.Join(root, "usr", "bin", "lmm-api-deploy")
 	paths.GoRevisionFile = filepath.Join(root, "usr", "share", "doc", "lmm-api-go-bin", "REVISION")
 	paths.GoContractFile = filepath.Join(root, "usr", "share", "doc", "lmm-api-go-bin", "API_ROUTE_CONTRACT_REVISION")
@@ -517,7 +539,10 @@ func newProductionFixture(t *testing.T) productionFixture {
 	oldRevision := strings.Repeat("1", 40)
 	newRevision := strings.Repeat("2", 40)
 	contract := strings.Repeat("a", 64)
-	if err := os.Symlink(filepath.Base(paths.InstalledBinary), paths.LegacyGoBinary); err != nil {
+	if err := os.WriteFile(paths.InstalledBinary, []byte("go-provider"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(paths.InstalledBinary), paths.OperatorBinary); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(paths.GoRevisionFile, []byte(oldRevision+"\n"), 0o644); err != nil {
@@ -580,7 +605,7 @@ func newProductionFixture(t *testing.T) productionFixture {
 		t.Fatal(err)
 	}
 	clockValue := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
-	runner := &fakeProductionRunner{t: t, goCandidate: goCandidate, goRollback: goRollback, webCandidate: webCandidate, webRollback: webRollback, probeBinary: probe, installedBinary: paths.InstalledBinary, frontendRoot: paths.FrontendRoot, oldWebIndex: filepath.Join(oldFrontend, "index.html"), newWebIndex: filepath.Join(newFrontend, "index.html"), oldVersion: oldVersion, newVersion: newVersion, oldRevision: oldRevision, newRevision: newRevision, contractRevision: contract, installedGoVersion: oldVersion, installedWebVersion: oldVersion, installedGoRevision: oldRevision, installedWebRevision: oldRevision, goRevisionFile: paths.GoRevisionFile, webRevisionFile: paths.WebRevisionFile, goContractFile: paths.GoContractFile, webContractFile: paths.WebContractFile, serviceActive: true, timerDeadline: clockValue.Add(productionDefaultRollback)}
+	runner := &fakeProductionRunner{t: t, goCandidate: goCandidate, goRollback: goRollback, webCandidate: webCandidate, webRollback: webRollback, probeBinary: probe, installedBinary: paths.InstalledBinary, operatorBinary: paths.OperatorBinary, frontendRoot: paths.FrontendRoot, oldWebIndex: filepath.Join(oldFrontend, "index.html"), newWebIndex: filepath.Join(newFrontend, "index.html"), oldVersion: oldVersion, newVersion: newVersion, oldRevision: oldRevision, newRevision: newRevision, contractRevision: contract, installedGoVersion: oldVersion, installedWebVersion: oldVersion, installedGoRevision: oldRevision, installedWebRevision: oldRevision, goRevisionFile: paths.GoRevisionFile, webRevisionFile: paths.WebRevisionFile, goContractFile: paths.GoContractFile, webContractFile: paths.WebContractFile, serviceActive: true, timerDeadline: clockValue.Add(productionDefaultRollback)}
 	runtime := &productionRuntime{paths: paths, runner: runner, now: func() time.Time { return clockValue }, sleep: func(d time.Duration) { clockValue = clockValue.Add(d) }, effectiveUID: func() int { return 0 }, hostname: func() (string, error) { return productionExpectedHost, nil }, probeAttempts: 1, requiredOwnerUID: uint32(os.Getuid())}
 	workspace, err := runtime.openWorkspace(workspaceRoot)
 	if err != nil {

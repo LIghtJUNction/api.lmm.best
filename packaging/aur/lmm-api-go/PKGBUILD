@@ -24,7 +24,7 @@ options=('!strip')
 # advances it to the reviewed release merge instead of relying on branch-only objects.
 _commit=1db462ebe08cc99e32014d478eb866e85af3badd
 source=("lmm-api-go::git+${url}.git#commit=${_commit}" 'lmm-api-cli-phase.sh')
-sha256sums=('SKIP' '2b93864b302a7901a4688fd5b7df9b7e262f193a666a915718f434db20054935')
+sha256sums=('SKIP' '4b8756419bc644ea62e05be72626345cbb27b582192539b732a4cda4431ad54b')
 
 build() {
   cd lmm-api-go || return
@@ -43,7 +43,7 @@ package() {
   local shared="${root}/packaging/common/lmm-api"
   local file
 
-  install -Dm0755 "${srcdir}/lmm-api-cli" "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0755 "${srcdir}/lmm-api-cli" "${pkgdir}/usr/bin/lmm-api-go"
   lmm_cli_phase_install_compatibility_alias "$_lmm_cli_phase" "$pkgdir"
   install -Dm0644 "${shared}/lmm-api.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api.service"

@@ -136,7 +136,7 @@ func defaultProductionPaths() productionPaths {
 		PackagedDropInDir:     defaultPackagedMemoryDropInDir,
 		NginxRoot:             defaultNginxRoot,
 		EdgeAssetRoot:         defaultEdgeAssetRoot,
-		InstalledBinary:       "/usr/bin/lmm-api",
+		InstalledBinary:       "/usr/bin/lmm-api-go",
 		OperatorBinary:        productionOperatorBinary,
 		LegacyGoBinary:        "/usr/bin/lmm-api-go",
 		LegacyDeployBinary:    "/usr/bin/lmm-api-deploy",
@@ -554,9 +554,9 @@ func (runtime *productionRuntime) packageMetadata(ctx context.Context, packagePa
 		digest := sha256.Sum256(index)
 		metadata.IndexSHA256 = hex.EncodeToString(digest[:])
 	} else {
-		binary, err := runtime.runner.Run(ctx, productionCommand{Name: commandBsdtar, Args: []string{"-xOf", packagePath, "usr/bin/lmm-api"}})
+		binary, err := runtime.runner.Run(ctx, productionCommand{Name: commandBsdtar, Args: []string{"-xOf", packagePath, "usr/bin/lmm-api-go"}})
 		if err != nil || len(binary) == 0 {
-			binary, err = runtime.runner.Run(ctx, productionCommand{Name: commandBsdtar, Args: []string{"-xOf", packagePath, "usr/bin/lmm-api-go"}})
+			binary, err = runtime.runner.Run(ctx, productionCommand{Name: commandBsdtar, Args: []string{"-xOf", packagePath, "usr/bin/lmm-api"}})
 		}
 		if err != nil || len(binary) == 0 {
 			return productionPackageMetadata{}, errors.New("Go package service binary is missing")

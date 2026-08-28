@@ -35,7 +35,7 @@ else
   NEW_CONFIG_DIR=/etc/lmm-api-go
   OLD_DROPIN_DIR=/etc/systemd/system/lmm-api-go.service.d
   NEW_DROPIN_DIR=/etc/systemd/system/lmm-api.service.d
-  INSTALLED_BINARY=/usr/bin/lmm-api
+  INSTALLED_BINARY=/usr/bin/lmm-api-go
   PACKAGED_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist
   REMOVED_SELECTOR=/usr/bin/lmm-api-select
   REMOVED_PROVIDER_ROOT=/usr/lib/lmm-api

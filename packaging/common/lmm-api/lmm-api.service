@@ -14,7 +14,7 @@ Environment=LMM_API_BIND_ADDRESS=127.0.0.1
 Environment=LMM_API_FRONTEND_DIR=/srv/lmm-api-frontend/current
 Environment=LMM_DB_MIGRATION_MODE=verify
 EnvironmentFile=-/etc/lmm-api-go/lmm-api-go.env
-ExecStart=/usr/bin/lmm-api serve
+ExecStart=/usr/bin/lmm-api-go serve
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=45s

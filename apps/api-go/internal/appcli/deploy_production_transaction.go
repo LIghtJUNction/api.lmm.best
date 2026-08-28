@@ -430,6 +430,29 @@ func (runtime *productionRuntime) verifyTransitionCLI(transition productionPacka
 			return err
 		}
 	}
+	if !rollback {
+		provider, err := os.Lstat(runtime.paths.InstalledBinary)
+		if err != nil || !provider.Mode().IsRegular() || provider.Mode()&0o111 == 0 {
+			return errors.New("candidate Go provider binary is not a regular executable")
+		}
+		selection, err := os.Lstat(runtime.paths.OperatorBinary)
+		if err != nil || selection.Mode()&os.ModeSymlink == 0 {
+			return errors.New("candidate backend-selection path is not a symlink")
+		}
+		target, err := os.Readlink(runtime.paths.OperatorBinary)
+		if err != nil || target != filepath.Base(runtime.paths.InstalledBinary) {
+			return errors.New("candidate backend-selection symlink has an unsafe target")
+		}
+		if phase == productionCLIPhaseT1 {
+			if runtime.paths.LegacyDeployBinary == "" {
+				return errors.New("legacy deploy CLI removal path is not configured")
+			}
+			if _, err := os.Lstat(runtime.paths.LegacyDeployBinary); err == nil || !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("T1 legacy deploy CLI path remains: %s", runtime.paths.LegacyDeployBinary)
+			}
+		}
+		return nil
+	}
 	if phase == productionCLIPhaseT1 {
 		for _, path := range []string{runtime.paths.LegacyGoBinary, runtime.paths.LegacyDeployBinary} {
 			if path == "" {
@@ -450,11 +473,11 @@ func (runtime *productionRuntime) verifyTransitionCLI(transition productionPacka
 			return err
 		}
 		if legacy {
-			info, err := os.Lstat(runtime.paths.InstalledBinary)
+			info, err := os.Lstat(runtime.paths.OperatorBinary)
 			if err != nil || info.Mode()&os.ModeSymlink == 0 {
 				return errors.New("pre-T0 rollback package lacks its reverse compatibility CLI link")
 			}
-			target, err := os.Readlink(runtime.paths.InstalledBinary)
+			target, err := os.Readlink(runtime.paths.OperatorBinary)
 			if err != nil || target != filepath.Base(runtime.paths.LegacyGoBinary) {
 				return errors.New("pre-T0 reverse CLI compatibility link has an unsafe target")
 			}
@@ -470,7 +493,7 @@ func (runtime *productionRuntime) verifyTransitionCLI(transition productionPacka
 		return errors.New("T0 rollback package lacks its compatibility CLI link")
 	}
 	target, err := os.Readlink(runtime.paths.LegacyGoBinary)
-	if err != nil || target != filepath.Base(runtime.paths.InstalledBinary) {
+	if err != nil || target != filepath.Base(runtime.paths.OperatorBinary) {
 		return errors.New("T0 compatibility CLI link has an unsafe target")
 	}
 	return nil

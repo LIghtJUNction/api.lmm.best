@@ -46,11 +46,11 @@ for asset in lmm-api.service lmm-api-go.env edge-policy REVISION API_ROUTE_CONTR
   require_literal "$GO_WORKFLOW" "$asset" "Go release omits $asset"
 done
 # shellcheck disable=SC2016 # Deliberately inspect workflow source literals.
-require_literal "$GO_WORKFLOW" '-o "../../${bundle}/lmm-api"' \
-  'Go release archive does not contain the canonical CLI name'
+require_literal "$GO_WORKFLOW" '-o "../../${bundle}/lmm-api-go"' \
+  'Go release archive does not contain the real provider binary name'
 # shellcheck disable=SC2016 # Deliberately inspect workflow source literals.
-reject_literal "$GO_WORKFLOW" '-o "../../${bundle}/lmm-api-go"' \
-  'Go release archive still emits the legacy CLI name'
+reject_literal "$GO_WORKFLOW" '-o "../../${bundle}/lmm-api"' \
+  'Go release archive incorrectly emits the backend-selection name as a real file'
 for gate in 'git merge-base --is-ancestor' 'git rev-list -n 1' \
   'cosign sign-blob' 'cosign verify-blob' 'sha256sum --check'; do
   require_literal "$GO_WORKFLOW" "$gate" "Go release omits gate: $gate"
@@ -141,4 +141,4 @@ done
 
 TMPDIR=${TMPDIR:?set TMPDIR to a marker-owned test workspace} \
   "$HERE/test-api-route-contract.sh"
-printf '%s\n' 'single-CLI Go, Web-owned frontend, metadata, and signature release contracts verified'
+printf '%s\n' 'Go provider, backend-selection link, Web frontend, metadata, and signature release contracts verified'

@@ -27,11 +27,14 @@ pkgbase = lmm-api-go-git
 	conflicts = lmm-api-git
 	conflicts = lmm-api-go
 	conflicts = lmm-api-go-bin
+	conflicts = lmm-api-deploy
+	conflicts = lmm-api-deploy-bin
+	replaces = lmm-api-deploy-bin
 	options = !strip
 	backup = etc/lmm-api-go/lmm-api-go.env
 	source = lmm-api-go::git+https://github.com/LIghtJUNction/api.lmm.best.git#branch=main
 	source = lmm-api-cli-phase.sh
 	sha256sums = SKIP
-	sha256sums = 2b93864b302a7901a4688fd5b7df9b7e262f193a666a915718f434db20054935
+	sha256sums = 4b8756419bc644ea62e05be72626345cbb27b582192539b732a4cda4431ad54b
 
 pkgname = lmm-api-go-git

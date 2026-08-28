@@ -46,7 +46,7 @@ source_aarch64=(
   "${_artifact}-arm64.tar.gz.sigstore.json::${_release_base}/${_artifact}-arm64.tar.gz.sigstore.json"
 )
 noextract=("${_artifact}-amd64.tar.gz" "${_artifact}-arm64.tar.gz")
-sha256sums=('2b93864b302a7901a4688fd5b7df9b7e262f193a666a915718f434db20054935')
+sha256sums=('4b8756419bc644ea62e05be72626345cbb27b582192539b732a4cda4431ad54b')
 sha256sums_x86_64=(
   'b5f7e5347ce60c30f4a462e5904ef24b39bc9bd2c6e5c5b681d529915ca34d88'
   '36f124b8ba97da51a7946cf4d9aa0c6796c6bfea72392ea19735cc680f4bde72'
@@ -81,12 +81,12 @@ prepare() {
   bsdtar -xf "${archive}"
 
   local bundle="${srcdir}/${_artifact}-${_release_arch}"
-  if [[ ${pkgver} == "${_legacy_cli_archive_version}" || ${pkgver} == "${_legacy_bundled_version}" ]]; then
-    [[ -f ${bundle}/lmm-api-go && ! -L ${bundle}/lmm-api-go ]] || return 1
-    [[ ! -e ${bundle}/lmm-api ]] || return 1
+  if [[ -f ${bundle}/lmm-api-go && ! -L ${bundle}/lmm-api-go ]]; then
+    [[ ! -e ${bundle}/lmm-api && ! -L ${bundle}/lmm-api ]] || return 1
+  elif [[ -f ${bundle}/lmm-api && ! -L ${bundle}/lmm-api ]]; then
+    [[ ! -e ${bundle}/lmm-api-go && ! -L ${bundle}/lmm-api-go ]] || return 1
   else
-    [[ -f ${bundle}/lmm-api && ! -L ${bundle}/lmm-api ]] || return 1
-    [[ ! -e ${bundle}/lmm-api-go ]] || return 1
+    return 1
   fi
   if [[ ${pkgver} == "${_legacy_bundled_version}" ]]; then
     [[ -f ${bundle}/frontend-dist/index.html ]] || return 1
@@ -114,13 +114,18 @@ prepare() {
 package() {
   local archive="${_artifact}-${_release_arch}.tar.gz"
   local bundle="${srcdir}/${_artifact}-${_release_arch}"
-  local cli=lmm-api
+  local cli
   local file release_asset_sha256
 
-  if [[ ${pkgver} == "${_legacy_cli_archive_version}" || ${pkgver} == "${_legacy_bundled_version}" ]]; then
+  if [[ -f ${bundle}/lmm-api-go && ! -L ${bundle}/lmm-api-go ]]; then
     cli=lmm-api-go
+  elif [[ -f ${bundle}/lmm-api && ! -L ${bundle}/lmm-api ]]; then
+    cli=lmm-api
+  else
+    error 'release bundle does not contain a real Go provider binary'
+    return 1
   fi
-  install -Dm0755 "${bundle}/${cli}" "${pkgdir}/usr/bin/lmm-api"
+  install -Dm0755 "${bundle}/${cli}" "${pkgdir}/usr/bin/lmm-api-go"
   lmm_cli_phase_install_compatibility_alias "$_lmm_cli_phase" "$pkgdir"
   install -Dm0644 "${bundle}/lmm-api.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
