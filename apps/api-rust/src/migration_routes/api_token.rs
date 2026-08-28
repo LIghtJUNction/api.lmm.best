@@ -83,6 +83,34 @@ pub enum OAuthApiTokenError {
     Unavailable,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum TokenCreationFenceError {
+    #[error("active token owner not found")]
+    OwnerUnavailable,
+    #[error("API key limit reached")]
+    Limit,
+    #[error("token creation database unavailable")]
+    Database(#[source] sqlx::Error),
+}
+
+impl TokenCreationFenceError {
+    fn into_oauth(self) -> OAuthApiTokenError {
+        match self {
+            Self::OwnerUnavailable => OAuthApiTokenError::NotFound,
+            Self::Limit => OAuthApiTokenError::Limit,
+            Self::Database(_) => OAuthApiTokenError::Unavailable,
+        }
+    }
+
+    fn into_dashboard(self, limit: i64) -> TokenError {
+        match self {
+            Self::OwnerUnavailable => TokenError::not_found(),
+            Self::Limit => TokenError::token_limit(limit),
+            Self::Database(error) => TokenError::db(error),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiTokenHttpState {
     service: Arc<PgValkeyApiTokenService>,
@@ -210,6 +238,55 @@ impl PgValkeyApiTokenService {
         self
     }
 
+    async fn begin_token_creation(
+        &self,
+        user_id: i64,
+        max_user_tokens: i64,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, TokenCreationFenceError> {
+        let mut tx = self
+            .pg
+            .begin()
+            .await
+            .map_err(TokenCreationFenceError::Database)?;
+        let owner = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL AND status = 1 FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(TokenCreationFenceError::Database)?;
+        if owner.is_none() {
+            return Err(TokenCreationFenceError::OwnerUnavailable);
+        }
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(TokenCreationFenceError::Database)?;
+        if count >= max_user_tokens {
+            return Err(TokenCreationFenceError::Limit);
+        }
+        Ok(tx)
+    }
+
+    async fn activate_console(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        user_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        if self.console_activation_on_create {
+            sqlx::query(
+                "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
+            )
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn oauth_list(
         &self,
         user_id: i64,
@@ -246,36 +323,14 @@ impl PgValkeyApiTokenService {
         let settings = self.token_settings().await;
         let key = generate_key();
         let now = unix_now();
-        let mut tx = self
-            .pg
-            .begin()
-            .await
-            .map_err(|_| OAuthApiTokenError::Unavailable)?;
-        let owner = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL AND status = 1 FOR UPDATE",
-        )
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|_| OAuthApiTokenError::Unavailable)?;
-        if owner.is_none() {
-            return Err(OAuthApiTokenError::NotFound);
-        }
-        let count = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND deleted_at IS NULL",
-        )
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|_| OAuthApiTokenError::Unavailable)?;
-        if count >= settings.max_user_tokens {
-            return Err(OAuthApiTokenError::Limit);
-        }
-
         let has_auto_groups_column = self
             .has_auto_groups_column()
             .await
             .map_err(|_| OAuthApiTokenError::Unavailable)?;
+        let mut tx = self
+            .begin_token_creation(user_id, settings.max_user_tokens)
+            .await
+            .map_err(TokenCreationFenceError::into_oauth)?;
         let id = if has_auto_groups_column {
             sqlx::query_scalar::<_, i64>(
                 "INSERT INTO tokens (user_id, key, status, name, created_time, accessed_time, expired_time, remain_quota, unlimited_quota, model_limits_enabled, model_limits, allow_ips, used_quota, \"group\", cross_group_retry, auto_groups) VALUES ($1,$2,1,$3,$4,$4,-1,0,TRUE,FALSE,'','',0,'default',FALSE,'') RETURNING id",
@@ -298,15 +353,9 @@ impl PgValkeyApiTokenService {
             .await
         }
         .map_err(|_| OAuthApiTokenError::Unavailable)?;
-        if self.console_activation_on_create {
-            sqlx::query(
-                "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
-            )
-            .bind(user_id)
-            .execute(&mut *tx)
+        self.activate_console(&mut tx, user_id)
             .await
             .map_err(|_| OAuthApiTokenError::Unavailable)?;
-        }
         tx.commit()
             .await
             .map_err(|_| OAuthApiTokenError::Unavailable)?;
@@ -771,17 +820,10 @@ return 1
         let has_auto_groups_column = self.has_auto_groups_column().await?;
         let key = generate_key();
         let now = unix_now();
-        let mut tx = self.pg.begin().await.map_err(TokenError::db)?;
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM tokens WHERE user_id = $1 AND deleted_at IS NULL",
-        )
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(TokenError::db)?;
-        if count >= settings.max_user_tokens {
-            return Err(TokenError::token_limit(settings.max_user_tokens));
-        }
+        let mut tx = self
+            .begin_token_creation(user_id, settings.max_user_tokens)
+            .await
+            .map_err(|error| error.into_dashboard(settings.max_user_tokens))?;
         // `AddToken` builds a fresh Go model without copying request status;
         // GORM applies its `status:1` and `expired_time:-1` defaults whenever
         // the incoming expiration is omitted or zero.
@@ -795,15 +837,9 @@ return 1
                 .bind(user_id).bind(&key).bind(input.name).bind(now).bind(expired_time).bind(input.remain_quota).bind(input.unlimited_quota).bind(input.model_limits_enabled).bind(input.model_limits).bind(input.allow_ips.unwrap_or_default()).bind(input.group).bind(input.cross_group_retry)
                 .execute(&mut *tx).await.map_err(TokenError::db)?;
         }
-        if self.console_activation_on_create {
-            sqlx::query(
-                "UPDATE users SET console_activated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE id = $1 AND deleted_at IS NULL AND console_activated_at = 0",
-            )
-            .bind(user_id)
-            .execute(&mut *tx)
+        self.activate_console(&mut tx, user_id)
             .await
             .map_err(TokenError::db)?;
-        }
         tx.commit().await.map_err(TokenError::db)
     }
 

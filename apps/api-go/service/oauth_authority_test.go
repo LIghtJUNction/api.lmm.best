@@ -164,6 +164,30 @@ func TestOAuthBootstrapAPIKeyCreationEnforcesTheTransactionalLimit(t *testing.T)
 	assert.EqualValues(t, 1, count)
 }
 
+func TestOAuthGrantLifetimesMatchTheRustAuthorityContract(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, oauthAuthorizationRequestTTL)
+	assert.Equal(t, 90*time.Second, oauthAuthorizationCodeTTL)
+	assert.Equal(t, 10*time.Minute, oauthDeviceGrantTTL)
+	assert.Equal(t, 15*time.Minute, oauthAccessTokenTTL)
+	assert.Equal(t, 30*24*time.Hour, oauthRefreshTokenTTL)
+}
+
+func TestOAuthRevocationValidatesTheFixedPublicClient(t *testing.T) {
+	resetOAuthServiceState(t)
+	now := time.Now().UTC()
+	assert.ErrorIs(t,
+		RevokeOAuthGrantToken("unknown-token", "other-client", now),
+		ErrOAuthInvalidClient,
+	)
+	assert.ErrorIs(t,
+		RevokeOAuthGrantToken("", OAuthBootstrapClientId, now),
+		ErrOAuthInvalidRequest,
+	)
+	require.NoError(t,
+		RevokeOAuthGrantToken("unknown-token", OAuthBootstrapClientId, now),
+	)
+}
+
 func TestOAuthIssuerRequiresHTTPSOrAnExactLoopbackIP(t *testing.T) {
 	original := system_setting.ServerAddress
 	t.Cleanup(func() { system_setting.ServerAddress = original })

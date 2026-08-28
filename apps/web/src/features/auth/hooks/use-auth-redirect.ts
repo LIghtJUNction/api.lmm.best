@@ -20,6 +20,7 @@ import { useNavigate } from '@tanstack/react-router'
 import i18n from 'i18next'
 
 import {
+  authContinuationSearch,
   getSavedLanguage,
   sanitizeAuthRedirect,
 } from '@/features/auth/lib/auth-redirect'
@@ -60,15 +61,23 @@ export function useAuthRedirect() {
   /**
    * Redirect to 2FA page
    */
-  const redirectTo2FA = () => {
-    navigate({ to: '/otp', replace: true })
+  const redirectTo2FA = (redirectTo?: string) => {
+    navigate({
+      to: '/otp',
+      search: authContinuationSearch(redirectTo),
+      replace: true,
+    })
   }
 
   /**
    * Redirect to login page
    */
-  const redirectToLogin = () => {
-    navigate({ to: '/sign-in', replace: true })
+  const redirectToLogin = (redirectTo?: string) => {
+    navigate({
+      to: '/sign-in',
+      search: authContinuationSearch(redirectTo),
+      replace: true,
+    })
   }
 
   /**

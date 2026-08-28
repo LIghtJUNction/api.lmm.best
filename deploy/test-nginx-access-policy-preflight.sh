@@ -212,6 +212,26 @@ done
   fail 'an API preflight reached the access-policy or application upstream'
 }
 
+near_miss_paths=(
+  /.well-known/oauth-authorization-server/
+  /oauth/authorize/
+  /oauth/device/code/
+  /oauth/token/
+  /oauth/revoke/
+)
+for path in "${near_miss_paths[@]}"; do
+  status=$(curl --silent --show-error --unix-socket "$socket" \
+    --request GET --output "$work/near-miss.body" --dump-header "$work/near-miss.headers" \
+    --write-out '%{http_code}' "http://localhost$path")
+  [[ $status == 404 ]] || fail "OAuth near miss $path returned HTTP $status instead of 404"
+  grep -Fq '"error":"invalid_request"' "$work/near-miss.body" || \
+    fail "OAuth near miss $path lost its protocol error body"
+  tr -d '\r' <"$work/near-miss.headers" >"$work/near-miss.headers.normalized"
+  assert_header "$work/near-miss.headers.normalized" '^Cache-Control: no-store$'
+  assert_header "$work/near-miss.headers.normalized" '^Content-Type: application/json$'
+done
+[[ ! -s $upstream_log ]] || fail 'an OAuth near miss reached the upstream'
+
 # A non-OPTIONS API request must still run the inherited access policy and
 # surface its structured denial rather than reaching the application route.
 # The duplicate slash also proves that the normalized location-matching URI,

@@ -195,6 +195,14 @@ jobs:
           bun run --filter @lmm/web build
           bun run --filter @lmm/web bundle:check
 
+      - name: Verify OAuth authorization UI in Chromium
+        env:
+          OAUTH_UI_USE_EXISTING_BUILD: "1"
+        run: |
+          test "$(bunx playwright --version)" = "Version 1.62.1"
+          bunx playwright install --with-deps chromium
+          bun run --filter @lmm/web test:oauth-ui-e2e
+
       - name: Verify public installers are shipped verbatim
         run: |
           cmp apps/web/public/install.sh apps/web/dist/install.sh
@@ -465,6 +473,9 @@ jobs:
       LMM_MODELS_TEST_VALKEY_URL: redis://:lmm-ci-valkey-password@127.0.0.1:6379/0
       LMM_API_TOKEN_TEST_DATABASE_URL: postgresql://lmm_ci:lmm-ci-postgres-password@127.0.0.1:5432/lmm_ci
       LMM_API_TOKEN_TEST_VALKEY_URL: redis://:lmm-ci-valkey-password@127.0.0.1:6379/0
+      LMM_OAUTH_TEST_ALLOW_SCHEMA_RESET: "1"
+      LMM_OAUTH_TEST_DATABASE_URL: postgresql://lmm_ci:lmm-ci-postgres-password@127.0.0.1:5432/lmm_ci
+      LMM_OAUTH_TEST_VALKEY_URL: redis://:lmm-ci-valkey-password@127.0.0.1:6379/0
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

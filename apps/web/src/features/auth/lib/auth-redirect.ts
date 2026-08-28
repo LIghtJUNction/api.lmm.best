@@ -20,6 +20,10 @@ import type { AuthUser } from '@/stores/auth-store'
 
 const allowedRedirectProtocols = new Set(['http:', 'https:'])
 
+export function authContinuationSearch(redirectTo?: string) {
+  return redirectTo ? { redirect: redirectTo } : {}
+}
+
 export function getSavedLanguage(user: AuthUser): string | undefined {
   if (typeof user.language === 'string') {
     return user.language

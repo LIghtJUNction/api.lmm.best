@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	oauthFamilyLockNamespace int64 = 0x4f41555448
+
 	OAuthDeviceStatusPending  = "pending"
 	OAuthDeviceStatusApproved = "approved"
 	OAuthDeviceStatusDenied   = "denied"
@@ -293,11 +295,22 @@ func RotateOAuthRefreshToken(raw, clientId string, accessTTL, refreshTTL time.Du
 	}
 	var pair *OAuthTokenPair
 	var replayed bool
+	tokenHash := oauthOpaqueHash(OAuthTokenKindRefresh, raw)
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		var family OAuthGrantToken
+		if err := tx.Select("family_id").Where(
+			"token_hash = ? AND kind = ? AND client_id = ?",
+			tokenHash, OAuthTokenKindRefresh, clientId,
+		).First(&family).Error; err != nil {
+			return normalizeOAuthRecordError(err)
+		}
+		if err := lockOAuthTokenFamily(tx, family.FamilyId); err != nil {
+			return err
+		}
 		var token OAuthGrantToken
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
 			"token_hash = ? AND kind = ? AND client_id = ?",
-			oauthOpaqueHash(OAuthTokenKindRefresh, raw), OAuthTokenKindRefresh, clientId,
+			tokenHash, OAuthTokenKindRefresh, clientId,
 		).First(&token).Error; err != nil {
 			return normalizeOAuthRecordError(err)
 		}
@@ -345,13 +358,26 @@ func RevokeOAuthToken(raw string, now time.Time) error {
 	} else if !strings.HasPrefix(raw, "lmm_oat_") {
 		return nil
 	}
+	tokenHash := oauthOpaqueHash(kind, raw)
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var token OAuthGrantToken
-		err := tx.Where("token_hash = ? AND kind = ?", oauthOpaqueHash(kind, raw), kind).First(&token).Error
+		var family OAuthGrantToken
+		err := tx.Select("family_id").Where("token_hash = ? AND kind = ?", tokenHash, kind).First(&family).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		if err != nil {
+			return fmt.Errorf("find oauth token family for revocation: %w", err)
+		}
+		if err := lockOAuthTokenFamily(tx, family.FamilyId); err != nil {
+			return err
+		}
+		var token OAuthGrantToken
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"token_hash = ? AND kind = ?", tokenHash, kind,
+		).First(&token).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
 			return fmt.Errorf("find oauth token for revocation: %w", err)
 		}
 		query := tx.Model(&OAuthGrantToken{}).Where("id = ?", token.Id)
@@ -367,6 +393,16 @@ func RevokeOAuthToken(raw string, now time.Time) error {
 		return fmt.Errorf("revoke oauth token: %w", err)
 	}
 	return nil
+}
+
+func lockOAuthTokenFamily(tx *gorm.DB, familyId string) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	return tx.Exec(
+		"SELECT pg_advisory_xact_lock(hashtextextended(?, ?))",
+		familyId, oauthFamilyLockNamespace,
+	).Error
 }
 
 func randomOAuthValue(size int) (string, error) {

@@ -24,6 +24,7 @@ for route in \
   '/oauth/token' \
   '/oauth/revoke'; do
   assert_literal "location = $route" "$config"
+  assert_literal "location ^~ $route/" "$config"
 done
 assert_literal 'location ^~ /oauth/ { try_files /index.html =404;' "$config"
 if grep -Fq 'location = /oauth/device {' "$config" || grep -Fq 'location = /oauth/consent {' "$config"; then

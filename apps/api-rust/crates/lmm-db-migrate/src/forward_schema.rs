@@ -515,27 +515,43 @@ pub fn verify_oauth_authority_schema(
             }
         }
     }
-    for &(table, index) in &[
+    for &(table, index, expected_column) in &[
         (
             "oauth_device_grants",
             "idx_oauth_device_grants_device_code_hash",
+            "device_code_hash",
         ),
         (
             "oauth_device_grants",
             "idx_oauth_device_grants_user_code_hash",
+            "user_code_hash",
         ),
-        ("oauth_grant_tokens", "idx_oauth_grant_tokens_token_hash"),
+        (
+            "oauth_grant_tokens",
+            "idx_oauth_grant_tokens_token_hash",
+            "token_hash",
+        ),
     ] {
-        let index_definition: Option<String> = transaction
+        let compatible = transaction
             .query_opt(
-                "SELECT indexdef FROM pg_catalog.pg_indexes WHERE schemaname = $1 AND tablename = $2 AND indexname = $3",
+                "SELECT idx.indisunique, idx.indisvalid, idx.indpred IS NULL, idx.indnkeyatts, idx.indnatts, attribute.attname FROM pg_catalog.pg_index AS idx JOIN pg_catalog.pg_class AS index_relation ON index_relation.oid = idx.indexrelid JOIN pg_catalog.pg_class AS table_relation ON table_relation.oid = idx.indrelid JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = table_relation.relnamespace JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = table_relation.oid AND attribute.attnum = idx.indkey[0] WHERE namespace.nspname = $1 AND table_relation.relname = $2 AND index_relation.relname = $3",
                 &[&schema, &table, &index],
             )?
-            .map(|row| row.get(0));
-        if !index_definition
-            .as_deref()
-            .is_some_and(|definition| definition.starts_with("CREATE UNIQUE INDEX"))
-        {
+            .is_some_and(|row| {
+                let unique: bool = row.get(0);
+                let valid: bool = row.get(1);
+                let unpredicated: bool = row.get(2);
+                let key_columns: i16 = row.get(3);
+                let all_columns: i16 = row.get(4);
+                let column: String = row.get(5);
+                unique
+                    && valid
+                    && unpredicated
+                    && key_columns == 1
+                    && all_columns == 1
+                    && column == expected_column
+            });
+        if !compatible {
             return Err(MigrationError::Manifest(format!(
                 "forward schema is missing compatible unique index {index}"
             )));

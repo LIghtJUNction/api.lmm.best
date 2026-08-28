@@ -11,7 +11,7 @@ manifest="$repo_root/apps/api-rust/Cargo.toml"
 suite=${1:-all}
 
 usage() {
-  echo "usage: $0 {auth|models|api-token|all}" >&2
+  echo "usage: $0 {auth|models|api-token|oauth|all}" >&2
   exit 2
 }
 
@@ -52,10 +52,22 @@ run_api_token() {
     --test migration_api_token -- --ignored --test-threads=1
 }
 
+run_oauth() {
+  [[ ${LMM_OAUTH_TEST_ALLOW_SCHEMA_RESET:-} == 1 ]] || {
+    echo "LMM_OAUTH_TEST_ALLOW_SCHEMA_RESET=1 is required for the isolated OAuth schema reset" >&2
+    exit 1
+  }
+  require_loopback_url LMM_OAUTH_TEST_DATABASE_URL
+  require_loopback_url LMM_OAUTH_TEST_VALKEY_URL
+  cargo build --locked --manifest-path "$manifest" -p lmm-api-rs --bin lmm-api-rs
+  bash "$script_dir/test-oauth-authority-listener.sh"
+}
+
 case "$suite" in
   auth) run_auth ;;
   models) run_models ;;
   api-token) run_api_token ;;
-  all) run_auth; run_models; run_api_token ;;
+  oauth) run_oauth ;;
+  all) run_auth; run_models; run_api_token; run_oauth ;;
   *) usage ;;
 esac

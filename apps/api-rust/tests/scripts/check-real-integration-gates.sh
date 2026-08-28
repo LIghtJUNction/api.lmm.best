@@ -6,14 +6,29 @@ repo_root=$(cd -- "$script_dir/../../../.." && pwd -P)
 tests_dir="$repo_root/apps/api-rust/tests"
 runner="$repo_root/apps/api-rust/tests/scripts/run-real-integration-gates.sh"
 isolated_runner="$repo_root/apps/api-rust/tests/scripts/run-isolated-real-integration-gates.sh"
+oauth_listener="$repo_root/apps/api-rust/tests/scripts/test-oauth-authority-listener.sh"
 
 [[ -x $runner || -f $runner ]] || { echo "missing real-integration runner: $runner" >&2; exit 1; }
 [[ -x $isolated_runner || -f $isolated_runner ]] || { echo "missing isolated real-integration runner: $isolated_runner" >&2; exit 1; }
+[[ -x $oauth_listener || -f $oauth_listener ]] || { echo "missing OAuth listener gate: $oauth_listener" >&2; exit 1; }
+for contract in \
+  'LMM_OAUTH_TEST_ALLOW_SCHEMA_RESET' \
+  'LMM_OAUTH_TEST_DATABASE_URL' \
+  'LMM_OAUTH_TEST_VALKEY_URL' \
+  'lmm_oat_' \
+  'lmm_ort_' \
+  'race-rotate' \
+  'race-revoke'; do
+  grep -Fq "$contract" "$oauth_listener" || {
+    echo "OAuth listener gate is missing contract: $contract" >&2
+    exit 1
+  }
+done
 
 declare -A requirements=(
   [auth_pg_valkey.rs]='auth_routes_preserve_postgres_and_valkey_control_plane,dashboard_resolver_preserves_session_pat_and_userauth_boundaries,assistant_l1_confirmation_should_be_session_bound_and_single_use|LMM_AUTH_TEST_DATABASE_URL|LMM_AUTH_TEST_VALKEY_URL'
   [models_pg_valkey.rs]='models_route_uses_authoritative_postgres_and_tolerates_valkey_failure|LMM_MODELS_TEST_DATABASE_URL|LMM_MODELS_TEST_VALKEY_URL'
-  [migration_api_token.rs]='mixed_case_deleted_at_create_update_preserves_active_rows_and_rejects_invalid_inputs,create_missing_and_explicit_zero_fields_use_go_model_defaults,create_token_activation_is_one_time_and_transactional,api_token_mutations_invalidate_cached_credentials_and_keep_listings_masked,api_token_status_only_writes_the_legacy_update_column_set,api_token_delete_is_idempotent_under_replay_and_competing_requests,api_token_batch_delete_is_owner_scoped_and_preserves_foreign_cache_on_replay,api_token_token_limit_and_owner_scope_use_postgres_authority,concurrent_create_keeps_the_legacy_count_then_insert_race_contract,api_token_options_refresh_is_best_effort_and_retains_last_good_snapshot,api_token_update_returns_loaded_mutation_without_a_post_write_select,api_token_row_decode_faults_keep_raw_generic_detail_but_search_maps_the_error,api_token_listener_preserves_field_specific_query_overflows_and_repeated_keys,api_token_batch_key_database_fault_is_not_silently_downgraded_to_an_empty_map|LMM_API_TOKEN_TEST_DATABASE_URL|LMM_API_TOKEN_TEST_VALKEY_URL'
+  [migration_api_token.rs]='mixed_case_deleted_at_create_update_preserves_active_rows_and_rejects_invalid_inputs,create_missing_and_explicit_zero_fields_use_go_model_defaults,create_token_activation_is_one_time_and_transactional,api_token_mutations_invalidate_cached_credentials_and_keep_listings_masked,api_token_status_only_writes_the_legacy_update_column_set,api_token_delete_is_idempotent_under_replay_and_competing_requests,api_token_batch_delete_is_owner_scoped_and_preserves_foreign_cache_on_replay,api_token_token_limit_and_owner_scope_use_postgres_authority,concurrent_create_serializes_the_shared_token_limit_fence,api_token_options_refresh_is_best_effort_and_retains_last_good_snapshot,api_token_update_returns_loaded_mutation_without_a_post_write_select,api_token_row_decode_faults_keep_raw_generic_detail_but_search_maps_the_error,api_token_listener_preserves_field_specific_query_overflows_and_repeated_keys,api_token_batch_key_database_fault_is_not_silently_downgraded_to_an_empty_map|LMM_API_TOKEN_TEST_DATABASE_URL|LMM_API_TOKEN_TEST_VALKEY_URL'
 )
 
 total_ignored=0
@@ -79,14 +94,15 @@ if rg -U -n 'else\s*\{\s*return;\s*\}' \
   exit 1
 fi
 
-for suite in auth models api-token; do
+for suite in auth models api-token oauth; do
   if env -u LMM_AUTH_TEST_ALLOW_SCHEMA_RESET -u LMM_AUTH_TEST_DATABASE_URL -u LMM_AUTH_TEST_VALKEY_URL \
     -u LMM_MODELS_TEST_DATABASE_URL -u LMM_MODELS_TEST_VALKEY_URL \
     -u LMM_API_TOKEN_TEST_DATABASE_URL -u LMM_API_TOKEN_TEST_VALKEY_URL \
+    -u LMM_OAUTH_TEST_ALLOW_SCHEMA_RESET -u LMM_OAUTH_TEST_DATABASE_URL -u LMM_OAUTH_TEST_VALKEY_URL \
     bash "$runner" "$suite" >/dev/null 2>&1; then
     echo "$suite real-integration runner unexpectedly accepted missing environment" >&2
     exit 1
   fi
 done
 
-echo "real integration gates valid: $total_ignored ignored tests across ${#requirements[@]} modules; missing environment hard-fails"
+echo "real integration gates valid: $total_ignored ignored tests across ${#requirements[@]} modules plus OAuth listener race coverage; missing environment hard-fails"

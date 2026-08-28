@@ -21,6 +21,12 @@ The authority supports:
 - short-lived bearer access tokens;
 - explicit revocation.
 
+Grant lifetimes are fixed across Go and Rust: authorization request 5 minutes,
+authorization code 90 seconds, device grant 10 minutes, access token 15
+minutes, and refresh token 30 days. Access tokens use the `lmm_oat_` prefix;
+refresh tokens use `lmm_ort_`. Both providers hash the complete prefixed value
+with the shared `oauth:access:` / `oauth:refresh:` HMAC contract.
+
 Only these scopes exist:
 
 ```text
@@ -88,7 +94,8 @@ not printed or persisted by `lmm-api-rs`.
 Go and Rust providers implement the same HMAC, PKCE, grant, scope, response,
 and schema contracts. New HMAC/PKCE vectors are asserted in both languages.
 The Rust implementation is mounted only on the normal server, never the test
-instance.
+instance, and only when `LMM_SCHEMA_CONTRACT >= 4`; older contract listeners
+expose no OAuth authority routes.
 
 Nginx sends the five protocol endpoints above to the selected backend through
 exact locations. `/oauth/consent` and `/oauth/device` remain under the SPA
@@ -96,6 +103,8 @@ exact locations. `/oauth/consent` and `/oauth/device` remain under the SPA
 container test.
 
 Do not publish OAuth metadata until schema contract 4 is installed and both
-selectable providers have passed their grant/token/resource tests. Changing
+selectable providers have passed their grant/token/resource tests. CI runs a
+real Rust listener against PostgreSQL 18 and authenticated Valkey, including a
+concurrent refresh/revoke race and replay-family revocation. Changing
 `lmm-api` to point at another provider is still a separate explicit backend
 cutover; installers do not switch it automatically.

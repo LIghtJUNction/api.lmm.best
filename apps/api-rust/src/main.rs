@@ -844,19 +844,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_console_access_gate(Arc::clone(&auth)),
         );
-        let oauth_authority = http::api_global_rate_limited_surface(
-            &app_state,
-            oauth_authority_router(
-                OAuthAuthorityState::new(
-                    pg.clone(),
-                    Arc::clone(&auth),
-                    Arc::clone(&api_token_service),
-                    config.auth_session_secret.clone(),
-                    &oauth_issuer,
-                )
-                .map_err(io::Error::other)?,
-            ),
-        );
+        let oauth_authority = if config.schema_contract >= 4 {
+            http::api_global_rate_limited_surface(
+                &app_state,
+                oauth_authority_router(
+                    OAuthAuthorityState::new(
+                        pg.clone(),
+                        Arc::clone(&auth),
+                        Arc::clone(&api_token_service),
+                        config.auth_session_secret.clone(),
+                        &oauth_issuer,
+                    )
+                    .map_err(io::Error::other)?,
+                ),
+            )
+        } else {
+            axum::Router::new()
+        };
         let open_source_bounties = http::api_global_rate_limited_surface(
             &app_state,
             open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth))),

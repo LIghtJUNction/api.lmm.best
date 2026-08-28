@@ -19,6 +19,7 @@ import { z } from 'zod'
 
 import { DeviceAuthorization } from '@/features/oauth-authorization/device-authorization'
 import { requireOAuthAuthentication } from '@/features/oauth-authorization/oauth-route-guard'
+import { normalizeOAuthDeviceCode } from '@/features/oauth-authorization/oauth-utils'
 
 const searchSchema = z.object({
   user_code: z.string().trim().max(32).optional(),
@@ -32,5 +33,11 @@ export const Route = createFileRoute('/(auth)/oauth_/device')({
 
 function OAuthDeviceRoute() {
   const search = Route.useSearch()
-  return <DeviceAuthorization userCode={search.user_code} />
+  const normalizedCode = normalizeOAuthDeviceCode(search.user_code ?? '')
+  return (
+    <DeviceAuthorization
+      key={normalizedCode}
+      userCode={normalizedCode || undefined}
+    />
+  )
 }

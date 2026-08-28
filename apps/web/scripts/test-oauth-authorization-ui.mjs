@@ -30,6 +30,13 @@ const evidenceRoot = resolve(
   process.env.OAUTH_UI_EVIDENCE_DIR || join(appRoot, '../../.scratch/oauth-ui/evidence')
 )
 
+if (process.env.OAUTH_UI_USE_EXISTING_BUILD !== '1') {
+  execFileSync('bun', ['run', 'build'], {
+    cwd: appRoot,
+    stdio: 'inherit',
+  })
+}
+
 if (!existsSync(join(distRoot, 'index.html'))) {
   throw new Error('apps/web/dist is missing; run `bun run build` before the OAuth UI browser test')
 }
@@ -340,6 +347,10 @@ try {
   await devicePage.getByRole('button', { name: 'Connect device' }).click()
   await captureEvidence(devicePage, 'oauth-device-submitting-mobile.png')
   await devicePage.getByText('Device connected').waitFor()
+  assert.equal(
+    await devicePage.evaluate(() => document.activeElement?.textContent?.trim()),
+    'Device connected'
+  )
   measurements.deviceDecisionMs = Date.now() - deviceDecisionStartedAt
   await captureEvidence(devicePage, 'oauth-device-success-mobile.png')
 

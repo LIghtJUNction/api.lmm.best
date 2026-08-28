@@ -20,8 +20,12 @@ func TestOAuthHashVectorsMatchTheRustAuthorityContract(t *testing.T) {
 		authFlowTokenHash("authorization-request-token"),
 	)
 	assert.Equal(t,
-		"b09a2fff0bc85028977df6ab0370080c18e4f6d7d12d9830bbd31d64c646b1c2",
-		oauthOpaqueHash("access-token", "access-token-value"),
+		"bf9ec23b8a5d2ccd7e18e2ac97b59445be4592f85c0479e40f3c68e130aa05be",
+		oauthOpaqueHash(OAuthTokenKindAccess, "lmm_oat_access-token-value"),
+	)
+	assert.Equal(t,
+		"0412268c4e323ca09d48a2f8a0740f4377a89e798a24dec063050984629070b2",
+		oauthOpaqueHash(OAuthTokenKindRefresh, "lmm_ort_refresh-token-value"),
 	)
 }
 

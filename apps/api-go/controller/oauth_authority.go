@@ -122,8 +122,10 @@ func RevokeOAuthToken(c *gin.Context) {
 	if !requireOAuthForm(c) {
 		return
 	}
-	if err := service.RevokeOAuthGrantToken(c.PostForm("token"), time.Now().UTC()); err != nil {
-		oauthError(c, http.StatusServiceUnavailable, "temporarily_unavailable", "Token revocation is temporarily unavailable.")
+	if err := service.RevokeOAuthGrantToken(
+		c.PostForm("token"), c.PostForm("client_id"), time.Now().UTC(),
+	); err != nil {
+		writeOAuthServiceError(c, err)
 		return
 	}
 	c.Header("Cache-Control", "no-store")
@@ -182,7 +184,7 @@ func requireOAuthForm(c *gin.Context) bool {
 func writeOAuthServiceError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrOAuthInvalidClient):
-		oauthError(c, http.StatusBadRequest, "invalid_client", "The public client is not registered.")
+		oauthError(c, http.StatusUnauthorized, "invalid_client", "The public client is not registered.")
 	case errors.Is(err, service.ErrOAuthInvalidScope):
 		oauthError(c, http.StatusBadRequest, "invalid_scope", "The requested scope is not allowed.")
 	case errors.Is(err, service.ErrOAuthInvalidRedirectURI), errors.Is(err, service.ErrOAuthInvalidPKCE), errors.Is(err, service.ErrOAuthInvalidRequest):
@@ -197,6 +199,8 @@ func writeOAuthServiceError(c *gin.Context, err error) {
 		oauthError(c, http.StatusBadRequest, "access_denied", "The user denied authorization.")
 	case errors.Is(err, model.ErrOAuthExpiredToken):
 		oauthError(c, http.StatusBadRequest, "expired_token", "The device code has expired.")
+	case errors.Is(err, service.ErrOAuthUnavailable):
+		oauthError(c, http.StatusServiceUnavailable, "temporarily_unavailable", "The OAuth authority is temporarily unavailable.")
 	default:
 		oauthError(c, http.StatusBadRequest, "invalid_grant", "The grant is invalid or expired.")
 	}

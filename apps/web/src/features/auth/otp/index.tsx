@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { AuthLayout } from '../auth-layout'
 import { OtpForm } from './components/otp-form'
 
-export function Otp() {
+export function Otp(props: { redirectTo?: string }) {
   const { t } = useTranslation()
   return (
     <AuthLayout>
@@ -46,7 +46,7 @@ export function Otp() {
           </p>
         </div>
 
-        <OtpForm />
+        <OtpForm redirectTo={props.redirectTo} />
       </div>
     </AuthLayout>
   )

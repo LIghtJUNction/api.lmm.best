@@ -23,7 +23,7 @@ import {
   KeyRound,
   ShieldCheck,
 } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -56,10 +56,15 @@ export function DeviceAuthorization(props: { userCode?: string }) {
   const [completedDecision, setCompletedDecision] = useState<boolean | null>(
     null
   )
+  const completionHeadingRef = useRef<HTMLHeadingElement>(null)
   const decisionMutation = useMutation({
     mutationFn: (approve: boolean) => decideOAuthDevice(userCode, approve),
     onSuccess: (result) => setCompletedDecision(result.approved),
   })
+
+  useEffect(() => {
+    if (completedDecision != null) completionHeadingRef.current?.focus()
+  }, [completedDecision])
 
   const complete = isCompleteOAuthDeviceCode(userCode)
   const title = t('Connect lmm-api-rs')
@@ -83,7 +88,11 @@ export function DeviceAuthorization(props: { userCode?: string }) {
         description={description}
       >
         <Card>
-          <CardContent className='flex min-h-72 flex-col items-center justify-center gap-4 py-10 text-center'>
+          <CardContent
+            className='flex min-h-72 flex-col items-center justify-center gap-4 py-10 text-center'
+            role='status'
+            aria-live='polite'
+          >
             <div
               className={
                 completedDecision
@@ -94,7 +103,11 @@ export function DeviceAuthorization(props: { userCode?: string }) {
               <CompletionIcon className='size-6' aria-hidden='true' />
             </div>
             <div className='space-y-1.5'>
-              <h3 className='text-lg font-semibold'>
+              <h3
+                ref={completionHeadingRef}
+                tabIndex={-1}
+                className='text-lg font-semibold outline-none'
+              >
                 {completedDecision
                   ? t('Device connected')
                   : t('Connection denied')}
@@ -121,7 +134,7 @@ export function DeviceAuthorization(props: { userCode?: string }) {
   return (
     <OAuthPageShell icon={KeyRound} title={title} description={description}>
       <Card>
-        <form onSubmit={approve}>
+        <form onSubmit={approve} aria-busy={decisionMutation.isPending}>
           <CardHeader className='border-b'>
             <CardTitle>{t('Confirm your device code')}</CardTitle>
             <CardDescription>

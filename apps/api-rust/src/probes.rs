@@ -68,6 +68,10 @@ FROM advanced_security_events WHERE FALSE"#,
 const OAUTH_AUTHORITY_SCHEMA_SELECTS: &[&str] = &[
     "SELECT id, device_code_hash, user_code_hash, client_id, scopes, status, user_id, interval_seconds, last_polled_at, created_at, expires_at, consumed_at FROM oauth_device_grants WHERE FALSE",
     "SELECT id, token_hash, kind, family_id, client_id, user_id, scopes, created_at, expires_at, consumed_at, revoked_at FROM oauth_grant_tokens WHERE FALSE",
+    "EXPLAIN (COSTS FALSE) INSERT INTO oauth_device_grants (id, device_code_hash, user_code_hash, client_id, scopes, status, expires_at, interval_seconds) VALUES (DEFAULT, repeat('a', 64), repeat('b', 64), 'lmm-api-rs', 'api_keys:list', 'pending', NOW(), 5)",
+    "EXPLAIN (COSTS FALSE) UPDATE oauth_device_grants SET status = 'approved', user_id = 1, last_polled_at = NOW(), consumed_at = NOW() WHERE FALSE",
+    "EXPLAIN (COSTS FALSE) INSERT INTO oauth_grant_tokens (id, token_hash, kind, family_id, client_id, user_id, scopes, expires_at) VALUES (DEFAULT, repeat('a', 64), 'access', '00000000-0000-0000-0000-000000000000', 'lmm-api-rs', 1, 'api_keys:list', NOW())",
+    "EXPLAIN (COSTS FALSE) UPDATE oauth_grant_tokens SET consumed_at = NOW(), revoked_at = NOW() WHERE FALSE",
 ];
 
 pub struct InfrastructureProbe {

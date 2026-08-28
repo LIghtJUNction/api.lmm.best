@@ -45,6 +45,7 @@ var (
 	ErrOAuthInvalidGrant       = errors.New("invalid_grant")
 	ErrOAuthUnsupportedGrant   = errors.New("unsupported_grant_type")
 	ErrOAuthAccessDenied       = errors.New("access_denied")
+	ErrOAuthUnavailable        = errors.New("temporarily_unavailable")
 )
 
 var oauthAllowedScopes = map[string]struct{}{
@@ -373,9 +374,15 @@ func ExchangeOAuthRefreshToken(refreshToken, clientId string, now time.Time) (*O
 	return oauthTokenResponse(pair, pair.Scopes), nil
 }
 
-func RevokeOAuthGrantToken(token string, now time.Time) error {
+func RevokeOAuthGrantToken(token, clientId string, now time.Time) error {
+	if clientId != OAuthBootstrapClientId {
+		return ErrOAuthInvalidClient
+	}
+	if strings.TrimSpace(token) == "" {
+		return ErrOAuthInvalidRequest
+	}
 	if err := model.RevokeOAuthToken(token, now); err != nil {
-		return fmt.Errorf("revoke oauth grant token: %w", err)
+		return fmt.Errorf("revoke oauth grant token: %w", ErrOAuthUnavailable)
 	}
 	return nil
 }

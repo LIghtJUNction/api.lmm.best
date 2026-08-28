@@ -1102,7 +1102,7 @@ async fn api_token_token_limit_and_owner_scope_use_postgres_authority() {
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 18 and Valkey; use tests/scripts/run-real-integration-gates.sh"]
-async fn concurrent_create_keeps_the_legacy_count_then_insert_race_contract() {
+async fn concurrent_create_serializes_the_shared_token_limit_fence() {
     let database_url = env::var("LMM_API_TOKEN_TEST_DATABASE_URL")
         .expect("set LMM_API_TOKEN_TEST_DATABASE_URL for the isolated PostgreSQL 18 harness");
     let valkey_url = env::var("LMM_API_TOKEN_TEST_VALKEY_URL")
@@ -1144,17 +1144,14 @@ async fn concurrent_create_keeps_the_legacy_count_then_insert_race_contract() {
         .iter()
         .filter(|response| response["message"] == "已达到最大令牌数量限制 (1)")
         .count();
-    assert_eq!(successful + limited, 2);
+    assert_eq!(successful, 1);
+    assert_eq!(limited, 1);
     let persisted: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM tokens WHERE user_id = 7 AND deleted_at IS NULL")
             .fetch_one(&pool)
             .await
             .expect("count concurrent token rows");
-    // Go performs an unconstrained count followed by an insert. Depending on
-    // scheduling the frozen race permits one or two inserts; the test records
-    // that contract without imposing advisory-lock serialization.
-    assert!((1..=2).contains(&persisted));
-    assert_eq!(persisted as usize, successful);
+    assert_eq!(persisted, 1);
 }
 
 #[tokio::test]
@@ -1661,6 +1658,7 @@ async fn reset(pool: &PgPool) {
     sqlx::query(
         "CREATE TABLE users (
             id BIGINT PRIMARY KEY,
+            status BIGINT NOT NULL DEFAULT 1,
             console_activated_at BIGINT NOT NULL DEFAULT 0,
             deleted_at TIMESTAMPTZ
         )",
@@ -1668,7 +1666,7 @@ async fn reset(pool: &PgPool) {
     .execute(pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO users (id) VALUES (7), (8)")
+    sqlx::query("INSERT INTO users (id, status) VALUES (7, 1), (8, 1)")
         .execute(pool)
         .await
         .unwrap();

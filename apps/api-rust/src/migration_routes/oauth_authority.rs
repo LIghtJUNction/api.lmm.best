@@ -7,8 +7,12 @@ use std::sync::Arc;
 
 use axum::{
     Form, Json, Router,
-    extract::{DefaultBodyLimit, Extension, Path, Query, State},
+    extract::{
+        DefaultBodyLimit, Extension, Path, Query, Request, State,
+        rejection::{FormRejection, JsonRejection, QueryRejection},
+    },
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -26,9 +30,9 @@ use crate::{
 use self::{
     store::OAuthStore,
     types::{
-        AuthorityError, AuthorizationDecision, AuthorizationDecisionBody, AuthorizationPreview,
-        AuthorizationQuery, CLIENT_ID, CreateKeyBody, DeviceCodeForm, DeviceDecision,
-        DeviceDecisionBody, Metadata, RevokeForm, TokenForm, canonical_issuer,
+        AccessPrincipal, AuthorityError, AuthorizationDecision, AuthorizationDecisionBody,
+        AuthorizationPreview, AuthorizationQuery, CLIENT_ID, CreateKeyBody, DeviceCodeForm,
+        DeviceDecision, DeviceDecisionBody, Metadata, RevokeForm, TokenForm, canonical_issuer,
         validate_authorization_query,
     },
 };
@@ -43,6 +47,16 @@ pub struct OAuthAuthorityState {
     dashboard_auth: Arc<dyn DashboardAuth>,
     api_tokens: Arc<PgValkeyApiTokenService>,
     issuer: Arc<str>,
+}
+
+#[derive(Clone, Copy)]
+struct DashboardPrincipal(i64);
+
+#[derive(Clone)]
+struct ScopeGuardState {
+    authority: OAuthAuthorityState,
+    required_scope: &'static str,
+    critical: bool,
 }
 
 impl OAuthAuthorityState {
@@ -69,27 +83,144 @@ impl OAuthAuthorityState {
 }
 
 pub fn router(state: OAuthAuthorityState) -> Router {
+    let critical_layer = middleware::from_fn_with_state(state.clone(), critical_guard);
+    let dashboard_layer = middleware::from_fn_with_state(state.clone(), dashboard_guard);
+    let dashboard_mutation_layer =
+        middleware::from_fn_with_state(state.clone(), dashboard_mutation_guard);
+    let list_scope_layer = middleware::from_fn_with_state(
+        ScopeGuardState {
+            authority: state.clone(),
+            required_scope: "api_keys:list",
+            critical: false,
+        },
+        scope_guard,
+    );
+    let create_scope_layer = middleware::from_fn_with_state(
+        ScopeGuardState {
+            authority: state.clone(),
+            required_scope: "api_keys:create",
+            critical: true,
+        },
+        scope_guard,
+    );
+    let reveal_scope_layer = middleware::from_fn_with_state(
+        ScopeGuardState {
+            authority: state.clone(),
+            required_scope: "api_keys:reveal",
+            critical: true,
+        },
+        scope_guard,
+    );
+
     Router::new()
         .route("/.well-known/oauth-authorization-server", get(metadata))
-        .route("/oauth/authorize", get(begin_authorization))
-        .route("/oauth/device/code", post(create_device_code))
-        .route("/oauth/token", post(exchange_token))
-        .route("/oauth/revoke", post(revoke_token))
+        .route(
+            "/oauth/authorize",
+            get(begin_authorization).route_layer(critical_layer.clone()),
+        )
+        .route(
+            "/oauth/device/code",
+            post(create_device_code).route_layer(critical_layer.clone()),
+        )
+        .route(
+            "/oauth/token",
+            post(exchange_token).route_layer(critical_layer.clone()),
+        )
+        .route(
+            "/oauth/revoke",
+            post(revoke_token).route_layer(critical_layer),
+        )
         .route(
             "/api/oauth/authorization/{request}",
-            get(authorization_preview).post(decide_authorization),
+            get(authorization_preview).route_layer(dashboard_layer),
         )
-        .route("/api/oauth/device", post(decide_device))
+        .route(
+            "/api/oauth/authorization/{request}",
+            post(decide_authorization).route_layer(dashboard_mutation_layer.clone()),
+        )
+        .route(
+            "/api/oauth/device",
+            post(decide_device).route_layer(dashboard_mutation_layer),
+        )
         .route(
             "/api/oauth/bootstrap/keys",
-            get(list_api_keys).post(create_api_key),
+            get(list_api_keys).route_layer(list_scope_layer),
+        )
+        .route(
+            "/api/oauth/bootstrap/keys",
+            post(create_api_key).route_layer(create_scope_layer),
         )
         .route(
             "/api/oauth/bootstrap/keys/{id}/reveal",
-            post(reveal_api_key),
+            post(reveal_api_key).route_layer(reveal_scope_layer),
         )
         .layer(DefaultBodyLimit::max(OAUTH_BODY_LIMIT_BYTES))
         .with_state(state)
+}
+
+async fn critical_guard(
+    State(state): State<OAuthAuthorityState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Err(response) =
+        enforce_critical_limit(&state, request.extensions().get::<ClientIpKey>()).await
+    {
+        return response;
+    }
+    next.run(request).await
+}
+
+async fn dashboard_guard(
+    State(state): State<OAuthAuthorityState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let user_id = match dashboard_user_id(&state, request.headers()).await {
+        Ok(user_id) => user_id,
+        Err(response) => return response,
+    };
+    request.extensions_mut().insert(DashboardPrincipal(user_id));
+    next.run(request).await
+}
+
+async fn dashboard_mutation_guard(
+    State(state): State<OAuthAuthorityState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let user_id = match dashboard_user_id(&state, request.headers()).await {
+        Ok(user_id) => user_id,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        enforce_critical_limit(&state, request.extensions().get::<ClientIpKey>()).await
+    {
+        return response;
+    }
+    request.extensions_mut().insert(DashboardPrincipal(user_id));
+    next.run(request).await
+}
+
+async fn scope_guard(
+    State(guard): State<ScopeGuardState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let principal =
+        match access_principal(&guard.authority, request.headers(), guard.required_scope).await {
+            Ok(principal) => principal,
+            Err(response) => return response,
+        };
+    if guard.critical
+        && let Err(response) =
+            enforce_critical_limit(&guard.authority, request.extensions().get::<ClientIpKey>())
+                .await
+    {
+        return response;
+    }
+    request.extensions_mut().insert(principal);
+    next.run(request).await
 }
 
 async fn metadata(State(state): State<OAuthAuthorityState>) -> Response {
@@ -118,12 +249,12 @@ async fn metadata(State(state): State<OAuthAuthorityState>) -> Response {
 
 async fn begin_authorization(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    Query(input): Query<AuthorizationQuery>,
+    input: Result<Query<AuthorizationQuery>, QueryRejection>,
 ) -> Response {
-    if let Err(response) = enforce_critical_limit(&state, client_ip.as_ref()).await {
-        return response;
-    }
+    let Query(input) = match input {
+        Ok(input) => input,
+        Err(_) => return protocol_error(AuthorityError::InvalidRequest),
+    };
     let payload = match validate_authorization_query(&input) {
         Ok(payload) => payload,
         Err(error) => return protocol_error(error),
@@ -147,17 +278,15 @@ async fn begin_authorization(
     };
     let mut response = StatusCode::FOUND.into_response();
     response.headers_mut().insert(header::LOCATION, location);
+    apply_no_store_headers(&mut response);
     response
 }
 
 async fn authorization_preview(
     State(state): State<OAuthAuthorityState>,
-    headers: HeaderMap,
+    Extension(_principal): Extension<DashboardPrincipal>,
     Path(request): Path<String>,
 ) -> Response {
-    if let Err(response) = dashboard_user_id(&state, &headers).await {
-        return response;
-    }
     match state
         .store
         .authorization_preview(&request, Utc::now())
@@ -180,15 +309,15 @@ async fn authorization_preview(
 
 async fn decide_authorization(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    headers: HeaderMap,
+    Extension(principal): Extension<DashboardPrincipal>,
     Path(request): Path<String>,
-    Json(body): Json<AuthorizationDecisionBody>,
+    body: Result<Json<AuthorizationDecisionBody>, JsonRejection>,
 ) -> Response {
-    let user_id = match dashboard_mutation_user(&state, &headers, client_ip.as_ref()).await {
-        Ok(user_id) => user_id,
-        Err(response) => return response,
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(_) => return legacy_error(AuthorityError::InvalidRequest),
     };
+    let user_id = principal.0;
     match state
         .store
         .decide_authorization(&request, user_id, body.approve, Utc::now())
@@ -201,12 +330,12 @@ async fn decide_authorization(
 
 async fn create_device_code(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    Form(input): Form<DeviceCodeForm>,
+    input: Result<Form<DeviceCodeForm>, FormRejection>,
 ) -> Response {
-    if let Err(response) = enforce_critical_limit(&state, client_ip.as_ref()).await {
-        return response;
-    }
+    let Form(input) = match input {
+        Ok(input) => input,
+        Err(_) => return protocol_error(AuthorityError::InvalidRequest),
+    };
     match state
         .store
         .create_device_authorization(&input.client_id, &input.scope, &state.issuer, Utc::now())
@@ -219,14 +348,14 @@ async fn create_device_code(
 
 async fn decide_device(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    headers: HeaderMap,
-    Json(body): Json<DeviceDecisionBody>,
+    Extension(principal): Extension<DashboardPrincipal>,
+    body: Result<Json<DeviceDecisionBody>, JsonRejection>,
 ) -> Response {
-    let user_id = match dashboard_mutation_user(&state, &headers, client_ip.as_ref()).await {
-        Ok(user_id) => user_id,
-        Err(response) => return response,
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(_) => return legacy_error(AuthorityError::InvalidRequest),
     };
+    let user_id = principal.0;
     match state
         .store
         .decide_device(&body.user_code, user_id, body.approve, Utc::now())
@@ -239,12 +368,12 @@ async fn decide_device(
 
 async fn exchange_token(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    Form(input): Form<TokenForm>,
+    input: Result<Form<TokenForm>, FormRejection>,
 ) -> Response {
-    if let Err(response) = enforce_critical_limit(&state, client_ip.as_ref()).await {
-        return response;
-    }
+    let Form(input) = match input {
+        Ok(input) => input,
+        Err(_) => return protocol_error(AuthorityError::InvalidRequest),
+    };
     let now = Utc::now();
     let result = match input.grant_type.as_str() {
         "authorization_code" => {
@@ -297,12 +426,12 @@ async fn exchange_token(
 
 async fn revoke_token(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    Form(input): Form<RevokeForm>,
+    input: Result<Form<RevokeForm>, FormRejection>,
 ) -> Response {
-    if let Err(response) = enforce_critical_limit(&state, client_ip.as_ref()).await {
-        return response;
-    }
+    let Form(input) = match input {
+        Ok(input) => input,
+        Err(_) => return protocol_error(AuthorityError::InvalidRequest),
+    };
     if input.token.is_empty() || input.client_id.is_empty() {
         return protocol_error(AuthorityError::InvalidRequest);
     }
@@ -316,11 +445,10 @@ async fn revoke_token(
     }
 }
 
-async fn list_api_keys(State(state): State<OAuthAuthorityState>, headers: HeaderMap) -> Response {
-    let principal = match access_principal(&state, &headers, "api_keys:list").await {
-        Ok(principal) => principal,
-        Err(response) => return response,
-    };
+async fn list_api_keys(
+    State(state): State<OAuthAuthorityState>,
+    Extension(principal): Extension<AccessPrincipal>,
+) -> Response {
     match state.api_tokens.oauth_list(principal.user_id).await {
         Ok(keys) => oauth_json(StatusCode::OK, &keys),
         Err(error) => api_token_error(error),
@@ -329,17 +457,13 @@ async fn list_api_keys(State(state): State<OAuthAuthorityState>, headers: Header
 
 async fn create_api_key(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    headers: HeaderMap,
-    Json(body): Json<CreateKeyBody>,
+    Extension(principal): Extension<AccessPrincipal>,
+    body: Result<Json<CreateKeyBody>, JsonRejection>,
 ) -> Response {
-    let principal =
-        match scoped_mutation_principal(&state, &headers, client_ip.as_ref(), "api_keys:create")
-            .await
-        {
-            Ok(principal) => principal,
-            Err(response) => return response,
-        };
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(_) => return protocol_error(AuthorityError::InvalidRequest),
+    };
     match state
         .api_tokens
         .oauth_create(principal.user_id, &body.name)
@@ -352,42 +476,13 @@ async fn create_api_key(
 
 async fn reveal_api_key(
     State(state): State<OAuthAuthorityState>,
-    client_ip: Option<Extension<ClientIpKey>>,
-    headers: HeaderMap,
+    Extension(principal): Extension<AccessPrincipal>,
     Path(id): Path<i64>,
 ) -> Response {
-    let principal =
-        match scoped_mutation_principal(&state, &headers, client_ip.as_ref(), "api_keys:reveal")
-            .await
-        {
-            Ok(principal) => principal,
-            Err(response) => return response,
-        };
     match state.api_tokens.oauth_reveal(principal.user_id, id).await {
         Ok(key) => oauth_json(StatusCode::OK, &key),
         Err(error) => api_token_error(error),
     }
-}
-
-async fn dashboard_mutation_user(
-    state: &OAuthAuthorityState,
-    headers: &HeaderMap,
-    client_ip: Option<&Extension<ClientIpKey>>,
-) -> Result<i64, Response> {
-    let user_id = dashboard_user_id(state, headers).await?;
-    enforce_critical_limit(state, client_ip).await?;
-    Ok(user_id)
-}
-
-async fn scoped_mutation_principal(
-    state: &OAuthAuthorityState,
-    headers: &HeaderMap,
-    client_ip: Option<&Extension<ClientIpKey>>,
-    required_scope: &str,
-) -> Result<types::AccessPrincipal, Response> {
-    let principal = access_principal(state, headers, required_scope).await?;
-    enforce_critical_limit(state, client_ip).await?;
-    Ok(principal)
 }
 
 async fn dashboard_user_id(
@@ -409,7 +504,7 @@ async fn access_principal(
     state: &OAuthAuthorityState,
     headers: &HeaderMap,
     required_scope: &str,
-) -> Result<types::AccessPrincipal, Response> {
+) -> Result<AccessPrincipal, Response> {
     let access_token =
         bearer_token(headers).ok_or_else(|| protocol_error(AuthorityError::Unauthorized))?;
     let principal = state
@@ -425,10 +520,10 @@ async fn access_principal(
 
 async fn enforce_critical_limit(
     state: &OAuthAuthorityState,
-    client_ip: Option<&Extension<ClientIpKey>>,
+    client_ip: Option<&ClientIpKey>,
 ) -> Result<(), Response> {
     let client_ip = client_ip
-        .map(|Extension(value)| value.0.as_str())
+        .map(|value| value.0.as_str())
         .ok_or_else(|| protocol_error(AuthorityError::Storage))?;
     match state
         .dashboard_auth
@@ -545,10 +640,22 @@ fn protocol_error(error: AuthorityError) -> Response {
             "The OAuth authority is temporarily unavailable.",
         ),
     };
-    oauth_json(
+    let mut response = oauth_json(
         status,
         &json!({ "error": code, "error_description": description }),
-    )
+    );
+    if matches!(
+        error,
+        AuthorityError::Unauthorized | AuthorityError::InsufficientScope
+    ) {
+        let challenge = format!("Bearer realm=\"api.lmm.best\", error=\"{code}\"");
+        if let Ok(value) = HeaderValue::from_str(&challenge) {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, value);
+        }
+    }
+    response
 }
 
 fn api_token_error(error: OAuthApiTokenError) -> Response {

@@ -176,10 +176,14 @@ const NON_BLOCKING_PUBLIC_PATHS = [
 
 const AUTHENTICATED_OAUTH_PATHS = ['/oauth/consent', '/oauth/device'] as const
 
+function isAuthenticatedOAuthPath(pathname: string): boolean {
+  return AUTHENTICATED_OAUTH_PATHS.includes(
+    pathname as (typeof AUTHENTICATED_OAUTH_PATHS)[number]
+  )
+}
+
 function isNonBlockingPublicPath(pathname: string): boolean {
-  if (AUTHENTICATED_OAUTH_PATHS.includes(pathname as (typeof AUTHENTICATED_OAUTH_PATHS)[number])) {
-    return false
-  }
+  if (isAuthenticatedOAuthPath(pathname)) return false
   return NON_BLOCKING_PUBLIC_PATHS.some(
     (path) =>
       pathname === path || (path !== '/' && pathname.startsWith(`${path}/`))
@@ -246,7 +250,11 @@ export const Route = createRootRouteWithContext<{
     }
 
     if (authBootstrap) {
-      await resolveWithTimeout(authBootstrap, 2_500)
+      if (isAuthenticatedOAuthPath(pathname)) {
+        await authBootstrap
+      } else {
+        await resolveWithTimeout(authBootstrap, 2_500)
+      }
     } else {
       // Public pages should paint even while an unavailable API is recovering.
       // The store will update the header and CTA when a session eventually

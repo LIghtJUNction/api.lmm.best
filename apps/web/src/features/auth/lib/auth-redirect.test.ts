@@ -21,11 +21,23 @@ import { describe, test } from 'node:test'
 
 import type { AuthUser } from '@/stores/auth-store'
 
-import { getSavedLanguage, sanitizeAuthRedirect } from './auth-redirect'
+import {
+  authContinuationSearch,
+  getSavedLanguage,
+  sanitizeAuthRedirect,
+} from './auth-redirect'
 
 const origin = 'https://dashboard.example.com'
 
 describe('authentication redirect validation', () => {
+  test('preserves an OAuth continuation through a 2FA or login detour', () => {
+    assert.deepEqual(
+      authContinuationSearch('/oauth/consent?request=opaque-request'),
+      { redirect: '/oauth/consent?request=opaque-request' }
+    )
+    assert.deepEqual(authContinuationSearch(), {})
+  })
+
   test('preserves safe internal paths, search parameters, and fragments', () => {
     assert.equal(
       sanitizeAuthRedirect('/console?tab=usage#recent', origin),

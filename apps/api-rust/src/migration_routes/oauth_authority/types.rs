@@ -11,10 +11,10 @@ use subtle::ConstantTimeEq;
 pub(super) const CLIENT_ID: &str = "lmm-api-rs";
 pub(super) const AUTHORIZATION_REQUEST_PURPOSE: &str = "oauth_authorize_request";
 pub(super) const AUTHORIZATION_CODE_PURPOSE: &str = "oauth_authorization_code";
-pub(super) const AUTHORIZATION_REQUEST_TTL_SECONDS: i64 = 600;
-pub(super) const AUTHORIZATION_CODE_TTL_SECONDS: i64 = 180;
-pub(super) const DEVICE_CODE_TTL_SECONDS: i64 = 900;
-pub(super) const ACCESS_TOKEN_TTL_SECONDS: i64 = 600;
+pub(super) const AUTHORIZATION_REQUEST_TTL_SECONDS: i64 = 300;
+pub(super) const AUTHORIZATION_CODE_TTL_SECONDS: i64 = 90;
+pub(super) const DEVICE_CODE_TTL_SECONDS: i64 = 600;
+pub(super) const ACCESS_TOKEN_TTL_SECONDS: i64 = 900;
 pub(super) const REFRESH_TOKEN_TTL_SECONDS: i64 = 30 * 24 * 60 * 60;
 pub(super) const DEVICE_POLL_INTERVAL_SECONDS: i64 = 5;
 
@@ -210,7 +210,7 @@ pub(super) fn validate_authorization_query(
     }
     validate_redirect_uri(&input.redirect_uri)?;
     if input.code_challenge_method != "S256"
-        || !is_pkce_value(&input.code_challenge)
+        || !is_pkce_challenge(&input.code_challenge)
         || !is_oauth_state(&input.state)
     {
         return Err(AuthorityError::InvalidRequest);
@@ -281,6 +281,9 @@ pub(super) fn canonical_issuer(value: &str) -> Result<String, AuthorityError> {
 }
 
 pub(super) fn verify_pkce(verifier: &str, expected: &str) -> bool {
+    if !is_pkce_verifier(verifier) || !is_pkce_challenge(expected) {
+        return false;
+    }
     let actual = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     actual.as_bytes().ct_eq(expected.as_bytes()).into()
 }
@@ -339,7 +342,14 @@ fn is_oauth_state(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
 }
 
-fn is_pkce_value(value: &str) -> bool {
+fn is_pkce_challenge(value: &str) -> bool {
+    value.len() == 43
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn is_pkce_verifier(value: &str) -> bool {
     (43..=128).contains(&value.len())
         && value
             .bytes()
@@ -349,8 +359,11 @@ fn is_pkce_value(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthorityError, AuthorizationQuery, auth_flow_hash, canonical_issuer, normalize_scopes,
-        opaque_hash, validate_authorization_query, validate_redirect_uri, verify_pkce,
+        ACCESS_TOKEN_TTL_SECONDS, AUTHORIZATION_CODE_TTL_SECONDS,
+        AUTHORIZATION_REQUEST_TTL_SECONDS, AuthorityError, AuthorizationQuery,
+        DEVICE_CODE_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS, auth_flow_hash, canonical_issuer,
+        normalize_scopes, opaque_hash, validate_authorization_query, validate_redirect_uri,
+        verify_pkce,
     };
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use secrecy::SecretString;
@@ -371,6 +384,8 @@ mod tests {
         });
         assert!(result.is_ok(), "expected valid request, got {result:?}");
         assert!(verify_pkce(&verifier, &challenge));
+        assert!(!verify_pkce("short", &challenge));
+        assert!(!verify_pkce(&verifier, &format!("{}~", &challenge[..42])));
     }
 
     #[test]
@@ -410,13 +425,26 @@ mod tests {
             Ok("bdce4c4b125c53d8d191a6c988bb84fd3ac703fa913fa5797250f8d516271562".to_owned())
         );
         assert_eq!(
-            opaque_hash(&secret, "access-token", "access-token-value"),
-            Ok("b09a2fff0bc85028977df6ab0370080c18e4f6d7d12d9830bbd31d64c646b1c2".to_owned())
+            opaque_hash(&secret, "access", "lmm_oat_access-token-value"),
+            Ok("bf9ec23b8a5d2ccd7e18e2ac97b59445be4592f85c0479e40f3c68e130aa05be".to_owned())
+        );
+        assert_eq!(
+            opaque_hash(&secret, "refresh", "lmm_ort_refresh-token-value"),
+            Ok("0412268c4e323ca09d48a2f8a0740f4377a89e798a24dec063050984629070b2".to_owned())
         );
         assert!(verify_pkce(
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~",
             "ImpiCd8pp4MveCNnbIS7-GXEtB0xF5HMIDoWqvGA5ig"
         ));
+    }
+
+    #[test]
+    fn lifetimes_match_the_go_authority_contract() {
+        assert_eq!(AUTHORIZATION_REQUEST_TTL_SECONDS, 300);
+        assert_eq!(AUTHORIZATION_CODE_TTL_SECONDS, 90);
+        assert_eq!(DEVICE_CODE_TTL_SECONDS, 600);
+        assert_eq!(ACCESS_TOKEN_TTL_SECONDS, 900);
+        assert_eq!(REFRESH_TOKEN_TTL_SECONDS, 30 * 24 * 60 * 60);
     }
 
     #[test]

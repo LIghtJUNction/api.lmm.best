@@ -11,6 +11,8 @@ use super::types::{
     random_user_code, validate_client, verify_pkce,
 };
 
+const OAUTH_FAMILY_LOCK_NAMESPACE: i64 = 0x4f_41_55_54_48;
+
 #[derive(Clone)]
 pub(super) struct OAuthStore {
     pg: PgPool,
@@ -42,6 +44,7 @@ struct DeviceGrantRow {
 #[derive(Debug, FromRow)]
 struct GrantTokenRow {
     id: i64,
+    kind: String,
     user_id: i64,
     client_id: String,
     scopes: String,
@@ -307,6 +310,25 @@ impl OAuthStore {
             tx.commit().await.map_err(storage_error)?;
             return Err(AuthorityError::ExpiredToken);
         }
+        let slow_down = grant
+            .last_polled_at
+            .is_some_and(|last| now < last + Duration::seconds(grant.interval_seconds));
+        if slow_down {
+            grant.interval_seconds += 5;
+        }
+        sqlx::query(
+            "UPDATE oauth_device_grants SET last_polled_at = $1, interval_seconds = $2 WHERE id = $3",
+        )
+        .bind(now)
+        .bind(grant.interval_seconds)
+        .bind(grant.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        if slow_down {
+            tx.commit().await.map_err(storage_error)?;
+            return Err(AuthorityError::SlowDown);
+        }
         if grant.status == "denied" {
             sqlx::query(
                 "UPDATE oauth_device_grants SET consumed_at = $1 WHERE id = $2 AND consumed_at IS NULL",
@@ -314,31 +336,14 @@ impl OAuthStore {
             .bind(now)
             .bind(grant.id)
             .execute(&mut *tx)
-            .await.map_err(storage_error)?;
+            .await
+            .map_err(storage_error)?;
             tx.commit().await.map_err(storage_error)?;
             return Err(AuthorityError::AccessDenied);
         }
         if grant.status == "pending" {
-            let slow_down = grant
-                .last_polled_at
-                .is_some_and(|last| now < last + Duration::seconds(grant.interval_seconds));
-            if slow_down {
-                grant.interval_seconds += 5;
-            }
-            sqlx::query(
-                "UPDATE oauth_device_grants SET last_polled_at = $1, interval_seconds = $2 WHERE id = $3",
-            )
-            .bind(now)
-            .bind(grant.interval_seconds)
-            .bind(grant.id)
-            .execute(&mut *tx)
-            .await.map_err(storage_error)?;
             tx.commit().await.map_err(storage_error)?;
-            return Err(if slow_down {
-                AuthorityError::SlowDown
-            } else {
-                AuthorityError::AuthorizationPending
-            });
+            return Err(AuthorityError::AuthorizationPending);
         }
         if grant.status != "approved" || grant.user_id <= 0 {
             return Err(AuthorityError::InvalidGrant);
@@ -367,14 +372,27 @@ impl OAuthStore {
         now: DateTime<Utc>,
     ) -> Result<TokenResponse, AuthorityError> {
         validate_client(client_id)?;
-        let token_hash = opaque_hash(&self.session_secret, "refresh-token", refresh_token)?;
+        if !refresh_token.starts_with("lmm_ort_") {
+            return Err(AuthorityError::InvalidGrant);
+        }
+        let token_hash = opaque_hash(&self.session_secret, "refresh", refresh_token)?;
         let mut tx = self.pg.begin().await.map_err(storage_error)?;
+        let family_id = sqlx::query_scalar::<_, String>(
+            "SELECT family_id FROM oauth_grant_tokens WHERE token_hash = $1 AND kind = 'refresh'",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?
+        .ok_or(AuthorityError::InvalidGrant)?;
+        lock_token_family(&mut tx, &family_id).await?;
         let token = sqlx::query_as::<_, GrantTokenRow>(
-            "SELECT id, user_id, client_id, scopes, family_id, expires_at, consumed_at, revoked_at FROM oauth_grant_tokens WHERE token_hash = $1 AND kind = 'refresh' FOR UPDATE",
+            "SELECT id, kind, user_id, client_id, scopes, family_id, expires_at, consumed_at, revoked_at FROM oauth_grant_tokens WHERE token_hash = $1 AND kind = 'refresh' FOR UPDATE",
         )
         .bind(token_hash)
         .fetch_optional(&mut *tx)
-        .await.map_err(storage_error)?
+        .await
+        .map_err(storage_error)?
         .ok_or(AuthorityError::InvalidGrant)?;
         if token.client_id != client_id || token.expires_at <= now {
             return Err(AuthorityError::InvalidGrant);
@@ -420,30 +438,53 @@ impl OAuthStore {
         now: DateTime<Utc>,
     ) -> Result<(), AuthorityError> {
         validate_client(client_id)?;
-        let refresh_hash = opaque_hash(&self.session_secret, "refresh-token", raw_token)?;
-        let access_hash = opaque_hash(&self.session_secret, "access-token", raw_token)?;
+        let refresh_hash = opaque_hash(&self.session_secret, "refresh", raw_token)?;
+        let access_hash = opaque_hash(&self.session_secret, "access", raw_token)?;
         let mut tx = self.pg.begin().await.map_err(storage_error)?;
-        let found = sqlx::query_as::<_, GrantTokenRow>(
-            "SELECT id, user_id, client_id, scopes, family_id, expires_at, consumed_at, revoked_at FROM oauth_grant_tokens WHERE (token_hash = $1 AND kind = 'refresh') OR (token_hash = $2 AND kind = 'access') FOR UPDATE",
+        let family_id = sqlx::query_scalar::<_, String>(
+            "SELECT family_id FROM oauth_grant_tokens WHERE (token_hash = $1 AND kind = 'refresh') OR (token_hash = $2 AND kind = 'access')",
+        )
+        .bind(&refresh_hash)
+        .bind(&access_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(storage_error)?;
+        let Some(family_id) = family_id else {
+            tx.commit().await.map_err(storage_error)?;
+            return Ok(());
+        };
+        lock_token_family(&mut tx, &family_id).await?;
+        let token = sqlx::query_as::<_, GrantTokenRow>(
+            "SELECT id, kind, user_id, client_id, scopes, family_id, expires_at, consumed_at, revoked_at FROM oauth_grant_tokens WHERE (token_hash = $1 AND kind = 'refresh') OR (token_hash = $2 AND kind = 'access') FOR UPDATE",
         )
         .bind(refresh_hash)
         .bind(access_hash)
         .fetch_optional(&mut *tx)
-        .await.map_err(storage_error)?;
-        let Some(token) = found else {
-            tx.commit().await.map_err(storage_error)?;
-            return Ok(());
-        };
+        .await
+        .map_err(storage_error)?
+        .ok_or(AuthorityError::InvalidGrant)?;
         if token.client_id != client_id {
             return Err(AuthorityError::InvalidClient);
         }
-        sqlx::query(
-            "UPDATE oauth_grant_tokens SET revoked_at = COALESCE(revoked_at, $1) WHERE family_id = $2",
-        )
-        .bind(now)
-        .bind(token.family_id)
-        .execute(&mut *tx)
-        .await.map_err(storage_error)?;
+        if token.kind == "refresh" {
+            sqlx::query(
+                "UPDATE oauth_grant_tokens SET revoked_at = COALESCE(revoked_at, $1) WHERE family_id = $2",
+            )
+            .bind(now)
+            .bind(token.family_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        } else {
+            sqlx::query(
+                "UPDATE oauth_grant_tokens SET revoked_at = COALESCE(revoked_at, $1) WHERE id = $2",
+            )
+            .bind(now)
+            .bind(token.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(storage_error)?;
+        }
         tx.commit().await.map_err(storage_error)?;
         Ok(())
     }
@@ -453,7 +494,10 @@ impl OAuthStore {
         access_token: &str,
         now: DateTime<Utc>,
     ) -> Result<AccessPrincipal, AuthorityError> {
-        let token_hash = opaque_hash(&self.session_secret, "access-token", access_token)?;
+        if !access_token.starts_with("lmm_oat_") {
+            return Err(AuthorityError::Unauthorized);
+        }
+        let token_hash = opaque_hash(&self.session_secret, "access", access_token)?;
         let row = sqlx::query_as::<_, (i64, String)>(
             "SELECT token_record.user_id, token_record.scopes FROM oauth_grant_tokens AS token_record JOIN users ON users.id = token_record.user_id AND users.deleted_at IS NULL AND users.status = 1 WHERE token_record.token_hash = $1 AND token_record.kind = 'access' AND token_record.client_id = $2 AND token_record.revoked_at IS NULL AND token_record.consumed_at IS NULL AND token_record.expires_at > $3",
         )
@@ -499,14 +543,14 @@ impl OAuthStore {
         existing_family_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<TokenResponse, AuthorityError> {
-        let access_token = random_secret()?;
-        let refresh_token = random_secret()?;
+        let access_token = format!("lmm_oat_{}", random_secret()?);
+        let refresh_token = format!("lmm_ort_{}", random_secret()?);
         let family_id = match existing_family_id {
             Some(value) => value.to_owned(),
             None => uuid::Uuid::new_v4().to_string(),
         };
-        let access_hash = opaque_hash(&self.session_secret, "access-token", &access_token)?;
-        let refresh_hash = opaque_hash(&self.session_secret, "refresh-token", &refresh_token)?;
+        let access_hash = opaque_hash(&self.session_secret, "access", &access_token)?;
+        let refresh_hash = opaque_hash(&self.session_secret, "refresh", &refresh_token)?;
         sqlx::query(
             "INSERT INTO oauth_grant_tokens (token_hash, kind, user_id, client_id, scopes, family_id, expires_at, created_at) VALUES ($1,'access',$2,$3,$4,$5,$6,$7), ($8,'refresh',$2,$3,$4,$5,$9,$7)",
         )
@@ -530,6 +574,19 @@ impl OAuthStore {
             scope: scopes.to_owned(),
         })
     }
+}
+
+async fn lock_token_family(
+    tx: &mut Transaction<'_, Postgres>,
+    family_id: &str,
+) -> Result<(), AuthorityError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, $2))")
+        .bind(family_id)
+        .bind(OAUTH_FAMILY_LOCK_NAMESPACE)
+        .execute(&mut **tx)
+        .await
+        .map_err(storage_error)?;
+    Ok(())
 }
 
 fn storage_error(error: impl std::fmt::Display) -> AuthorityError {
