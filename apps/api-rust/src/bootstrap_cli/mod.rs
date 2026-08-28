@@ -1,3 +1,4 @@
+mod cc_switch_release;
 mod doctor;
 mod executor;
 mod plan;
@@ -68,11 +69,11 @@ pub enum CliError {
     ConfirmationIo(#[from] io::Error),
 }
 
-pub fn run_from_env() -> Result<Dispatch, CliError> {
-    run(Cli::parse())
+pub async fn run_from_env() -> Result<Dispatch, CliError> {
+    run(Cli::parse()).await
 }
 
-fn run(cli: Cli) -> Result<Dispatch, CliError> {
+async fn run(cli: Cli) -> Result<Dispatch, CliError> {
     match cli.command {
         None | Some(Command::Serve) => Ok(Dispatch::StartServer),
         Some(Command::Doctor { json }) => {
@@ -84,7 +85,7 @@ fn run(cli: Cli) -> Result<Dispatch, CliError> {
             dry_run,
             yes,
         }) => {
-            bootstrap(tools, dry_run, yes)?;
+            bootstrap(tools, dry_run, yes).await?;
             Ok(Dispatch::Completed)
         }
     }
@@ -100,7 +101,7 @@ fn print_doctor(json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn bootstrap(tools: Vec<Tool>, dry_run: bool, yes: bool) -> Result<(), CliError> {
+async fn bootstrap(tools: Vec<Tool>, dry_run: bool, yes: bool) -> Result<(), CliError> {
     let report = DoctorReport::collect();
     let plan = plan::build(&report, &tools)?;
     print!("{}", plan.render_human());
@@ -113,7 +114,7 @@ fn bootstrap(tools: Vec<Tool>, dry_run: bool, yes: bool) -> Result<(), CliError>
         println!("Bootstrap cancelled; no changes were made.");
         return Ok(());
     }
-    executor::execute(&plan)?;
+    executor::execute(&plan).await?;
     println!("Bootstrap completed.");
     Ok(())
 }
@@ -139,35 +140,31 @@ mod tests {
     use super::{Cli, Command, Dispatch, run};
     use crate::bootstrap_cli::plan::Tool;
 
-    #[test]
-    fn no_arguments_preserve_server_startup() {
-        let cli = Cli::try_parse_from(["lmm-api-rs"]).expect("no-argument CLI should parse");
+    #[tokio::test]
+    async fn no_arguments_preserve_server_startup() -> Result<(), Box<dyn std::error::Error>> {
+        let cli = Cli::try_parse_from(["lmm-api-rs"])?;
 
-        assert_eq!(
-            run(cli).expect("dispatch should succeed"),
-            Dispatch::StartServer
-        );
+        assert_eq!(run(cli).await?, Dispatch::StartServer);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_serve_starts_the_server() -> Result<(), Box<dyn std::error::Error>> {
+        let cli = Cli::try_parse_from(["lmm-api-rs", "serve"])?;
+
+        assert_eq!(run(cli).await?, Dispatch::StartServer);
+        Ok(())
     }
 
     #[test]
-    fn explicit_serve_starts_the_server() {
-        let cli = Cli::try_parse_from(["lmm-api-rs", "serve"]).expect("serve command should parse");
-
-        assert_eq!(
-            run(cli).expect("dispatch should succeed"),
-            Dispatch::StartServer
-        );
-    }
-
-    #[test]
-    fn doctor_json_command_parses() {
-        let cli = Cli::try_parse_from(["lmm-api-rs", "doctor", "--json"])
-            .expect("doctor command should parse");
+    fn doctor_json_command_parses() -> Result<(), clap::Error> {
+        let cli = Cli::try_parse_from(["lmm-api-rs", "doctor", "--json"])?;
         assert!(matches!(cli.command, Some(Command::Doctor { json: true })));
+        Ok(())
     }
 
     #[test]
-    fn bootstrap_tools_parse_in_user_order() {
+    fn bootstrap_tools_parse_in_user_order() -> Result<(), clap::Error> {
         let cli = Cli::try_parse_from([
             "lmm-api-rs",
             "bootstrap",
@@ -176,8 +173,7 @@ mod tests {
             "--tool",
             "codex",
             "--dry-run",
-        ])
-        .expect("bootstrap command should parse");
+        ])?;
         assert!(matches!(
             cli.command,
             Some(Command::Bootstrap {
@@ -186,6 +182,7 @@ mod tests {
                 yes: false,
             }) if tools == vec![Tool::Dsh, Tool::Codex]
         ));
+        Ok(())
     }
 
     #[test]

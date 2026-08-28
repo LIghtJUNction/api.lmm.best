@@ -100,7 +100,9 @@ impl InstallAction {
             } => format!("download verified release from {repository} ({asset_hint})"),
             Self::OfficialInstaller {
                 url, interpreter, ..
-            } => format!("download {url}, verify it, then run it with {interpreter}"),
+            } => format!(
+                "download {url}, then run its checksum-verifying installer with {interpreter}"
+            ),
         }
     }
 }
@@ -226,10 +228,23 @@ fn plan_cc_switch(platform: Platform, report: &DoctorReport) -> InstallAction {
             repository: "farion1231/cc-switch",
             asset_hint: "signed and notarized macOS DMG",
         },
+        Platform::Windows if has_installer(report, "winget") => command(
+            Tool::CcSwitch,
+            "winget",
+            &[
+                "install",
+                "--id",
+                "farion1231.CC-Switch",
+                "--exact",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ],
+            "WinGet: farion1231.CC-Switch",
+        ),
         Platform::Windows => InstallAction::UpstreamRelease {
             tool: Tool::CcSwitch,
             repository: "farion1231/cc-switch",
-            asset_hint: "signed Windows MSI",
+            asset_hint: "Minisign-verified Windows MSI",
         },
     }
 }
@@ -251,10 +266,17 @@ fn plan_codex(platform: Platform, report: &DoctorReport) -> InstallAction {
             "npm: @openai/codex",
         );
     }
-    InstallAction::UpstreamRelease {
-        tool: Tool::Codex,
-        repository: "openai/codex",
-        asset_hint: "official release archive for the current platform",
+    match platform {
+        Platform::Windows => InstallAction::OfficialInstaller {
+            tool: Tool::Codex,
+            url: "https://chatgpt.com/codex/install.ps1",
+            interpreter: "powershell",
+        },
+        Platform::Linux | Platform::MacOs => InstallAction::OfficialInstaller {
+            tool: Tool::Codex,
+            url: "https://chatgpt.com/codex/install.sh",
+            interpreter: "sh",
+        },
     }
 }
 
@@ -361,9 +383,9 @@ mod tests {
     }
 
     #[test]
-    fn cc_switch_is_always_first_and_uses_aur_on_arch_linux() {
+    fn cc_switch_is_always_first_and_uses_aur_on_arch_linux() -> Result<(), PlanError> {
         let report = report("linux", &[], &["paru", "npm"], true);
-        let plan = build(&report, &[Tool::Dsh]).expect("plan should succeed");
+        let plan = build(&report, &[Tool::Dsh])?;
 
         assert_eq!(plan.requested, vec![Tool::CcSwitch, Tool::Dsh]);
         assert!(matches!(
@@ -371,12 +393,13 @@ mod tests {
             InstallAction::Command { program, arguments, .. }
                 if program == "paru" && arguments.last().is_some_and(|value| value == "cc-switch-bin")
         ));
+        Ok(())
     }
 
     #[test]
-    fn non_arch_linux_does_not_use_an_incidental_aur_helper() {
+    fn non_arch_linux_does_not_use_an_incidental_aur_helper() -> Result<(), PlanError> {
         let report = report("linux", &[], &["paru", "npm"], false);
-        let plan = build(&report, &[Tool::CcSwitch]).expect("plan should succeed");
+        let plan = build(&report, &[Tool::CcSwitch])?;
 
         assert!(matches!(
             plan.actions.as_slice(),
@@ -385,45 +408,46 @@ mod tests {
                 ..
             }]
         ));
+        Ok(())
     }
 
     #[test]
-    fn installed_tools_are_skipped_without_losing_mandatory_ordering() {
+    fn installed_tools_are_skipped_without_losing_mandatory_ordering() -> Result<(), PlanError> {
         let report = report(
             "linux",
             &[Component::CcSwitch, Component::Codex],
             &["npm"],
             false,
         );
-        let plan = build(&report, &[]).expect("default plan should succeed");
+        let plan = build(&report, &[])?;
 
         assert_eq!(plan.skipped_installed, vec![Tool::CcSwitch, Tool::Codex]);
         assert_eq!(plan.actions.len(), 1);
         assert_eq!(plan.actions[0].tool(), Tool::ClaudeCode);
+        Ok(())
     }
 
     #[test]
-    fn macos_prefers_homebrew_for_cc_switch_and_codex() {
+    fn macos_prefers_homebrew_for_cc_switch_and_codex() -> Result<(), PlanError> {
         let report = report("macos", &[], &["brew"], false);
-        let plan = build(&report, &[Tool::Codex]).expect("macOS plan should succeed");
+        let plan = build(&report, &[Tool::Codex])?;
 
         assert!(plan.actions.iter().all(|action| matches!(
             action,
             InstallAction::Command { program, .. } if program == "brew"
         )));
+        Ok(())
     }
 
     #[test]
     fn dsh_requires_npm() {
         let report = report("windows", &[Component::CcSwitch], &[], false);
-        let error = build(&report, &[Tool::Dsh]).expect_err("dsh without npm should fail");
-
         assert_eq!(
-            error,
-            PlanError::MissingCapability {
+            build(&report, &[Tool::Dsh]),
+            Err(PlanError::MissingCapability {
                 tool: "dsh",
                 requirement: "npm"
-            }
+            })
         );
     }
 

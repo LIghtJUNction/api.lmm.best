@@ -215,7 +215,7 @@ impl ControlTaskStatusProbe for ListenerControlTaskStatusProbe {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if bootstrap_cli::run_from_env()? == bootstrap_cli::Dispatch::Completed {
+    if bootstrap_cli::run_from_env().await? == bootstrap_cli::Dispatch::Completed {
         return Ok(());
     }
     lmm_observability::init()?;

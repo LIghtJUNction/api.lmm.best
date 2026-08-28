@@ -240,36 +240,37 @@ mod tests {
     use super::{DoctorReport, find_executable};
 
     #[cfg(unix)]
-    fn make_executable(path: &std::path::Path) {
+    fn make_executable(path: &std::path::Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::write(path, b"fixture").expect("fixture should be writable");
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-            .expect("fixture permissions should be writable");
+        fs::write(path, b"fixture")?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn find_executable_returns_matching_file_from_explicit_path() {
+    fn find_executable_returns_matching_file_from_explicit_path() -> std::io::Result<()> {
         let directory = std::env::temp_dir().join(format!(
             "lmm-api-rs-doctor-{}-{}",
             std::process::id(),
             "find"
         ));
-        fs::create_dir_all(&directory).expect("fixture directory should be created");
+        fs::create_dir_all(&directory)?;
         let executable = directory.join("codex");
-        make_executable(&executable);
+        make_executable(&executable)?;
         let search_path = OsString::from(directory.as_os_str());
 
         let found = find_executable("codex", Some(&search_path), "linux");
 
-        fs::remove_dir_all(&directory).expect("fixture directory should be removed");
+        fs::remove_dir_all(&directory)?;
         assert_eq!(found, Some(executable));
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn find_executable_ignores_non_executable_file() {
+    fn find_executable_ignores_non_executable_file() -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = std::env::temp_dir().join(format!(
@@ -277,17 +278,17 @@ mod tests {
             std::process::id(),
             "mode"
         ));
-        fs::create_dir_all(&directory).expect("fixture directory should be created");
+        fs::create_dir_all(&directory)?;
         let candidate = directory.join("claude");
-        fs::write(&candidate, b"fixture").expect("fixture should be writable");
-        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o600))
-            .expect("fixture permissions should be writable");
+        fs::write(&candidate, b"fixture")?;
+        fs::set_permissions(&candidate, fs::Permissions::from_mode(0o600))?;
         let search_path = OsString::from(directory.as_os_str());
 
         let found = find_executable("claude", Some(&search_path), "linux");
 
-        fs::remove_dir_all(&directory).expect("fixture directory should be removed");
+        fs::remove_dir_all(&directory)?;
         assert_eq!(found, None);
+        Ok(())
     }
 
     #[test]
