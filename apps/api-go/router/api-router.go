@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/LIghtJUNction/api.lmm.best/controller"
 	"github.com/LIghtJUNction/api.lmm.best/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 
 	// Import oauth package to register providers via init()
 	_ "github.com/LIghtJUNction/api.lmm.best/oauth"
@@ -61,6 +62,30 @@ const (
 )
 
 func SetApiRouter(router *gin.Engine) {
+	firstPartyOAuthRouter := router.Group("/oauth")
+	firstPartyOAuthRouter.Use(middleware.RouteTag("oauth"))
+	firstPartyOAuthRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	firstPartyOAuthRouter.Use(middleware.BodyStorageCleanup())
+	firstPartyOAuthRouter.Use(middleware.GlobalAPIRateLimit())
+	{
+		firstPartyOAuthRouter.GET("/authorize", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.BeginOAuthAuthorization)
+		firstPartyOAuthRouter.POST("/device/code", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.CreateOAuthDeviceCode)
+		firstPartyOAuthRouter.POST("/token", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.ExchangeOAuthToken)
+		firstPartyOAuthRouter.POST("/revoke", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.RevokeOAuthToken)
+	}
+	router.GET("/.well-known/oauth-authorization-server", middleware.DisableCache(), controller.GetOAuthAuthorizationServerMetadata)
+
+	oauthBootstrapResource := router.Group("/api/oauth/bootstrap")
+	oauthBootstrapResource.Use(middleware.RouteTag("oauth-bootstrap"))
+	oauthBootstrapResource.Use(gzip.Gzip(gzip.DefaultCompression))
+	oauthBootstrapResource.Use(middleware.BodyStorageCleanup())
+	oauthBootstrapResource.Use(middleware.GlobalAPIRateLimit())
+	{
+		oauthBootstrapResource.GET("/keys", middleware.OAuthAccessAuth(service.OAuthScopeApiKeysList), middleware.DisableCache(), controller.ListOAuthBootstrapAPIKeys)
+		oauthBootstrapResource.POST("/keys", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysCreate), middleware.DisableCache(), controller.CreateOAuthBootstrapAPIKey)
+		oauthBootstrapResource.POST("/keys/:id/reveal", middleware.CriticalRateLimit(), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysReveal), middleware.DisableCache(), controller.RevealOAuthBootstrapAPIKey)
+	}
+
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
@@ -148,6 +173,13 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.ResetPassword)
 		// OAuth routes - specific routes must come before :provider wildcard
+		firstPartyOAuthDashboardRoute := apiRouter.Group("/oauth/authorization")
+		firstPartyOAuthDashboardRoute.Use(middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache())
+		{
+			firstPartyOAuthDashboardRoute.GET("/:request", controller.GetOAuthAuthorizationRequest)
+			firstPartyOAuthDashboardRoute.POST("/:request", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.DecideOAuthAuthorization)
+		}
+		apiRouter.POST("/oauth/device", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), controller.DecideOAuthDeviceAuthorization)
 		apiRouter.POST("/oauth/state", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.GenerateOAuthCode)
 		// Email/code binding is a compact JSON mutation. Bound it before auth so
 		// an authenticated caller cannot make encoding/json grow the heap with an

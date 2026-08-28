@@ -76,6 +76,7 @@ type OAuthTokenPair struct {
 	AccessExpiresAt  time.Time
 	RefreshExpiresAt time.Time
 	FamilyId         string
+	Scopes           string
 }
 
 func CreateOAuthDeviceGrant(clientId, scopes string, expiresAt time.Time, intervalSeconds int) (string, string, *OAuthDeviceGrant, error) {
@@ -140,6 +141,20 @@ func ApproveOAuthDeviceGrant(userCode string, userId int, approve bool, now time
 // ConsumeOAuthDeviceGrant enforces the polling interval and consumes an approved
 // grant exactly once. Pending and slow-down responses leave the grant reusable.
 func ConsumeOAuthDeviceGrant(deviceCode, clientId string, now time.Time) (*OAuthDeviceGrant, error) {
+	grant, err := ConsumeOAuthDeviceGrantWithAction(deviceCode, clientId, now, nil)
+	if err != nil {
+		return nil, fmt.Errorf("consume oauth device grant: %w", err)
+	}
+	return grant, nil
+}
+
+// ConsumeOAuthDeviceGrantWithAction consumes the grant and commits the caller's
+// token issuance action in the same transaction.
+func ConsumeOAuthDeviceGrantWithAction(
+	deviceCode, clientId string,
+	now time.Time,
+	action func(tx *gorm.DB, grant *OAuthDeviceGrant) error,
+) (*OAuthDeviceGrant, error) {
 	var consumed *OAuthDeviceGrant
 	var outcome error
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -182,6 +197,11 @@ func ConsumeOAuthDeviceGrant(deviceCode, clientId string, now time.Time) (*OAuth
 			}
 		default:
 			return ErrOAuthInvalidGrant
+		}
+		if action != nil {
+			if err := action(tx, &grant); err != nil {
+				return fmt.Errorf("consume oauth device grant action: %w", err)
+			}
 		}
 		result := tx.Model(&OAuthDeviceGrant{}).Where(
 			"id = ? AND consumed_at IS NULL", grant.Id,
@@ -231,6 +251,7 @@ func createOAuthTokenPair(tx *gorm.DB, familyId, clientId string, userId int, sc
 		AccessExpiresAt:  now.Add(accessTTL),
 		RefreshExpiresAt: now.Add(refreshTTL),
 		FamilyId:         familyId,
+		Scopes:           scopes,
 	}
 	records := []OAuthGrantToken{
 		{

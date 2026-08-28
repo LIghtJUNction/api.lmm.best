@@ -1,7 +1,7 @@
 package model
 
 import (
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -101,12 +101,25 @@ func authFlowTokenHash(token string) string {
 }
 
 func CreateAuthFlow(input AuthFlowCreate) (string, *AuthFlow, error) {
-	if strings.TrimSpace(input.Purpose) == "" || input.ExpiresAt.IsZero() || !input.ExpiresAt.After(time.Now()) {
+	token, flow, err := CreateAuthFlowWithTx(DB, input)
+	if err != nil {
+		return "", nil, fmt.Errorf("create auth flow: %w", err)
+	}
+	return token, flow, nil
+}
+
+// CreateAuthFlowWithTx creates a one-time flow in the caller's transaction.
+func CreateAuthFlowWithTx(tx *gorm.DB, input AuthFlowCreate) (string, *AuthFlow, error) {
+	if tx == nil || strings.TrimSpace(input.Purpose) == "" || input.ExpiresAt.IsZero() || !input.ExpiresAt.After(time.Now().UTC()) {
 		return "", nil, ErrAuthFlowInvalid
 	}
 	random := make([]byte, AuthFlowTokenBytes)
-	if _, err := rand.Read(random); err != nil {
+	count, err := cryptorand.Read(random)
+	if err != nil {
 		return "", nil, fmt.Errorf("generate auth flow token: %w", err)
+	}
+	if count != len(random) {
+		return "", nil, errors.New("generate auth flow token: short random read")
 	}
 	token := base64.RawURLEncoding.EncodeToString(random)
 	flow := &AuthFlow{
@@ -119,8 +132,8 @@ func CreateAuthFlow(input AuthFlowCreate) (string, *AuthFlow, error) {
 		Payload:   input.Payload,
 		ExpiresAt: input.ExpiresAt,
 	}
-	if err := DB.Create(flow).Error; err != nil {
-		return "", nil, err
+	if err := tx.Create(flow).Error; err != nil {
+		return "", nil, fmt.Errorf("create auth flow: %w", err)
 	}
 	return token, flow, nil
 }
@@ -129,9 +142,13 @@ func CreateAuthFlow(input AuthFlowCreate) (string, *AuthFlow, error) {
 // The assertion is HMACed before storage and the unique token_hash index makes
 // replay rejection atomic on SQLite, MySQL and PostgreSQL.
 func ClaimExternalAuthAssertion(purpose, assertion string, expiresAt time.Time) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		return ClaimExternalAuthAssertionWithTx(tx, purpose, assertion, expiresAt)
 	})
+	if err != nil {
+		return fmt.Errorf("claim external auth assertion: %w", err)
+	}
+	return nil
 }
 
 // ClaimExternalAuthAssertionWithTx records a provider assertion in the
@@ -140,7 +157,7 @@ func ClaimExternalAuthAssertion(purpose, assertion string, expiresAt time.Time) 
 func ClaimExternalAuthAssertionWithTx(tx *gorm.DB, purpose, assertion string, expiresAt time.Time) error {
 	purpose = strings.TrimSpace(purpose)
 	assertion = strings.TrimSpace(assertion)
-	now := time.Now()
+	now := time.Now().UTC()
 	if tx == nil || purpose == "" || assertion == "" || !expiresAt.After(now) {
 		return ErrAuthFlowInvalid
 	}
@@ -179,7 +196,7 @@ func GetAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
 	if flow.ConsumedAt != nil {
 		return nil, ErrAuthFlowConsumed
 	}
-	if !flow.ExpiresAt.After(time.Now()) {
+	if !flow.ExpiresAt.After(time.Now().UTC()) {
 		return nil, ErrAuthFlowExpired
 	}
 	return &flow, nil
@@ -188,7 +205,11 @@ func GetAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
 // ConsumeAuthFlow atomically validates and consumes a flow. Optional match
 // fields are enforced when non-zero so tokens cannot cross purposes or users.
 func ConsumeAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
-	return ConsumeAuthFlowWithAction(token, match, nil)
+	flow, err := ConsumeAuthFlowWithAction(token, match, nil)
+	if err != nil {
+		return nil, fmt.Errorf("consume auth flow: %w", err)
+	}
+	return flow, nil
 }
 
 // ConsumeAuthFlowWithAction consumes a flow and runs action in the same
@@ -209,7 +230,7 @@ func ConsumeAuthFlowWithAction(token string, match AuthFlowMatch, action func(tx
 		if consumed.ConsumedAt != nil {
 			return ErrAuthFlowConsumed
 		}
-		now := time.Now()
+		now := time.Now().UTC()
 		if !consumed.ExpiresAt.After(now) {
 			return ErrAuthFlowExpired
 		}
