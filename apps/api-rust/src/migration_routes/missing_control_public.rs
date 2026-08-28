@@ -102,7 +102,8 @@ impl MissingControlAuthorizer for DashboardMissingControlAuthorizer {
         &self,
         headers: &HeaderMap,
     ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
-        let token = dashboard_credential(headers).ok_or(MissingControlAuthError::Unauthorized)?;
+        let token = crate::migration_routes::legacy_http::dashboard_credential(headers)
+            .ok_or(MissingControlAuthError::Unauthorized)?;
         let internal = dashboard_token_candidate(&token);
         match self.auth.self_user(SecretString::from(token)).await {
             Ok(user) => {
@@ -144,7 +145,8 @@ impl MissingControlAuthorizer for DashboardMissingControlAuthorizer {
         &self,
         headers: &HeaderMap,
     ) -> Result<MissingControlPrincipal, MissingControlAuthError> {
-        let token = dashboard_credential(headers).ok_or(MissingControlAuthError::Unauthorized)?;
+        let token = crate::migration_routes::legacy_http::dashboard_credential(headers)
+            .ok_or(MissingControlAuthError::Unauthorized)?;
         let internal = dashboard_token_candidate(&token);
         match self
             .auth
@@ -190,7 +192,8 @@ impl MissingControlAuthorizer for DashboardMissingControlAuthorizer {
         &self,
         headers: &HeaderMap,
     ) -> Result<Option<MissingControlPrincipal>, MissingControlAuthError> {
-        let token = dashboard_credential(headers).ok_or(MissingControlAuthError::Unauthorized)?;
+        let token = crate::migration_routes::legacy_http::dashboard_credential(headers)
+            .ok_or(MissingControlAuthError::Unauthorized)?;
         let principal = self.principal(headers).await?;
         match self.auth.current_session(SecretString::from(token)).await {
             Ok(_) => Ok(Some(principal)),
@@ -304,6 +307,14 @@ impl MissingControlStoreError {
         Self(message.into())
     }
 }
+
+impl std::fmt::Display for MissingControlStoreError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MissingControlStoreError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MissingControlToken {
@@ -628,7 +639,8 @@ async fn console_access_boundary(
     let Some(auth) = state.console_access_auth.as_ref() else {
         return next.run(request).await;
     };
-    let Some(token) = dashboard_credential(request.headers()) else {
+    let Some(token) = crate::migration_routes::legacy_http::dashboard_credential(request.headers())
+    else {
         return console_not_found();
     };
     let user = match auth
@@ -1460,25 +1472,8 @@ fn user_auth_body(headers: &HeaderMap, error: UserAuthPolicyError) -> Value {
     })
 }
 
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
 fn dashboard_credential_present(headers: &HeaderMap) -> bool {
-    dashboard_credential(headers).is_some()
+    crate::migration_routes::legacy_http::dashboard_credential(headers).is_some()
 }
 
 fn dashboard_unauthorized(headers: &HeaderMap) -> Response {
@@ -1679,6 +1674,8 @@ mod tests {
     use secrecy::ExposeSecret;
     use tower::ServiceExt;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     struct Auth(Option<MissingControlPrincipal>);
     #[async_trait]
     impl MissingControlAuthorizer for Auth {
@@ -1705,7 +1702,7 @@ mod tests {
             &self,
             _: &str,
         ) -> Result<CriticalRateLimitOutcome, AuthError> {
-            panic!("not used by public route tests")
+            Err(AuthError::new(AuthErrorKind::Internal))
         }
 
         async fn login(
@@ -1713,7 +1710,7 @@ mod tests {
             _: LoginRequest,
             _: RequestMetadata,
         ) -> Result<LoginOutcome, AuthError> {
-            panic!("not used by public route tests")
+            Err(AuthError::new(AuthErrorKind::Internal))
         }
 
         async fn login_2fa(
@@ -1721,7 +1718,7 @@ mod tests {
             _: TwoFactorLoginRequest,
             _: RequestMetadata,
         ) -> Result<AuthBundle, AuthError> {
-            panic!("not used by public route tests")
+            Err(AuthError::new(AuthErrorKind::Internal))
         }
 
         async fn refresh(
@@ -1730,7 +1727,7 @@ mod tests {
             _: Option<String>,
             _: RequestMetadata,
         ) -> Result<AuthBundle, AuthError> {
-            panic!("not used by public route tests")
+            Err(AuthError::new(AuthErrorKind::Internal))
         }
 
         async fn self_user(&self, access_token: SecretString) -> Result<DashboardUser, AuthError> {
@@ -1767,14 +1764,14 @@ mod tests {
         }
 
         async fn logout(&self, _: LogoutRequest) -> Result<crate::auth::LogoutResult, AuthError> {
-            panic!("not used by public route tests")
+            Err(AuthError::new(AuthErrorKind::Internal))
         }
 
         async fn generate_personal_access_token(
             &self,
             _: SecretString,
         ) -> Result<String, AuthError> {
-            panic!("not used by public route tests")
+            Err(AuthError::new(AuthErrorKind::Internal))
         }
     }
 
@@ -1812,7 +1809,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn all_dashboard_routes_use_the_shared_raw_or_bearer_parser() {
+    async fn all_dashboard_routes_use_the_shared_raw_or_bearer_parser() -> TestResult {
         let mut store = MemoryMissingControlStore {
             group_names: vec!["default".into()],
             models: json!({"1": ["gpt"]}),
@@ -1852,17 +1849,16 @@ mod tests {
                 .oneshot(
                     Request::get(uri)
                         .header("authorization", authorization)
-                        .body(Body::empty())
-                        .unwrap(),
+                        .body(Body::empty())?,
                 )
-                .await
-                .unwrap();
+                .await?;
             assert_eq!(
                 response.status(),
                 StatusCode::OK,
                 "{uri} with {authorization}"
             );
         }
+        Ok(())
     }
 
     #[test]
@@ -1878,7 +1874,7 @@ mod tests {
             let mut headers = HeaderMap::new();
             headers.insert(header::AUTHORIZATION, HeaderValue::from_static(raw));
             assert_eq!(
-                dashboard_credential(&headers).as_deref(),
+                crate::migration_routes::legacy_http::dashboard_credential(&headers).as_deref(),
                 expected,
                 "{raw:?}"
             );
@@ -1886,17 +1882,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_is_admin_only_and_preserves_legacy_envelope() {
+    async fn group_is_admin_only_and_preserves_legacy_envelope() -> TestResult {
         let unauthorized = app(None)
-            .oneshot(Request::get("/api/group/").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/group/").body(Body::empty())?)
+            .await?;
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-        let unauthorized_body = axum::body::to_bytes(unauthorized.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let unauthorized_body = axum::body::to_bytes(unauthorized.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&unauthorized_body).unwrap(),
+            serde_json::from_slice::<Value>(&unauthorized_body)?,
             json!({
                 "success": false,
                 "code": "AUTH_UNAUTHORIZED",
@@ -1907,43 +1900,35 @@ mod tests {
             .oneshot(
                 Request::get("/api/group/")
                     .header("authorization", "Bearer x")
-                    .body(Body::empty())
-                    .unwrap(),
+                    .body(Body::empty())?,
             )
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
         let ok = app(Some(10))
             .oneshot(
                 Request::get("/api/group/")
                     .header("authorization", "Bearer x")
-                    .body(Body::empty())
-                    .unwrap(),
+                    .body(Body::empty())?,
             )
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(ok.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(ok.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(ok.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({"success": true, "message": "", "data": ["default"]})
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn models_requires_a_server_verified_user() {
+    async fn models_requires_a_server_verified_user() -> TestResult {
         let response = app(None)
-            .oneshot(Request::get("/api/models").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/models").body(Body::empty())?)
+            .await?;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({
                 "success": false,
                 "code": "AUTH_UNAUTHORIZED",
@@ -1954,77 +1939,52 @@ mod tests {
             .oneshot(
                 Request::get("/api/models")
                     .header("authorization", "Bearer x")
-                    .body(Body::empty())
-                    .unwrap(),
+                    .body(Body::empty())?,
             )
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({"success": true, "data": {"1": ["gpt"]}})
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn public_routes_keep_methods_paths_and_bearer_failures() {
+    async fn public_routes_keep_methods_paths_and_bearer_failures() -> TestResult {
         let pricing = app(None)
-            .oneshot(Request::get("/api/pricing").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/pricing").body(Body::empty())?)
+            .await?;
         assert_eq!(pricing.status(), StatusCode::OK);
         let ranking = app(None)
-            .oneshot(
-                Request::get("/api/rankings?period=week")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/rankings?period=week").body(Body::empty())?)
+            .await?;
         assert_eq!(ranking.status(), StatusCode::OK);
         let ratio = app(None)
-            .oneshot(
-                Request::get("/api/ratio_config")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/ratio_config").body(Body::empty())?)
+            .await?;
         assert_eq!(ratio.status(), StatusCode::OK);
         let no_bearer = app(None)
-            .oneshot(
-                Request::get("/api/usage/token/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/usage/token/").body(Body::empty())?)
+            .await?;
         assert_eq!(no_bearer.status(), StatusCode::UNAUTHORIZED);
-        let no_bearer_body = axum::body::to_bytes(no_bearer.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let no_bearer_body = axum::body::to_bytes(no_bearer.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&no_bearer_body).unwrap(),
+            serde_json::from_slice::<Value>(&no_bearer_body)?,
             json!({"success": false, "message": "Token not provided"})
         );
         let usage = app(None)
             .oneshot(
                 Request::get("/api/usage/token/")
                     .header("authorization", "Bearer sk-abc")
-                    .body(Body::empty())
-                    .unwrap(),
+                    .body(Body::empty())?,
             )
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(usage.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(usage.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(usage.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({
                 "code": true,
                 "message": "ok",
@@ -2041,27 +2001,26 @@ mod tests {
                 },
             })
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn normal_ratio_config_read_fails_closed_when_options_are_unavailable() {
+    async fn normal_ratio_config_read_fails_closed_when_options_are_unavailable() -> TestResult {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .acquire_timeout(std::time::Duration::from_millis(1))
-            .connect_lazy("postgres://unused:unused@localhost/unused")
-            .expect("valid lazy PostgreSQL URL");
+            .connect_lazy("postgres://unused:unused@localhost/unused")?;
         let response = ratio_config_direct(axum::extract::State(RatioConfigState {
             pg: pool,
             limiter: std::sync::Arc::new(AllowMissingControlRateLimiter),
         }))
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({"success": false, "message": "倍率配置接口未启用"})
         );
+        Ok(())
     }
 
     #[test]
@@ -2080,39 +2039,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rankings_keeps_the_go_envelope_for_empty_data_and_invalid_periods() {
+    async fn rankings_keeps_the_go_envelope_for_empty_data_and_invalid_periods() -> TestResult {
         let success = app(None)
-            .oneshot(
-                Request::get("/api/rankings?period=week")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/rankings?period=week").body(Body::empty())?)
+            .await?;
         assert_eq!(success.status(), StatusCode::OK);
-        let success_body = axum::body::to_bytes(success.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let success_body = axum::body::to_bytes(success.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&success_body).unwrap(),
+            serde_json::from_slice::<Value>(&success_body)?,
             json!({"success": true, "data": {"models": []}})
         );
 
         let invalid = app(None)
-            .oneshot(
-                Request::get("/api/rankings?period=quarter")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::get("/api/rankings?period=quarter").body(Body::empty())?)
+            .await?;
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-        let invalid_body = axum::body::to_bytes(invalid.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let invalid_body = axum::body::to_bytes(invalid.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&invalid_body).unwrap(),
+            serde_json::from_slice::<Value>(&invalid_body)?,
             json!({"success": false, "message": "invalid ranking period: quarter"})
         );
+        Ok(())
     }
 }

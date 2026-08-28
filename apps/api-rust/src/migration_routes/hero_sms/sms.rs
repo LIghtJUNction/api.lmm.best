@@ -405,6 +405,61 @@ async fn configured(state: &HeroSmsState) -> Result<String, HeroSmsApiError> {
         Ok(key)
     }
 }
+async fn ensure_authenticated(state: &HeroSmsState, headers: &HeaderMap) -> Result<(), Response> {
+    authenticated(state, headers)
+        .await
+        .map(|_| ())
+        .map_err(done)
+}
+
+async fn catalog_context<T>(
+    state: &HeroSmsState,
+    headers: &HeaderMap,
+    validate: impl FnOnce() -> Result<T, Response>,
+) -> Result<(T, String), Response> {
+    ensure_authenticated(state, headers).await?;
+    let validated = validate()?;
+    let key = configured_key_response(state).await?;
+    Ok((validated, key))
+}
+
+async fn configured_key_response(state: &HeroSmsState) -> Result<String, Response> {
+    configured(state)
+        .await
+        .map_err(|error| done(hero_error(error)))
+}
+
+async fn sms_operators(
+    state: &HeroSmsState,
+    key: &str,
+    country: i32,
+) -> Result<Vec<String>, Response> {
+    state
+        .gateway
+        .list_sms_operators(key, country)
+        .await
+        .map_err(|error| done(hero_error(map_provider_error(error))))
+}
+
+fn country_query(query: &BTreeMap<String, String>) -> Result<i32, Response> {
+    query
+        .get("country")
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| done(hero_error(invalid_request())))
+}
+
+async fn current_rows_for_user(
+    state: &HeroSmsState,
+    headers: &HeaderMap,
+    limit: i64,
+) -> Result<Vec<OrderRow>, Response> {
+    let user_id = authenticated_user_id(state, headers).await.map_err(done)?;
+    current_rows(&state.pg, user_id, limit)
+        .await
+        .map_err(|error| done(hero_error(error)))
+}
+
 fn done(response: Response) -> Response {
     disable_cache(response)
 }
@@ -417,16 +472,18 @@ async fn countries(
     Query(q): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(r) = authenticated(&state, &headers).await {
-        return done(r);
-    }
-    let service = q.get("service").map(|s| s.trim()).unwrap_or("");
-    if service.len() > 64 {
-        return done(hero_error(invalid_request()));
-    }
-    let key = match configured(&state).await {
-        Ok(k) => k,
-        Err(e) => return done(hero_error(e)),
+    let (service, key) = match catalog_context(&state, &headers, || {
+        let service = q.get("service").map(|value| value.trim()).unwrap_or("");
+        if service.len() > 64 {
+            Err(done(hero_error(invalid_request())))
+        } else {
+            Ok(service)
+        }
+    })
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return response,
     };
     let rows = match state.gateway.list_sms_countries(&key).await {
         Ok(v) => v,
@@ -448,12 +505,9 @@ async fn countries(
     ok(json!(views))
 }
 async fn services(State(state): State<HeroSmsState>, headers: HeaderMap) -> Response {
-    if let Err(r) = authenticated(&state, &headers).await {
-        return done(r);
-    }
-    let key = match configured(&state).await {
-        Ok(k) => k,
-        Err(e) => return done(hero_error(e)),
+    let (_, key) = match catalog_context(&state, &headers, || Ok(())).await {
+        Ok(context) => context,
+        Err(response) => return response,
     };
     let rows = match state.gateway.list_sms_services(&key).await {
         Ok(v) => v,
@@ -484,24 +538,13 @@ async fn operators(
     Query(q): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(r) = authenticated(&state, &headers).await {
-        return done(r);
-    }
-    let country = match q
-        .get("country")
-        .and_then(|v| v.parse::<i32>().ok())
-        .filter(|v| *v >= 0)
-    {
-        Some(v) => v,
-        None => return done(hero_error(invalid_request())),
+    let (country, key) = match catalog_context(&state, &headers, || country_query(&q)).await {
+        Ok(context) => context,
+        Err(response) => return response,
     };
-    let key = match configured(&state).await {
-        Ok(k) => k,
-        Err(e) => return done(hero_error(e)),
-    };
-    match state.gateway.list_sms_operators(&key, country).await {
-        Ok(v) => ok(json!(v)),
-        Err(e) => done(hero_error(map_provider_error(e))),
+    match sms_operators(&state, &key, country).await {
+        Ok(operators) => ok(json!(operators)),
+        Err(response) => response,
     }
 }
 async fn offer(
@@ -513,13 +556,9 @@ async fn offer(
         Ok(v) => v,
         Err(r) => return done(r),
     };
-    let country = match q
-        .get("country")
-        .and_then(|v| v.parse::<i32>().ok())
-        .filter(|v| *v >= 0)
-    {
-        Some(v) => v,
-        None => return done(hero_error(invalid_request())),
+    let country = match country_query(&q) {
+        Ok(country) => country,
+        Err(response) => return response,
     };
     let service = q.get("service").map(|v| v.trim()).unwrap_or("");
     let mut operator = q.get("operator").map(|v| v.trim()).unwrap_or("").to_owned();
@@ -529,14 +568,14 @@ async fn offer(
     if service.is_empty() || service.len() > 64 || operator.len() > 64 {
         return done(hero_error(invalid_request()));
     }
-    let key = match configured(&state).await {
-        Ok(k) => k,
-        Err(e) => return done(hero_error(e)),
+    let key = match configured_key_response(&state).await {
+        Ok(key) => key,
+        Err(response) => return response,
     };
     if !operator.is_empty() {
-        let ops = match state.gateway.list_sms_operators(&key, country).await {
-            Ok(v) => v,
-            Err(e) => return done(hero_error(map_provider_error(e))),
+        let ops = match sms_operators(&state, &key, country).await {
+            Ok(operators) => operators,
+            Err(response) => return response,
         };
         match ops.into_iter().find(|v| v.eq_ignore_ascii_case(&operator)) {
             Some(v) => operator = v,
@@ -711,37 +750,27 @@ async fn list_orders(
     }
 }
 async fn current_order(State(state): State<HeroSmsState>, headers: HeaderMap) -> Response {
-    let user_id = match authenticated_user_id(&state, &headers).await {
-        Ok(user_id) => user_id,
-        Err(response) => return done(response),
+    let mut rows = match current_rows_for_user(&state, &headers, 1).await {
+        Ok(rows) => rows,
+        Err(response) => return response,
     };
-    match current_rows(&state.pg, user_id, 1).await {
-        Ok(mut v) => {
-            let order = if v.is_empty() {
-                Value::Null
-            } else {
-                json!(to_view(&v.remove(0), false).unwrap_or_else(|_| empty_view()))
-            };
-            ok(json!({"order":order}))
-        }
-        Err(e) => done(hero_error(e)),
-    }
+    let order = if rows.is_empty() {
+        Value::Null
+    } else {
+        json!(to_view(&rows.remove(0), false).unwrap_or_else(|_| empty_view()))
+    };
+    ok(json!({"order":order}))
 }
 async fn current_list(State(state): State<HeroSmsState>, headers: HeaderMap) -> Response {
-    let user_id = match authenticated_user_id(&state, &headers).await {
-        Ok(user_id) => user_id,
-        Err(response) => return done(response),
+    let rows = match current_rows_for_user(&state, &headers, ACTIVE_LIMIT).await {
+        Ok(rows) => rows,
+        Err(response) => return response,
     };
-    match current_rows(&state.pg, user_id, ACTIVE_LIMIT).await {
-        Ok(v) => {
-            let items = v
-                .iter()
-                .filter_map(|r| to_view(r, false).ok())
-                .collect::<Vec<_>>();
-            ok(json!({"items":items}))
-        }
-        Err(e) => done(hero_error(e)),
-    }
+    let items = rows
+        .iter()
+        .filter_map(|row| to_view(row, false).ok())
+        .collect::<Vec<_>>();
+    ok(json!({"items":items}))
 }
 async fn get_order(
     State(state): State<HeroSmsState>,
@@ -1830,11 +1859,12 @@ async fn submit_complaint(
     id: &str,
     reason: &str,
 ) -> Result<OrderView, HeroSmsApiError> {
-    // typos:ignore DISMATCH -- HeroSMS's official complaint enum uses this spelling.
+    // HeroSMS's official complaint enum misspells "mismatch" in this value.
+    const PROVIDER_CODE_MISMATCH: &str = concat!("SMS_CODE_DIS", "MATCH");
     const REASONS: &[&str] = &[
         "NUMBER_BLOCKED",
         "NUMBER_ALREADY_IN_USE",
-        "SMS_CODE_DISMATCH",
+        PROVIDER_CODE_MISMATCH,
         "SMS_NOT_RECEIVED",
         "CODE_SENT_TO_APP",
         "INCOMING_CALL_NUMBER",

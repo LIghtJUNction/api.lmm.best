@@ -531,8 +531,8 @@ async fn authenticated_user(
     state: &DeveloperAccessState,
     headers: &HeaderMap,
 ) -> Result<Principal, Response> {
-    let credential =
-        dashboard_credential(headers).ok_or_else(|| dashboard_auth_error(headers, None))?;
+    let credential = crate::migration_routes::legacy_http::dashboard_credential(headers)
+        .ok_or_else(|| dashboard_auth_error(headers, None))?;
     let user = state
         .auth
         .self_user_view_for_optional(SecretString::from(credential.clone()))
@@ -546,8 +546,8 @@ async fn authenticated_admin(
     state: &DeveloperAccessState,
     headers: &HeaderMap,
 ) -> Result<Principal, Response> {
-    let credential =
-        dashboard_credential(headers).ok_or_else(|| dashboard_auth_error(headers, None))?;
+    let credential = crate::migration_routes::legacy_http::dashboard_credential(headers)
+        .ok_or_else(|| dashboard_auth_error(headers, None))?;
     let user = state
         .auth
         .self_user_view_for_optional(SecretString::from(credential.clone()))
@@ -994,23 +994,6 @@ fn query_value(query: Option<&str>, key: &str) -> String {
         .unwrap_or_default()
 }
 
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
 fn dashboard_auth_error(headers: &HeaderMap, kind: Option<AuthErrorKind>) -> Response {
     let (status, code, english) = match kind {
         Some(AuthErrorKind::TokenExpired) => (
@@ -1127,6 +1110,8 @@ mod tests {
 
     use super::*;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     fn request_fixture() -> DeveloperAccessRequest {
         DeveloperAccessRequest {
             id: 9,
@@ -1143,19 +1128,20 @@ mod tests {
     }
 
     #[test]
-    fn submission_should_use_unicode_character_limits_and_redact_handoff_secrets() {
+    fn submission_should_use_unicode_character_limits_and_redact_handoff_secrets() -> TestResult {
         let reason = "  测试申请说，password: hunter2  ";
         let recommendation =
             "AI recommends approval because key=sk-secret-token-123 is configured.";
 
-        let (reason, recommendation) =
-            normalize_submission(reason, recommendation).expect("valid submission");
+        let (reason, recommendation) = normalize_submission(reason, recommendation)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
 
         assert_eq!(reason, "测试申请说，password: [REDACTED]");
         assert_eq!(
             recommendation,
             "AI recommends approval because key=[REDACTED_API_KEY] is configured."
         );
+        Ok(())
     }
 
     #[test]
@@ -1171,8 +1157,8 @@ mod tests {
     }
 
     #[test]
-    fn pending_request_self_projection_should_hide_admin_and_user_ids() {
-        let value = serde_json::to_value(request_fixture().self_view()).expect("serialize view");
+    fn pending_request_self_projection_should_hide_admin_and_user_ids() -> TestResult {
+        let value = serde_json::to_value(request_fixture().self_view())?;
 
         assert_eq!(value["id"], 9);
         assert!(value.get("user_id").is_none());
@@ -1181,6 +1167,7 @@ mod tests {
             value["ai_recommendation"],
             "The described integration is specific and appropriate."
         );
+        Ok(())
     }
 
     #[test]
@@ -1196,41 +1183,43 @@ mod tests {
     }
 
     #[test]
-    fn nullable_json_should_match_gin_zero_value_binding() {
-        let input = parse_nullable_json::<SubmissionInput>(b"null").expect("nullable input");
+    fn nullable_json_should_match_gin_zero_value_binding() -> TestResult {
+        let input = parse_nullable_json::<SubmissionInput>(b"null")?;
 
         assert!(!input.confirmed);
         assert!(input.reason.is_empty());
         assert!(input.ai_recommendation.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn zero_content_length_review_should_ignore_the_body_like_gin() {
+    async fn zero_content_length_review_should_ignore_the_body_like_gin() -> TestResult {
         let request = Request::builder()
             .header(header::CONTENT_LENGTH, "0")
-            .body(Body::from("not-json"))
-            .expect("request");
+            .body(Body::from("not-json"))?;
 
-        let input = parse_review(request).await.expect("zero-value review");
+        let input = parse_review(request).await.map_err(|response| {
+            std::io::Error::other(format!("unexpected status: {}", response.status()))
+        })?;
 
         assert!(input.note.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn coded_error_should_preserve_status_and_legacy_json_contract() {
+    async fn coded_error_should_preserve_status_and_legacy_json_contract() -> TestResult {
         let response = developer_error(
             StatusCode::CONFLICT,
             "DEVELOPER_ACCESS_ALREADY_ACTIVE",
             "developer access is already active",
         );
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        let bytes = to_bytes(response.into_body(), 1_024)
-            .await
-            .expect("read response");
-        let body: Value = serde_json::from_slice(&bytes).expect("decode response");
+        let bytes = to_bytes(response.into_body(), 1_024).await?;
+        let body: Value = serde_json::from_slice(&bytes)?;
 
         assert_eq!(body["success"], false);
         assert_eq!(body["code"], "DEVELOPER_ACCESS_ALREADY_ACTIVE");
         assert_eq!(body["message"], "developer access is already active");
+        Ok(())
     }
 }

@@ -510,7 +510,8 @@ impl VerifyEmailIdentityResolver for DashboardVerifyEmailIdentityResolver {
         &self,
         headers: &HeaderMap,
     ) -> Result<VerifyEmailIdentity, VerifyEmailAuthError> {
-        let credential = dashboard_credential(headers).ok_or(VerifyEmailAuthError::Unauthorized)?;
+        let credential = crate::migration_routes::legacy_http::dashboard_credential(headers)
+            .ok_or(VerifyEmailAuthError::Unauthorized)?;
         let internal = dashboard_token_candidate(&credential);
         let identity = match self
             .auth
@@ -1070,23 +1071,6 @@ fn client_ip(request: &Request) -> String {
         .unwrap_or_else(|| "unknown".to_owned())
 }
 
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
 fn dashboard_auth_error(headers: &HeaderMap, error: VerifyEmailAuthError) -> Response {
     let (status, code, english) = match error {
         VerifyEmailAuthError::TokenExpired => (
@@ -1205,6 +1189,8 @@ fn unix_seconds() -> i64 {
 mod tests {
     use super::*;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     fn smtp_options(entries: &[(&str, &str)]) -> HashMap<String, String> {
         entries
             .iter()
@@ -1230,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    fn smtp_config_applies_from_fallback_port_465_tls_and_login_rules() {
+    fn smtp_config_applies_from_fallback_port_465_tls_and_login_rules() -> TestResult {
         let options = smtp_options(&[
             ("SMTPServer", "smtp.example.com"),
             ("SMTPPort", "465"),
@@ -1238,15 +1224,16 @@ mod tests {
             ("SMTPToken", "secret"),
         ]);
 
-        let config = SmtpConfig::from_options(&options).expect("valid SMTP configuration");
+        let config = SmtpConfig::from_options(&options)?;
 
         assert_eq!(config.from, "operator@outlook.example");
         assert_eq!(config.tls_mode, SmtpTlsMode::ImplicitTls);
         assert_eq!(config.auth_mechanisms(), Some(vec![Mechanism::Login]));
+        Ok(())
     }
 
     #[test]
-    fn smtp_config_requires_starttls_and_only_skips_verification_when_explicit() {
+    fn smtp_config_requires_starttls_and_only_skips_verification_when_explicit() -> TestResult {
         let mut options = smtp_options(&[
             ("SMTPServer", "smtp.example.com"),
             ("SMTPAccount", "operator@example.com"),
@@ -1254,7 +1241,7 @@ mod tests {
             ("SMTPStartTLSEnabled", "true"),
         ]);
 
-        let strict = SmtpConfig::from_options(&options).expect("valid SMTP configuration");
+        let strict = SmtpConfig::from_options(&options)?;
         assert_eq!(strict.tls_mode, SmtpTlsMode::RequiredStartTls);
         assert!(!strict.insecure_skip_verify);
         assert_eq!(
@@ -1263,25 +1250,27 @@ mod tests {
         );
 
         options.insert("SMTPInsecureSkipVerify".to_owned(), "true".to_owned());
-        let insecure = SmtpConfig::from_options(&options).expect("valid SMTP configuration");
+        let insecure = SmtpConfig::from_options(&options)?;
         assert!(insecure.insecure_skip_verify);
+        Ok(())
     }
 
     #[test]
-    fn smtp_config_requires_server_or_account() {
+    fn smtp_config_requires_server_or_account() -> TestResult {
         let error = SmtpConfig::from_options(&HashMap::new())
-            .expect_err("missing SMTP configuration must fail closed");
+            .err()
+            .ok_or_else(|| std::io::Error::other("missing SMTP configuration was accepted"))?;
 
         assert_eq!(error.to_string(), "SMTP 服务器未配置");
+        Ok(())
     }
 
     #[test]
-    fn smtp_message_contains_named_sender_recipient_html_and_sender_domain_id() {
+    fn smtp_message_contains_named_sender_recipient_html_and_sender_domain_id() -> TestResult {
         let config = SmtpConfig::from_options(&smtp_options(&[
             ("SMTPServer", "smtp.example.com"),
             ("SMTPAccount", "operator@example.com"),
-        ]))
-        .expect("valid SMTP configuration");
+        ]))?;
         let message = SecurityEmailMessage {
             from_name: "LMM API".to_owned(),
             subject: "Security verification".to_owned(),
@@ -1289,12 +1278,7 @@ mod tests {
             html: "<p>code 123456</p>".to_owned(),
         };
 
-        let formatted = String::from_utf8(
-            build_smtp_message(&config, &message)
-                .expect("valid MIME message")
-                .formatted(),
-        )
-        .expect("MIME is UTF-8 compatible");
+        let formatted = String::from_utf8(build_smtp_message(&config, &message)?.formatted())?;
 
         assert!(formatted.contains("From: "));
         assert!(formatted.contains("LMM API"));
@@ -1303,5 +1287,6 @@ mod tests {
         assert!(formatted.contains("Message-ID: <") && formatted.contains("@example.com>"));
         assert!(formatted.contains("Content-Type: text/html; charset=utf-8"));
         assert!(formatted.contains("<p>code 123456</p>"));
+        Ok(())
     }
 }

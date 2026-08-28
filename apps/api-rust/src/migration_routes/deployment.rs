@@ -108,6 +108,14 @@ impl DeploymentError {
     }
 }
 
+impl fmt::Display for DeploymentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for DeploymentError {}
+
 /// Boundary for io.net plus its PostgreSQL/Valkey coordination.
 ///
 /// Write implementations must store a result keyed by `(actor, operation,
@@ -1210,7 +1218,8 @@ async fn deployment_admin_guard(
         }
     };
 
-    let Some(token) = dashboard_credential(request.headers()) else {
+    let Some(token) = crate::migration_routes::legacy_http::dashboard_credential(request.headers())
+    else {
         return deployment_auth_rejection(
             request.headers(),
             DeploymentAuthRejection::ConsoleNotFound,
@@ -1259,23 +1268,6 @@ async fn deployment_admin_guard(
         role: user.role,
     });
     next.run(request).await
-}
-
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
 }
 
 fn token_locale(headers: &HeaderMap) -> (bool, bool) {
@@ -1831,6 +1823,8 @@ async fn remove(
 mod runtime_tests {
     use super::*;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     fn call(operation: DeploymentOperation) -> DeploymentCall {
         DeploymentCall {
             operation,
@@ -1853,10 +1847,10 @@ mod runtime_tests {
     }
 
     #[test]
-    fn runtime_requires_a_nonempty_server_secret_and_fixed_https_origin() {
-        let client = crate::outbound_http::client(Duration::from_secs(1)).expect("client");
-        let public = reqwest::Url::parse(IONET_PUBLIC_BASE).expect("public URL");
-        let enterprise = reqwest::Url::parse(IONET_ENTERPRISE_BASE).expect("enterprise URL");
+    fn runtime_requires_a_nonempty_server_secret_and_fixed_https_origin() -> TestResult {
+        let client = crate::outbound_http::client(Duration::from_secs(1))?;
+        let public = reqwest::Url::parse(IONET_PUBLIC_BASE)?;
+        let enterprise = reqwest::Url::parse(IONET_ENTERPRISE_BASE)?;
         assert!(
             IoNetDeploymentJobRunner::with_client(
                 client.clone(),
@@ -1876,7 +1870,7 @@ mod runtime_tests {
             .err(),
             Some(DeploymentError::NotConfigured)
         );
-        let untrusted = reqwest::Url::parse("https://example.test/v1/").expect("URL");
+        let untrusted = reqwest::Url::parse("https://example.test/v1/")?;
         assert_eq!(
             IoNetDeploymentJobRunner::with_client(
                 client,
@@ -1887,19 +1881,17 @@ mod runtime_tests {
             .err(),
             Some(DeploymentError::NotConfigured)
         );
+        Ok(())
     }
 
     #[test]
-    fn runtime_uses_encoded_pinned_endpoints_and_rejects_path_injection() {
-        let runner = IoNetDeploymentJobRunner::new(SecretString::from("server-secret"))
-            .expect("configured runner");
-        let url = runner
-            .endpoint(
-                true,
-                &["deployment", "dep id", "log", "container#1"],
-                &json!({"limit": 100, "follow": true}),
-            )
-            .expect("pinned endpoint");
+    fn runtime_uses_encoded_pinned_endpoints_and_rejects_path_injection() -> TestResult {
+        let runner = IoNetDeploymentJobRunner::new(SecretString::from("server-secret"))?;
+        let url = runner.endpoint(
+            true,
+            &["deployment", "dep id", "log", "container#1"],
+            &json!({"limit": 100, "follow": true}),
+        )?;
         assert_eq!(url.host_str(), Some(IONET_HOST));
         assert!(url.as_str().contains("dep%20id"));
         assert!(url.as_str().contains("container%231"));
@@ -1910,6 +1902,7 @@ mod runtime_tests {
                 "invalid deployment identifier".to_owned()
             ))
         );
+        Ok(())
     }
 
     #[test]

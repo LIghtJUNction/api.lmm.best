@@ -130,12 +130,8 @@ func CreateAuthFlowWithTx(tx *gorm.DB, input AuthFlowCreate) (string, *AuthFlow,
 		return "", nil, ErrAuthFlowInvalid
 	}
 	random := make([]byte, AuthFlowTokenBytes)
-	count, err := cryptorand.Read(random)
-	if err != nil {
+	if _, err := cryptorand.Read(random); err != nil {
 		return "", nil, fmt.Errorf("generate auth flow token: %w", err)
-	}
-	if count != len(random) {
-		return "", nil, errors.New("generate auth flow token: short random read")
 	}
 	token := base64.RawURLEncoding.EncodeToString(random)
 	flow := &AuthFlow{

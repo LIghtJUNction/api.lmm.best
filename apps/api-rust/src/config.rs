@@ -776,6 +776,21 @@ mod tests {
     use secrecy::SecretString;
     use std::{net::SocketAddr, time::Duration};
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn enabled_turnstile_options(
+        site_key: Option<&str>,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut options = std::collections::BTreeMap::from([(
+            "TurnstileCheckEnabled".to_owned(),
+            "true".to_owned(),
+        )]);
+        if let Some(site_key) = site_key {
+            options.insert("TurnstileSiteKey".to_owned(), site_key.to_owned());
+        }
+        options
+    }
+
     #[test]
     fn debug_should_redact_connection_urls() {
         let config = Config {
@@ -847,10 +862,7 @@ mod tests {
                 enabled: true,
                 secret_key: None,
             }
-            .resolve_public(&std::collections::BTreeMap::from([(
-                "TurnstileCheckEnabled".to_owned(),
-                "true".to_owned(),
-            )])),
+            .resolve_public(&enabled_turnstile_options(None)),
             Err(super::ConfigError::Invalid("TurnstileSiteKey"))
         ));
         assert!(matches!(
@@ -864,43 +876,32 @@ mod tests {
     }
 
     #[test]
-    fn turnstile_rejects_database_enable_mismatch_and_blank_site_key() {
-        let enabled = super::turnstile_from_values(true, Some("secret"))
-            .expect("nonblank secret is accepted");
+    fn turnstile_rejects_database_enable_mismatch_and_blank_site_key() -> TestResult {
+        let enabled = super::turnstile_from_values(true, Some("secret"))?;
         assert!(matches!(
             enabled.resolve_public(&std::collections::BTreeMap::new()),
             Err(super::ConfigError::Invalid("TurnstileCheckEnabled"))
         ));
         assert!(matches!(
-            enabled.resolve_public(&std::collections::BTreeMap::from([(
-                "TurnstileCheckEnabled".to_owned(),
-                "true".to_owned(),
-            )])),
+            enabled.resolve_public(&enabled_turnstile_options(None)),
             Err(super::ConfigError::Invalid("TurnstileSiteKey"))
         ));
+        Ok(())
     }
 
     #[test]
-    fn turnstile_resolves_only_consistent_public_state() {
-        let config = super::turnstile_from_values(true, Some("secret"))
-            .expect("nonblank secret is accepted");
-        let public = config
-            .resolve_public(&std::collections::BTreeMap::from([
-                ("TurnstileCheckEnabled".to_owned(), "true".to_owned()),
-                ("TurnstileSiteKey".to_owned(), "site-key".to_owned()),
-            ]))
-            .expect("matching configuration is accepted");
+    fn turnstile_resolves_only_consistent_public_state() -> TestResult {
+        let config = super::turnstile_from_values(true, Some("secret"))?;
+        let public = config.resolve_public(&enabled_turnstile_options(Some("site-key")))?;
         assert!(public.enabled);
         assert_eq!(public.site_key, "site-key");
 
-        let disabled = super::turnstile_from_values(false, None)
-            .expect("disabled Turnstile does not require a secret");
+        let disabled = super::turnstile_from_values(false, None)?;
         assert_eq!(
-            disabled
-                .resolve_public(&std::collections::BTreeMap::new())
-                .expect("matching disabled configuration is accepted"),
+            disabled.resolve_public(&std::collections::BTreeMap::new())?,
             TurnstilePublicConfig::disabled()
         );
+        Ok(())
     }
 
     #[test]
@@ -925,19 +926,20 @@ mod tests {
     }
 
     #[test]
-    fn test_instance_listener_must_be_literal_loopback() {
+    fn test_instance_listener_must_be_literal_loopback() -> TestResult {
         for valid in ["127.0.0.1:3100", "[::1]:3100"] {
             assert!(
-                super::validate_test_listener(valid.parse().expect("socket address")).is_ok(),
+                super::validate_test_listener(valid.parse()?).is_ok(),
                 "{valid}"
             );
         }
         for invalid in ["0.0.0.0:3100", "192.0.2.10:3100", "[::]:3100"] {
             assert!(
-                super::validate_test_listener(invalid.parse().expect("socket address")).is_err(),
+                super::validate_test_listener(invalid.parse()?).is_err(),
                 "{invalid}"
             );
         }
+        Ok(())
     }
 
     #[test]
@@ -964,39 +966,33 @@ mod tests {
     }
 
     #[test]
-    fn test_instance_valkey_port_override_is_nonzero_and_defaults_safely() {
-        assert_eq!(super::parse_test_valkey_port(None).unwrap(), 6380);
-        assert_eq!(super::parse_test_valkey_port(Some("23456")).unwrap(), 23456);
+    fn test_instance_valkey_port_override_is_nonzero_and_defaults_safely() -> TestResult {
+        assert_eq!(super::parse_test_valkey_port(None)?, 6380);
+        assert_eq!(super::parse_test_valkey_port(Some("23456"))?, 23456);
         for invalid in ["", "0", "65536", "23456 "] {
             assert!(
                 super::parse_test_valkey_port(Some(invalid)).is_err(),
                 "{invalid:?}"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn blue_green_slot_identity_is_strict() {
-        assert_eq!(
-            super::validated_slot("blue".to_owned(), false).expect("blue production slot"),
-            "blue"
-        );
-        assert_eq!(
-            super::validated_slot("green".to_owned(), false).expect("green production slot"),
-            "green"
-        );
+    fn blue_green_slot_identity_is_strict() -> TestResult {
+        assert_eq!(super::validated_slot("blue".to_owned(), false)?, "blue");
+        assert_eq!(super::validated_slot("green".to_owned(), false)?, "green");
         assert!(super::validated_slot("single".to_owned(), false).is_err());
         assert!(super::validated_slot("canary".to_owned(), false).is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_instance_slot_is_single_only() {
-        assert_eq!(
-            super::validated_slot("single".to_owned(), true).expect("single test slot"),
-            "single"
-        );
+    fn test_instance_slot_is_single_only() -> TestResult {
+        assert_eq!(super::validated_slot("single".to_owned(), true)?, "single");
         assert!(super::validated_slot("blue".to_owned(), true).is_err());
         assert!(super::validated_slot("green".to_owned(), true).is_err());
+        Ok(())
     }
 
     #[test]
@@ -1016,60 +1012,67 @@ mod tests {
     }
 
     #[test]
-    fn test_instance_requires_the_exact_opt_in_value() {
-        assert!(!super::parse_test_instance_value(None).expect("absent flag is production"));
-        assert!(super::parse_test_instance_value(Some("1")).expect("explicit test flag is valid"));
+    fn test_instance_requires_the_exact_opt_in_value() -> TestResult {
+        assert!(!super::parse_test_instance_value(None)?);
+        assert!(super::parse_test_instance_value(Some("1"))?);
         for invalid in ["", "0", "true", "01", "1 "] {
             assert!(
                 super::parse_test_instance_value(Some(invalid)).is_err(),
                 "{invalid:?}"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_disabled_by_default() {
-        let addr: SocketAddr = "127.0.0.1:3101".parse().unwrap();
-        assert!(!super::parse_local_acceptance_policy("", addr).expect("absent flag"));
-        assert!(!super::parse_local_acceptance_policy("false", addr).expect("false flag"));
-        assert!(!super::parse_local_acceptance_policy("TRUE", addr).expect("uppercase"));
-        assert!(!super::parse_local_acceptance_policy("1", addr).expect("numeric"));
+    fn local_acceptance_disabled_by_default() -> TestResult {
+        let addr: SocketAddr = "127.0.0.1:3101".parse()?;
+        for flag in ["", "false", "TRUE", "1"] {
+            assert!(!super::parse_local_acceptance_policy(flag, addr)?);
+        }
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_ipv4_loopback() {
-        let addr: SocketAddr = "127.0.0.1:3101".parse().unwrap();
-        assert!(super::parse_local_acceptance_policy("true", addr).expect("IPv4 loopback"));
+    fn local_acceptance_ipv4_loopback() -> TestResult {
+        let addr: SocketAddr = "127.0.0.1:3101".parse()?;
+        assert!(super::parse_local_acceptance_policy("true", addr)?);
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_ipv6_loopback() {
-        let addr: SocketAddr = "[::1]:3101".parse().unwrap();
-        assert!(super::parse_local_acceptance_policy("true", addr).expect("IPv6 loopback"));
+    fn local_acceptance_ipv6_loopback() -> TestResult {
+        let addr: SocketAddr = "[::1]:3101".parse()?;
+        assert!(super::parse_local_acceptance_policy("true", addr)?);
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_rejects_ipv4_wildcard() {
-        let addr: SocketAddr = "0.0.0.0:3101".parse().unwrap();
+    fn local_acceptance_rejects_ipv4_wildcard() -> TestResult {
+        let addr: SocketAddr = "0.0.0.0:3101".parse()?;
         assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_rejects_ipv6_wildcard() {
-        let addr: SocketAddr = "[::]:3101".parse().unwrap();
+    fn local_acceptance_rejects_ipv6_wildcard() -> TestResult {
+        let addr: SocketAddr = "[::]:3101".parse()?;
         assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_rejects_other_loopback_address() {
-        let addr: SocketAddr = "127.0.0.2:3101".parse().unwrap();
+    fn local_acceptance_rejects_other_loopback_address() -> TestResult {
+        let addr: SocketAddr = "127.0.0.2:3101".parse()?;
         assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+        Ok(())
     }
 
     #[test]
-    fn local_acceptance_rejects_public_address() {
-        let addr: SocketAddr = "192.0.2.10:3101".parse().unwrap();
+    fn local_acceptance_rejects_public_address() -> TestResult {
+        let addr: SocketAddr = "192.0.2.10:3101".parse()?;
         assert!(super::parse_local_acceptance_policy("true", addr).is_err());
+        Ok(())
     }
 
     #[test]
@@ -1091,14 +1094,14 @@ mod tests {
     }
 
     #[test]
-    fn drain_timeout_must_leave_the_systemd_supervisor_margin() {
+    fn drain_timeout_must_leave_the_systemd_supervisor_margin() -> TestResult {
         assert_eq!(
-            super::bounded_seconds("LMM_DRAIN_TIMEOUT_SECONDS", 30, 40)
-                .expect("default drain timeout is valid"),
+            super::bounded_seconds("LMM_DRAIN_TIMEOUT_SECONDS", 30, 40)?,
             Duration::from_secs(30)
         );
         assert!(super::bounded_seconds_value(0, "LMM_DRAIN_TIMEOUT_SECONDS", 40).is_err());
         assert!(super::bounded_seconds_value(41, "LMM_DRAIN_TIMEOUT_SECONDS", 40).is_err());
+        Ok(())
     }
 
     #[test]
@@ -1112,20 +1115,21 @@ mod tests {
     }
 
     #[test]
-    fn public_content_cache_ttl_should_accept_one_second() {
+    fn public_content_cache_ttl_should_accept_one_second() -> TestResult {
         assert_eq!(
-            super::public_content_cache_ttl_value(1).expect("one second is within the cache bound"),
+            super::public_content_cache_ttl_value(1)?,
             Duration::from_secs(1)
         );
+        Ok(())
     }
 
     #[test]
-    fn public_content_cache_ttl_should_accept_five_seconds() {
+    fn public_content_cache_ttl_should_accept_five_seconds() -> TestResult {
         assert_eq!(
-            super::public_content_cache_ttl_value(5)
-                .expect("five seconds is the maximum cache lifetime"),
+            super::public_content_cache_ttl_value(5)?,
             Duration::from_secs(5)
         );
+        Ok(())
     }
 
     #[test]
@@ -1149,10 +1153,12 @@ mod tests {
     }
 
     #[test]
-    fn trusted_cookie_origins_must_be_exact_https_origins() {
+    fn trusted_cookie_origins_must_be_exact_https_origins() -> TestResult {
         assert_eq!(
-            super::trusted_https_origin("https://Panel.Example:8443", "SESSION_COOKIE_TRUSTED_URL")
-                .expect("HTTPS origin is valid"),
+            super::trusted_https_origin(
+                "https://Panel.Example:8443",
+                "SESSION_COOKIE_TRUSTED_URL"
+            )?,
             "https://panel.example:8443"
         );
         for invalid in [
@@ -1167,25 +1173,26 @@ mod tests {
                 "{invalid} must not become a trusted origin"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn trusted_proxy_policy_matches_the_legacy_default_none_and_explicit_contracts() {
-        let defaults = super::parse_trusted_proxies(" ").expect("default policy is valid");
-        assert!(defaults.trusts("127.0.0.1".parse().expect("loopback IP")));
-        assert!(defaults.trusts("172.20.0.2".parse().expect("private IP")));
-        assert!(!defaults.trusts("198.51.100.10".parse().expect("public IP")));
+    fn trusted_proxy_policy_matches_the_legacy_default_none_and_explicit_contracts() -> TestResult {
+        let defaults = super::parse_trusted_proxies(" ")?;
+        assert!(defaults.trusts("127.0.0.1".parse()?));
+        assert!(defaults.trusts("172.20.0.2".parse()?));
+        assert!(!defaults.trusts("198.51.100.10".parse()?));
 
-        let disabled = super::parse_trusted_proxies(" NoNe ").expect("none policy is valid");
-        assert!(!disabled.trusts("127.0.0.1".parse().expect("loopback IP")));
+        let disabled = super::parse_trusted_proxies(" NoNe ")?;
+        assert!(!disabled.trusts("127.0.0.1".parse()?));
 
-        let explicit = super::parse_trusted_proxies(" 192.0.2.0/24, 198.51.100.30 ")
-            .expect("explicit CIDR and IP policy is valid");
-        assert!(explicit.trusts("192.0.2.10".parse().expect("CIDR member")));
-        assert!(explicit.trusts("198.51.100.30".parse().expect("explicit IP")));
-        assert!(!explicit.trusts("127.0.0.1".parse().expect("replaced default")));
+        let explicit = super::parse_trusted_proxies(" 192.0.2.0/24, 198.51.100.30 ")?;
+        assert!(explicit.trusts("192.0.2.10".parse()?));
+        assert!(explicit.trusts("198.51.100.30".parse()?));
+        assert!(!explicit.trusts("127.0.0.1".parse()?));
         for invalid in [", ,", "none,127.0.0.1", "not-an-ip"] {
             assert!(super::parse_trusted_proxies(invalid).is_err(), "{invalid}");
         }
+        Ok(())
     }
 }

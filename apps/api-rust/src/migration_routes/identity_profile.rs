@@ -479,18 +479,23 @@ impl IntoResponse for ProfileError {
     }
 }
 
+async fn find_aff_code(pg: &PgPool, user_id: i64) -> Result<Option<String>, ProfileError> {
+    Ok(
+        sqlx::query_scalar::<_, Option<String>>("SELECT aff_code FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(pg)
+            .await
+            .map_err(|_| ProfileError::internal())?
+            .flatten()
+            .filter(|code| !code.is_empty()),
+    )
+}
+
 async fn get_aff_code(
     State(state): State<ProfileState>,
     Extension(identity): Extension<ProfileIdentity>,
 ) -> Result<Json<Success<String>>, ProfileError> {
-    let existing =
-        sqlx::query_scalar::<_, Option<String>>("SELECT aff_code FROM users WHERE id = $1")
-            .bind(identity.user_id)
-            .fetch_optional(&state.pg)
-            .await
-            .map_err(|_| ProfileError::internal())?
-            .flatten()
-            .filter(|code| !code.is_empty());
+    let existing = find_aff_code(&state.pg, identity.user_id).await?;
     if let Some(code) = existing {
         return Ok(success(Some(code)));
     }
@@ -503,13 +508,8 @@ async fn get_aff_code(
         .map_err(|_| ProfileError::internal())?;
     let code = match assigned {
         Some(code) => code,
-        None => sqlx::query_scalar::<_, Option<String>>("SELECT aff_code FROM users WHERE id = $1")
-            .bind(identity.user_id)
-            .fetch_optional(&state.pg)
-            .await
-            .map_err(|_| ProfileError::internal())?
-            .flatten()
-            .filter(|code| !code.is_empty())
+        None => find_aff_code(&state.pg, identity.user_id)
+            .await?
             .ok_or_else(ProfileError::not_found)?,
     };
     clear_user_cache(&state, identity.user_id).await;
@@ -1232,6 +1232,17 @@ mod tests {
     };
     use serde_json::{Map, Value};
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn notification_setting_json(
+        current: &str,
+        request: &UserSettingRequest,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        let json = build_notification_setting(current, request, 1)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
     #[test]
     fn self_setting_keeps_sidebar_precedence_when_both_legacy_keys_arrive() {
         let request = Map::from_iter([
@@ -1269,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn notification_setting_serialization_matches_go_dto_and_priority_fallback() {
+    fn notification_setting_serialization_matches_go_dto_and_priority_fallback() -> TestResult {
         let request = UserSettingRequest {
             notify_type: "gotify".to_owned(),
             quota_warning_threshold: 2.5,
@@ -1284,13 +1295,10 @@ mod tests {
             accept_unset_model_ratio_model: false,
             record_ip_log: false,
         };
-        let json = build_notification_setting(
+        let value = notification_setting_json(
             r#"{"language":"zh","gotify_priority":7,"upstream_model_update_notify_enabled":true}"#,
             &request,
-            1,
-        )
-        .expect("notification setting should serialize");
-        let value: Value = serde_json::from_str(&json).expect("serialized setting JSON");
+        )?;
         assert_eq!(
             value,
             serde_json::json!({
@@ -1302,10 +1310,11 @@ mod tests {
                 "upstream_model_update_notify_enabled": true,
             })
         );
+        Ok(())
     }
 
     #[test]
-    fn notification_setting_drops_fields_go_fresh_dto_drops() {
+    fn notification_setting_drops_fields_go_fresh_dto_drops() -> TestResult {
         let request = UserSettingRequest {
             notify_type: "email".to_owned(),
             quota_warning_threshold: 1.0,
@@ -1320,22 +1329,20 @@ mod tests {
             accept_unset_model_ratio_model: false,
             record_ip_log: false,
         };
-        let json = build_notification_setting(
+        let value = notification_setting_json(
             r#"{"language":"zh","billing_preference":"wallet","gotify_priority":7}"#,
             &request,
-            1,
-        )
-        .expect("notification setting should serialize");
-        let value: Value = serde_json::from_str(&json).expect("serialized setting JSON");
+        )?;
         assert_eq!(value["notify_type"], "email");
         assert_eq!(value["notification_email"], "ada@example.test");
         assert_eq!(value["gotify_priority"], 0);
         assert!(value.get("language").is_none());
         assert!(value.get("billing_preference").is_none());
+        Ok(())
     }
 
     #[test]
-    fn setting_validation_matches_go_legacy_http_status_messages() {
+    fn setting_validation_matches_go_legacy_http_status_messages() -> TestResult {
         let request = UserSettingRequest {
             notify_type: String::new(),
             quota_warning_threshold: 0.0,
@@ -1350,11 +1357,14 @@ mod tests {
             accept_unset_model_ratio_model: false,
             record_ip_log: false,
         };
-        let error = validate_user_setting(&request, LegacyLocale::En).expect_err("invalid type");
+        let error = validate_user_setting(&request, LegacyLocale::En)
+            .err()
+            .ok_or_else(|| std::io::Error::other("invalid warning type was accepted"))?;
         assert_eq!(error.status, axum::http::StatusCode::OK);
         assert_eq!(error.message, "Invalid warning type");
         assert!(is_request_uri("/webhook"));
         assert!(is_request_uri("https://example.test/hook"));
         assert!(!is_request_uri("relative/path"));
+        Ok(())
     }
 }

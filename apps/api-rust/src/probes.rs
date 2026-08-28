@@ -212,7 +212,14 @@ fn failed(dependency: &'static str) -> ProbeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
+
+    fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        match mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
 
     struct MockSchemaBackend {
         range: (i64, i64),
@@ -227,10 +234,7 @@ mod tests {
         }
 
         async fn verify_select(&self, query: &'static str) -> Result<(), ProbeError> {
-            self.seen
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(query);
+            lock_unpoisoned(&self.seen).push(query);
             if self.failing_query == Some(query) {
                 Err(failed("schema"))
             } else {
@@ -261,11 +265,7 @@ mod tests {
         let backend = backend(None);
         schema_compatible_with(&backend, 2).await?;
         assert_eq!(
-            backend
-                .seen
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_slice(),
+            lock_unpoisoned(&backend.seen).as_slice(),
             [
                 STATUS_SCHEMA_SELECTS,
                 AUTH_SCHEMA_SELECTS,
@@ -301,11 +301,7 @@ mod tests {
 
         assert_eq!(error.dependency, "schema");
         assert_eq!(
-            backend
-                .seen
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .last(),
+            lock_unpoisoned(&backend.seen).last(),
             Some(&CURRENT_DASHBOARD_SCHEMA_SELECTS[0])
         );
         Ok(())
@@ -319,11 +315,7 @@ mod tests {
 
         assert_eq!(error.dependency, "schema");
         assert_eq!(
-            backend
-                .seen
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .last(),
+            lock_unpoisoned(&backend.seen).last(),
             Some(&OAUTH_AUTHORITY_SCHEMA_SELECTS[0])
         );
         Ok(())
@@ -339,13 +331,7 @@ mod tests {
         };
         let error = required_probe_error(schema_compatible_with(&backend, 2).await)?;
         assert_eq!(error.dependency, "schema");
-        assert!(
-            backend
-                .seen
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .is_empty()
-        );
+        assert!(lock_unpoisoned(&backend.seen).is_empty());
         Ok(())
     }
 }

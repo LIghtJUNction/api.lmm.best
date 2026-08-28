@@ -1070,7 +1070,8 @@ async fn authenticate_dashboard(
     state: &SecurityAdminState,
     headers: &HeaderMap,
 ) -> Result<DashboardUserView, Response> {
-    let Some(credential) = dashboard_credential(headers) else {
+    let Some(credential) = crate::migration_routes::legacy_http::dashboard_credential(headers)
+    else {
         return Err(dashboard_auth_error(headers, None));
     };
     state
@@ -1202,9 +1203,10 @@ async fn require_cleanup_security_proof(
         .ok_or_else(|| {
             security_proof_error("SECURITY_PROOF_REQUIRED", "Secure verification is required")
         })?;
-    let credential = dashboard_credential(headers).ok_or_else(|| {
-        security_proof_error("SECURITY_PROOF_INVALID", "Security proof is invalid")
-    })?;
+    let credential = crate::migration_routes::legacy_http::dashboard_credential(headers)
+        .ok_or_else(|| {
+            security_proof_error("SECURITY_PROOF_INVALID", "Security proof is invalid")
+        })?;
     let session = state
         .auth
         .current_session(SecretString::from(credential))
@@ -1445,23 +1447,6 @@ fn with_auth_version(mut response: Response) -> Response {
     response
 }
 
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
 fn dashboard_auth_error(headers: &HeaderMap, kind: Option<AuthErrorKind>) -> Response {
     if kind == Some(AuthErrorKind::UserDisabled) {
         return user_policy_error(headers, UserAuthPolicyError::UserDisabled);
@@ -1515,23 +1500,17 @@ mod cleanup_tests {
     #[test]
     fn cleanup_keep_defaults_and_enforces_bounds() {
         assert_eq!(
-            parse_review_history_keep(None).expect("default keep"),
-            DEFAULT_REVIEW_HISTORY_KEEP
+            parse_review_history_keep(None).ok(),
+            Some(DEFAULT_REVIEW_HISTORY_KEEP)
         );
-        assert_eq!(
-            parse_review_history_keep(Some("keep=1")).expect("minimum keep"),
-            1
-        );
-        assert_eq!(
-            parse_review_history_keep(Some("keep=100")).expect("maximum keep"),
-            100
-        );
+        assert_eq!(parse_review_history_keep(Some("keep=1")).ok(), Some(1));
+        assert_eq!(parse_review_history_keep(Some("keep=100")).ok(), Some(100));
         for query in ["keep=0", "keep=101", "keep=invalid"] {
             assert_eq!(
                 parse_review_history_keep(Some(query))
-                    .expect_err("invalid keep")
-                    .status(),
-                StatusCode::BAD_REQUEST
+                    .err()
+                    .map(|response| response.status()),
+                Some(StatusCode::BAD_REQUEST)
             );
         }
     }
@@ -1539,14 +1518,12 @@ mod cleanup_tests {
     #[test]
     fn cleanup_expected_count_requires_a_safe_non_negative_value() {
         assert_eq!(
-            parse_review_history_expected_count(Some("keep=30&expected_count=0"))
-                .expect("zero expected count"),
-            0
+            parse_review_history_expected_count(Some("keep=30&expected_count=0")).ok(),
+            Some(0)
         );
         assert_eq!(
-            parse_review_history_expected_count(Some("expected_count=100000"))
-                .expect("maximum expected count"),
-            MAX_REVIEW_HISTORY_EXPECTED_COUNT
+            parse_review_history_expected_count(Some("expected_count=100000")).ok(),
+            Some(MAX_REVIEW_HISTORY_EXPECTED_COUNT)
         );
         for query in [
             "keep=30",
@@ -1556,9 +1533,9 @@ mod cleanup_tests {
         ] {
             assert_eq!(
                 parse_review_history_expected_count(Some(query))
-                    .expect_err("invalid expected count")
-                    .status(),
-                StatusCode::BAD_REQUEST
+                    .err()
+                    .map(|response| response.status()),
+                Some(StatusCode::BAD_REQUEST)
             );
         }
     }

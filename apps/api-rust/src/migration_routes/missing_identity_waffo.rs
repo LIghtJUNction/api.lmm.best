@@ -1093,6 +1093,7 @@ fn default_waffo_methods() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::migration_routes::test_support::RejectingDashboardAuth;
     use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
@@ -1100,56 +1101,11 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    struct RejectingAuth;
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    #[async_trait]
-    impl DashboardAuth for RejectingAuth {
-        async fn check_critical_rate_limit(
-            &self,
-            _: &str,
-        ) -> Result<crate::auth::CriticalRateLimitOutcome, crate::auth::AuthError> {
-            Ok(crate::auth::CriticalRateLimitOutcome::Allowed)
-        }
-        async fn login(
-            &self,
-            _: crate::auth::LoginRequest,
-            _: crate::auth::RequestMetadata,
-        ) -> Result<crate::auth::LoginOutcome, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn login_2fa(
-            &self,
-            _: crate::auth::TwoFactorLoginRequest,
-            _: crate::auth::RequestMetadata,
-        ) -> Result<crate::auth::AuthBundle, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn refresh(
-            &self,
-            _: SecretString,
-            _: Option<String>,
-            _: crate::auth::RequestMetadata,
-        ) -> Result<crate::auth::AuthBundle, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn self_user(
-            &self,
-            _: SecretString,
-        ) -> Result<DashboardUser, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn logout(
-            &self,
-            _: crate::auth::LogoutRequest,
-        ) -> Result<crate::auth::LogoutResult, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn generate_personal_access_token(
-            &self,
-            _: SecretString,
-        ) -> Result<String, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
+    fn decimal(raw: &str) -> Result<FixedDecimal, std::io::Error> {
+        FixedDecimal::parse(raw)
+            .ok_or_else(|| std::io::Error::other(format!("invalid decimal fixture: {raw}")))
     }
 
     struct NoopGateway;
@@ -1164,54 +1120,51 @@ mod tests {
         }
     }
 
-    fn app() -> Router {
-        router(WaffoTopUpState::new(
-            PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap(),
-            Arc::new(RejectingAuth),
+    fn app() -> Result<Router, sqlx::Error> {
+        Ok(router(WaffoTopUpState::new(
+            PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?,
+            Arc::new(RejectingDashboardAuth),
             Arc::new(NoopGateway),
-        ))
+        )))
     }
 
     #[tokio::test]
     async fn waffo_public_payment_seams_reject_missing_dashboard_credential_before_database_or_gateway()
-     {
+    -> TestResult {
         for uri in [
             "/api/user/waffo/amount",
             "/api/user/waffo/pay",
             "/api/user/waffo-pancake/amount",
             "/api/user/waffo-pancake/pay",
         ] {
-            let response = app()
-                .oneshot(
-                    Request::post(uri)
-                        .header(header::CONTENT_TYPE, "application/json")
-                        // Go's enclosing `UserAuth` rejects before
-                        // `ShouldBindJSON`; an invalid body must not alter
-                        // that response or touch a persistence/provider seam.
-                        .body(Body::from("not-json"))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let request = Request::post(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                // Go's enclosing `UserAuth` rejects before
+                // `ShouldBindJSON`; an invalid body must not alter
+                // that response or touch a persistence/provider seam.
+                .body(Body::from("not-json"))?;
+            let response = app()?.oneshot(request).await?;
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
             assert_eq!(
-                response.headers().get(header::CONTENT_TYPE).unwrap(),
-                "application/json",
+                response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok()),
+                Some("application/json"),
                 "{uri}"
             );
+            let body = to_bytes(response.into_body(), 1024).await?;
             assert_eq!(
-                serde_json::from_slice::<Value>(
-                    &to_bytes(response.into_body(), 1024).await.unwrap()
-                )
-                .unwrap(),
+                serde_json::from_slice::<Value>(&body)?,
                 json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token"}),
                 "{uri}"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn quote_keeps_group_ratio_discount_and_token_normalization() {
+    fn quote_keeps_group_ratio_discount_and_token_normalization() -> TestResult {
         let settings = BTreeMap::from([
             (
                 "general_setting.quota_display_type".to_owned(),
@@ -1225,15 +1178,13 @@ mod tests {
                 r#"{"200":0.5}"#.to_owned(),
             ),
         ]);
-        assert_eq!(
-            quote_money(200, "vip", WAFFO, &settings),
-            FixedDecimal::parse("3").unwrap()
-        );
+        assert_eq!(quote_money(200, "vip", WAFFO, &settings), decimal("3")?);
         assert_eq!(normalized_amount(200, &settings), 2);
+        Ok(())
     }
 
     #[test]
-    fn token_display_keeps_go_legacy_option_fallback() {
+    fn token_display_keeps_go_legacy_option_fallback() -> TestResult {
         let legacy_tokens = BTreeMap::from([
             ("DisplayInCurrencyEnabled".to_owned(), "false".to_owned()),
             ("QuotaPerUnit".to_owned(), "100".to_owned()),
@@ -1242,7 +1193,7 @@ mod tests {
         assert_eq!(normalized_amount(200, &legacy_tokens), 2);
         assert_eq!(
             quote_money(200, "default", WAFFO, &legacy_tokens),
-            FixedDecimal::parse("2").unwrap()
+            decimal("2")?
         );
 
         let dotted_wins = BTreeMap::from([
@@ -1255,6 +1206,7 @@ mod tests {
         ]);
         assert!(!token_display(&dotted_wins));
         assert_eq!(normalized_amount(200, &dotted_wins), 200);
+        Ok(())
     }
     #[test]
     fn payment_method_is_server_allowlisted() {
@@ -1336,10 +1288,11 @@ mod tests {
         );
     }
     #[test]
-    fn zero_decimal_currencies_are_not_sent_with_fraction() {
-        let amount = FixedDecimal::parse("12.5").unwrap();
+    fn zero_decimal_currencies_are_not_sent_with_fraction() -> TestResult {
+        let amount = decimal("12.5")?;
         assert_eq!(format_amount(amount, "JPY"), "13");
         assert_eq!(format_amount(amount, "USD"), "12.50");
+        Ok(())
     }
 
     #[test]

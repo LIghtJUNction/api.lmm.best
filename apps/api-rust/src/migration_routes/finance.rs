@@ -23,10 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
-use crate::auth::{
-    AuthErrorKind, DashboardAuth, DashboardUserView, UserAuthPolicyError, enforce_user_auth_view,
-    user_auth_message, user_auth_status,
-};
+use crate::auth::{DashboardAuth, DashboardUserView, UserAuthPolicyError, enforce_user_auth_view};
 
 const ADMIN_ROLE: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
@@ -383,7 +380,7 @@ async fn list_entries(
     let limit = query
         .get("limit")
         .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(50)
+        .map_or(50, std::convert::identity)
         .clamp(1, MAX_ENTRIES);
     let (before_occurred_at, before_id) = match parse_entry_cursor(&query) {
         Ok(cursor) => cursor,
@@ -597,23 +594,35 @@ async fn authenticated_admin(
     state: &FinanceState,
     headers: &HeaderMap,
 ) -> Result<DashboardUserView, Response> {
-    let Some(credential) = dashboard_credential(headers) else {
-        return Err(dashboard_auth_error(headers, None));
+    let Some(credential) = crate::migration_routes::legacy_http::dashboard_credential(headers)
+    else {
+        return Err(
+            crate::migration_routes::legacy_http::localized_dashboard_auth_error(headers, None),
+        );
     };
     let user = state
         .auth
         .self_user_view_for_optional(SecretString::from(credential))
         .await
-        .map_err(|error| dashboard_auth_error(headers, Some(error.kind)))?;
+        .map_err(|error| {
+            crate::migration_routes::legacy_http::localized_dashboard_auth_error(
+                headers,
+                Some(error.kind),
+            )
+        })?;
     if !user.developer_access_granted {
         return Err(console_not_found());
     }
-    enforce_user_auth_view(&user).map_err(|error| user_policy_error(headers, error))?;
+    enforce_user_auth_view(&user).map_err(|error| {
+        crate::migration_routes::legacy_http::localized_user_policy_error(headers, error)
+    })?;
     if user.role < ADMIN_ROLE {
-        return Err(user_policy_error(
-            headers,
-            UserAuthPolicyError::InsufficientPrivilege,
-        ));
+        return Err(
+            crate::migration_routes::legacy_http::localized_user_policy_error(
+                headers,
+                UserAuthPolicyError::InsufficientPrivilege,
+            ),
+        );
     }
     Ok(user)
 }
@@ -681,7 +690,8 @@ fn parse_entry_cursor(query: &HashMap<String, String>) -> Result<(i64, i64), &'s
 
 fn parse_query(raw: Option<&str>) -> HashMap<String, String> {
     let mut query = HashMap::new();
-    for (key, value) in form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+    let raw = raw.map_or("", std::convert::identity);
+    for (key, value) in form_urlencoded::parse(raw.as_bytes()) {
         query
             .entry(key.into_owned())
             .or_insert_with(|| value.into_owned());
@@ -697,7 +707,7 @@ fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+            i64::try_from(duration.as_secs()).map_or(i64::MAX, std::convert::identity)
         })
 }
 
@@ -742,123 +752,6 @@ fn with_auth_version(mut response: Response) -> Response {
         HeaderValue::from_static(AUTH_VERSION),
     );
     response
-}
-
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
-fn dashboard_auth_error(headers: &HeaderMap, kind: Option<AuthErrorKind>) -> Response {
-    if kind == Some(AuthErrorKind::UserDisabled) {
-        return user_policy_error(headers, UserAuthPolicyError::UserDisabled);
-    }
-    let (status, code, message) = match kind {
-        Some(AuthErrorKind::TokenExpired) => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_TOKEN_EXPIRED",
-            auth_not_logged_in(headers),
-        ),
-        Some(AuthErrorKind::SessionRevoked) => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_SESSION_REVOKED",
-            auth_not_logged_in(headers),
-        ),
-        Some(AuthErrorKind::Internal) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "AUTH_INTERNAL_ERROR",
-            auth_database_error(headers),
-        ),
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_UNAUTHORIZED",
-            auth_invalid_access_token(headers),
-        ),
-    };
-    legacy_json(
-        status,
-        json!({"success": false, "code": code, "message": message}),
-    )
-}
-
-fn user_policy_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response {
-    let code = match error {
-        UserAuthPolicyError::UserDisabled => "AUTH_USER_DISABLED",
-        UserAuthPolicyError::InsufficientPrivilege => "AUTH_INSUFFICIENT_PRIVILEGE",
-        UserAuthPolicyError::InvalidUserInfo => "AUTH_USER_INVALID",
-    };
-    legacy_json(
-        StatusCode::from_u16(user_auth_status(error)).unwrap_or(StatusCode::UNAUTHORIZED),
-        json!({
-            "success": false,
-            "code": code,
-            "message": user_auth_message(
-                error,
-                headers.get(header::ACCEPT_LANGUAGE).and_then(|value| value.to_str().ok()),
-            ),
-        }),
-    )
-}
-
-#[derive(Clone, Copy)]
-enum TokenLocale {
-    En,
-    ZhCn,
-    ZhTw,
-}
-
-fn token_locale(headers: &HeaderMap) -> TokenLocale {
-    let language = headers
-        .get(header::ACCEPT_LANGUAGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if language.starts_with("zh-tw") {
-        TokenLocale::ZhTw
-    } else if language.starts_with("zh") {
-        TokenLocale::ZhCn
-    } else {
-        TokenLocale::En
-    }
-}
-
-fn auth_not_logged_in(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Unauthorized, not logged in and no access token provided",
-        TokenLocale::ZhCn => "无权进行此操作，未登录且未提供 access token",
-        TokenLocale::ZhTw => "無權進行此操作，未登入且未提供 access token",
-    }
-}
-
-fn auth_invalid_access_token(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Unauthorized, invalid access token",
-        TokenLocale::ZhCn => "无权进行此操作，access token 无效",
-        TokenLocale::ZhTw => "無權進行此操作，access token 無效",
-    }
-}
-
-fn auth_database_error(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Database error, please contact the administrator",
-        TokenLocale::ZhCn => "数据库出错，请联系管理员",
-        TokenLocale::ZhTw => "資料庫出錯，請聯繫管理員",
-    }
 }
 
 fn db_error(error: impl std::fmt::Display) -> FinanceError {
@@ -1250,7 +1143,7 @@ impl FinanceAccumulator {
             .date_naive()
             .and_hms_opt(0, 0, 0)
             .map(|dt| dt.and_utc().timestamp())
-            .unwrap_or(start);
+            .map_or(start, std::convert::identity);
         while day < end {
             self.daily_metric(day);
             day += 24 * 60 * 60;
@@ -1415,8 +1308,10 @@ impl FinanceBackend for PgFinanceBackend {
             .iter()
             .map(ledger_entry_from_row)
             .collect::<Result<Vec<_>, _>>()?;
-        let next = if has_more && !entries.is_empty() {
-            let last = entries.last().expect("non-empty");
+        let next = if has_more {
+            let last = entries.last().ok_or_else(|| {
+                FinanceError("finance ledger pagination produced no cursor row".to_owned())
+            })?;
             Some((last.occurred_at, last.id))
         } else {
             None
@@ -1597,14 +1492,16 @@ impl FinanceBackend for PgFinanceBackend {
             .as_ref()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| label.clone());
+            .map_or_else(|| label.clone(), std::convert::identity);
         let label = if label.is_empty() {
             method.to_owned()
         } else {
             label
         };
-        let enabled = input.enabled.unwrap_or(enabled);
-        let include_revenue = input.include_revenue.unwrap_or(include_revenue);
+        let enabled = input.enabled.map_or(enabled, std::convert::identity);
+        let include_revenue = input
+            .include_revenue
+            .map_or(include_revenue, std::convert::identity);
         let row = if id > 0 {
             sqlx::query(
                 "UPDATE finance_payment_methods SET label = $1, enabled = $2, include_revenue = $3, \
@@ -1841,8 +1738,10 @@ async fn load_topups(
             acc.add_revenue(&method, &provider, amount, timestamp, user_id);
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
-        last_ts = row_get(last, "complete_time").unwrap_or(0);
+        let last = rows
+            .last()
+            .ok_or_else(|| FinanceError("top-up pagination returned an empty batch".to_owned()))?;
+        last_ts = row_get(last, "complete_time")?;
         if last_ts <= 0 {
             last_ts = row_get(last, "create_time")?;
         }
@@ -1926,8 +1825,10 @@ async fn load_subscription_orders(
             );
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
-        last_ts = row_get(last, "complete_time").unwrap_or(0);
+        let last = rows.last().ok_or_else(|| {
+            FinanceError("subscription pagination returned an empty batch".to_owned())
+        })?;
+        last_ts = row_get(last, "complete_time")?;
         if last_ts <= 0 {
             last_ts = row_get(last, "create_time")?;
         }
@@ -2006,7 +1907,9 @@ async fn load_usage_logs(
             acc.add_usage(user_id, created_at, prompt, completion, cost, priced);
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
+        let last = rows
+            .last()
+            .ok_or_else(|| FinanceError("usage pagination returned an empty batch".to_owned()))?;
         last_ts = row_get(last, "created_at")?;
         last_request_id = row_get(last, "request_id")?;
         if (rows.len() as i64) < limit {
@@ -2085,7 +1988,7 @@ async fn load_ledger_entries(
                 &row_get::<String>(row, "payment_provider")?,
             );
             let user_id: Option<i64> = row_get(row, "user_id")?;
-            let user_id = user_id.unwrap_or(0);
+            let user_id = user_id.map_or(0, std::convert::identity);
             let occurred_at: i64 = row_get(row, "occurred_at")?;
             let category: String = row_get(row, "category")?;
             match entry_type.as_str() {
@@ -2120,7 +2023,9 @@ async fn load_ledger_entries(
             }
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
+        let last = rows
+            .last()
+            .ok_or_else(|| FinanceError("ledger pagination returned an empty batch".to_owned()))?;
         last_ts = row_get(last, "occurred_at")?;
         last_id = row_get(last, "id")?;
         if (rows.len() as i64) < limit {
