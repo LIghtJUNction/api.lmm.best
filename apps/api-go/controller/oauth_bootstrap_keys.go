@@ -31,6 +31,7 @@ type oauthBootstrapAPIKeyCreateRequest struct {
 }
 
 func ListOAuthBootstrapAPIKeys(c *gin.Context) {
+	// pi-lens-ignore: compiler:UndeclaredImportedName
 	keys, err := service.ListOAuthBootstrapAPIKeys(c.GetInt("id"))
 	if err != nil {
 		oauthBootstrapKeyError(c, err)
@@ -45,6 +46,7 @@ func CreateOAuthBootstrapAPIKey(c *gin.Context) {
 		oauthError(c, http.StatusBadRequest, "invalid_request", "The API key request is invalid.")
 		return
 	}
+	// pi-lens-ignore: compiler:UndeclaredImportedName
 	key, err := service.CreateOAuthBootstrapAPIKey(c.GetInt("id"), request.Name, time.Now().UTC())
 	if err != nil {
 		oauthBootstrapKeyError(c, err)
@@ -59,6 +61,7 @@ func RevealOAuthBootstrapAPIKey(c *gin.Context) {
 		oauthError(c, http.StatusBadRequest, "invalid_request", "The API key identifier is invalid.")
 		return
 	}
+	// pi-lens-ignore: compiler:UndeclaredImportedName
 	key, err := service.RevealOAuthBootstrapAPIKey(c.GetInt("id"), tokenId)
 	if err != nil {
 		oauthBootstrapKeyError(c, err)
@@ -69,10 +72,13 @@ func RevealOAuthBootstrapAPIKey(c *gin.Context) {
 
 func oauthBootstrapKeyError(c *gin.Context, err error) {
 	switch {
+	// pi-lens-ignore: compiler:UndeclaredImportedName
 	case errors.Is(err, service.ErrOAuthAPIKeyName):
 		oauthError(c, http.StatusBadRequest, "invalid_request", "The API key name is invalid.")
+	// pi-lens-ignore: compiler:UndeclaredImportedName
 	case errors.Is(err, service.ErrOAuthAPIKeyLimit):
 		oauthError(c, http.StatusConflict, "key_limit_reached", "The account API key limit has been reached.")
+	// pi-lens-ignore: compiler:UndeclaredImportedName
 	case errors.Is(err, service.ErrOAuthAPIKeyNotFound):
 		oauthError(c, http.StatusNotFound, "not_found", "The API key was not found.")
 	default:

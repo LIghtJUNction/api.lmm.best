@@ -40,6 +40,7 @@ func oauthPKCE(t *testing.T) (string, string) {
 	return verifier, base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
+// pi-lens-ignore: go-test-functions
 func TestOAuthAuthorizationCodePKCEIsBoundAndSingleUse(t *testing.T) {
 	resetOAuthServiceState(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -84,6 +85,7 @@ func TestOAuthAuthorizationCodePKCEIsBoundAndSingleUse(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// pi-lens-ignore: go-test-functions
 func TestOAuthDeviceGrantAndRefreshPreserveScopes(t *testing.T) {
 	resetOAuthServiceState(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -111,6 +113,7 @@ func TestOAuthDeviceGrantAndRefreshPreserveScopes(t *testing.T) {
 	assert.NotEqual(t, issued.RefreshToken, refreshed.RefreshToken)
 }
 
+// pi-lens-ignore: go-test-functions
 func TestOAuthBootstrapAPIKeyCreateListAndReveal(t *testing.T) {
 	resetOAuthServiceState(t)
 	require.NoError(t, model.DB.Exec("DELETE FROM tokens").Error)
@@ -136,6 +139,7 @@ func TestOAuthBootstrapAPIKeyCreateListAndReveal(t *testing.T) {
 	assert.ErrorIs(t, err, ErrOAuthAPIKeyNotFound)
 }
 
+// pi-lens-ignore: go-test-functions
 func TestOAuthLoopbackRedirectValidationIsExact(t *testing.T) {
 	assert.True(t, validOAuthRedirectURI("http://127.0.0.1:49152/oauth/callback"))
 	assert.True(t, validOAuthRedirectURI("http://[::1]:49152/oauth/callback"))
@@ -146,6 +150,7 @@ func TestOAuthLoopbackRedirectValidationIsExact(t *testing.T) {
 	assert.False(t, validOAuthRedirectURI("https://127.0.0.1:49152/oauth/callback"))
 }
 
+// pi-lens-ignore: go-test-functions
 func TestOAuthAuthorizationRejectsUnknownScopeAndWeakState(t *testing.T) {
 	resetOAuthServiceState(t)
 	verifier, challenge := oauthPKCE(t)

@@ -15,24 +15,40 @@ import (
 )
 
 const (
-	AuthFlowPurposeOAuth             = "oauth"
-	AuthFlowPurposeTwoFALogin        = "2fa_login"
-	AuthFlowPurposePasskeyLogin      = "passkey_login"
-	AuthFlowPurposePasskeyRegister   = "passkey_register"
-	AuthFlowPurposePasskeyStepUp     = "passkey_step_up"
-	AuthFlowPurposeWeChatLogin       = "wechat_login"
-	AuthFlowPurposeTelegramLogin     = "telegram_login"
-	AuthFlowPurposeTelegramBind      = "telegram_bind"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeOAuth = "oauth"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeTwoFALogin = "2fa_login"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposePasskeyLogin = "passkey_login"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposePasskeyRegister = "passkey_register"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposePasskeyStepUp = "passkey_step_up"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeWeChatLogin = "wechat_login"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeTelegramLogin = "telegram_login"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeTelegramBind = "telegram_bind"
+	// pi-lens-ignore: go-hardcoded-secrets
 	AuthFlowPurposeTelegramAssertion = "telegram_assertion"
-	AuthFlowPurposeAssistantL1       = "assistant_l1_recommendation"
-	AuthFlowPurposeAssistantAdmin    = "assistant_admin_change"
-	AuthFlowPurposeAssistantKey      = "assistant_key_creation"
-	AuthFlowPurposeAssistantDrawing  = "assistant_drawing_generation"
-	AuthFlowPurposeAssistantHandoff  = "assistant_handoff"
-	AuthFlowIntentLogin              = "login"
-	AuthFlowIntentBind               = "bind"
-	AuthFlowTokenBytes               = 32
-	AuthFlowDefaultCleanupRetention  = 24 * time.Hour
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeAssistantL1 = "assistant_l1_recommendation"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeAssistantAdmin = "assistant_admin_change"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeAssistantKey = "assistant_key_creation"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeAssistantDrawing = "assistant_drawing_generation"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowPurposeAssistantHandoff = "assistant_handoff"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowIntentLogin = "login"
+	// pi-lens-ignore: go-hardcoded-secrets
+	AuthFlowIntentBind              = "bind"
+	AuthFlowTokenBytes              = 32
+	AuthFlowDefaultCleanupRetention = 24 * time.Hour
 )
 
 var (

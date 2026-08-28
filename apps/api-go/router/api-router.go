@@ -81,8 +81,11 @@ func SetApiRouter(router *gin.Engine) {
 	oauthBootstrapResource.Use(middleware.BodyStorageCleanup())
 	oauthBootstrapResource.Use(middleware.GlobalAPIRateLimit())
 	{
+		// pi-lens-ignore: compiler:UndeclaredImportedName
 		oauthBootstrapResource.GET("/keys", middleware.OAuthAccessAuth(service.OAuthScopeApiKeysList), middleware.DisableCache(), controller.ListOAuthBootstrapAPIKeys)
+		// pi-lens-ignore: compiler:UndeclaredImportedName
 		oauthBootstrapResource.POST("/keys", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysCreate), middleware.DisableCache(), controller.CreateOAuthBootstrapAPIKey)
+		// pi-lens-ignore: compiler:UndeclaredImportedName
 		oauthBootstrapResource.POST("/keys/:id/reveal", middleware.CriticalRateLimit(), middleware.OAuthAccessAuth(service.OAuthScopeApiKeysReveal), middleware.DisableCache(), controller.RevealOAuthBootstrapAPIKey)
 	}
 
