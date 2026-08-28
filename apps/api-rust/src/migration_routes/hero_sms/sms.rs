@@ -146,21 +146,20 @@ async fn increment_sms_rate_limit(
     let script = redis::Script::new(
         "local c=redis.call('INCR',KEYS[1]); if c==1 then redis.call('EXPIRE',KEYS[1],ARGV[2]) end; local t=redis.call('TTL',KEYS[1]); return {c,t}",
     );
-    let invocation = script
-        .key(sms_user_rate_limit_key(scope, user_id))
+    let key = sms_user_rate_limit_key(scope, user_id);
+    let mut invocation = script.prepare_invoke();
+    invocation
+        .key(key)
         .arg(limiter.config.max_requests)
-        .arg(limiter.config.window.as_secs().max(1))
-        .invoke_async(&mut connection);
-    tokio::time::timeout(timeout, invocation)
+        .arg(limiter.config.window.as_secs().max(1));
+    let result = invocation.invoke_async(&mut connection);
+    tokio::time::timeout(timeout, result)
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
 }
 
-fn sms_rate_limit_outcome(
-    (requests, ttl): (u64, i64),
-    maximum: u64,
-) -> CriticalRateLimitOutcome {
+fn sms_rate_limit_outcome((requests, ttl): (u64, i64), maximum: u64) -> CriticalRateLimitOutcome {
     if requests <= maximum {
         CriticalRateLimitOutcome::Allowed
     } else {
@@ -337,10 +336,7 @@ async fn authenticated(
     require_user(state, headers).await
 }
 
-async fn authenticated_user_id(
-    state: &HeroSmsState,
-    headers: &HeaderMap,
-) -> Result<i64, Response> {
+async fn authenticated_user_id(state: &HeroSmsState, headers: &HeaderMap) -> Result<i64, Response> {
     authenticated(state, headers).await.map(|user| user.id)
 }
 
@@ -356,7 +352,7 @@ async fn prepare_empty_mutation(
     Ok(user_id)
 }
 
-async fn prepare_json_mutation<T: serde::de::DeserializeOwned>(
+async fn prepare_json_mutation<T: serde::de::DeserializeOwned + Default>(
     state: &HeroSmsState,
     headers: &HeaderMap,
     request: Request,
@@ -766,17 +762,12 @@ async fn clear_history(
     headers: HeaderMap,
     request: Request,
 ) -> Response {
-    let user_id = match prepare_empty_mutation(
-        &state,
-        &headers,
-        request,
-        "hero-sms-sms-history-clear",
-    )
-    .await
-    {
-        Ok(user_id) => user_id,
-        Err(response) => return done(response),
-    };
+    let user_id =
+        match prepare_empty_mutation(&state, &headers, request, "hero-sms-sms-history-clear").await
+        {
+            Ok(user_id) => user_id,
+            Err(response) => return done(response),
+        };
     match sqlx::query("UPDATE hero_sms_sms_orders SET history_hidden_at=$2 WHERE user_id=$1 AND history_hidden_at=0 AND status=ANY($3)").bind(user_id).bind(now_unix()).bind(TERMINAL_STATUSES).execute(&state.pg).await{Ok(v)=>ok(json!({"hidden_count":v.rows_affected()})),Err(_)=>done(hero_error(internal_error()))}
 }
 async fn hide_history(
@@ -832,17 +823,11 @@ async fn cancel(
     headers: HeaderMap,
     request: Request,
 ) -> Response {
-    let user_id = match prepare_empty_mutation(
-        &state,
-        &headers,
-        request,
-        "hero-sms-sms-cancel",
-    )
-    .await
-    {
-        Ok(user_id) => user_id,
-        Err(response) => return done(response),
-    };
+    let user_id =
+        match prepare_empty_mutation(&state, &headers, request, "hero-sms-sms-cancel").await {
+            Ok(user_id) => user_id,
+            Err(response) => return done(response),
+        };
     match cancel_order(&state, user_id, id.trim()).await {
         Ok((v, q)) => {
             let s = if v.status == "cancel_pending" {
@@ -1611,14 +1596,15 @@ async fn complete_code(
     Ok(changed > 0)
 }
 
-fn provider_id_for_reconciliation<'a>(
-    row: &'a OrderRow,
+fn provider_id_for_reconciliation(
+    row: &OrderRow,
     missing_message: &'static str,
-) -> Result<&'a str, HeroSmsApiError> {
+) -> Result<String, HeroSmsApiError> {
     row.provider_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .map(str::to_owned)
         .ok_or(HeroSmsApiError {
             status: StatusCode::CONFLICT,
             code: "RECONCILING",
@@ -1637,7 +1623,7 @@ async fn finalize_cancellation(
     )?;
     let provider_state = state
         .gateway
-        .get_sms_activation_state(key, provider_id)
+        .get_sms_activation_state(key, &provider_id)
         .await
         .map_err(map_provider_error)?;
     if provider_state == SMS_STATE_CANCEL {
@@ -1670,7 +1656,7 @@ async fn finalize_cancellation(
     }
     let provider_status = state
         .gateway
-        .get_sms_activation_status(key, provider_id)
+        .get_sms_activation_status(key, &provider_id)
         .await
         .map_err(map_provider_error)?;
     if !provider_status.code.is_empty()
@@ -1697,7 +1683,7 @@ async fn finalize_cancellation(
     if row.provider_cancel_accepted_at == 0 {
         state
             .gateway
-            .set_sms_activation_status(key, provider_id, 8)
+            .set_sms_activation_status(key, &provider_id, 8)
             .await
             .map_err(map_provider_error)?;
         sqlx::query("UPDATE hero_sms_sms_orders SET provider_cancel_accepted_at=$2,updated_at=$2 WHERE id=$1 AND status='cancel_pending' AND provider_cancel_accepted_at=0")
@@ -1729,7 +1715,7 @@ async fn reconcile_complaint(
     {
         let result = state
             .gateway
-            .submit_sms_complaint(key, provider_id, &row.complaint_type)
+            .submit_sms_complaint(key, &provider_id, &row.complaint_type)
             .await;
         let attempts = row.complaint_submit_attempts + 1;
         let (status, next_retry) = match &result {
@@ -1762,7 +1748,7 @@ async fn reconcile_complaint(
     }
     let provider_state = state
         .gateway
-        .get_sms_activation_state(key, provider_id)
+        .get_sms_activation_state(key, &provider_id)
         .await
         .map_err(map_provider_error)?;
     if provider_state == SMS_STATE_CANCEL {
@@ -1778,7 +1764,7 @@ async fn reconcile_complaint(
     } else {
         let status = state
             .gateway
-            .get_sms_activation_status(key, provider_id)
+            .get_sms_activation_status(key, &provider_id)
             .await
             .map_err(map_provider_error)?;
         if !status.code.is_empty() {

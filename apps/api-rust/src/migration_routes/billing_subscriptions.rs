@@ -859,10 +859,7 @@ impl PlanInput {
     }
 }
 
-async fn validated_plan_input(
-    pg: &PgPool,
-    request: PlanRequest,
-) -> Result<PlanInput, Response> {
+async fn validated_plan_input(pg: &PgPool, request: PlanRequest) -> Result<PlanInput, Response> {
     let input = request
         .plan
         .normalize()
@@ -923,7 +920,12 @@ async fn admin_list_plans(
 fn plan_list_response(result: Result<Vec<Plan>, sqlx::Error>) -> Response {
     with_auth_version(
         result
-            .map(|plans| ok(plans.into_iter().map(|plan| PlanView { plan }).collect::<Vec<_>>()))
+            .map(|plans| {
+                ok(plans
+                    .into_iter()
+                    .map(|plan| PlanView { plan })
+                    .collect::<Vec<_>>())
+            })
             .unwrap_or_else(|_| failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
     )
 }
@@ -1710,8 +1712,7 @@ async fn admin_reset_user_subscriptions(
     Path(user_id): Path<i64>,
     Json(input): Json<ResetRequest>,
 ) -> Response {
-    if let Err(response) =
-        authorize_admin_id(&state, &headers, user_id, "无效的用户ID").await
+    if let Err(response) = authorize_admin_id(&state, &headers, user_id, "无效的用户ID").await
     {
         return response;
     }
@@ -1819,8 +1820,7 @@ async fn admin_list_user_subscriptions(
     headers: HeaderMap,
     Path(user_id): Path<i64>,
 ) -> Response {
-    if let Err(response) =
-        authorize_admin_id(&state, &headers, user_id, "无效的用户ID").await
+    if let Err(response) = authorize_admin_id(&state, &headers, user_id, "无效的用户ID").await
     {
         return response;
     }
