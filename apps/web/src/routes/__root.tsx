@@ -159,6 +159,7 @@ let setupStatusChecked = getSetupStatusFromCache()
 const NON_BLOCKING_PUBLIC_PATHS = [
   '/',
   '/challenges',
+  '/how-it-works',
   '/pricing',
   '/privacy-policy',
   '/user-agreement',

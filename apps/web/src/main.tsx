@@ -126,6 +126,7 @@ if (!rootElement) {
       '/pricing',
       '/challenges',
       '/about',
+      '/how-it-works',
       '/rankings',
       '/privacy-policy',
       '/user-agreement',

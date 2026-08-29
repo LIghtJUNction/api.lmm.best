@@ -35,6 +35,7 @@ import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as ChallengesIndexRouteImport } from './routes/challenges/index'
 import { Route as ChallengesChallengeIdRouteImport } from './routes/challenges/$challengeId'
 import { Route as GuideIndexRouteImport } from './routes/guide/index'
+import { Route as HowItWorksIndexRouteImport } from './routes/how-it-works/index'
 import { Route as OauthProviderRouteImport } from './routes/oauth/$provider'
 import { Route as PricingIndexRouteImport } from './routes/pricing/index'
 import { Route as RankingsIndexRouteImport } from './routes/rankings/index'
@@ -214,6 +215,11 @@ const ChallengesChallengeIdRoute = ChallengesChallengeIdRouteImport.update({
 const GuideIndexRoute = GuideIndexRouteImport.update({
   id: '/guide/',
   path: '/guide/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HowItWorksIndexRoute = HowItWorksIndexRouteImport.update({
+  id: '/how-it-works/',
+  path: '/how-it-works/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OauthProviderRoute = OauthProviderRouteImport.update({
@@ -538,6 +544,7 @@ export interface FileRoutesByFullPath {
   '/about/': typeof AboutIndexRoute
   '/challenges/': typeof ChallengesIndexRoute
   '/guide/': typeof GuideIndexRoute
+  '/how-it-works/': typeof HowItWorksIndexRoute
   '/pricing/': typeof PricingIndexRoute
   '/rankings/': typeof RankingsIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -614,6 +621,7 @@ export interface FileRoutesByTo {
   '/about': typeof AboutIndexRoute
   '/challenges': typeof ChallengesIndexRoute
   '/guide': typeof GuideIndexRoute
+  '/how-it-works': typeof HowItWorksIndexRoute
   '/pricing': typeof PricingIndexRoute
   '/rankings': typeof RankingsIndexRoute
   '/security': typeof SecurityIndexRoute
@@ -694,6 +702,7 @@ export interface FileRoutesById {
   '/about/': typeof AboutIndexRoute
   '/challenges/': typeof ChallengesIndexRoute
   '/guide/': typeof GuideIndexRoute
+  '/how-it-works/': typeof HowItWorksIndexRoute
   '/pricing/': typeof PricingIndexRoute
   '/rankings/': typeof RankingsIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -773,6 +782,7 @@ export interface FileRouteTypes {
     | '/about/'
     | '/challenges/'
     | '/guide/'
+    | '/how-it-works/'
     | '/pricing/'
     | '/rankings/'
     | '/security/'
@@ -849,6 +859,7 @@ export interface FileRouteTypes {
     | '/about'
     | '/challenges'
     | '/guide'
+    | '/how-it-works'
     | '/pricing'
     | '/rankings'
     | '/security'
@@ -928,6 +939,7 @@ export interface FileRouteTypes {
     | '/about/'
     | '/challenges/'
     | '/guide/'
+    | '/how-it-works/'
     | '/pricing/'
     | '/rankings/'
     | '/security/'
@@ -998,6 +1010,7 @@ export interface RootRouteChildren {
   AboutIndexRoute: typeof AboutIndexRoute
   ChallengesIndexRoute: typeof ChallengesIndexRoute
   GuideIndexRoute: typeof GuideIndexRoute
+  HowItWorksIndexRoute: typeof HowItWorksIndexRoute
   PricingIndexRoute: typeof PricingIndexRoute
   RankingsIndexRoute: typeof RankingsIndexRoute
   SecurityIndexRoute: typeof SecurityIndexRoute
@@ -1187,6 +1200,13 @@ declare module '@tanstack/react-router' {
       path: '/guide'
       fullPath: '/guide/'
       preLoaderRoute: typeof GuideIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/how-it-works/': {
+      id: '/how-it-works/'
+      path: '/how-it-works'
+      fullPath: '/how-it-works/'
+      preLoaderRoute: typeof HowItWorksIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/oauth/$provider': {
@@ -1729,6 +1749,7 @@ const rootRouteChildren: RootRouteChildren = {
   AboutIndexRoute: AboutIndexRoute,
   ChallengesIndexRoute: ChallengesIndexRoute,
   GuideIndexRoute: GuideIndexRoute,
+  HowItWorksIndexRoute: HowItWorksIndexRoute,
   PricingIndexRoute: PricingIndexRoute,
   RankingsIndexRoute: RankingsIndexRoute,
   SecurityIndexRoute: SecurityIndexRoute,
