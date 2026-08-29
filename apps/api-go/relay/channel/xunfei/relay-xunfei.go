@@ -287,12 +287,13 @@ func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, dom
 				break
 			}
 			if !helper.SendCtx(requestContext, dataChan, response) {
+				// SendCtx only returns false when the request context is done.
+				// Propagate cancellation so callers do not treat a stopped
+				// producer as a successful empty completion.
+				responseErr = requestContext.Err()
 				return
 			}
 			if response.Payload.Choices.Status == 2 {
-				if err != nil {
-					common.SysLog("error closing websocket connection: " + err.Error())
-				}
 				break
 			}
 		}
