@@ -272,6 +272,7 @@ describe('console activation boundary', () => {
     assert.equal(isRestrictedPublicRoute('/rankings'), true)
     assert.equal(isRestrictedPublicRoute('/about'), true)
     assert.equal(isRestrictedPublicRoute('/challenges/42'), false)
+    assert.equal(isRestrictedPublicRoute('/how-it-works'), false)
     assert.equal(isRestrictedPublicRoute('/privacy-policy'), false)
     assert.equal(isRestrictedPublicRoute('/sign-in'), false)
   })

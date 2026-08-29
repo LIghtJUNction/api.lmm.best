@@ -156,6 +156,7 @@ export function Footer(props: FooterProps) {
     pathname.startsWith('/pricing') ||
     pathname.startsWith('/rankings') ||
     pathname.startsWith('/about') ||
+    pathname.startsWith('/how-it-works') ||
     pathname.startsWith('/user-agreement') ||
     pathname.startsWith('/privacy-policy') ||
     pathname.startsWith('/terms') ||
@@ -196,7 +197,7 @@ export function Footer(props: FooterProps) {
           },
           {
             text: t('How it works'),
-            href: '/#workflow',
+            href: '/how-it-works',
           },
         ],
       },
