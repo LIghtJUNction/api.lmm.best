@@ -121,7 +121,7 @@ func TestQuoteTopUpSupportsExplicitFXAndLegacyDirectPricing(t *testing.T) {
 
 	cnyGlobal, err := quoteTopUp(68, "default", "cny-global")
 	require.NoError(t, err)
-	require.True(t, cnyGlobal.Equal(decimal.RequireFromString("68.00")))
+	require.True(t, cnyGlobal.Equal(decimal.RequireFromString("462.40")))
 
 	legacyDirect, err := quoteTopUp(1, "default", "epay")
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestQuoteTopUpSupportsExplicitFXAndLegacyDirectPricing(t *testing.T) {
 	require.True(t, grouped.Equal(decimal.RequireFromString("0.70")))
 }
 
-func TestConfiguredPlatformRateUsesCustomLocalCurrency(t *testing.T) {
+func TestConfiguredPlatformRateDefaultsToUSDNormalizedCredit(t *testing.T) {
 	preserveChannelPricing(t)
 	generalSetting := operation_setting.GetGeneralSetting()
 	generalSetting.QuotaDisplayType = operation_setting.QuotaDisplayTypeCustom
@@ -140,7 +140,7 @@ func TestConfiguredPlatformRateUsesCustomLocalCurrency(t *testing.T) {
 
 	rate, err := configuredPlatformUnitsPerUSD()
 	require.NoError(t, err)
-	require.True(t, rate.Equal(decimal.RequireFromString("0.92")))
+	require.True(t, rate.Equal(decimal.NewFromInt(1)))
 }
 
 func TestQuoteTopUpRejectsAmbiguousOrInvalidPricing(t *testing.T) {
@@ -230,7 +230,7 @@ func TestGetTopUpInfoPreservesCanonicalFXMetadata(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.Len(t, response.Data.PayMethods, 1)
 	require.Equal(t, "CNY", response.Data.PayMethods[0]["settlement_currency"])
-	require.Equal(t, "6.8", response.Data.PayMethods[0]["platform_units_per_usd"])
+	require.Equal(t, "1", response.Data.PayMethods[0]["platform_units_per_usd"])
 	require.Equal(t, "6.8", response.Data.PayMethods[0]["settlement_units_per_usd"])
 }
 

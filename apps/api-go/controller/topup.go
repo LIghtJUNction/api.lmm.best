@@ -674,7 +674,7 @@ func parsePositivePaymentRate(paymentMethod, field, raw string) (decimal.Decimal
 // getPayMethodSettlementPricing accepts two unambiguous pricing contracts:
 //
 //   - FX: settlement_units_per_usd plus platform_units_per_usd, which
-//     defaults to the synchronized global USDExchangeRate when omitted
+//     defaults to 1 because platform credits are USD-normalized
 //   - direct: settlement_units_per_platform_unit
 //
 // unit_price remains a deprecated alias for the direct rate so existing
@@ -684,24 +684,15 @@ func parsePositivePaymentRate(paymentMethod, field, raw string) (decimal.Decimal
 func configuredPlatformUnitsPerUSD() (decimal.Decimal, error) {
 	generalSetting := operation_setting.GetGeneralSetting()
 	switch generalSetting.QuotaDisplayType {
-	case operation_setting.QuotaDisplayTypeUSD:
+	case operation_setting.QuotaDisplayTypeUSD,
+		operation_setting.QuotaDisplayTypeCNY,
+		operation_setting.QuotaDisplayTypeCustom:
 		return decimal.NewFromInt(1), nil
-	case operation_setting.QuotaDisplayTypeCNY:
-		rate := decimal.NewFromFloat(operation_setting.USDExchangeRate)
-		if rate.IsPositive() {
-			return rate, nil
-		}
-	case operation_setting.QuotaDisplayTypeCustom:
-		rate := decimal.NewFromFloat(generalSetting.CustomCurrencyExchangeRate)
-		if rate.IsPositive() {
-			return rate, nil
-		}
 	case operation_setting.QuotaDisplayTypeTokens:
 		return decimal.Zero, fmt.Errorf("token display mode has no platform units per USD")
 	default:
 		return decimal.Zero, fmt.Errorf("unsupported platform currency mode %q", generalSetting.QuotaDisplayType)
 	}
-	return decimal.Zero, fmt.Errorf("platform units per USD must be positive")
 }
 
 func getPayMethodSettlementPricing(paymentMethod string) (payMethodSettlementPricing, error) {
