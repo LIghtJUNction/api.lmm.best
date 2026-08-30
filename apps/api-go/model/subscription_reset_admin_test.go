@@ -1,0 +1,386 @@
+package model
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func seedResetSubscription(t *testing.T, userId, planId, subscriptionId int, used int64) (int64, int64) {
+	t.Helper()
+	now := GetDBTimestamp()
+	endTime := now + 90*24*60*60
+	nextResetTime := now + 12*24*60*60
+	require.NoError(t, DB.Create(&User{
+		Id: userId, Username: "reset-user-" + time.Unix(int64(userId), 0).Format("150405"),
+		Password: "password", Status: 1, AffCode: fmt.Sprintf("reset-aff-%d", userId),
+	}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{
+		Id: planId, Title: "Reset plan", PriceAmount: 1,
+		DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 10_000, Enabled: true,
+	}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: subscriptionId, UserId: userId, PlanId: planId,
+		AmountTotal: 10_000, AmountUsed: used, StartTime: now - 3600,
+		EndTime: endTime, Status: "active", NextResetTime: nextResetTime,
+	}).Error)
+	return endTime, nextResetTime
+}
+
+func TestHardSubscriptionResetRequiresPreviewAndChangesOnlyQuota(t *testing.T) {
+	truncateTables(t)
+	endTime, nextResetTime := seedResetSubscription(t, 9701, 9702, 9703, 4321)
+
+	input := AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9701, PlanId: 9702}},
+	}
+	preview, err := AdminPreviewSubscriptionsReset(input)
+	require.NoError(t, err)
+	require.Equal(t, int64(4321), preview.QuotaToRestore)
+	require.Equal(t, 1, preview.TargetCount)
+	require.Equal(t, 1, preview.ActiveSubscriptions)
+	require.NotEmpty(t, preview.Token)
+
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{ActorUserId: 1, Mode: SubscriptionResetModeHard})
+	require.ErrorContains(t, err, "preview is required")
+
+	operationId := "hard-reset-preview-contract"
+	result, err := AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: operationId, PreviewToken: preview.Token,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(4321), result.RestoredQuota)
+	require.Equal(t, 1, result.ResetSubscriptions)
+
+	var subscription UserSubscription
+	require.NoError(t, DB.First(&subscription, 9703).Error)
+	require.Zero(t, subscription.AmountUsed)
+	require.Equal(t, endTime, subscription.EndTime)
+	require.Equal(t, nextResetTime, subscription.NextResetTime)
+
+	retry, err := AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: operationId, PreviewToken: preview.Token,
+	})
+	require.NoError(t, err)
+	require.Equal(t, result.RestoredQuota, retry.RestoredQuota)
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "different-operation", PreviewToken: preview.Token,
+	})
+	require.ErrorContains(t, err, "already been consumed")
+}
+
+func TestSoftSubscriptionResetIssuesExpiringBankedVoucher(t *testing.T) {
+	truncateTables(t)
+	endTime, nextResetTime := seedResetSubscription(t, 9711, 9712, 9713, 2468)
+
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeSoft,
+		Targets: []SubscriptionResetTarget{{UserId: 9711, PlanId: 9712}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(2468), preview.QuotaToRestore)
+	require.Greater(t, preview.VoucherExpiresAt, GetDBTimestamp()+27*24*60*60)
+	require.Less(t, preview.VoucherExpiresAt, GetDBTimestamp()+32*24*60*60)
+
+	result, err := AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "soft-reset-preview-contract", PreviewToken: preview.Token,
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.RestoredQuota)
+	require.Equal(t, 1, result.VouchersIssued)
+
+	var subscription UserSubscription
+	require.NoError(t, DB.First(&subscription, 9713).Error)
+	require.Equal(t, int64(2468), subscription.AmountUsed)
+	require.Equal(t, endTime, subscription.EndTime)
+	require.Equal(t, nextResetTime, subscription.NextResetTime)
+
+	duplicatePreview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeSoft,
+		Targets: []SubscriptionResetTarget{{UserId: 9711, PlanId: 9712}},
+	})
+	require.NoError(t, err)
+	require.Len(t, duplicatePreview.Targets, 1)
+	require.Equal(t, int64(1), duplicatePreview.Targets[0].BankedVoucherCount)
+
+	vouchers, err := ListUserSubscriptionResetVouchers(9711)
+	require.NoError(t, err)
+	require.Len(t, vouchers, 1)
+	require.Equal(t, SubscriptionResetVoucherAvailable, vouchers[0].Status)
+
+	redeemed, err := RedeemUserSubscriptionResetVoucher(9711, vouchers[0].Id)
+	require.NoError(t, err)
+	require.Equal(t, int64(2468), redeemed.RestoredQuota)
+	require.NoError(t, DB.First(&subscription, 9713).Error)
+	require.Zero(t, subscription.AmountUsed)
+	require.Equal(t, endTime, subscription.EndTime)
+	require.Equal(t, nextResetTime, subscription.NextResetTime)
+
+	replayed, err := RedeemUserSubscriptionResetVoucher(9711, vouchers[0].Id)
+	require.NoError(t, err)
+	require.Equal(t, redeemed, replayed)
+}
+
+func TestSubscriptionResetVoucherListPrioritizesAvailableVouchers(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9721, 9722, 9723, 10)
+	now := GetDBTimestamp()
+	available := SubscriptionResetVoucher{
+		UserId: 9721, PlanId: 9722, OperationId: "available-voucher",
+		Status: SubscriptionResetVoucherAvailable, ExpiresAt: now + 3600,
+	}
+	require.NoError(t, DB.Create(&available).Error)
+	for index := 0; index < 101; index++ {
+		require.NoError(t, DB.Create(&SubscriptionResetVoucher{
+			UserId: 9721, PlanId: 9722, OperationId: fmt.Sprintf("redeemed-voucher-%d", index),
+			Status: SubscriptionResetVoucherRedeemed, ExpiresAt: now + 3600, RedeemedAt: now,
+		}).Error)
+	}
+
+	vouchers, err := ListUserSubscriptionResetVouchers(9721)
+	require.NoError(t, err)
+	require.Len(t, vouchers, 100)
+	require.Equal(t, available.Id, vouchers[0].Id)
+	require.Equal(t, SubscriptionResetVoucherAvailable, vouchers[0].Status)
+}
+
+func TestSubscriptionResetPreviewSupportsMultiplePlans(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9721, 9722, 9723, 100)
+	require.NoError(t, DB.Create(&SubscriptionPlan{
+		Id: 9724, Title: "Second reset plan", PriceAmount: 1,
+		DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		TotalAmount: 20_000, Enabled: true,
+	}).Error)
+	now := GetDBTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: 9725, UserId: 9721, PlanId: 9724, AmountTotal: 20_000,
+		AmountUsed: 250, StartTime: now - 3600, EndTime: now + 3600,
+		Status: "active", NextResetTime: now + 1800,
+	}).Error)
+
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{
+			{UserId: 9721, PlanId: 9722},
+			{UserId: 9721, PlanId: 9724},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, preview.PlanCount)
+	require.Equal(t, 1, preview.UserCount)
+	require.Equal(t, int64(350), preview.QuotaToRestore)
+	require.Len(t, preview.Targets, 2)
+}
+
+func TestSubscriptionResetAllMatchingFiltersSpecificUsers(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9711, 9712, 9713, 100)
+	seedResetSubscription(t, 9714, 9715, 9716, 200)
+
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard, AllMatching: true,
+		Filter: AdminSubscriptionResetEligibleFilter{UserIds: []int{9714}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, preview.TargetCount)
+	require.Equal(t, 9714, preview.Targets[0].UserId)
+	require.Equal(t, int64(200), preview.QuotaToRestore)
+}
+
+func TestSubscriptionResetAllMatchingRejectsAmbiguousOrOversizedFilters(t *testing.T) {
+	truncateTables(t)
+	_, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard, AllMatching: true,
+		Targets: []SubscriptionResetTarget{{UserId: 1, PlanId: 1}},
+	})
+	require.ErrorContains(t, err, "cannot be combined")
+
+	planIds := make([]int, 101)
+	for index := range planIds {
+		planIds[index] = index + 1
+	}
+	_, err = AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard, AllMatching: true,
+		Filter: AdminSubscriptionResetEligibleFilter{PlanIds: planIds},
+	})
+	require.ErrorContains(t, err, "too many")
+
+	_, err = AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard, AllMatching: true,
+		Filter: AdminSubscriptionResetEligibleFilter{PlanIds: []int{-1}},
+	})
+	require.ErrorContains(t, err, "invalid")
+
+	_, err = AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard, AllMatching: true,
+		Filter: AdminSubscriptionResetEligibleFilter{PlanId: 1, PlanIds: []int{1}},
+	})
+	require.ErrorContains(t, err, "cannot be combined")
+
+	_, err = AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard, AllMatching: true,
+		Filter: AdminSubscriptionResetEligibleFilter{Query: strings.Repeat("x", 201)},
+	})
+	require.ErrorContains(t, err, "too long")
+}
+
+func TestSubscriptionResetRejectsUsersWithoutActiveSubscription(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 9731, Username: "no-subscription", Password: "password", Status: 1}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{
+		Id: 9732, Title: "Inactive plan", PriceAmount: 1,
+		DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 100,
+	}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: 9733, UserId: 9731, PlanId: 9732, AmountTotal: 100, AmountUsed: 50,
+		Status: "active", StartTime: GetDBTimestamp() - 60, EndTime: 0,
+	}).Error)
+
+	_, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9731, PlanId: 9732}},
+	})
+	require.ErrorContains(t, err, "no active subscription users")
+}
+
+func TestSubscriptionResetRequiresClientOperationID(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9741, 9742, 9743, 50)
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9741, PlanId: 9742}},
+	})
+	require.NoError(t, err)
+
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, PreviewToken: preview.Token,
+	})
+	require.ErrorContains(t, err, "operation id is required")
+
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, PreviewToken: preview.Token, OperationId: strings.Repeat("x", 65),
+	})
+	require.ErrorContains(t, err, "operation id is too long")
+}
+
+func TestSubscriptionResetRejectsStalePreviewWithoutConsumingIt(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9751, 9752, 9753, 100)
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9751, PlanId: 9752}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", 9753).UpdateColumn("amount_used", 125).Error)
+
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "stale-preview", PreviewToken: preview.Token,
+	})
+	require.ErrorIs(t, err, ErrSubscriptionResetPreviewStale)
+
+	var persistedPreview SubscriptionResetPreview
+	require.NoError(t, DB.First(&persistedPreview, "token = ?", preview.Token).Error)
+	require.Zero(t, persistedPreview.ConsumedAt)
+	require.Empty(t, persistedPreview.OperationId)
+	var subscription UserSubscription
+	require.NoError(t, DB.First(&subscription, 9753).Error)
+	require.Equal(t, int64(125), subscription.AmountUsed)
+}
+
+func TestSubscriptionResetRejectsSubscriptionsAddedAfterPreview(t *testing.T) {
+	truncateTables(t)
+	endTime, nextResetTime := seedResetSubscription(t, 9761, 9762, 9763, 100)
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9761, PlanId: 9762}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: 9764, UserId: 9761, PlanId: 9762, AmountTotal: 10_000, AmountUsed: 75,
+		StartTime: GetDBTimestamp() - 60, EndTime: endTime, Status: "active", NextResetTime: nextResetTime,
+	}).Error)
+
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "frozen-only", PreviewToken: preview.Token,
+	})
+	require.ErrorIs(t, err, ErrSubscriptionResetPreviewStale)
+
+	var original, added UserSubscription
+	require.NoError(t, DB.First(&original, 9763).Error)
+	require.NoError(t, DB.First(&added, 9764).Error)
+	require.Equal(t, int64(100), original.AmountUsed)
+	require.Equal(t, int64(75), added.AmountUsed)
+	var persistedPreview SubscriptionResetPreview
+	require.NoError(t, DB.First(&persistedPreview, "token = ?", preview.Token).Error)
+	require.Zero(t, persistedPreview.ConsumedAt)
+	require.Empty(t, persistedPreview.OperationId)
+}
+
+func TestSubscriptionResetOperationReplaySurvivesPreviewExpiry(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9771, 9772, 9773, 80)
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9771, PlanId: 9772}},
+	})
+	require.NoError(t, err)
+	input := AdminSubscriptionResetBatchInput{ActorUserId: 1, OperationId: "expiry-replay", PreviewToken: preview.Token}
+	first, err := AdminResetSubscriptionsBatch(input)
+	require.NoError(t, err)
+	require.NoError(t, DB.Model(&SubscriptionResetPreview{}).Where("token = ?", preview.Token).UpdateColumn("expires_at", 1).Error)
+
+	replayed, err := AdminResetSubscriptionsBatch(input)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+}
+
+func TestSubscriptionResetOperationIDCannotBindAnotherPreview(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9781, 9782, 9783, 90)
+	firstPreview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9781, PlanId: 9782}},
+	})
+	require.NoError(t, err)
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "shared-operation", PreviewToken: firstPreview.Token,
+	})
+	require.NoError(t, err)
+
+	secondPreview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9781, PlanId: 9782}},
+	})
+	require.NoError(t, err)
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "shared-operation", PreviewToken: secondPreview.Token,
+	})
+	require.ErrorIs(t, err, ErrSubscriptionResetOperationConflict)
+}
+
+func TestCheckedSubscriptionResetAddRejectsOverflow(t *testing.T) {
+	_, err := checkedSubscriptionResetAdd(int64(^uint64(0)>>1), 1)
+	require.ErrorContains(t, err, "supported range")
+}
+
+func TestAddOneCalendarMonthUTCClampsMonthEnd(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		from time.Time
+		want time.Time
+	}{
+		{name: "common year", from: time.Date(2025, time.January, 31, 12, 30, 0, 0, time.UTC), want: time.Date(2025, time.February, 28, 12, 30, 0, 0, time.UTC)},
+		{name: "leap year", from: time.Date(2024, time.January, 31, 12, 30, 0, 0, time.UTC), want: time.Date(2024, time.February, 29, 12, 30, 0, 0, time.UTC)},
+		{name: "ordinary day", from: time.Date(2025, time.March, 15, 8, 0, 0, 0, time.UTC), want: time.Date(2025, time.April, 15, 8, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			require.Equal(t, testCase.want.Unix(), addOneCalendarMonthUTC(testCase.from.Unix()))
+		})
+	}
+}

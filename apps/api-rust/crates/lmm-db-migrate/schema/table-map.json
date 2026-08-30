@@ -4360,6 +4360,17 @@
           "converter": "identity"
         },
         {
+          "name": "archived_at",
+          "sqlite_type": "bigint",
+          "sqlite_not_null": true,
+          "sqlite_default": "0",
+          "pk_position": 0,
+          "postgres_type": "bigint",
+          "postgres_not_null": true,
+          "postgres_default": "0",
+          "converter": "identity"
+        },
+        {
           "name": "created_at",
           "sqlite_type": "bigint",
           "sqlite_not_null": false,
@@ -4415,8 +4426,22 @@
           "converter": "identity"
         }
       ],
-      "sqlite_indexes": [],
+      "sqlite_indexes": [
+        {
+          "name": "idx_subscription_plans_archived_at",
+          "unique": false,
+          "columns": ["archived_at"],
+          "predicate": null
+        }
+      ],
       "postgres_indexes": [
+        {
+          "name": "idx_subscription_plans_archived_at",
+          "unique": false,
+          "columns": ["archived_at"],
+          "primary": false,
+          "predicate": null
+        },
         {
           "name": "subscription_plans_pkey",
           "unique": true,
