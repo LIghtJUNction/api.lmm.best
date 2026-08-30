@@ -8,6 +8,7 @@ plan="${MIGRATION_PLAN_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/migr
 gate="${MIGRATION_GATE_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/migration-gate.tsv}"
 review="${MIGRATION_INTEGRATION_REVIEW_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv}"
 frozen_contract="${MIGRATION_FROZEN_ROUTE_AUTH_PATH:-$repo_root/apps/api-rust/tests/fixtures/routes/frozen-route-auth.tsv}"
+route_stub_checker="$repo_root/apps/api-rust/tests/scripts/route-local-stub-state.pl"
 
 # Normalize command input without rewriting tracked route ledgers. This keeps
 # the checker stable when a checkout preserves CRLF TSV endings.
@@ -87,7 +88,7 @@ awk -F '\t' '
     }
   }
   END {
-    if (NR != 353) { printf "expected 352 routes, got %d\n", NR - 1 > "/dev/stderr"; failed=1 }
+    if (NR != 354) { printf "expected 353 routes, got %d\n", NR - 1 > "/dev/stderr"; failed=1 }
     if (api_token_routes != 9) { printf "expected 9 exact API-token authorization rows, got %d\n", api_token_routes > "/dev/stderr"; failed=1 }
     exit failed
   }
@@ -197,6 +198,22 @@ normalize_ledger_path() {
 
 is_frozen_model_delete_501() {
   [[ $1 == DELETE && $2 == /v1/models/:model ]]
+}
+
+is_uncredited_frozen_legacy_501_candidate() {
+  local method=$1 path=$2 source_state=$3 compile_state=$4 mount_state=$5
+  local differential_state=$6 approval_state=$7 owner=$8 gate_state=$9
+  local expected_handler='github.com/QuantumNous/new-api/controller.RelayNotImplemented'
+  local handler_count
+
+  [[ $source_state == present && $compile_state == unverified && $mount_state == mounted &&
+    $differential_state == unverified && $approval_state == pending-independent-approval &&
+    $owner == go && $gate_state == candidate-pending-independent-approval ]] || return 1
+  handler_count=$(awk -F '\t' -v method="$method" -v path="$path" -v handler="$expected_handler" '
+    $1 == method && $2 == path && $3 == handler { count++ }
+    END { print count + 0 }
+  ' <(tsv_without_crlf "$legacy"))
+  [[ $handler_count == 1 ]]
 }
 
 require_frozen_model_delete_501_evidence() {
@@ -321,11 +338,45 @@ while IFS=$'\t' read -r method path source_state compile_state mount_state diffe
     echo "mounted $method $path lacks exact router mount $router_path in $router_evidence" >&2
     exit 1
   fi
+  route_stub_state=complete
   if rg -q -i 'StatusCode::NOT_IMPLEMENTED|not[_ -]?implemented|(^|[^0-9])501([^0-9]|$)' "$source_file"; then
+    [[ -f $route_stub_checker && ! -L $route_stub_checker ]] || {
+      echo "missing route-local stub checker: $route_stub_checker" >&2
+      exit 1
+    }
+    if [[ $path == */\** ]]; then
+      single_stub_state=$(perl "$route_stub_checker" "$source_file" "$method" "$single_path") || {
+        echo "could not inspect route-local stub state for $method $path ($single_path)" >&2
+        exit 1
+      }
+      tail_stub_state=$(perl "$route_stub_checker" "$source_file" "$method" "$tail_path") || {
+        echo "could not inspect route-local stub state for $method $path ($tail_path)" >&2
+        exit 1
+      }
+      if [[ $single_stub_state == stub || $tail_stub_state == stub ]]; then
+        route_stub_state=stub
+      elif [[ $single_stub_state != complete || $tail_stub_state != complete ]]; then
+        echo "invalid route-local stub state for $method $path" >&2
+        exit 1
+      fi
+    else
+      route_stub_state=$(perl "$route_stub_checker" "$source_file" "$method" "$router_path") || {
+        echo "could not inspect route-local stub state for $method $path" >&2
+        exit 1
+      }
+      [[ $route_stub_state == complete || $route_stub_state == stub ]] || {
+        echo "invalid route-local stub state for $method $path: $route_stub_state" >&2
+        exit 1
+      }
+    fi
+  fi
+  if [[ $route_stub_state == stub ]]; then
     if is_frozen_model_delete_501 "$method" "$path"; then
       require_frozen_model_delete_501_evidence "$method" "$path" "$source_state" "$compile_state" "$mount_state" "$differential_state" "$approval_state" "$owner" "$gate_state" "$evidence" || exit 1
+    elif is_uncredited_frozen_legacy_501_candidate "$method" "$path" "$source_state" "$compile_state" "$mount_state" "$differential_state" "$approval_state" "$owner" "$gate_state"; then
+      : # Static legacy-equivalent 501 candidate; it earns no Rust migration credit.
     else
-      echo "mounted $method $path has a stub/501 marker in $router_evidence" >&2
+      echo "mounted $method $path has a route-local stub/501 handler in $router_evidence" >&2
       exit 1
     fi
   fi
@@ -400,17 +451,17 @@ candidate_mod="$repo_root/apps/api-rust/src/migration_routes.rs"
 # a newly added helper cannot silently evade the module inventory.
 is_candidate_helper() {
   case $1 in
-  relay_anthropic_gemini_postgres | relay_misc_postgres | sse) return 0 ;;
+  legacy_http | relay_anthropic_gemini_postgres | relay_misc_postgres | sse | test_support) return 0 ;;
   *) return 1 ;;
   esac
 }
 
-for helper in relay_anthropic_gemini_postgres relay_misc_postgres sse; do
+for helper in legacy_http relay_anthropic_gemini_postgres relay_misc_postgres sse test_support; do
   [[ -f "$candidate_dir/$helper.rs" ]] || {
     echo "declared migration helper is missing: $helper.rs" >&2
     exit 1
   }
-  grep -Eq "^pub mod $helper;$" "$candidate_mod" || {
+  grep -Eq "^pub(\(crate\))? mod $helper;$" "$candidate_mod" || {
     echo "migration helper is not declared: $helper" >&2
     exit 1
   }
@@ -537,4 +588,4 @@ awk -F '\t' '
   }
 ' <(tsv_without_crlf "$gate")
 
-echo "migration plan valid: 352 frozen legacy routes covered exactly; route ownership policy satisfied"
+echo "migration plan valid: 353 frozen legacy routes covered exactly; route ownership policy satisfied"

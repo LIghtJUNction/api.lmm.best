@@ -39,6 +39,26 @@ export type UpdateOptionResponse = {
   message: string
 }
 
+export type UsdExchangeRateQuote = {
+  base_currency: 'USD'
+  quote_currency: string
+  rate: number
+  fetched_at: string
+  provider: string
+}
+
+export type UsdExchangeRateResponse =
+  | {
+      success: true
+      message: string
+      data: UsdExchangeRateQuote
+    }
+  | {
+      success: false
+      message: string
+      data?: never
+    }
+
 export type DynamicPricingModelStatus = {
   factor: number
   request_factor_min: number
@@ -422,8 +442,10 @@ export type BillingSettings = {
   'quota_setting.enable_free_model_pre_consume': boolean
   QuotaPerUnit: number
   USDExchangeRate: number
+  TopUpPlatformUnitsPerCNY: number
   'general_setting.quota_display_type': string
   'general_setting.custom_currency_symbol': string
+  'general_setting.custom_currency_code': string
   'general_setting.custom_currency_exchange_rate': number
   DisplayInCurrencyEnabled: boolean
   DisplayTokenStatEnabled: boolean

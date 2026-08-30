@@ -24,6 +24,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 
 import { deletePlan } from '../../api.js'
 import { useSubscriptions } from '../subscriptions-provider.js'
+import { getDeletePlanErrorMessage } from './delete-plan-error.js'
 
 export function DeletePlanDialog() {
   const { t } = useTranslation()
@@ -45,9 +46,7 @@ export function DeletePlanDialog() {
       triggerRefresh()
       setOpen(null)
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : t('Operation failed')
-      )
+      toast.error(t(getDeletePlanErrorMessage(error, t('Operation failed'))))
     } finally {
       setLoading(false)
     }

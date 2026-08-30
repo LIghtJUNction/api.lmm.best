@@ -50,6 +50,7 @@ export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
 }
 export type StripePaymentResponse = ApiResponse<{ pay_link: string }>
 export type AffiliateCodeResponse = ApiResponse<string>
+export type AffiliateInvitationResponse = ApiResponse
 export type AffiliateTransferResponse = ApiResponse
 export type CreemPaymentResponse = ApiResponse<{ checkout_url: string }>
 export type WaffoPaymentResponse = ApiResponse<
@@ -89,6 +90,11 @@ export interface CreemProduct {
 /**
  * Creem payment request
  */
+export interface AffiliateInvitationRequest {
+  /** Recipient address; the backend constructs the trusted affiliate URL. */
+  email: string
+}
+
 export interface CreemPaymentRequest {
   /** Creem product ID */
   product_id: string
@@ -114,9 +120,20 @@ export interface PaymentMethod {
   max_topup?: string | number
   /** Optional react-icons component name or safe icon URL */
   icon?: string
-  /** Settlement unit shown for this gateway, for example LDC. */
+  /** Explicit ISO/code unit charged by the gateway, for example USD or CNY. */
+  settlement_currency?: string
+  /** Platform credit units represented by 1 real USD in the settlement contract. */
+  platform_units_per_usd?: string | number
+  /** Gateway settlement units represented by 1 real USD. */
+  settlement_units_per_usd?: string | number
+  /** Explicit direct rate for legacy gateways that do not use the USD bridge. */
+  settlement_units_per_platform_unit?: string | number
+  /** @deprecated Legacy gateway settlement unit; use settlement_currency. */
   settlement_unit?: string
-  /** Configured gateway price for one credited USD. The server remains authoritative. */
+  /**
+   * @deprecated Legacy settlement units per platform unit. Kept only as an
+   * explicit compatibility fallback when the two USD-based rates are absent.
+   */
   unit_price?: string | number
   /** Per-method payment multiplier combined with the user's group multiplier. */
   topup_ratio?: string | number
@@ -170,6 +187,10 @@ export interface TopupInfo {
   creem_products?: CreemProduct[]
   /** Whether Waffo topup is enabled */
   enable_waffo_topup?: boolean
+  /** Fiat settlement currency used by Waffo. */
+  waffo_currency?: string
+  /** Fiat amount charged for one platform dollar by Waffo. */
+  waffo_unit_price?: number | string
   /** Available Waffo payment methods */
   waffo_pay_methods?: WaffoPayMethod[]
   /** Minimum topup amount for Waffo */
@@ -305,10 +326,14 @@ export interface TopupRecord {
   id: number
   /** User ID */
   user_id: number
-  /** Topup amount (quota) */
+  /** Deprecated integer projection of the platform amount. */
   amount: number
-  /** Payment amount (actual money paid) */
+  /** Exact platform amount snapshot in millionths for fractional top-ups. */
+  platform_amount_micros?: number
+  /** Payment amount (actual fiat money paid) */
   money: number
+  /** Fiat currency used by the selected payment gateway. */
+  currency?: string
   /** Trade/order number */
   trade_no: string
   /** Payment method type */

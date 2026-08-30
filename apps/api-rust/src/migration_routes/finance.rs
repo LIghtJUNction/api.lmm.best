@@ -23,10 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgRow};
 
-use crate::auth::{
-    AuthErrorKind, DashboardAuth, DashboardUserView, UserAuthPolicyError, enforce_user_auth_view,
-    user_auth_message, user_auth_status,
-};
+use crate::auth::{DashboardAuth, DashboardUserView, UserAuthPolicyError, enforce_user_auth_view};
 
 const ADMIN_ROLE: i64 = 10;
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
@@ -111,6 +108,13 @@ struct FinanceMethodMetric {
     token_units: i64,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+struct FinanceCurrencyMetric {
+    currency: String,
+    amount_micros: i64,
+    orders: i64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct FinanceDailyMetric {
     date: String,
@@ -176,6 +180,8 @@ struct FinanceOverview {
     daily: Vec<FinanceDailyMetric>,
     users: Vec<FinanceUserMetric>,
     payment_methods: Vec<FinancePaymentMethod>,
+    settlement_revenue_by_currency: Vec<FinanceCurrencyMetric>,
+    unclassified_settlement_orders: i64,
     sources_bounded: bool,
     user_metrics_truncated: bool,
     user_metrics_complete: bool,
@@ -383,7 +389,7 @@ async fn list_entries(
     let limit = query
         .get("limit")
         .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(50)
+        .map_or(50, std::convert::identity)
         .clamp(1, MAX_ENTRIES);
     let (before_occurred_at, before_id) = match parse_entry_cursor(&query) {
         Ok(cursor) => cursor,
@@ -597,23 +603,35 @@ async fn authenticated_admin(
     state: &FinanceState,
     headers: &HeaderMap,
 ) -> Result<DashboardUserView, Response> {
-    let Some(credential) = dashboard_credential(headers) else {
-        return Err(dashboard_auth_error(headers, None));
+    let Some(credential) = crate::migration_routes::legacy_http::dashboard_credential(headers)
+    else {
+        return Err(
+            crate::migration_routes::legacy_http::localized_dashboard_auth_error(headers, None),
+        );
     };
     let user = state
         .auth
         .self_user_view_for_optional(SecretString::from(credential))
         .await
-        .map_err(|error| dashboard_auth_error(headers, Some(error.kind)))?;
+        .map_err(|error| {
+            crate::migration_routes::legacy_http::localized_dashboard_auth_error(
+                headers,
+                Some(error.kind),
+            )
+        })?;
     if !user.developer_access_granted {
         return Err(console_not_found());
     }
-    enforce_user_auth_view(&user).map_err(|error| user_policy_error(headers, error))?;
+    enforce_user_auth_view(&user).map_err(|error| {
+        crate::migration_routes::legacy_http::localized_user_policy_error(headers, error)
+    })?;
     if user.role < ADMIN_ROLE {
-        return Err(user_policy_error(
-            headers,
-            UserAuthPolicyError::InsufficientPrivilege,
-        ));
+        return Err(
+            crate::migration_routes::legacy_http::localized_user_policy_error(
+                headers,
+                UserAuthPolicyError::InsufficientPrivilege,
+            ),
+        );
     }
     Ok(user)
 }
@@ -681,7 +699,8 @@ fn parse_entry_cursor(query: &HashMap<String, String>) -> Result<(i64, i64), &'s
 
 fn parse_query(raw: Option<&str>) -> HashMap<String, String> {
     let mut query = HashMap::new();
-    for (key, value) in form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+    let raw = raw.map_or("", std::convert::identity);
+    for (key, value) in form_urlencoded::parse(raw.as_bytes()) {
         query
             .entry(key.into_owned())
             .or_insert_with(|| value.into_owned());
@@ -697,7 +716,7 @@ fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+            i64::try_from(duration.as_secs()).map_or(i64::MAX, std::convert::identity)
         })
 }
 
@@ -742,123 +761,6 @@ fn with_auth_version(mut response: Response) -> Response {
         HeaderValue::from_static(AUTH_VERSION),
     );
     response
-}
-
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
-fn dashboard_auth_error(headers: &HeaderMap, kind: Option<AuthErrorKind>) -> Response {
-    if kind == Some(AuthErrorKind::UserDisabled) {
-        return user_policy_error(headers, UserAuthPolicyError::UserDisabled);
-    }
-    let (status, code, message) = match kind {
-        Some(AuthErrorKind::TokenExpired) => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_TOKEN_EXPIRED",
-            auth_not_logged_in(headers),
-        ),
-        Some(AuthErrorKind::SessionRevoked) => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_SESSION_REVOKED",
-            auth_not_logged_in(headers),
-        ),
-        Some(AuthErrorKind::Internal) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "AUTH_INTERNAL_ERROR",
-            auth_database_error(headers),
-        ),
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_UNAUTHORIZED",
-            auth_invalid_access_token(headers),
-        ),
-    };
-    legacy_json(
-        status,
-        json!({"success": false, "code": code, "message": message}),
-    )
-}
-
-fn user_policy_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response {
-    let code = match error {
-        UserAuthPolicyError::UserDisabled => "AUTH_USER_DISABLED",
-        UserAuthPolicyError::InsufficientPrivilege => "AUTH_INSUFFICIENT_PRIVILEGE",
-        UserAuthPolicyError::InvalidUserInfo => "AUTH_USER_INVALID",
-    };
-    legacy_json(
-        StatusCode::from_u16(user_auth_status(error)).unwrap_or(StatusCode::UNAUTHORIZED),
-        json!({
-            "success": false,
-            "code": code,
-            "message": user_auth_message(
-                error,
-                headers.get(header::ACCEPT_LANGUAGE).and_then(|value| value.to_str().ok()),
-            ),
-        }),
-    )
-}
-
-#[derive(Clone, Copy)]
-enum TokenLocale {
-    En,
-    ZhCn,
-    ZhTw,
-}
-
-fn token_locale(headers: &HeaderMap) -> TokenLocale {
-    let language = headers
-        .get(header::ACCEPT_LANGUAGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if language.starts_with("zh-tw") {
-        TokenLocale::ZhTw
-    } else if language.starts_with("zh") {
-        TokenLocale::ZhCn
-    } else {
-        TokenLocale::En
-    }
-}
-
-fn auth_not_logged_in(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Unauthorized, not logged in and no access token provided",
-        TokenLocale::ZhCn => "无权进行此操作，未登录且未提供 access token",
-        TokenLocale::ZhTw => "無權進行此操作，未登入且未提供 access token",
-    }
-}
-
-fn auth_invalid_access_token(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Unauthorized, invalid access token",
-        TokenLocale::ZhCn => "无权进行此操作，access token 无效",
-        TokenLocale::ZhTw => "無權進行此操作，access token 無效",
-    }
-}
-
-fn auth_database_error(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Database error, please contact the administrator",
-        TokenLocale::ZhCn => "数据库出错，请联系管理员",
-        TokenLocale::ZhTw => "資料庫出錯，請聯繫管理員",
-    }
 }
 
 fn db_error(error: impl std::fmt::Display) -> FinanceError {
@@ -929,8 +831,7 @@ fn finance_payment_method_allowed(
 }
 
 fn finance_settlement_currency_allowed(currency: &str) -> bool {
-    let currency = currency.trim().to_ascii_uppercase();
-    currency.is_empty() || currency == FINANCE_CURRENCY_USD
+    matches!(currency.trim().to_ascii_uppercase().as_str(), "USD" | "CNY")
 }
 
 fn finance_topup_amount(settled: i64, expected: i64, money: f64) -> i64 {
@@ -1007,6 +908,7 @@ struct FinanceAccumulator {
     daily: BTreeMap<String, FinanceDailyMetric>,
     users: HashMap<i64, FinanceUserMetric>,
     method_users: HashMap<String, HashMap<i64, ()>>,
+    settlement_revenue: BTreeMap<String, FinanceCurrencyMetric>,
     method_user_pairs: i64,
 }
 
@@ -1018,6 +920,8 @@ impl FinanceAccumulator {
                 currency: FINANCE_CURRENCY_USD.to_owned(),
                 cost_attribution: "complete".to_owned(),
                 payment_methods,
+                settlement_revenue_by_currency: Vec::new(),
+                unclassified_settlement_orders: 0,
                 sources_bounded: true,
                 user_metrics_complete: true,
                 user_metrics_limit: MAX_USER_METRICS as i64,
@@ -1042,6 +946,7 @@ impl FinanceAccumulator {
             daily: BTreeMap::new(),
             users: HashMap::new(),
             method_users: HashMap::new(),
+            settlement_revenue: BTreeMap::new(),
             method_user_pairs: 0,
         }
     }
@@ -1134,6 +1039,34 @@ impl FinanceAccumulator {
         }
         self.overview.revenue_micros += amount;
         self.daily_metric(timestamp).revenue_micros += amount;
+    }
+
+    fn add_settlement_revenue(
+        &mut self,
+        currency: &str,
+        method: &str,
+        provider: &str,
+        amount: i64,
+        timestamp: i64,
+        user_id: i64,
+    ) {
+        let currency = currency.trim().to_ascii_uppercase();
+        if amount <= 0 || !finance_settlement_currency_allowed(&currency) {
+            self.overview.unclassified_settlement_orders += 1;
+            return;
+        }
+        let metric = self
+            .settlement_revenue
+            .entry(currency.clone())
+            .or_insert_with(|| FinanceCurrencyMetric {
+                currency: currency.clone(),
+                ..FinanceCurrencyMetric::default()
+            });
+        metric.amount_micros += amount;
+        metric.orders += 1;
+        if currency == FINANCE_CURRENCY_USD {
+            self.add_revenue(method, provider, amount, timestamp, user_id);
+        }
     }
 
     fn add_expense_delta(
@@ -1234,6 +1167,11 @@ impl FinanceAccumulator {
     }
 
     fn finish(mut self, start: i64, end: i64) -> FinanceOverview {
+        self.overview.settlement_revenue_by_currency =
+            self.settlement_revenue.values().cloned().collect();
+        self.overview
+            .settlement_revenue_by_currency
+            .sort_by(|left, right| left.currency.cmp(&right.currency));
         for (key, metric) in &self.methods {
             let mut copy = metric.clone();
             copy.users = self.method_users.get(key).map_or(0, |m| m.len() as i64);
@@ -1250,7 +1188,7 @@ impl FinanceAccumulator {
             .date_naive()
             .and_hms_opt(0, 0, 0)
             .map(|dt| dt.and_utc().timestamp())
-            .unwrap_or(start);
+            .map_or(start, std::convert::identity);
         while day < end {
             self.daily_metric(day);
             day += 24 * 60 * 60;
@@ -1317,6 +1255,16 @@ impl FinanceBackend for PgFinanceBackend {
         )
         .await?;
         load_subscription_orders(
+            &self.pg,
+            start,
+            end,
+            user_filter,
+            method_filter,
+            &config_map,
+            &mut acc,
+        )
+        .await?;
+        load_subscription_payment_events(
             &self.pg,
             start,
             end,
@@ -1415,8 +1363,10 @@ impl FinanceBackend for PgFinanceBackend {
             .iter()
             .map(ledger_entry_from_row)
             .collect::<Result<Vec<_>, _>>()?;
-        let next = if has_more && !entries.is_empty() {
-            let last = entries.last().expect("non-empty");
+        let next = if has_more {
+            let last = entries.last().ok_or_else(|| {
+                FinanceError("finance ledger pagination produced no cursor row".to_owned())
+            })?;
             Some((last.occurred_at, last.id))
         } else {
             None
@@ -1597,14 +1547,16 @@ impl FinanceBackend for PgFinanceBackend {
             .as_ref()
             .map(|v| v.trim().to_owned())
             .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| label.clone());
+            .map_or_else(|| label.clone(), std::convert::identity);
         let label = if label.is_empty() {
             method.to_owned()
         } else {
             label
         };
-        let enabled = input.enabled.unwrap_or(enabled);
-        let include_revenue = input.include_revenue.unwrap_or(include_revenue);
+        let enabled = input.enabled.map_or(enabled, std::convert::identity);
+        let include_revenue = input
+            .include_revenue
+            .map_or(include_revenue, std::convert::identity);
         let row = if id > 0 {
             sqlx::query(
                 "UPDATE finance_payment_methods SET label = $1, enabled = $2, include_revenue = $3, \
@@ -1778,7 +1730,6 @@ async fn load_topups(
              FROM top_ups WHERE status = $1 \
              AND COALESCE(NULLIF(complete_time, 0), create_time) >= $2 \
              AND COALESCE(NULLIF(complete_time, 0), create_time) < $3 \
-             AND (settlement_currency IS NULL OR settlement_currency = '' OR UPPER(settlement_currency) = 'USD') \
              AND NOT EXISTS (SELECT 1 FROM subscription_orders so WHERE so.trade_no = top_ups.trade_no AND so.status = $1) \
              AND (COALESCE(NULLIF(complete_time, 0), create_time) > $4 OR (COALESCE(NULLIF(complete_time, 0), create_time) = $4 AND id > $5)) \
              ORDER BY COALESCE(NULLIF(complete_time, 0), create_time) ASC, id ASC LIMIT $6",
@@ -1796,7 +1747,6 @@ async fn load_topups(
                  FROM top_ups WHERE status = $1 AND user_id = $7 \
                  AND COALESCE(NULLIF(complete_time, 0), create_time) >= $2 \
                  AND COALESCE(NULLIF(complete_time, 0), create_time) < $3 \
-                 AND (settlement_currency IS NULL OR settlement_currency = '' OR UPPER(settlement_currency) = 'USD') \
                  AND NOT EXISTS (SELECT 1 FROM subscription_orders so WHERE so.trade_no = top_ups.trade_no AND so.status = $1) \
                  AND (COALESCE(NULLIF(complete_time, 0), create_time) > $4 OR (COALESCE(NULLIF(complete_time, 0), create_time) = $4 AND id > $5)) \
                  ORDER BY COALESCE(NULLIF(complete_time, 0), create_time) ASC, id ASC LIMIT $6",
@@ -1838,11 +1788,13 @@ async fn load_topups(
                 row_get(row, "expected_amount_micros")?,
                 row_get(row, "money")?,
             );
-            acc.add_revenue(&method, &provider, amount, timestamp, user_id);
+            acc.add_settlement_revenue(&currency, &method, &provider, amount, timestamp, user_id);
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
-        last_ts = row_get(last, "complete_time").unwrap_or(0);
+        let last = rows
+            .last()
+            .ok_or_else(|| FinanceError("top-up pagination returned an empty batch".to_owned()))?;
+        last_ts = row_get(last, "complete_time")?;
         if last_ts <= 0 {
             last_ts = row_get(last, "create_time")?;
         }
@@ -1872,17 +1824,19 @@ async fn load_subscription_orders(
             break;
         }
         let sql = if user_filter > 0 {
-            "SELECT id, user_id, money, payment_method, payment_provider, create_time, complete_time \
+            "SELECT id, user_id, expected_amount_micros, settlement_currency, payment_method, payment_provider, create_time, complete_time \
              FROM subscription_orders WHERE status = $1 AND user_id = $7 \
              AND COALESCE(NULLIF(complete_time, 0), create_time) >= $2 \
              AND COALESCE(NULLIF(complete_time, 0), create_time) < $3 \
+             AND NOT EXISTS (SELECT 1 FROM subscription_payment_events spe WHERE spe.subscription_order_id = subscription_orders.id) \
              AND (COALESCE(NULLIF(complete_time, 0), create_time) > $4 OR (COALESCE(NULLIF(complete_time, 0), create_time) = $4 AND id > $5)) \
              ORDER BY COALESCE(NULLIF(complete_time, 0), create_time) ASC, id ASC LIMIT $6"
         } else {
-            "SELECT id, user_id, money, payment_method, payment_provider, create_time, complete_time \
+            "SELECT id, user_id, expected_amount_micros, settlement_currency, payment_method, payment_provider, create_time, complete_time \
              FROM subscription_orders WHERE status = $1 \
              AND COALESCE(NULLIF(complete_time, 0), create_time) >= $2 \
              AND COALESCE(NULLIF(complete_time, 0), create_time) < $3 \
+             AND NOT EXISTS (SELECT 1 FROM subscription_payment_events spe WHERE spe.subscription_order_id = subscription_orders.id) \
              AND (COALESCE(NULLIF(complete_time, 0), create_time) > $4 OR (COALESCE(NULLIF(complete_time, 0), create_time) = $4 AND id > $5)) \
              ORDER BY COALESCE(NULLIF(complete_time, 0), create_time) ASC, id ASC LIMIT $6"
         };
@@ -1916,21 +1870,101 @@ async fn load_subscription_orders(
                 timestamp = row_get(row, "create_time")?;
             }
             let user_id: i64 = row_get(row, "user_id")?;
-            let money: f64 = row_get(row, "money")?;
-            acc.add_revenue(
-                &method,
-                &provider,
-                finance_micros_from_float(money),
-                timestamp,
-                user_id,
-            );
+            let currency: String = row_get(row, "settlement_currency")?;
+            let amount: i64 = row_get(row, "expected_amount_micros")?;
+            acc.add_settlement_revenue(&currency, &method, &provider, amount, timestamp, user_id);
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
-        last_ts = row_get(last, "complete_time").unwrap_or(0);
+        let last = rows.last().ok_or_else(|| {
+            FinanceError("subscription pagination returned an empty batch".to_owned())
+        })?;
+        last_ts = row_get(last, "complete_time")?;
         if last_ts <= 0 {
             last_ts = row_get(last, "create_time")?;
         }
+        last_id = row_get(last, "id")?;
+        if (rows.len() as i64) < limit {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn load_subscription_payment_events(
+    pg: &PgPool,
+    start: i64,
+    end: i64,
+    user_filter: i64,
+    method_filter: &str,
+    configs: &HashMap<String, FinancePaymentMethod>,
+    acc: &mut FinanceAccumulator,
+) -> Result<(), FinanceError> {
+    let mut last_ts = 0i64;
+    let mut last_id = 0i64;
+    let mut processed = 0i64;
+    loop {
+        let limit = batch_limit(processed);
+        if limit == 0 {
+            break;
+        }
+        let sql = if user_filter > 0 {
+            "SELECT spe.id, so.user_id, spe.settlement_amount_micros, spe.settlement_currency, \
+             so.payment_method, spe.payment_provider, spe.created_time \
+             FROM subscription_payment_events spe \
+             JOIN subscription_orders so ON so.id = spe.subscription_order_id \
+             WHERE so.status = $1 AND so.user_id = $7 \
+             AND spe.created_time >= $2 AND spe.created_time < $3 \
+             AND (spe.created_time > $4 OR (spe.created_time = $4 AND spe.id > $5)) \
+             ORDER BY spe.created_time ASC, spe.id ASC LIMIT $6"
+        } else {
+            "SELECT spe.id, so.user_id, spe.settlement_amount_micros, spe.settlement_currency, \
+             so.payment_method, spe.payment_provider, spe.created_time \
+             FROM subscription_payment_events spe \
+             JOIN subscription_orders so ON so.id = spe.subscription_order_id \
+             WHERE so.status = $1 \
+             AND spe.created_time >= $2 AND spe.created_time < $3 \
+             AND (spe.created_time > $4 OR (spe.created_time = $4 AND spe.id > $5)) \
+             ORDER BY spe.created_time ASC, spe.id ASC LIMIT $6"
+        };
+        let mut query = sqlx::query(sql)
+            .bind(TOPUP_STATUS_SUCCESS)
+            .bind(start)
+            .bind(end)
+            .bind(last_ts)
+            .bind(last_id)
+            .bind(limit);
+        if user_filter > 0 {
+            query = query.bind(user_filter);
+        }
+        let rows = query.fetch_all(pg).await.map_err(db_error)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in &rows {
+            let (method, provider) = normalize_payment_source(
+                &row_get::<String>(row, "payment_method")?,
+                &row_get::<String>(row, "payment_provider")?,
+            );
+            if !method_filter.is_empty() && method != method_filter {
+                continue;
+            }
+            if !finance_payment_method_allowed(&method, &provider, configs) {
+                continue;
+            }
+            acc.add_settlement_revenue(
+                &row_get::<String>(row, "settlement_currency")?,
+                &method,
+                &provider,
+                row_get(row, "settlement_amount_micros")?,
+                row_get(row, "created_time")?,
+                row_get(row, "user_id")?,
+            );
+        }
+        processed += rows.len() as i64;
+        let last = rows.last().ok_or_else(|| {
+            FinanceError("subscription payment pagination returned an empty batch".to_owned())
+        })?;
+        last_ts = row_get(last, "created_time")?;
         last_id = row_get(last, "id")?;
         if (rows.len() as i64) < limit {
             break;
@@ -2006,7 +2040,9 @@ async fn load_usage_logs(
             acc.add_usage(user_id, created_at, prompt, completion, cost, priced);
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
+        let last = rows
+            .last()
+            .ok_or_else(|| FinanceError("usage pagination returned an empty batch".to_owned()))?;
         last_ts = row_get(last, "created_at")?;
         last_request_id = row_get(last, "request_id")?;
         if (rows.len() as i64) < limit {
@@ -2085,7 +2121,7 @@ async fn load_ledger_entries(
                 &row_get::<String>(row, "payment_provider")?,
             );
             let user_id: Option<i64> = row_get(row, "user_id")?;
-            let user_id = user_id.unwrap_or(0);
+            let user_id = user_id.map_or(0, std::convert::identity);
             let occurred_at: i64 = row_get(row, "occurred_at")?;
             let category: String = row_get(row, "category")?;
             match entry_type.as_str() {
@@ -2120,7 +2156,9 @@ async fn load_ledger_entries(
             }
         }
         processed += rows.len() as i64;
-        let last = rows.last().expect("non-empty batch");
+        let last = rows
+            .last()
+            .ok_or_else(|| FinanceError("ledger pagination returned an empty batch".to_owned()))?;
         last_ts = row_get(last, "occurred_at")?;
         last_id = row_get(last, "id")?;
         if (rows.len() as i64) < limit {
@@ -2136,5 +2174,42 @@ fn batch_limit(processed: i64) -> i64 {
         0
     } else {
         remaining.min(BATCH_SIZE)
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::{FinanceAccumulator, FinanceCurrencyMetric, FinanceOverview};
+
+    #[test]
+    fn settlement_totals_keep_real_currencies_separate() {
+        let mut accumulator = FinanceAccumulator::new(0, 86_400, Vec::new());
+        accumulator.add_settlement_revenue("USD", "stripe", "stripe", 1_000_000, 1, 1);
+        accumulator.add_settlement_revenue("CNY", "alipay", "epay", 6_800_000, 1, 2);
+        accumulator.add_settlement_revenue("", "legacy", "", 9_000_000, 1, 3);
+
+        let FinanceOverview {
+            revenue_micros,
+            settlement_revenue_by_currency,
+            unclassified_settlement_orders,
+            ..
+        } = accumulator.finish(0, 86_400);
+        assert_eq!(revenue_micros, 1_000_000);
+        assert_eq!(unclassified_settlement_orders, 1);
+        assert_eq!(
+            settlement_revenue_by_currency,
+            vec![
+                FinanceCurrencyMetric {
+                    currency: "CNY".to_owned(),
+                    amount_micros: 6_800_000,
+                    orders: 1,
+                },
+                FinanceCurrencyMetric {
+                    currency: "USD".to_owned(),
+                    amount_micros: 1_000_000,
+                    orders: 1,
+                },
+            ]
+        );
     }
 }

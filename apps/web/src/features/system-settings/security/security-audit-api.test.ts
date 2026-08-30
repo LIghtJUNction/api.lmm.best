@@ -13,6 +13,11 @@ GNU Affero General Public License for more details.
 
 You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+/*
+Copyright (C) 2026 LIghtJUNction
 */
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
@@ -86,11 +91,11 @@ describe('assistant review cleanup API', () => {
       })
     }
 
-    const result = await deleteAssistantReviewRuns(30, 'proof-token')
+    const result = await deleteAssistantReviewRuns(30, 5, 'proof-token')
 
     assert.equal(captured?.method, 'delete')
     assert.equal(captured?.url, ADMIN_ASSISTANT_REVIEW_RUNS_ENDPOINT)
-    assert.deepEqual(captured?.params, { keep: 30 })
+    assert.deepEqual(captured?.params, { keep: 30, expected_count: 5 })
     assert.equal(captured?.headers?.['X-Security-Proof'], 'proof-token')
     assert.equal(result.data?.deleted_count, 5)
   })

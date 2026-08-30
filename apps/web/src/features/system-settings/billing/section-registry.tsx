@@ -89,6 +89,7 @@ const BILLING_SECTIONS = [
         defaultValues={{
           QuotaPerUnit: settings.QuotaPerUnit,
           USDExchangeRate: settings.USDExchangeRate,
+          TopUpPlatformUnitsPerCNY: settings.TopUpPlatformUnitsPerCNY ?? 1,
           DisplayInCurrencyEnabled: settings.DisplayInCurrencyEnabled,
           DisplayTokenStatEnabled: settings.DisplayTokenStatEnabled,
           general_setting: {
@@ -97,6 +98,8 @@ const BILLING_SECTIONS = [
             ),
             custom_currency_symbol:
               settings['general_setting.custom_currency_symbol'] ?? '¤',
+            custom_currency_code:
+              settings['general_setting.custom_currency_code'] ?? '',
             custom_currency_exchange_rate:
               settings['general_setting.custom_currency_exchange_rate'] ?? 1,
           },
@@ -139,7 +142,6 @@ const BILLING_SECTIONS = [
           PayAddress: settings.PayAddress,
           EpayId: settings.EpayId,
           EpayKey: settings.EpayKey,
-          Price: settings.Price,
           MinTopUp: settings.MinTopUp,
           CustomCallbackAddress: settings.CustomCallbackAddress,
           PayMethods: settings.PayMethods,

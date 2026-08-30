@@ -3,7 +3,7 @@ name: LMM Go backend release
 on:
   push:
     tags:
-      - 'go-v*.*.*'
+      - "go-v*.*.*"
 
 permissions:
   actions: read
@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CI: 'true'
-  GOMAXPROCS: '2'
+  CI: "true"
+  GOMAXPROCS: "2"
 
 jobs:
   prepare:
@@ -34,6 +34,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
+
+      - name: Set up Go for the native deployment contract CLI
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache: false
 
       - name: Verify version, ancestry, tag, and contract
         id: identity
@@ -64,7 +70,14 @@ jobs:
           [[ "$aur_version" != "$version" ]]
           [[ $(printf '%s\n%s\n' "$aur_version" "$version" | sort -V | tail -n 1) == "$version" ]]
 
-          contract_revision=$(deploy/production/api-route-contract-revision.sh print)
+          contract_cli_dir="$RUNNER_TEMP/lmm-api-route-contract"
+          mkdir -p "$contract_cli_dir"
+          (cd apps/api-go && go build -p 2 -trimpath -o "$contract_cli_dir/lmm-api-go" .)
+          ln -s lmm-api-go "$contract_cli_dir/lmm-api"
+          [[ $(readlink "$contract_cli_dir/lmm-api") == lmm-api-go ]]
+          [[ $(sha256sum "$contract_cli_dir/lmm-api" | cut -d' ' -f1) == \
+             $(sha256sum "$contract_cli_dir/lmm-api-go" | cut -d' ' -f1) ]]
+          contract_revision=$("$contract_cli_dir/lmm-api" deploy contract route print)
           {
             echo "contract_revision=$contract_revision"
             echo "version=$version"
@@ -94,12 +107,8 @@ jobs:
           go-version-file: apps/api-go/go.mod
           cache: false
 
-      - name: Install production contract tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes libarchive-tools
-          test "$(command -v bsdtar)" = /usr/bin/bsdtar
-          bsdtar --version | head -1
+      - name: Install archive inspection tool
+        run: sudo apt-get update && sudo apt-get install --yes libarchive-tools
 
       - name: Check and test default Go module
         working-directory: apps/api-go
@@ -111,7 +120,7 @@ jobs:
       - name: Check independent relaykit module
         working-directory: apps/api-go/relaykit
         env:
-          GOWORK: 'off'
+          GOWORK: "off"
         run: |
           go vet ./...
           go test -p 2 ./...
@@ -141,16 +150,17 @@ jobs:
         run: |
           set -euo pipefail
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
-          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
-            bash deploy/production/test-api-route-contract.sh
-          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
-            bash deploy/production/test-release-artifact-contract.sh
+          shellcheck \
+            packaging/aur/export-go-package-base.sh \
+            packaging/aur/test-bin-makepkg.sh \
+            packaging/aur/test-export-go-package-base.sh \
+            packaging/aur/test-matrix.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
             bash packaging/aur/test-matrix.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
-            bash deploy/production/test-go-package-roundtrip.sh
+            bash packaging/aur/test-bin-makepkg.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
-            bash deploy/production/test-go-rollback-state-machine.sh
+            bash packaging/aur/test-export-go-package-base.sh
 
   build:
     name: Build and sign Go linux/${{ matrix.arch }}
@@ -181,7 +191,7 @@ jobs:
         env:
           GOARCH: ${{ matrix.arch }}
           GOOS: linux
-          CGO_ENABLED: '0'
+          CGO_ENABLED: "0"
           EXPECTED_CONTRACT_REVISION: ${{ needs.prepare.outputs.contract_revision }}
           RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -194,10 +204,10 @@ jobs:
             cd apps/api-go
             go build -p 2 -trimpath \
               -ldflags="-s -w -X github.com/LIghtJUNction/api.lmm.best/common.Version=${RELEASE_VERSION}" \
-              -o "../../${bundle}/lmm-api" .
+              -o "../../${bundle}/lmm-api-go" .
           )
-          file "$bundle/lmm-api"
-          if ldd "$bundle/lmm-api" 2>&1 | grep -qvE 'not a dynamic executable|statically linked'; then
+          file "$bundle/lmm-api-go"
+          if ldd "$bundle/lmm-api-go" 2>&1 | grep -qvE 'not a dynamic executable|statically linked'; then
             echo 'Go release binary is dynamically linked' >&2
             exit 1
           fi
@@ -209,25 +219,28 @@ jobs:
             packaging/common/lmm-api/lmm-api-operator.sudoers \
             "$bundle/"
           mkdir -p "$bundle/edge-policy/nginx"
-          cp deploy/nginx/http-map.conf \
-            deploy/nginx/lmm-api-locations.conf \
-            deploy/nginx/mime.types \
-            deploy/nginx/new-api.conf \
-            deploy/nginx/lmm-api-region-policy.conf \
+          cp packaging/common/lmm-api/edge-policy/nginx/http-map.conf \
+            packaging/common/lmm-api/edge-policy/nginx/lmm-api-locations.conf \
+            packaging/common/lmm-api/edge-policy/nginx/mime.types \
+            packaging/common/lmm-api/edge-policy/nginx/new-api.conf \
+            packaging/common/lmm-api/edge-policy/nginx/lmm-api-region-policy.conf \
             "$bundle/edge-policy/nginx/"
           cp packaging/common/lmm-api/geoip2-country-update.service \
             packaging/common/lmm-api/geoip2-country-update.timer \
             "$bundle/edge-policy/"
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
-          cli_phase=$(<deploy/production/CLI_TRANSITION_PHASE)
-          [[ "$cli_phase" == 't0' || "$cli_phase" == 't1' ]]
-          install -m 0644 deploy/production/CLI_TRANSITION_PHASE "$bundle/CLI_TRANSITION_PHASE"
           printf '%s\n' "$RELEASE_REVISION" >"$bundle/REVISION"
-          deploy/production/api-route-contract-revision.sh generate \
-            "$bundle/API_ROUTE_CONTRACT_REVISION"
-          deploy/production/api-route-contract-revision.sh verify \
+          provider_sha256=$(sha256sum "$bundle/lmm-api-go" | cut -d' ' -f1)
+          ln -s lmm-api-go "$bundle/lmm-api"
+          [[ $(readlink "$bundle/lmm-api") == lmm-api-go ]]
+          [[ $(sha256sum "$bundle/lmm-api" | cut -d' ' -f1) == "$provider_sha256" ]]
+          # Cross-compiled providers cannot execute on the x86_64 runner. The
+          # prepare job derives this revision through the native public CLI.
+          printf '%s\n' "$EXPECTED_CONTRACT_REVISION" > \
             "$bundle/API_ROUTE_CONTRACT_REVISION"
           [[ $(<"$bundle/API_ROUTE_CONTRACT_REVISION") == "$EXPECTED_CONTRACT_REVISION" ]]
+          rm -- "$bundle/lmm-api"
+          [[ ! -e "$bundle/lmm-api" && ! -L "$bundle/lmm-api" ]]
           [[ ! -e "$bundle/frontend-dist" ]]
           tar -czf "release-go/${artifact}.tar.gz" -C release-go "$artifact"
           (cd release-go && sha256sum "${artifact}.tar.gz" >"${artifact}.tar.gz.sha256")
@@ -274,16 +287,35 @@ jobs:
           merge-multiple: true
 
       - name: Publish immutable Go release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
-        with:
-          tag_name: ${{ github.ref_name }}
-          target_commitish: ${{ needs.prepare.outputs.revision }}
-          name: LMM Go backend ${{ github.ref_name }}
-          body: |
-            Independent production Go-only backend release.
+        env:
+          CONTRACT_REVISION: ${{ needs.prepare.outputs.contract_revision }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release-assets/*)
+          (( ${#assets[@]} > 0 )) || {
+            echo 'No signed Go release assets were downloaded.' >&2
+            exit 1
+          }
+          notes="$RUNNER_TEMP/go-release-notes.md"
+          printf "%s\n\nRevision: \`%s\`\nAPI/route contract revision: \`%s\`\n" \
+            'Independent production Go-only backend release.' \
+            "$RELEASE_REVISION" "$CONTRACT_REVISION" > "$notes"
 
-            Revision: `${{ needs.prepare.outputs.revision }}`
-            API/route contract revision: `${{ needs.prepare.outputs.contract_revision }}`
-          files: release-assets/*
-          fail_on_unmatched_files: true
-          make_latest: true
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --target "$RELEASE_REVISION" \
+              --title "LMM Go backend $RELEASE_TAG" \
+              --notes-file "$notes" --latest
+            gh release upload "$RELEASE_TAG" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --target "$RELEASE_REVISION" \
+              --title "LMM Go backend $RELEASE_TAG" \
+              --notes-file "$notes" --latest
+          fi

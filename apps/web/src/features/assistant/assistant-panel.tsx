@@ -104,7 +104,10 @@ import {
 import { AssistantAccountActionTool } from './assistant-account-action-tool'
 import { AssistantActivationTool } from './assistant-activation-tool'
 import { AssistantAdminChangeTool } from './assistant-admin-change-tool'
-import { copyAssistantText } from './assistant-clipboard'
+import {
+  copyAssistantText,
+  notifyAssistantCopyResult,
+} from './assistant-clipboard'
 import { AssistantCostTool } from './assistant-cost-tool'
 import {
   subscribeToAssistantOpen,
@@ -1851,6 +1854,13 @@ export function AssistantPanel(props: {
     return copyAssistantText(text, navigator.clipboard)
   }
 
+  const notifyCopyResult = (copied: boolean) => {
+    notifyAssistantCopyResult(copied, {
+      success: () => toast.success(t('Conversation copied')),
+      error: () => toast.error(t('Copy failed')),
+    })
+  }
+
   const handleShareConversation = async () => {
     const text = conversationText()
     if (!text) return
@@ -1863,7 +1873,7 @@ export function AssistantPanel(props: {
       }
     }
     const copied = await copyAssistantText(text, navigator.clipboard)
-    toast.success(copied ? t('Conversation copied') : t('Copy failed'))
+    notifyCopyResult(copied)
   }
 
   const panelContent = (
@@ -2239,11 +2249,7 @@ export function AssistantPanel(props: {
                       title={t('Copy conversation')}
                       data-testid='assistant-copy-conversation'
                       onClick={() => {
-                        void handleCopyConversation().then((copied) => {
-                          toast.success(
-                            copied ? t('Conversation copied') : t('Copy failed')
-                          )
-                        })
+                        void handleCopyConversation().then(notifyCopyResult)
                       }}
                     >
                       <HugeiconsIcon
@@ -2331,17 +2337,18 @@ export function AssistantPanel(props: {
                     ) && !conversationRestricted
                   }
                   onRetry={() => {
-                    const retryable = [...entries]
-                      .reverse()
-                      .find((entry) => entry.retry !== undefined && entry.error)
+                    let retryable: (typeof entries)[number] | undefined
+                    for (let index = entries.length - 1; index >= 0; index--) {
+                      const entry = entries[index]
+                      if (entry?.retry !== undefined && entry.error) {
+                        retryable = entry
+                        break
+                      }
+                    }
                     if (retryable) void retryMessage(retryable)
                   }}
                   onCopy={() => {
-                    void handleCopyConversation().then((copied) => {
-                      toast.success(
-                        copied ? t('Conversation copied') : t('Copy failed')
-                      )
-                    })
+                    void handleCopyConversation().then(notifyCopyResult)
                   }}
                   onShare={() => {
                     void handleShareConversation()

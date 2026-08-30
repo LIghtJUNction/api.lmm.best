@@ -16,7 +16,10 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
+    http::{
+        HeaderMap, HeaderName, HeaderValue, StatusCode,
+        header::{self, InvalidHeaderValue},
+    },
     response::{IntoResponse, Response},
     routing::get as route_get,
 };
@@ -28,10 +31,7 @@ use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
     ClientIpKey, RequestContext,
-    auth::{
-        AuthErrorKind, DashboardAuth, DashboardUserView, UserAuthPolicyError,
-        enforce_user_auth_view, user_auth_message, user_auth_status,
-    },
+    auth::{DashboardAuth, DashboardUserView, UserAuthPolicyError, enforce_user_auth_view},
 };
 
 const ADMIN_ROLE: i64 = 10;
@@ -41,7 +41,7 @@ const MAX_WINDOW_SECONDS: i64 = 90 * 24 * 60 * 60;
 const MAX_ROWS: i64 = 200_000;
 const PRICING_VERSION: &str = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f";
 
-const FILE_NAMES: [&str; 14] = [
+const FILE_NAMES: [&str; 15] = [
     "manifest.json",
     "financial-options.json",
     "model-prices-and-ratios.json",
@@ -51,6 +51,7 @@ const FILE_NAMES: [&str; 14] = [
     "subscription-plans.json",
     "topups.json",
     "subscription-orders.json",
+    "subscription-payment-events.json",
     "usage-billing-records.json",
     "bounty-ledger.json",
     "checkins.json",
@@ -142,6 +143,87 @@ pub struct FinanceExportAudit {
 #[error("{0}")]
 pub struct FinanceExportError(pub String);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FinanceExportFormat {
+    Text,
+    Zip,
+}
+
+impl FinanceExportFormat {
+    fn parse(value: &str) -> Result<Self, FinanceExportRequestError> {
+        match value {
+            "text" => Ok(Self::Text),
+            "zip" => Ok(Self::Zip),
+            _ => Err(FinanceExportRequestError::UnsupportedFormat),
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Zip => "zip",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+enum FinanceExportRequestError {
+    #[error("format must be zip or text")]
+    UnsupportedFormat,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum FinanceExportBuildError {
+    #[error("finance export database query `{operation}` failed: {source}")]
+    Database {
+        operation: &'static str,
+        #[source]
+        source: sqlx::Error,
+    },
+    #[error("finance export database row column `{column}` failed: {source}")]
+    Row {
+        column: String,
+        #[source]
+        source: sqlx::Error,
+    },
+    #[error("finance export JSON serialization failed: {source}")]
+    Json {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("finance export base URI `{value}` is invalid")]
+    Uri { value: String },
+    #[error("finance export response header `{name}` is invalid: {source}")]
+    Header {
+        name: &'static str,
+        #[source]
+        source: InvalidHeaderValue,
+    },
+    #[error("finance export ZIP entry `{name}` could not be created: {source}")]
+    ZipEntry {
+        name: &'static str,
+        #[source]
+        source: zip::result::ZipError,
+    },
+    #[error("finance export ZIP entry `{name}` bytes could not be written: {source}")]
+    ZipBytes {
+        name: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("finance export ZIP could not be finalized: {source}")]
+    ZipFinish {
+        #[source]
+        source: zip::result::ZipError,
+    },
+}
+
+impl From<FinanceExportBuildError> for FinanceExportError {
+    fn from(error: FinanceExportBuildError) -> Self {
+        Self(error.to_string())
+    }
+}
+
 /// Storage boundary used to keep route tests independent from live finance data.
 #[async_trait]
 pub trait FinanceExportBackend: Send + Sync {
@@ -169,15 +251,15 @@ impl FinanceExportBackend for PgFinanceExportBackend {
         generated_at: i64,
     ) -> Result<FinanceExportArtifact, FinanceExportError> {
         let options = load_options(&self.pg).await?;
-        let effective_pricing = load_effective_pricing(&self.pg, &options)
-            .await
-            .unwrap_or_default();
+        let effective_pricing = load_effective_pricing(&self.pg, &options).await?;
         let mut users = load_users(&self.pg).await?;
         apply_user_ratios(&mut users, &options);
         let channels = load_channels(&self.pg).await?;
         let plans = load_plans(&self.pg).await?;
         let topups = load_topups(&self.pg, start_timestamp, end_timestamp).await?;
         let orders = load_subscription_orders(&self.pg, start_timestamp, end_timestamp).await?;
+        let subscription_payments =
+            load_subscription_payments(&self.pg, start_timestamp, end_timestamp).await?;
         let usage = load_usage(&self.pg, start_timestamp, end_timestamp).await?;
         let bounty_ledger = load_bounty_ledger(&self.pg, start_timestamp, end_timestamp).await?;
         let checkins = load_checkins(&self.pg, start_timestamp, end_timestamp).await?;
@@ -195,6 +277,10 @@ impl FinanceExportBackend for PgFinanceExportBackend {
             ("plans".to_owned(), usize_to_i64(plans.len())),
             ("topups".to_owned(), usize_to_i64(topups.len())),
             ("subscription_orders".to_owned(), usize_to_i64(orders.len())),
+            (
+                "subscription_payment_events".to_owned(),
+                usize_to_i64(subscription_payments.len()),
+            ),
             ("usage".to_owned(), usize_to_i64(usage.len())),
             (
                 "bounty_ledger".to_owned(),
@@ -212,6 +298,10 @@ impl FinanceExportBackend for PgFinanceExportBackend {
             (
                 "subscription_orders".to_owned(),
                 usize_to_i64(orders.len()) == MAX_ROWS,
+            ),
+            (
+                "subscription_payment_events".to_owned(),
+                usize_to_i64(subscription_payments.len()) == MAX_ROWS,
             ),
             ("usage".to_owned(), usize_to_i64(usage.len()) == MAX_ROWS),
             (
@@ -290,6 +380,10 @@ impl FinanceExportBackend for PgFinanceExportBackend {
             (
                 "subscription-orders.json".to_owned(),
                 go_pretty_json(&orders)?,
+            ),
+            (
+                "subscription-payment-events.json".to_owned(),
+                go_pretty_json(&subscription_payments)?,
             ),
             (
                 "usage-billing-records.json".to_owned(),
@@ -443,6 +537,7 @@ struct FinanceTopup {
     topup_id: i64,
     user_id: i64,
     amount: i64,
+    platform_amount_micros: i64,
     credited_quota: i64,
     expected_amount_micros: i64,
     settled_amount_micros: i64,
@@ -460,12 +555,33 @@ struct FinanceSubscriptionOrder {
     order_id: i64,
     user_id: i64,
     plan_id: i64,
+    #[serde(rename = "plan_price")]
     money: f64,
+    plan_currency: String,
+    expected_amount_micros: i64,
+    settlement_currency: String,
     payment_method: String,
     payment_provider: String,
+    provider_product_id: String,
+    provider_subscription_state: String,
+    current_period_start: i64,
+    current_period_end: i64,
+    refunded_amount_micros: i64,
     status: String,
     create_time: i64,
     complete_time: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct FinanceSubscriptionPayment {
+    payment_event_id: i64,
+    subscription_order_id: i64,
+    payment_provider: String,
+    settlement_currency: String,
+    settlement_amount_micros: i64,
+    period_start: i64,
+    period_end: i64,
+    created_time: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -612,7 +728,7 @@ async fn export_finance(State(state): State<FinanceExportState>, request: Reques
                 .and_then(|context| context.client_ip)
                 .map(|ip| ip.to_string())
         })
-        .unwrap_or_default();
+        .map_or_else(String::new, |value| value);
     drop(request);
 
     let principal = match authenticated_admin(&state, &headers).await {
@@ -620,13 +736,14 @@ async fn export_finance(State(state): State<FinanceExportState>, request: Reques
         Err(response) => return response,
     };
     let query = parse_query(raw_query.as_deref());
-    let format = query
+    let raw_format = query
         .get("format")
         .map_or("zip", |value| value.trim())
         .to_ascii_lowercase();
-    if !matches!(format.as_str(), "zip" | "text") {
-        return authenticated_handler_response(api_error("format must be zip or text"));
-    }
+    let format = match FinanceExportFormat::parse(&raw_format) {
+        Ok(format) => format,
+        Err(error) => return authenticated_handler_response(api_error(&error.to_string())),
+    };
     let (start_timestamp, end_timestamp) = match export_window(&query, unix_timestamp()) {
         Ok(window) => window,
         Err(message) => return authenticated_handler_response(api_error(message)),
@@ -645,18 +762,18 @@ async fn export_finance(State(state): State<FinanceExportState>, request: Reques
             actor_id: principal.id,
             actor_username: principal.username,
             client_ip,
-            format: format.clone(),
+            format: format.as_str().to_owned(),
             start_timestamp,
             end_timestamp,
             rows: artifact.rows.clone(),
         })
         .await;
-    if format == "text" {
+    if format == FinanceExportFormat::Text {
         return text_response(export_text(&artifact.files));
     }
-    match export_zip(&artifact.files) {
-        Ok(bytes) => zip_response(bytes),
-        Err(_) => zip_response(Vec::new()),
+    match export_zip(&artifact.files).and_then(zip_response) {
+        Ok(response) => response,
+        Err(error) => authenticated_handler_response(api_error(&error.to_string())),
     }
 }
 
@@ -664,23 +781,35 @@ async fn authenticated_admin(
     state: &FinanceExportState,
     headers: &HeaderMap,
 ) -> Result<DashboardUserView, Response> {
-    let Some(credential) = dashboard_credential(headers) else {
-        return Err(dashboard_auth_error(headers, None));
+    let Some(credential) = crate::migration_routes::legacy_http::dashboard_credential(headers)
+    else {
+        return Err(
+            crate::migration_routes::legacy_http::localized_dashboard_auth_error(headers, None),
+        );
     };
     let user = state
         .auth
         .self_user_view_for_optional(SecretString::from(credential))
         .await
-        .map_err(|error| dashboard_auth_error(headers, Some(error.kind)))?;
+        .map_err(|error| {
+            crate::migration_routes::legacy_http::localized_dashboard_auth_error(
+                headers,
+                Some(error.kind),
+            )
+        })?;
     if !user.developer_access_granted {
         return Err(console_not_found());
     }
-    enforce_user_auth_view(&user).map_err(|error| user_policy_error(headers, error))?;
+    enforce_user_auth_view(&user).map_err(|error| {
+        crate::migration_routes::legacy_http::localized_user_policy_error(headers, error)
+    })?;
     if user.role < ADMIN_ROLE {
-        return Err(user_policy_error(
-            headers,
-            UserAuthPolicyError::InsufficientPrivilege,
-        ));
+        return Err(
+            crate::migration_routes::legacy_http::localized_user_policy_error(
+                headers,
+                UserAuthPolicyError::InsufficientPrivilege,
+            ),
+        );
     }
     Ok(user)
 }
@@ -725,7 +854,7 @@ fn positive_timestamp(
 
 fn parse_query(raw: Option<&str>) -> HashMap<String, String> {
     let mut query = HashMap::new();
-    for (key, value) in form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+    for (key, value) in form_urlencoded::parse(raw.map_or("", |value| value).as_bytes()) {
         query
             .entry(key.into_owned())
             .or_insert_with(|| value.into_owned());
@@ -753,19 +882,19 @@ fn export_zip(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, FinanceExpor
     let mut writer = ZipWriter::new(cursor);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     for name in FILE_NAMES {
-        writer
-            .start_file(name, options)
-            .map_err(export_serialization_error)?;
+        writer.start_file(name, options).map_err(|source| {
+            FinanceExportError::from(FinanceExportBuildError::ZipEntry { name, source })
+        })?;
         if let Some(contents) = files.get(name) {
-            writer
-                .write_all(contents)
-                .map_err(export_serialization_error)?;
+            writer.write_all(contents).map_err(|source| {
+                FinanceExportError::from(FinanceExportBuildError::ZipBytes { name, source })
+            })?;
         }
     }
     writer
         .finish()
         .map(Cursor::into_inner)
-        .map_err(export_serialization_error)
+        .map_err(|source| FinanceExportError::from(FinanceExportBuildError::ZipFinish { source }))
 }
 
 fn text_response(bytes: Vec<u8>) -> Response {
@@ -778,22 +907,21 @@ fn text_response(bytes: Vec<u8>) -> Response {
     authenticated_handler_response(response)
 }
 
-fn zip_response(bytes: Vec<u8>) -> Response {
+fn zip_response(bytes: Vec<u8>) -> Result<Response, FinanceExportError> {
     let filename = format!(
         "lmm-finance-export-{}.zip",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     );
+    let disposition = content_disposition(&filename)?;
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/zip"),
     );
-    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")) {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_DISPOSITION, value);
-    }
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -801,7 +929,18 @@ fn zip_response(bytes: Vec<u8>) -> Response {
         HeaderName::from_static("x-content-type-options"),
         HeaderValue::from_static("nosniff"),
     );
-    with_auth_version(with_disable_cache_preserving_cache_control(response))
+    Ok(with_auth_version(
+        with_disable_cache_preserving_cache_control(response),
+    ))
+}
+
+fn content_disposition(filename: &str) -> Result<HeaderValue, FinanceExportError> {
+    HeaderValue::from_str(&format!("attachment; filename=\"{filename}\"")).map_err(|source| {
+        FinanceExportError::from(FinanceExportBuildError::Header {
+            name: "content-disposition",
+            source,
+        })
+    })
 }
 
 fn authenticated_handler_response(response: Response) -> Response {
@@ -854,123 +993,6 @@ fn legacy_json(status: StatusCode, body: Value) -> Response {
     response
 }
 
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
-fn dashboard_auth_error(headers: &HeaderMap, kind: Option<AuthErrorKind>) -> Response {
-    if kind == Some(AuthErrorKind::UserDisabled) {
-        return user_policy_error(headers, UserAuthPolicyError::UserDisabled);
-    }
-    let (status, code, message) = match kind {
-        Some(AuthErrorKind::TokenExpired) => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_TOKEN_EXPIRED",
-            auth_not_logged_in(headers),
-        ),
-        Some(AuthErrorKind::SessionRevoked) => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_SESSION_REVOKED",
-            auth_not_logged_in(headers),
-        ),
-        Some(AuthErrorKind::Internal) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "AUTH_INTERNAL_ERROR",
-            auth_database_error(headers),
-        ),
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            "AUTH_UNAUTHORIZED",
-            auth_invalid_access_token(headers),
-        ),
-    };
-    legacy_json(
-        status,
-        json!({"success": false, "code": code, "message": message}),
-    )
-}
-
-fn user_policy_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response {
-    let code = match error {
-        UserAuthPolicyError::UserDisabled => "AUTH_USER_DISABLED",
-        UserAuthPolicyError::InsufficientPrivilege => "AUTH_INSUFFICIENT_PRIVILEGE",
-        UserAuthPolicyError::InvalidUserInfo => "AUTH_USER_INVALID",
-    };
-    legacy_json(
-        StatusCode::from_u16(user_auth_status(error)).unwrap_or(StatusCode::UNAUTHORIZED),
-        json!({
-            "success": false,
-            "code": code,
-            "message": user_auth_message(
-                error,
-                headers.get(header::ACCEPT_LANGUAGE).and_then(|value| value.to_str().ok()),
-            ),
-        }),
-    )
-}
-
-#[derive(Clone, Copy)]
-enum TokenLocale {
-    En,
-    ZhCn,
-    ZhTw,
-}
-
-fn token_locale(headers: &HeaderMap) -> TokenLocale {
-    let language = headers
-        .get(header::ACCEPT_LANGUAGE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if language.starts_with("zh-tw") {
-        TokenLocale::ZhTw
-    } else if language.starts_with("zh") {
-        TokenLocale::ZhCn
-    } else {
-        TokenLocale::En
-    }
-}
-
-fn auth_not_logged_in(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Unauthorized, not logged in and no access token provided",
-        TokenLocale::ZhCn => "无权进行此操作，未登录且未提供 access token",
-        TokenLocale::ZhTw => "無權進行此操作，未登入且未提供 access token",
-    }
-}
-
-fn auth_invalid_access_token(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Unauthorized, invalid access token",
-        TokenLocale::ZhCn => "无权进行此操作，access token 无效",
-        TokenLocale::ZhTw => "無權進行此操作，access token 無效",
-    }
-}
-
-fn auth_database_error(headers: &HeaderMap) -> &'static str {
-    match token_locale(headers) {
-        TokenLocale::En => "Database error, please contact the administrator",
-        TokenLocale::ZhCn => "数据库出错，请联系管理员",
-        TokenLocale::ZhTw => "資料庫出錯，請聯繫管理員",
-    }
-}
-
 async fn load_options(pg: &PgPool) -> Result<BTreeMap<String, String>, FinanceExportError> {
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT key, COALESCE(value, '') FROM options WHERE key = ANY($1)",
@@ -978,7 +1000,7 @@ async fn load_options(pg: &PgPool) -> Result<BTreeMap<String, String>, FinanceEx
     .bind(OPTION_KEYS.as_slice())
     .fetch_all(pg)
     .await
-    .map_err(database_error)?;
+    .map_err(|source| database_error("load finance options", source))?;
     Ok(rows.into_iter().collect())
 }
 
@@ -998,7 +1020,7 @@ async fn load_users(pg: &PgPool) -> Result<Vec<FinanceUser>, FinanceExportError>
     )
     .fetch_all(pg)
     .await
-    .map_err(database_error)?;
+    .map_err(|source| database_error("load finance users", source))?;
     rows.into_iter().map(user_from_row).collect()
 }
 
@@ -1037,7 +1059,7 @@ async fn load_channels(pg: &PgPool) -> Result<Vec<FinanceChannel>, FinanceExport
     )
     .fetch_all(pg)
     .await
-    .map_err(database_error)?;
+    .map_err(|source| database_error("load finance channels", source))?;
     rows.into_iter().map(channel_from_row).collect()
 }
 
@@ -1052,7 +1074,11 @@ fn channel_from_row(row: PgRow) -> Result<FinanceChannel, FinanceExportError> {
         created_time: get(&row, "created_time")?,
         test_time: get(&row, "test_time")?,
         response_time: get(&row, "response_time")?,
-        base_url: raw_url.as_deref().and_then(sanitize_base_url),
+        base_url: raw_url
+            .as_deref()
+            .map(sanitize_base_url)
+            .transpose()?
+            .flatten(),
         balance: get(&row, "balance")?,
         balance_updated_time: get(&row, "balance_updated_time")?,
         models: get(&row, "models")?,
@@ -1083,7 +1109,7 @@ async fn load_plans(pg: &PgPool) -> Result<Vec<FinancePlan>, FinanceExportError>
     )
     .fetch_all(pg)
     .await
-    .map_err(database_error)?;
+    .map_err(|source| database_error("load finance subscription plans", source))?;
     rows.into_iter().map(plan_from_row).collect()
 }
 
@@ -1119,7 +1145,10 @@ async fn load_topups(
 ) -> Result<Vec<FinanceTopup>, FinanceExportError> {
     let rows = sqlx::query(
         "SELECT id::BIGINT AS topup_id, COALESCE(user_id, 0)::BIGINT AS user_id, \
-         COALESCE(amount, 0)::BIGINT AS amount, COALESCE(credited_quota, 0)::BIGINT AS credited_quota, \
+         COALESCE(amount, 0)::BIGINT AS amount, \
+         CASE WHEN COALESCE(to_jsonb(top_ups)->>'platform_amount_micros', '') ~ '^-?[0-9]+$' \
+              THEN (to_jsonb(top_ups)->>'platform_amount_micros')::BIGINT ELSE 0 END AS platform_amount_micros, \
+         COALESCE(credited_quota, 0)::BIGINT AS credited_quota, \
          COALESCE(expected_amount_micros, 0)::BIGINT AS expected_amount_micros, \
          COALESCE(settled_amount_micros, 0)::BIGINT AS settled_amount_micros, \
          COALESCE(settlement_currency, '') AS settlement_currency, \
@@ -1128,7 +1157,12 @@ async fn load_topups(
          COALESCE(complete_time, 0)::BIGINT AS complete_time, COALESCE(status, '') AS status \
          FROM top_ups WHERE create_time >= $1 AND create_time <= $2 \
          ORDER BY create_time ASC, id ASC LIMIT 200000",
-    ).bind(start).bind(end).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance top-ups", source))?;
     rows.into_iter().map(topup_from_row).collect()
 }
 
@@ -1137,6 +1171,7 @@ fn topup_from_row(row: PgRow) -> Result<FinanceTopup, FinanceExportError> {
         topup_id: get(&row, "topup_id")?,
         user_id: get(&row, "user_id")?,
         amount: get(&row, "amount")?,
+        platform_amount_micros: get(&row, "platform_amount_micros")?,
         credited_quota: get(&row, "credited_quota")?,
         expected_amount_micros: get(&row, "expected_amount_micros")?,
         settled_amount_micros: get(&row, "settled_amount_micros")?,
@@ -1158,11 +1193,24 @@ async fn load_subscription_orders(
     let rows = sqlx::query(
         "SELECT id::BIGINT AS order_id, COALESCE(user_id, 0)::BIGINT AS user_id, \
          COALESCE(plan_id, 0)::BIGINT AS plan_id, COALESCE(money, 0)::DOUBLE PRECISION AS money, \
+         COALESCE(plan_currency, '') AS plan_currency, \
+         COALESCE(expected_amount_micros, 0)::BIGINT AS expected_amount_micros, \
+         COALESCE(settlement_currency, '') AS settlement_currency, \
          COALESCE(payment_method, '') AS payment_method, COALESCE(payment_provider, '') AS payment_provider, \
+         COALESCE(provider_product_id, '') AS provider_product_id, \
+         COALESCE(provider_subscription_state, '') AS provider_subscription_state, \
+         COALESCE(current_period_start, 0)::BIGINT AS current_period_start, \
+         COALESCE(current_period_end, 0)::BIGINT AS current_period_end, \
+         COALESCE(refunded_amount_micros, 0)::BIGINT AS refunded_amount_micros, \
          COALESCE(status, '') AS status, COALESCE(create_time, 0)::BIGINT AS create_time, \
          COALESCE(complete_time, 0)::BIGINT AS complete_time FROM subscription_orders \
          WHERE create_time >= $1 AND create_time <= $2 ORDER BY create_time ASC, id ASC LIMIT 200000",
-    ).bind(start).bind(end).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance subscription orders", source))?;
     rows.into_iter().map(order_from_row).collect()
 }
 
@@ -1172,12 +1220,57 @@ fn order_from_row(row: PgRow) -> Result<FinanceSubscriptionOrder, FinanceExportE
         user_id: get(&row, "user_id")?,
         plan_id: get(&row, "plan_id")?,
         money: get(&row, "money")?,
+        plan_currency: get(&row, "plan_currency")?,
+        expected_amount_micros: get(&row, "expected_amount_micros")?,
+        settlement_currency: get(&row, "settlement_currency")?,
         payment_method: get(&row, "payment_method")?,
         payment_provider: get(&row, "payment_provider")?,
+        provider_product_id: get(&row, "provider_product_id")?,
+        provider_subscription_state: get(&row, "provider_subscription_state")?,
+        current_period_start: get(&row, "current_period_start")?,
+        current_period_end: get(&row, "current_period_end")?,
+        refunded_amount_micros: get(&row, "refunded_amount_micros")?,
         status: get(&row, "status")?,
         create_time: get(&row, "create_time")?,
         complete_time: get(&row, "complete_time")?,
     })
+}
+
+async fn load_subscription_payments(
+    pg: &PgPool,
+    start: i64,
+    end: i64,
+) -> Result<Vec<FinanceSubscriptionPayment>, FinanceExportError> {
+    let rows = sqlx::query(
+        "SELECT id::BIGINT AS payment_event_id, COALESCE(subscription_order_id, 0)::BIGINT AS subscription_order_id, \
+         COALESCE(payment_provider, '') AS payment_provider, \
+         COALESCE(settlement_currency, '') AS settlement_currency, \
+         COALESCE(settlement_amount_micros, 0)::BIGINT AS settlement_amount_micros, \
+         COALESCE(period_start, 0)::BIGINT AS period_start, \
+         COALESCE(period_end, 0)::BIGINT AS period_end, \
+         COALESCE(created_time, 0)::BIGINT AS created_time \
+         FROM subscription_payment_events WHERE created_time >= $1 AND created_time <= $2 \
+         ORDER BY created_time ASC, id ASC LIMIT 200000",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance subscription payments", source))?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(FinanceSubscriptionPayment {
+                payment_event_id: get(&row, "payment_event_id")?,
+                subscription_order_id: get(&row, "subscription_order_id")?,
+                payment_provider: get(&row, "payment_provider")?,
+                settlement_currency: get(&row, "settlement_currency")?,
+                settlement_amount_micros: get(&row, "settlement_amount_micros")?,
+                period_start: get(&row, "period_start")?,
+                period_end: get(&row, "period_end")?,
+                created_time: get(&row, "created_time")?,
+            })
+        })
+        .collect()
 }
 
 async fn load_usage(
@@ -1196,7 +1289,12 @@ async fn load_usage(
          COALESCE(channel_id, 0)::BIGINT AS channel_id, COALESCE(\"group\", '') AS \"group\" FROM logs \
          WHERE created_at >= $1 AND created_at <= $2 AND type IN (1, 2, 3, 4, 6) \
          ORDER BY created_at ASC, id ASC LIMIT 200000",
-    ).bind(start).bind(end).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance usage", source))?;
     rows.into_iter().map(usage_from_row).collect()
 }
 
@@ -1229,7 +1327,12 @@ async fn load_bounty_ledger(
          user_id::BIGINT AS user_id, counterparty_user_id::BIGINT AS counterparty_user_id, kind, quota::BIGINT AS quota, \
          note, created_at::BIGINT AS created_at FROM open_source_bounty_ledgers \
          WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at ASC, id ASC LIMIT 200000",
-    ).bind(start).bind(end).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance bounty ledger", source))?;
     rows.into_iter().map(ledger_from_row).collect()
 }
 
@@ -1256,7 +1359,12 @@ async fn load_checkins(
         "SELECT id::BIGINT AS checkin_id, user_id::BIGINT AS user_id, checkin_date, \
          quota_awarded::BIGINT AS quota_awarded, COALESCE(created_at, 0)::BIGINT AS created_at FROM checkins \
          WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at ASC, id ASC LIMIT 200000",
-    ).bind(start).bind(end).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance check-ins", source))?;
     rows.into_iter().map(checkin_from_row).collect()
 }
 
@@ -1277,7 +1385,10 @@ async fn load_redemptions(pg: &PgPool) -> Result<Vec<FinanceRedemption>, Finance
          COALESCE(created_time, 0)::BIGINT AS created_time, COALESCE(redeemed_time, 0)::BIGINT AS redeemed_time, \
          COALESCE(used_user_id, 0)::BIGINT AS used_user_id, COALESCE(expired_time, 0)::BIGINT AS expired_time \
          FROM redemptions WHERE deleted_at IS NULL ORDER BY id ASC LIMIT 200000",
-    ).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance redemptions", source))?;
     rows.into_iter().map(redemption_from_row).collect()
 }
 
@@ -1308,7 +1419,10 @@ async fn load_user_subscriptions(
          COALESCE(downgrade_group, '') AS downgrade_group, COALESCE(allow_wallet_overflow, FALSE) AS allow_wallet_overflow, \
          COALESCE(created_at, 0)::BIGINT AS created_at, COALESCE(updated_at, 0)::BIGINT AS updated_at \
          FROM user_subscriptions ORDER BY id ASC LIMIT 200000",
-    ).fetch_all(pg).await.map_err(database_error)?;
+    )
+    .fetch_all(pg)
+    .await
+    .map_err(|source| database_error("load finance user subscriptions", source))?;
     rows.into_iter().map(user_subscription_from_row).collect()
 }
 
@@ -1345,7 +1459,7 @@ async fn load_effective_pricing(
     )
     .fetch_all(pg)
     .await
-    .map_err(database_error)?;
+    .map_err(|source| database_error("load finance model abilities", source))?;
     let abilities = ability_rows
         .into_iter()
         .map(|row| {
@@ -1365,7 +1479,7 @@ async fn load_effective_pricing(
     )
     .fetch_all(pg)
     .await
-    .map_err(database_error)?;
+    .map_err(|source| database_error("load finance model metadata", source))?;
     let metas = meta_rows
         .into_iter()
         .map(|row| {
@@ -1430,19 +1544,28 @@ fn build_effective_pricing(
                 (
                     0,
                     0.0,
-                    ratios.get(matching_name).copied().unwrap_or(37.5),
-                    completions.get(matching_name).copied().unwrap_or(1.0),
+                    ratios
+                        .get(matching_name)
+                        .copied()
+                        .map_or(37.5, |value| value),
+                    completions
+                        .get(matching_name)
+                        .copied()
+                        .map_or(1.0, |value| value),
                 )
             },
             |price| (1, price, 0.0, 0.0),
         );
-        let billing_mode = billing_modes.get(&model).cloned().unwrap_or_default();
+        let billing_mode = billing_modes
+            .get(&model)
+            .cloned()
+            .map_or_else(String::new, |value| value);
         let billing_expr = if billing_mode == "tiered_expr" {
             billing_expressions
                 .get(&model)
                 .filter(|value| !value.trim().is_empty())
                 .cloned()
-                .unwrap_or_default()
+                .map_or_else(String::new, |value| value)
         } else {
             String::new()
         };
@@ -1558,7 +1681,7 @@ fn advanced_custom_endpoints(settings: &str, model: &str) -> Option<Vec<String>>
     let routes = config
         .get("advanced_routes")
         .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
+        .map_or_else(Vec::new, |value| value);
     let mut endpoints = Vec::new();
     for route in routes {
         let models = route.get("models").and_then(Value::as_array);
@@ -1645,33 +1768,42 @@ fn float_map(options: &BTreeMap<String, String>, key: &str) -> BTreeMap<String, 
     options
         .get(key)
         .and_then(|value| serde_json::from_str(value).ok())
-        .unwrap_or_default()
+        .map_or_else(BTreeMap::new, |value| value)
 }
 
 fn string_map(options: &BTreeMap<String, String>, key: &str) -> BTreeMap<String, String> {
     options
         .get(key)
         .and_then(|value| serde_json::from_str(value).ok())
-        .unwrap_or_default()
+        .map_or_else(BTreeMap::new, |value| value)
 }
 
-fn sanitize_base_url(value: &str) -> Option<String> {
+fn sanitize_base_url(value: &str) -> Result<Option<String>, FinanceExportError> {
     let value = value.trim();
-    let (scheme, remainder) = value.split_once("://")?;
-    if scheme.is_empty() {
-        return None;
+    if value.is_empty() {
+        return Ok(None);
     }
-    let authority = remainder
+    let invalid_uri = || {
+        FinanceExportError::from(FinanceExportBuildError::Uri {
+            value: value.to_owned(),
+        })
+    };
+    let (scheme, remainder) = value.split_once("://").ok_or_else(invalid_uri)?;
+    if scheme.is_empty() {
+        return Err(invalid_uri());
+    }
+    let authority_with_credentials = remainder
         .split(['/', '?', '#'])
         .next()
-        .unwrap_or_default()
+        .ok_or_else(&invalid_uri)?;
+    let authority = authority_with_credentials
         .rsplit('@')
         .next()
-        .unwrap_or_default();
+        .ok_or_else(&invalid_uri)?;
     if authority.is_empty() {
-        None
+        Err(invalid_uri())
     } else {
-        Some(format!("{scheme}://{authority}"))
+        Ok(Some(format!("{scheme}://{authority}")))
     }
 }
 
@@ -1685,14 +1817,19 @@ fn go_pretty_json(value: &impl Serialize) -> Result<Vec<u8>, FinanceExportError>
                 .replace('\u{2029}', "\\u2029")
                 .into_bytes()
         })
-        .map_err(export_serialization_error)
+        .map_err(|source| FinanceExportError::from(FinanceExportBuildError::Json { source }))
 }
 
 fn get<'r, T>(row: &'r PgRow, column: &str) -> Result<T, FinanceExportError>
 where
     T: sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
 {
-    row.try_get(column).map_err(database_error)
+    row.try_get(column).map_err(|source| {
+        FinanceExportError::from(FinanceExportBuildError::Row {
+            column: column.to_owned(),
+            source,
+        })
+    })
 }
 
 fn is_zero(value: &i64) -> bool {
@@ -1700,89 +1837,213 @@ fn is_zero(value: &i64) -> bool {
 }
 
 fn usize_to_i64(value: usize) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
+    i64::try_from(value).map_or(i64::MAX, |value| value)
 }
 
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+            i64::try_from(duration.as_secs()).map_or(i64::MAX, |value| value)
         })
 }
 
-fn database_error(error: impl std::fmt::Display) -> FinanceExportError {
-    FinanceExportError(error.to_string())
-}
-
-fn export_serialization_error(error: impl std::fmt::Display) -> FinanceExportError {
-    FinanceExportError(error.to_string())
+fn database_error(operation: &'static str, source: sqlx::Error) -> FinanceExportError {
+    FinanceExportError::from(FinanceExportBuildError::Database { operation, source })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
+    use std::{
+        error::Error,
+        io::{Error as IoError, Read},
+    };
+
+    use serde::{Serializer, ser::Error as _};
 
     use super::*;
 
+    type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    fn test_error(message: impl Into<String>) -> Box<dyn Error> {
+        Box::new(IoError::other(message.into()))
+    }
+
+    fn require_error<T, E>(result: Result<T, E>, context: &'static str) -> TestResult<E> {
+        match result {
+            Ok(_) => Err(test_error(context)),
+            Err(error) => Ok(error),
+        }
+    }
+
+    struct BrokenJson;
+
+    impl Serialize for BrokenJson {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("fixture JSON failure"))
+        }
+    }
+
     #[test]
-    fn window_should_reject_more_than_ninety_days() {
+    fn window_should_reject_more_than_ninety_days() -> TestResult {
         let query = parse_query(Some("start_timestamp=1&end_timestamp=7776002"));
         assert_eq!(
             export_window(&query, 10),
             Err("export window cannot exceed 90 days")
         );
+        Ok(())
     }
 
     #[test]
-    fn base_url_should_remove_credentials_path_and_query() {
+    fn csv_format_should_keep_the_legacy_error() -> TestResult {
+        let error = require_error(
+            FinanceExportFormat::parse("csv"),
+            "CSV format must be rejected",
+        )?;
+        assert_eq!(error, FinanceExportRequestError::UnsupportedFormat);
+        assert_eq!(error.to_string(), "format must be zip or text");
+        Ok(())
+    }
+
+    #[test]
+    fn base_url_should_remove_credentials_path_and_query() -> TestResult {
         assert_eq!(
-            sanitize_base_url("https://user:secret@example.com/v1?token=secret"),
+            sanitize_base_url("https://user:secret@example.com/v1?token=secret")?,
             Some("https://example.com".to_owned())
         );
+        Ok(())
     }
 
     #[test]
-    fn text_should_preserve_section_order() {
-        let files = FILE_NAMES
-            .into_iter()
-            .map(|name| (name.to_owned(), name.as_bytes().to_vec()))
-            .collect();
-        let text = String::from_utf8(export_text(&files)).expect("UTF-8 fixture");
-        assert!(text.find("manifest.json") < text.find("users-balances.json"));
-    }
-
-    #[test]
-    fn zip_should_preserve_file_order() {
-        let files = FILE_NAMES
-            .into_iter()
-            .map(|name| (name.to_owned(), name.as_bytes().to_vec()))
-            .collect();
-        let bytes = export_zip(&files).expect("valid ZIP");
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("readable ZIP");
+    fn malformed_base_uri_should_return_an_explicit_error() -> TestResult {
+        let error = require_error(
+            sanitize_base_url("not-a-finance-uri"),
+            "malformed finance URI must fail closed",
+        )?;
         assert_eq!(
-            archive.by_index(0).expect("first entry").name(),
-            "manifest.json"
+            error.to_string(),
+            "finance export base URI `not-a-finance-uri` is invalid"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn text_should_preserve_section_order() -> TestResult {
+        let files = FILE_NAMES
+            .into_iter()
+            .map(|name| (name.to_owned(), name.as_bytes().to_vec()))
+            .collect();
+        let text = String::from_utf8(export_text(&files))
+            .map_err(|source| test_error(format!("text export UTF-8 error: {source}")))?;
+        assert!(text.find("manifest.json") < text.find("users-balances.json"));
+        Ok(())
+    }
+
+    #[test]
+    fn zip_should_preserve_file_order() -> TestResult {
+        let files = FILE_NAMES
+            .into_iter()
+            .map(|name| (name.to_owned(), name.as_bytes().to_vec()))
+            .collect();
+        let bytes = export_zip(&files)
+            .map_err(|source| test_error(format!("ZIP creation error: {source}")))?;
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+            .map_err(|source| test_error(format!("ZIP read error: {source}")))?;
+        let first_name = archive
+            .by_index(0)
+            .map_err(|source| test_error(format!("first ZIP row error: {source}")))?
+            .name()
+            .to_owned();
+        assert_eq!(first_name, "manifest.json");
         let mut contents = String::new();
         archive
             .by_name("user-subscriptions.json")
-            .expect("last entry")
+            .map_err(|source| test_error(format!("last ZIP row error: {source}")))?
             .read_to_string(&mut contents)
-            .expect("entry contents");
+            .map_err(|source| test_error(format!("ZIP entry byte error: {source}")))?;
         assert_eq!(contents, "user-subscriptions.json");
+        Ok(())
     }
 
     #[test]
-    fn go_json_should_escape_html_sensitive_characters() {
-        assert_eq!(
-            go_pretty_json(&"<&>").expect("JSON"),
-            br#""\u003c\u0026\u003e""#
+    fn fractional_topup_export_should_include_exact_platform_micros() -> TestResult {
+        let value = serde_json::to_value(FinanceTopup {
+            topup_id: 1,
+            user_id: 2,
+            amount: 6,
+            platform_amount_micros: 6_800_000,
+            credited_quota: 680,
+            expected_amount_micros: 1_000_000,
+            settled_amount_micros: 1_000_000,
+            settlement_currency: "USD".to_owned(),
+            money: 1.0,
+            payment_method: "waffo_pancake".to_owned(),
+            payment_provider: "waffo_pancake".to_owned(),
+            create_time: 10,
+            complete_time: 11,
+            status: "success".to_owned(),
+        })?;
+        assert_eq!(value["amount"], json!(6));
+        assert_eq!(value["platform_amount_micros"], json!(6_800_000));
+        Ok(())
+    }
+
+    #[test]
+    fn go_json_should_escape_html_sensitive_characters() -> TestResult {
+        let bytes = go_pretty_json(&"<&>")
+            .map_err(|source| test_error(format!("JSON encoding error: {source}")))?;
+        assert_eq!(bytes, br#""\u003c\u0026\u003e""#);
+        Ok(())
+    }
+
+    #[test]
+    fn json_serialization_should_return_an_explicit_error() -> TestResult {
+        let error = require_error(
+            go_pretty_json(&BrokenJson),
+            "broken JSON serializer must fail closed",
+        )?;
+        assert!(
+            error
+                .to_string()
+                .contains("finance export JSON serialization failed")
         );
+        assert!(error.to_string().contains("fixture JSON failure"));
+        Ok(())
     }
 
     #[test]
-    fn pricing_endpoint_inference_should_follow_go_special_cases() {
+    fn invalid_content_disposition_should_return_an_explicit_header_error() -> TestResult {
+        let error = require_error(
+            content_disposition("bad\nfilename.zip"),
+            "invalid content-disposition header must fail closed",
+        )?;
+        assert!(
+            error
+                .to_string()
+                .contains("finance export response header `content-disposition` is invalid")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn row_decode_error_should_include_the_column() -> TestResult {
+        let error = FinanceExportError::from(FinanceExportBuildError::Row {
+            column: "quota".to_owned(),
+            source: sqlx::Error::ColumnNotFound("quota".to_owned()),
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("finance export database row column `quota` failed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pricing_endpoint_inference_should_follow_go_special_cases() -> TestResult {
         let open_router = Ability {
             group: "default".to_owned(),
             model: "o3-pro".to_owned(),
@@ -1797,10 +2058,11 @@ mod tests {
             ..open_router
         };
         assert_eq!(endpoints_for_ability(&ordinary), ["openai"]);
+        Ok(())
     }
 
     #[test]
-    fn missing_advanced_custom_config_should_use_channel_fallback() {
+    fn missing_advanced_custom_config_should_use_channel_fallback() -> TestResult {
         let ability = Ability {
             group: "default".to_owned(),
             model: "gpt-4o".to_owned(),
@@ -1808,10 +2070,11 @@ mod tests {
             channel_settings: "{}".to_owned(),
         };
         assert_eq!(endpoints_for_ability(&ability), ["openai"]);
+        Ok(())
     }
 
     #[test]
-    fn exact_metadata_should_win_over_broader_rules() {
+    fn exact_metadata_should_win_over_broader_rules() -> TestResult {
         let metadata = vec![
             ModelMeta {
                 model_name: "gpt".to_owned(),
@@ -1838,5 +2101,6 @@ mod tests {
             matching_metadata("gpt-4o", &metadata).map(|value| value.description.as_str()),
             Some("exact")
         );
+        Ok(())
     }
 }

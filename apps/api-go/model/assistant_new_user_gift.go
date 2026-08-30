@@ -1,7 +1,7 @@
 package model
 
 import (
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"errors"
 	"math"
@@ -246,7 +246,7 @@ func getAssistantGiftRiskSecret(tx *gorm.DB) (string, error) {
 	seed := strings.TrimSpace(common.CryptoSecret)
 	if seed == "" {
 		raw := make([]byte, 32)
-		if _, err := rand.Read(raw); err != nil {
+		if _, err := cryptorand.Read(raw); err != nil {
 			return "", err
 		}
 		seed = hex.EncodeToString(raw)
@@ -371,9 +371,10 @@ func ClaimAssistantNewUserGift(userID int) (*AssistantNewUserGift, bool, error) 
 		if gift.Status != AssistantGiftOffered || gift.AmountCents <= 0 || gift.Quota <= 0 {
 			return ErrAssistantGiftUnavailable
 		}
-		result := tx.Model(&User{}).
-			Where("id = ? AND status = ?", userID, common.UserStatusEnabled).
-			Update("quota", gorm.Expr("quota + ?", gift.Quota))
+		result := UpdateWalletQuotaByDelta(
+			tx.Model(&User{}).Where("id = ? AND status = ?", userID, common.UserStatusEnabled),
+			gift.Quota,
+		)
 		if result.Error != nil {
 			return result.Error
 		}

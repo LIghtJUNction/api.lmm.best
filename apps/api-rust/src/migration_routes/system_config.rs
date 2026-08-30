@@ -1,6 +1,6 @@
 //! Legacy-compatible system configuration migration routes.
 //!
-//! This module deliberately owns only the fourteen `system-config` rows in
+//! This module deliberately owns only the current `system-config` rows in
 //! `migration-plan.tsv`.  In particular it does not claim any route merely
 //! because it happens to start with `/api/option`.
 
@@ -11,7 +11,7 @@ use crate::protocol_rollout::{
 use async_trait::async_trait;
 use axum::{
     Extension, Json, Router,
-    body::Bytes,
+    body::{Body, Bytes, to_bytes},
     extract::{DefaultBodyLimit, RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
@@ -28,6 +28,7 @@ use rsa::{
     pkcs8::DecodePrivateKey,
     signature::{SignatureEncoding as _, Signer as _},
 };
+use rust_decimal::Decimal;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -49,7 +50,12 @@ const OPTIONS_CACHE_KEY: &str = "lmm:system-config:options";
 const AFFINITY_CACHE_PREFIX: &str = "new-api:channel_affinity:v1:";
 const AUTH_VERSION: &str = "864b7076dbcd0a3c01b5520316720ebf";
 const OPTIONS_CACHE_TTL_SECONDS: u64 = 5;
+const WAFFO_PANCAKE_MUTATION_REQUEST_MAX_BYTES: usize = 16 << 10;
 const MAX_PROJECT_UPDATE_BYTES: usize = 1 << 20;
+const MAX_EXCHANGE_RATE_BYTES: usize = 256 << 10;
+const EXCHANGE_RATE_TIMEOUT: Duration = Duration::from_secs(10);
+const FRANKFURTER_URL_PREFIX: &str = "https://api.frankfurter.app/latest?from=USD&to=";
+const ER_API_URL: &str = "https://open.er-api.com/v6/latest/USD";
 const PROJECT_UPDATE_URL: &str =
     "https://api.github.com/repos/LIghtJUNction/api.lmm.best/commits/main";
 const PANCAKE_API_BASE_URL: &str = "https://api.waffo.ai";
@@ -57,6 +63,10 @@ const PANCAKE_GRAPHQL_PATH: &str = "/v1/graphql";
 const PANCAKE_CREATE_STORE_PATH: &str = "/v1/actions/store/create-store";
 const PANCAKE_CREATE_PRODUCT_PATH: &str = "/v1/actions/onetime-product/create-product";
 const PANCAKE_PUBLISH_PRODUCT_PATH: &str = "/v1/actions/onetime-product/publish-product";
+const PANCAKE_CREATE_SUBSCRIPTION_PRODUCT_PATH: &str =
+    "/v1/actions/subscription-product/create-product";
+const PANCAKE_PUBLISH_SUBSCRIPTION_PRODUCT_PATH: &str =
+    "/v1/actions/subscription-product/publish-product";
 const MAX_PANCAKE_RESPONSE_BYTES: usize = 1 << 20;
 const PANCAKE_STORE_NAME: &str = "lmm-forge-store";
 const PANCAKE_PRIMARY_PRODUCT_NAME: &str = "lmm-forge-wallet-topup";
@@ -185,6 +195,72 @@ pub trait ProjectUpdateClient: Send + Sync {
     async fn latest_main_commit(&self) -> Result<Value, ()>;
 }
 
+/// Resolves the number of settlement-currency units represented by one USD.
+/// Implementations must not infer a currency from a display symbol.
+#[async_trait]
+pub trait ExchangeRateProvider: Send + Sync {
+    /// Returns a positive finite rate for a validated ISO 4217-style code.
+    async fn settlement_units_per_usd(&self, currency: &str) -> Result<f64, ()>;
+}
+
+struct PinnedExchangeRateProvider {
+    client: Option<reqwest::Client>,
+}
+
+impl PinnedExchangeRateProvider {
+    fn production() -> Self {
+        Self {
+            client: crate::outbound_http::client(EXCHANGE_RATE_TIMEOUT).ok(),
+        }
+    }
+
+    async fn fetch_rate(&self, url: &str, currency: &str) -> Result<f64, ()> {
+        let client = self.client.as_ref().ok_or(())?;
+        let response = client.get(url).send().await.map_err(|_| ())?;
+        if !response.status().is_success() {
+            return Err(());
+        }
+        let body = to_bytes(
+            Body::from_stream(response.bytes_stream()),
+            MAX_EXCHANGE_RATE_BYTES,
+        )
+        .await
+        .map_err(|_| ())?;
+        let payload: Value = serde_json::from_slice(&body).map_err(|_| ())?;
+        if payload
+            .get("result")
+            .and_then(Value::as_str)
+            .is_some_and(|result| result != "success")
+        {
+            return Err(());
+        }
+        payload
+            .get("rates")
+            .and_then(|rates| rates.get(currency))
+            .and_then(Value::as_f64)
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+            .ok_or(())
+    }
+}
+
+#[async_trait]
+impl ExchangeRateProvider for PinnedExchangeRateProvider {
+    async fn settlement_units_per_usd(&self, currency: &str) -> Result<f64, ()> {
+        let currency = normalize_currency_code(currency).ok_or(())?;
+        if currency == "USD" {
+            return Ok(1.0);
+        }
+        // Both destinations are compile-time constants. The validated currency
+        // can only occupy Frankfurter's `to` value, so callers cannot select a
+        // host, scheme, port, path, or redirect target.
+        let primary = format!("{FRANKFURTER_URL_PREFIX}{currency}");
+        if let Ok(rate) = self.fetch_rate(&primary, &currency).await {
+            return Ok(rate);
+        }
+        self.fetch_rate(ER_API_URL, &currency).await
+    }
+}
+
 /// Authentication boundary supplied by the dashboard-auth migration.
 ///
 /// The legacy routes require a root dashboard session, not a bearer API key.
@@ -211,7 +287,8 @@ pub trait SystemConfigAuthorizer: Send + Sync {
                 credential: SystemConfigCredential::DashboardSession,
             })
             .map_err(|_| SystemConfigAuthRejection::Unauthorized {
-                supplied: dashboard_credential(headers).is_some(),
+                supplied: crate::migration_routes::legacy_http::dashboard_credential(headers)
+                    .is_some(),
             })
     }
 }
@@ -579,22 +656,27 @@ mod protocol_rollout_runtime_tests {
     use super::{ProcessRuntimeOptions, ProtocolRolloutConfig, SystemConfigRuntimeWriter};
     use crate::protocol_rollout::{FlagConfig, ProtocolRolloutSnapshotStatus};
     use serde_json::from_str;
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, io};
+
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
     const FLAG_AT_ONE_PERCENT: &str =
         r#"{"enabled":true,"canary_basis_points":100,"overrides":[]}"#;
     const FLAG_AT_FIVE_PERCENT: &str =
         r#"{"enabled":true,"canary_basis_points":500,"overrides":[]}"#;
 
-    async fn runtime_with_control() -> ProcessRuntimeOptions {
-        ProcessRuntimeOptions::new(BTreeMap::new())
+    fn invariant_error(message: &'static str) -> io::Error {
+        io::Error::other(message)
+    }
+
+    async fn runtime_with_control() -> TestResult<ProcessRuntimeOptions> {
+        Ok(ProcessRuntimeOptions::new(BTreeMap::new())
             .with_protocol_rollout(ProtocolRolloutConfig::default())
-            .await
-            .expect("default protocol rollout must validate")
+            .await?)
     }
 
     #[tokio::test]
-    async fn persisted_options_overlay_startup_configuration() {
+    async fn persisted_options_overlay_startup_configuration() -> TestResult {
         let mut initial = BTreeMap::new();
         initial.insert(
             "conversion_engine_v2".to_owned(),
@@ -603,12 +685,11 @@ mod protocol_rollout_runtime_tests {
         initial.insert("conversion_loss_policy".to_owned(), "warn".to_owned());
         let runtime = ProcessRuntimeOptions::new(initial)
             .with_protocol_rollout(ProtocolRolloutConfig::default())
-            .await
-            .expect("persisted rollout options must validate");
+            .await?;
 
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         let snapshot = control.snapshot();
         assert_eq!(
             snapshot.config().conversion_engine_v2.canary_basis_points,
@@ -618,14 +699,15 @@ mod protocol_rollout_runtime_tests {
             snapshot.config().loss_policy(),
             lmm_contracts::relay::LossPolicy::Warn
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn valid_protocol_change_replaces_immediately_and_advances_generation() {
-        let runtime = runtime_with_control().await;
+    async fn valid_protocol_change_replaces_immediately_and_advances_generation() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         let before = control.snapshot();
         let changes = vec![(
             "conversion_engine_v2".to_owned(),
@@ -635,23 +717,24 @@ mod protocol_rollout_runtime_tests {
         runtime
             .preflight(&changes)
             .await
-            .expect("valid protocol changes must pass preflight");
+            .map_err(|()| invariant_error("valid protocol changes must pass preflight"))?;
         runtime
             .apply_committed(&changes)
             .await
-            .expect("valid protocol changes must install");
+            .map_err(|()| invariant_error("valid protocol changes must install"))?;
 
         let after = control.snapshot();
         assert_eq!(after.generation(), before.generation() + 1);
         assert_eq!(after.config().conversion_engine_v2.canary_basis_points, 100);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn invalid_preflight_does_not_mutate_control_or_option_map() {
-        let runtime = runtime_with_control().await;
+    async fn invalid_preflight_does_not_mutate_control_or_option_map() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         let before = control.snapshot();
         let changes = vec![(
             "conversion_engine_v2".to_owned(),
@@ -666,25 +749,25 @@ mod protocol_rollout_runtime_tests {
                 .await
                 .contains_key("conversion_engine_v2")
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn unrelated_option_does_not_advance_rollout_generation() {
-        let runtime = runtime_with_control().await;
+    async fn unrelated_option_does_not_advance_rollout_generation() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         let before = control.snapshot();
         let changes = vec![("unrelated_option".to_owned(), "new-value".to_owned())];
 
-        runtime
-            .preflight(&changes)
-            .await
-            .expect("unrelated options preserve legacy preflight behavior");
+        runtime.preflight(&changes).await.map_err(|()| {
+            invariant_error("unrelated options preserve legacy preflight behavior")
+        })?;
         runtime
             .apply_committed(&changes)
             .await
-            .expect("unrelated options must update the option map");
+            .map_err(|()| invariant_error("unrelated options must update the option map"))?;
 
         assert_eq!(control.snapshot().generation(), before.generation());
         assert_eq!(
@@ -695,11 +778,12 @@ mod protocol_rollout_runtime_tests {
                 .map(String::as_str),
             Some("new-value")
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn emergency_rollback_wins_over_malformed_same_batch_values() {
-        let runtime = runtime_with_control().await;
+    async fn emergency_rollback_wins_over_malformed_same_batch_values() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let changes = vec![
             (
                 "conversion_engine_v2".to_owned(),
@@ -708,25 +792,25 @@ mod protocol_rollout_runtime_tests {
             ("protocol_rollout_rollback".to_owned(), "true".to_owned()),
         ];
 
-        runtime
-            .preflight(&changes)
-            .await
-            .expect("true rollback must fail closed before parsing stale values");
+        runtime.preflight(&changes).await.map_err(|()| {
+            invariant_error("true rollback must fail closed before parsing stale values")
+        })?;
         runtime
             .apply_committed(&changes)
             .await
-            .expect("true rollback must install even with stale values");
+            .map_err(|()| invariant_error("true rollback must install even with stale values"))?;
         let snapshot = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control")
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?
             .snapshot();
         assert_eq!(snapshot.status(), ProtocolRolloutSnapshotStatus::Rollback);
         assert!(snapshot.is_fail_closed());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn duplicate_rollback_keys_use_only_the_last_value() {
-        let runtime = runtime_with_control().await;
+    async fn duplicate_rollback_keys_use_only_the_last_value() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let changes = vec![
             ("protocol_rollout_rollback".to_owned(), "true".to_owned()),
             (
@@ -739,24 +823,25 @@ mod protocol_rollout_runtime_tests {
         runtime
             .preflight(&changes)
             .await
-            .expect("the final rollback=false must win");
+            .map_err(|()| invariant_error("the final rollback=false must win"))?;
         runtime
             .apply_committed(&changes)
             .await
-            .expect("the final rollback=false must install the candidate");
+            .map_err(|()| invariant_error("the final rollback=false must install the candidate"))?;
         let snapshot = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control")
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?
             .snapshot();
         assert_eq!(snapshot.status(), ProtocolRolloutSnapshotStatus::Active);
         assert_eq!(
             snapshot.config().conversion_engine_v2.canary_basis_points,
             100
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn rollback_false_rebuilds_prior_persisted_flags_from_startup_baseline() {
+    async fn rollback_false_rebuilds_prior_persisted_flags_from_startup_baseline() -> TestResult {
         let mut initial = BTreeMap::new();
         initial.insert(
             "conversion_engine_v2".to_owned(),
@@ -765,41 +850,41 @@ mod protocol_rollout_runtime_tests {
         initial.insert("protocol_rollout_rollback".to_owned(), "true".to_owned());
         let runtime = ProcessRuntimeOptions::new(initial)
             .with_protocol_rollout(ProtocolRolloutConfig::default())
-            .await
-            .expect("rollback startup overlay must be valid");
+            .await?;
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         assert!(control.snapshot().is_fail_closed());
 
         let recovery = vec![("protocol_rollout_rollback".to_owned(), "false".to_owned())];
         runtime
             .preflight(&recovery)
             .await
-            .expect("rollback=false must rebuild persisted prior flags");
+            .map_err(|()| invariant_error("rollback=false must rebuild persisted prior flags"))?;
         runtime
             .apply_committed(&recovery)
             .await
-            .expect("rollback=false must install the rebuilt candidate");
+            .map_err(|()| invariant_error("rollback=false must install the rebuilt candidate"))?;
         let recovered = control.snapshot();
         assert_eq!(recovered.status(), ProtocolRolloutSnapshotStatus::Active);
         assert_eq!(
             recovered.config().conversion_engine_v2.canary_basis_points,
             100
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn rollback_recovery_requires_full_validation() {
-        let runtime = runtime_with_control().await;
+    async fn rollback_recovery_requires_full_validation() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let emergency = vec![("protocol_rollout_rollback".to_owned(), "true".to_owned())];
         runtime
             .apply_committed(&emergency)
             .await
-            .expect("rollback must install");
+            .map_err(|()| invariant_error("rollback must install"))?;
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         let before_recovery = control.snapshot();
         let malformed_recovery = vec![
             ("protocol_rollout_rollback".to_owned(), "false".to_owned()),
@@ -818,22 +903,23 @@ mod protocol_rollout_runtime_tests {
         runtime
             .preflight(&valid_recovery)
             .await
-            .expect("recovery must validate every replacement value");
+            .map_err(|()| invariant_error("recovery must validate every replacement value"))?;
         runtime
             .apply_committed(&valid_recovery)
             .await
-            .expect("valid recovery must install");
+            .map_err(|()| invariant_error("valid recovery must install"))?;
         let recovered = control.snapshot();
         assert_eq!(recovered.status(), ProtocolRolloutSnapshotStatus::Active);
         assert_eq!(
             recovered.config().conversion_engine_v2.canary_basis_points,
             500
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn concurrent_same_key_replacements_keep_map_and_control_coherent() {
-        let runtime = runtime_with_control().await;
+    async fn concurrent_same_key_replacements_keep_map_and_control_coherent() -> TestResult {
+        let runtime = runtime_with_control().await?;
         let left = runtime.clone();
         let right = runtime.clone();
         let left_change = vec![(
@@ -854,16 +940,21 @@ mod protocol_rollout_runtime_tests {
 
         let control = runtime
             .protocol_rollout()
-            .expect("builder must install the shared control");
+            .ok_or_else(|| invariant_error("builder must install the shared control"))?;
         let snapshot = control.snapshot();
         let values = runtime.snapshot().await;
         let persisted = values
             .get("conversion_engine_v2")
-            .expect("same-key update must remain in the option map");
-        let persisted_flag = from_str::<FlagConfig>(persisted)
-            .expect("the final option map value must remain valid JSON");
+            .ok_or_else(|| invariant_error("same-key update must remain in the option map"))?;
+        let persisted_flag = from_str::<FlagConfig>(persisted).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the final option map value must remain valid JSON: {error}"),
+            )
+        })?;
         assert_eq!(snapshot.config().conversion_engine_v2, persisted_flag);
         assert_eq!(snapshot.generation(), 2);
+        Ok(())
     }
 }
 
@@ -969,8 +1060,8 @@ impl SystemConfigAuthorizer for DashboardRootAuthorizer {
     ) -> Result<SystemConfigAuthContext, SystemConfigAuthRejection> {
         use crate::auth::{UserAuthPolicyError, enforce_user_auth_view};
 
-        let token =
-            dashboard_credential(headers).ok_or(SystemConfigAuthRejection::ConsoleNotFound)?;
+        let token = crate::migration_routes::legacy_http::dashboard_credential(headers)
+            .ok_or(SystemConfigAuthRejection::ConsoleNotFound)?;
         let credential = if crate::auth::dashboard_token_candidate(&token) {
             SystemConfigCredential::DashboardSession
         } else {
@@ -1020,6 +1111,16 @@ pub trait WaffoPancakeGateway: Send + Sync {
         store_id: &str,
         name: &str,
         amount: &str,
+        return_url: &str,
+    ) -> Result<Value, ()>;
+    async fn create_subscription_product(
+        &self,
+        merchant_id: &str,
+        private_key: &str,
+        store_id: &str,
+        name: &str,
+        amount: &str,
+        billing_period: &str,
         return_url: &str,
     ) -> Result<Value, ()>;
 }
@@ -1168,21 +1269,128 @@ impl HttpWaffoPancakeGateway {
         .ok_or(())?;
         Ok(product)
     }
+
+    async fn create_and_publish_subscription_product(
+        &self,
+        merchant_id: &str,
+        private_key: &str,
+        store_id: &str,
+        name: &str,
+        amount: &str,
+        billing_period: &str,
+        return_url: &str,
+    ) -> Result<Value, ()> {
+        let store_id = nonempty(store_id)?;
+        let name = nonempty(name)?;
+        let amount = nonempty(amount)?;
+        let billing_period = match billing_period {
+            "weekly" | "monthly" | "quarterly" | "yearly" => billing_period,
+            _ => return Err(()),
+        };
+        let mut body = json!({
+            "storeId": store_id,
+            "name": name,
+            "billingPeriod": billing_period,
+            "prices": {"USD": {"amount": amount, "taxCategory": PANCAKE_TAX_CATEGORY}},
+        });
+        if let Some(object) = body.as_object_mut()
+            && let Some(return_url) = nonempty_optional(return_url)
+        {
+            object.insert("successUrl".to_owned(), json!(return_url));
+        }
+        let product = self
+            .post(
+                merchant_id,
+                private_key,
+                PANCAKE_CREATE_SUBSCRIPTION_PRODUCT_PATH,
+                body,
+                true,
+            )
+            .await?
+            .success_data()
+            .ok_or(())?
+            .get("product")
+            .ok_or(())?
+            .clone();
+        let product_id = required_string(&product, "id").ok_or(())?;
+        if !required_string(&product, "status")
+            .is_some_and(|status| status.eq_ignore_ascii_case("active"))
+        {
+            let published = self
+                .post(
+                    merchant_id,
+                    private_key,
+                    PANCAKE_PUBLISH_SUBSCRIPTION_PRODUCT_PATH,
+                    json!({"id": product_id}),
+                    true,
+                )
+                .await?
+                .success_data()
+                .ok_or(())?
+                .get("product")
+                .cloned()
+                .ok_or(())?;
+            if !required_string(&published, "status")
+                .is_some_and(|status| status.eq_ignore_ascii_case("active"))
+            {
+                return Err(());
+            }
+            return Ok(published);
+        }
+        Ok(product)
+    }
 }
 
 #[async_trait]
 impl WaffoPancakeGateway for HttpWaffoPancakeGateway {
     async fn catalog(&self, merchant_id: &str, private_key: &str) -> Result<Value, ()> {
-        let envelope = self
+        let stores_envelope = self
             .post(
                 merchant_id,
                 private_key,
                 PANCAKE_GRAPHQL_PATH,
-                json!({"query": "query { stores(limit: 100) { id name status prodEnabled onetimeProducts { id name status } } }"}),
+                json!({"query": "query { stores(limit: 100) { id name status prodEnabled } }"}),
                 false,
             )
             .await?;
-        normalize_pancake_catalog(envelope.success_data().ok_or(())?)
+        let stores_data = stores_envelope.success_data().ok_or(())?;
+        let mut stores = stores_data
+            .get("stores")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or(())?;
+        for store in &mut stores {
+            let store_id = required_string(store, "id").ok_or(())?;
+            let products_envelope = self
+                .post(
+                    merchant_id,
+                    private_key,
+                    PANCAKE_GRAPHQL_PATH,
+                    json!({
+                        "query": "query ($storeId: String!) { onetimeProducts(storeId: $storeId, filter: { status: { eq: \"active\" } }) { id name status } subscriptionProducts(storeId: $storeId, filter: { status: { eq: \"active\" } }) { id name status billingPeriod } }",
+                        "variables": {"storeId": store_id},
+                    }),
+                    false,
+                )
+                .await?;
+            let products = products_envelope.success_data().ok_or(())?;
+            let store_object = store.as_object_mut().ok_or(())?;
+            store_object.insert(
+                "onetimeProducts".to_owned(),
+                products
+                    .get("onetimeProducts")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            );
+            store_object.insert(
+                "subscriptionProducts".to_owned(),
+                products
+                    .get("subscriptionProducts")
+                    .cloned()
+                    .unwrap_or_else(|| json!([])),
+            );
+        }
+        normalize_pancake_catalog(json!({"stores": stores}))
     }
 
     async fn create_pair(
@@ -1240,6 +1448,28 @@ impl WaffoPancakeGateway for HttpWaffoPancakeGateway {
         )
         .await
     }
+
+    async fn create_subscription_product(
+        &self,
+        merchant_id: &str,
+        private_key: &str,
+        store_id: &str,
+        name: &str,
+        amount: &str,
+        billing_period: &str,
+        return_url: &str,
+    ) -> Result<Value, ()> {
+        self.create_and_publish_subscription_product(
+            merchant_id,
+            private_key,
+            store_id,
+            name,
+            amount,
+            billing_period,
+            return_url,
+        )
+        .await
+    }
 }
 
 /// Explicit no-egress adapter for the public test instance.
@@ -1262,6 +1492,19 @@ impl WaffoPancakeGateway for TestInstanceDisabledWaffoPancakeGateway {
 
     async fn create_product(
         &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<Value, ()> {
+        Err(())
+    }
+
+    async fn create_subscription_product(
+        &self,
+        _: &str,
         _: &str,
         _: &str,
         _: &str,
@@ -1346,18 +1589,36 @@ fn normalize_pancake_catalog(data: Value) -> Result<Value, ()> {
     let stores = data.get("stores").and_then(Value::as_array).ok_or(())?;
     let mut normalized = Vec::with_capacity(stores.len());
     for store in stores {
-        let products = store
+        let mut active_one_time = Vec::new();
+        for product in store
             .get("onetimeProducts")
             .and_then(Value::as_array)
-            .ok_or(())?;
-        let mut active_products = Vec::new();
-        for product in products {
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
             let status = required_string(product, "status").ok_or(())?;
             if status.eq_ignore_ascii_case("active") {
-                active_products.push(json!({
+                active_one_time.push(json!({
                     "id": required_string(product, "id").ok_or(())?,
                     "name": required_string(product, "name").ok_or(())?,
                     "status": status,
+                }));
+            }
+        }
+        let mut active_subscriptions = Vec::new();
+        for product in store
+            .get("subscriptionProducts")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
+            let status = required_string(product, "status").ok_or(())?;
+            if status.eq_ignore_ascii_case("active") {
+                active_subscriptions.push(json!({
+                    "id": required_string(product, "id").ok_or(())?,
+                    "name": required_string(product, "name").ok_or(())?,
+                    "status": status,
+                    "billingPeriod": required_string(product, "billingPeriod").ok_or(())?,
                 }));
             }
         }
@@ -1366,7 +1627,8 @@ fn normalize_pancake_catalog(data: Value) -> Result<Value, ()> {
             "name": required_string(store, "name").ok_or(())?,
             "status": required_string(store, "status").ok_or(())?,
             "prodEnabled": store.get("prodEnabled").and_then(Value::as_bool).unwrap_or(false),
-            "onetimeProducts": active_products,
+            "onetimeProducts": active_one_time,
+            "subscriptionProducts": active_subscriptions,
         }));
     }
     Ok(json!({"stores": normalized}))
@@ -1395,10 +1657,13 @@ fn nonempty_optional(value: &str) -> Option<&str> {
 mod pancake_gateway_tests {
     use super::{
         HttpWaffoPancakeGateway, TestInstanceDisabledWaffoPancakeGateway, WaffoPancakeGateway,
-        normalize_pancake_catalog, pancake_idempotency_key, parse_pancake_private_key,
+        normalize_pancake_catalog, pancake_billing_period, pancake_idempotency_key,
+        parse_pancake_private_key, subscription_price_in_usd,
     };
     use serde_json::json;
-    use std::time::Duration;
+    use std::{io, time::Duration};
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     #[test]
     fn production_constructor_uses_the_bounded_outbound_policy() {
@@ -1416,17 +1681,22 @@ mod pancake_gateway_tests {
                 .await
                 .is_err()
         );
-        assert_eq!(
+        assert!(
             gateway
-                .create_pair("MER_test", "secret", "")
+                .create_subscription_product(
+                    "MER_test", "secret", "STO_test", "plan", "1.00", "monthly", "",
+                )
                 .await
-                .expect_err("test gateway must fail closed"),
-            json!({"error":"Waffo Pancake 在测试实例中已禁用"})
+                .is_err()
+        );
+        assert_eq!(
+            gateway.create_pair("MER_test", "secret", "").await,
+            Err(json!({"error":"Waffo Pancake 在测试实例中已禁用"}))
         );
     }
 
     #[test]
-    fn catalog_keeps_only_active_products_in_the_go_shape() {
+    fn catalog_keeps_only_active_products_in_the_go_shape() -> TestResult {
         let catalog = normalize_pancake_catalog(json!({
             "stores": [{
                 "id": "STO_1",
@@ -1436,10 +1706,14 @@ mod pancake_gateway_tests {
                 "onetimeProducts": [
                     {"id":"PROD_active","name":"Active","status":"ACTIVE"},
                     {"id":"PROD_draft","name":"Draft","status":"draft"}
+                ],
+                "subscriptionProducts": [
+                    {"id":"PROD_monthly","name":"Monthly","status":"active","billingPeriod":"monthly"},
+                    {"id":"PROD_subscription_draft","name":"Draft","status":"draft","billingPeriod":"monthly"}
                 ]
             }]
         }))
-        .expect("valid Pancake catalog");
+        .map_err(|()| io::Error::new(io::ErrorKind::InvalidData, "valid Pancake catalog"))?;
         assert_eq!(
             catalog,
             json!({"stores":[{
@@ -1447,9 +1721,29 @@ mod pancake_gateway_tests {
                 "name":"Store",
                 "status":"active",
                 "prodEnabled":true,
-                "onetimeProducts":[{"id":"PROD_active","name":"Active","status":"ACTIVE"}]
+                "onetimeProducts":[{"id":"PROD_active","name":"Active","status":"ACTIVE"}],
+                "subscriptionProducts":[{"id":"PROD_monthly","name":"Monthly","status":"active","billingPeriod":"monthly"}]
             }]})
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recurring_cadence_and_fiat_conversion_are_explicit() {
+        let mut options = std::collections::BTreeMap::new();
+        options.insert("USDExchangeRate".to_owned(), "6.8".to_owned());
+        assert_eq!(pancake_billing_period("day", 7), Ok("weekly"));
+        assert_eq!(pancake_billing_period("month", 3), Ok("quarterly"));
+        assert_eq!(pancake_billing_period("custom", 1), Err(()));
+        assert_eq!(
+            subscription_price_in_usd("6.8", "CNY", &options),
+            Ok("1.00".to_owned())
+        );
+        assert_eq!(
+            subscription_price_in_usd("6.8", "USD", &options),
+            Ok("6.80".to_owned())
+        );
+        assert!(subscription_price_in_usd("6.8", "EUR", &options).is_err());
     }
 
     #[test]
@@ -1469,6 +1763,7 @@ pub struct SystemConfigHttpState {
     pub valkey: redis::Client,
     pub authorizer: Arc<dyn SystemConfigAuthorizer>,
     pub project_update: Arc<dyn ProjectUpdateClient>,
+    pub exchange_rate: Arc<dyn ExchangeRateProvider>,
     pub pancake: Arc<dyn WaffoPancakeGateway>,
     anonymous_body_limit_bytes: usize,
     runtime_writer: Arc<dyn SystemConfigRuntimeWriter>,
@@ -1492,6 +1787,7 @@ impl SystemConfigHttpState {
             valkey,
             authorizer,
             project_update,
+            exchange_rate: Arc::new(PinnedExchangeRateProvider::production()),
             pancake,
             anonymous_body_limit_bytes: 512 * 1024,
             runtime_writer: Arc::new(MissingSystemConfigRuntimeWriter),
@@ -1514,6 +1810,17 @@ impl SystemConfigHttpState {
         self
     }
 
+    /// Replaces the pinned exchange-rate client. This seam exists for bounded
+    /// deterministic tests; production composition uses the fixed providers.
+    #[must_use]
+    pub fn with_exchange_rate_provider(
+        mut self,
+        exchange_rate: Arc<dyn ExchangeRateProvider>,
+    ) -> Self {
+        self.exchange_rate = exchange_rate;
+        self
+    }
+
     /// Sets the configured ceiling for the anonymous setup request body.
     #[must_use]
     pub const fn with_anonymous_body_limit_bytes(mut self, bytes: usize) -> Self {
@@ -1530,8 +1837,16 @@ impl SystemConfigHttpState {
     }
 }
 
-/// All fourteen system-config migration-plan routes.
+/// System-config routes retained by the current Go listener contract.
 pub fn system_config_router(state: SystemConfigHttpState) -> Router {
+    let catalog = Router::new()
+        .route(
+            "/api/option/waffo-pancake/catalog",
+            post(pancake_catalog_post),
+        )
+        .layer(DefaultBodyLimit::max(
+            WAFFO_PANCAKE_MUTATION_REQUEST_MAX_BYTES,
+        ));
     let protected = Router::new()
         .route("/api/option/", get(get_options).put(update_option))
         .route(
@@ -1543,11 +1858,9 @@ pub fn system_config_router(state: SystemConfigHttpState) -> Router {
             post(confirm_payment_compliance),
         )
         .route("/api/option/project-update", get(project_update))
+        .route("/api/option/exchange-rate", get(exchange_rate))
         .route("/api/option/rest_model_ratio", post(reset_model_ratio))
-        .route(
-            "/api/option/waffo-pancake/catalog",
-            get(pancake_catalog).post(pancake_catalog_post),
-        )
+        .merge(catalog)
         .route("/api/option/bulk", post(update_options_bulk))
         .route("/api/option/validate", post(validate_options))
         .route("/api/option/waffo-pancake/pair", post(pancake_pair))
@@ -1607,23 +1920,6 @@ fn legacy_json(status: StatusCode, body: impl Serialize) -> Response {
         HeaderValue::from_static("application/json; charset=utf-8"),
     );
     response
-}
-
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
 }
 
 fn token_locale(headers: &HeaderMap) -> (bool, bool) {
@@ -2451,6 +2747,62 @@ async fn project_update(
         Err(()) => legacy_error("Failed to check for updates"),
     }
 }
+
+fn normalize_currency_code(raw: &str) -> Option<String> {
+    let code = raw.trim().to_ascii_uppercase();
+    (code.len() == 3 && code.bytes().all(|byte| byte.is_ascii_uppercase())).then_some(code)
+}
+
+async fn exchange_rate(
+    State(state): State<SystemConfigHttpState>,
+    Extension(_context): Extension<SystemConfigAuthContext>,
+    query: RawQuery,
+) -> Response {
+    let currency = query_values(query.0.as_deref())
+        .remove("currency")
+        .and_then(|value| normalize_currency_code(&value));
+    let Some(currency) = currency else {
+        return legacy_json(
+            StatusCode::BAD_REQUEST,
+            json!({"success": false, "message": "currency must be a three-letter ISO code"}),
+        );
+    };
+    let (provider, rate) = if currency == "USD" {
+        ("base", Ok(1.0))
+    } else {
+        (
+            "pinned-providers",
+            state
+                .exchange_rate
+                .settlement_units_per_usd(&currency)
+                .await,
+        )
+    };
+    match rate {
+        Ok(rate) if rate.is_finite() && rate > 0.0 => legacy_json(
+            StatusCode::OK,
+            json!({
+                "success": true,
+                "message": "",
+                "data": {
+                    "base_currency": "USD",
+                    "quote_currency": currency,
+                    "rate": rate,
+                    "fetched_at": chrono::Utc::now().to_rfc3339_opts(
+                        chrono::SecondsFormat::Secs,
+                        true,
+                    ),
+                    "provider": provider,
+                },
+            }),
+        ),
+        _ => legacy_json(
+            StatusCode::BAD_GATEWAY,
+            json!({"success": false, "message": "failed to fetch the latest USD exchange rate"}),
+        ),
+    }
+}
+
 async fn reset_model_ratio(
     State(state): State<SystemConfigHttpState>,
     Extension(context): Extension<SystemConfigAuthContext>,
@@ -2481,35 +2833,83 @@ struct PancakeCreds {
 struct SubscriptionProductRequest {
     name: Option<String>,
     amount: Option<String>,
+    currency: Option<String>,
+    duration_unit: Option<String>,
+    duration_value: Option<i64>,
 }
 
-fn pancake_query(raw: Option<&str>) -> PancakeCreds {
-    let mut values = query_values(raw);
-    PancakeCreds {
-        merchant_id: values.remove("merchant_id"),
-        private_key: values.remove("private_key"),
-        return_url: values.remove("return_url"),
-        store_id: values.remove("store_id"),
-        product_id: values.remove("product_id"),
+fn pancake_billing_period(duration_unit: &str, duration_value: i64) -> Result<&'static str, ()> {
+    match (
+        duration_unit.trim().to_ascii_lowercase().as_str(),
+        duration_value,
+    ) {
+        ("day", 7) => Ok("weekly"),
+        ("month", 1) => Ok("monthly"),
+        ("month", 3) => Ok("quarterly"),
+        ("month", 12) | ("year", 1) => Ok("yearly"),
+        _ => Err(()),
     }
 }
+
+fn subscription_price_in_usd(
+    amount: &str,
+    currency: &str,
+    options: &BTreeMap<String, String>,
+) -> Result<String, ()> {
+    let amount = Decimal::from_str_exact(amount.trim()).map_err(|_| ())?;
+    if amount <= Decimal::ZERO {
+        return Err(());
+    }
+    let usd = match currency.trim().to_ascii_uppercase().as_str() {
+        "USD" => amount,
+        "CNY" => {
+            let cny_per_usd = options
+                .get("USDExchangeRate")
+                .and_then(|value| Decimal::from_str_exact(value.trim()).ok())
+                .filter(|value| *value > Decimal::ZERO)
+                .ok_or(())?;
+            amount.checked_div(cny_per_usd).ok_or(())?
+        }
+        _ => return Err(()),
+    }
+    .round_dp(2);
+    if usd < Decimal::new(1, 2) {
+        return Err(());
+    }
+    Ok(format!("{usd:.2}"))
+}
+
 async fn pancake_values(
     state: &SystemConfigHttpState,
     supplied: &PancakeCreds,
 ) -> Result<(String, String, BTreeMap<String, String>), Response> {
+    let supplied_merchant_id = supplied
+        .merchant_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let supplied_private_key = supplied
+        .private_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let (Some(merchant_id), Some(private_key)) = (supplied_merchant_id, supplied_private_key) {
+        return Ok((
+            merchant_id.to_owned(),
+            private_key.to_owned(),
+            BTreeMap::new(),
+        ));
+    }
+
     let opts = cached_options(state)
         .await
         .map_err(|_| legacy_error("读取配置失败"))?;
-    let m = supplied
-        .merchant_id
-        .clone()
-        .filter(|x| !x.trim().is_empty())
+    let m = supplied_merchant_id
+        .map(str::to_owned)
         .or_else(|| opts.get("WaffoPancakeMerchantID").cloned())
         .unwrap_or_default();
-    let k = supplied
-        .private_key
-        .clone()
-        .filter(|x| !x.trim().is_empty())
+    let k = supplied_private_key
+        .map(str::to_owned)
         .or_else(|| opts.get("WaffoPancakePrivateKey").cloned())
         .unwrap_or_default();
     if m.is_empty() || k.is_empty() {
@@ -2666,23 +3066,6 @@ fn decode_option_values(body: &Bytes) -> Result<BTreeMap<String, String>, Respon
     Ok(request.values)
 }
 
-async fn pancake_catalog(
-    State(state): State<SystemConfigHttpState>,
-    Extension(_context): Extension<SystemConfigAuthContext>,
-    query: RawQuery,
-) -> Response {
-    let input = pancake_query(query.0.as_deref());
-    let Ok((m, k, _)) = pancake_values(&state, &input).await else {
-        return legacy_error("Waffo Pancake 凭证未配置");
-    };
-    match state.pancake.catalog(&m, &k).await {
-        Ok(data) => legacy_json(StatusCode::OK, json!({"message":"success","data":data})),
-        Err(_) => legacy_json(
-            StatusCode::OK,
-            json!({"message":"error","data":"拉取目录失败"}),
-        ),
-    }
-}
 async fn pancake_pair(
     State(state): State<SystemConfigHttpState>,
     Extension(_context): Extension<SystemConfigAuthContext>,
@@ -2769,6 +3152,9 @@ async fn pancake_subscription_product(
         SubscriptionProductRequest {
             name: None,
             amount: None,
+            currency: None,
+            duration_unit: None,
+            duration_value: None,
         }
     } else {
         match serde_json::from_slice::<SubscriptionProductRequest>(&body) {
@@ -2792,6 +3178,20 @@ async fn pancake_subscription_product(
             json!({"message":"error","data":"套餐价格不能为空"}),
         );
     }
+    let currency = input
+        .currency
+        .unwrap_or_else(|| "CNY".to_owned())
+        .trim()
+        .to_ascii_uppercase();
+    let duration_unit = input.duration_unit.unwrap_or_default();
+    let Ok(billing_period) =
+        pancake_billing_period(&duration_unit, input.duration_value.unwrap_or_default())
+    else {
+        return legacy_json(
+            StatusCode::OK,
+            json!({"message":"error","data":"Waffo Pancake recurring billing supports exactly 7 days, 1 month, 3 months, 12 months, or 1 year"}),
+        );
+    };
     let creds = PancakeCreds {
         merchant_id: None,
         private_key: None,
@@ -2816,18 +3216,25 @@ async fn pancake_subscription_product(
             json!({"message":"error","data":"Waffo Pancake 未完成配置，请先在支付设置中完成网关绑定"}),
         );
     }
+    let Ok(settlement_amount) = subscription_price_in_usd(&amount, &currency, &options) else {
+        return legacy_json(
+            StatusCode::OK,
+            json!({"message":"error","data":"套餐结算金额或币种无效"}),
+        );
+    };
     let return_url = options
         .get("WaffoPancakeReturnURL")
         .map(String::as_str)
         .unwrap_or_default();
     match state
         .pancake
-        .create_product(
+        .create_subscription_product(
             &merchant_id,
             &private_key,
             store_id,
             &name,
-            &amount,
+            &settlement_amount,
+            billing_period,
             return_url,
         )
         .await
@@ -2840,7 +3247,7 @@ async fn pancake_subscription_product(
                 .unwrap_or(product);
             legacy_json(
                 StatusCode::OK,
-                json!({"message":"success","data":{"product_id":product_id,"product_name":name,"store_id":store_id}}),
+                json!({"message":"success","data":{"product_id":product_id,"product_name":name,"store_id":store_id,"settlement_currency":"USD","settlement_amount":settlement_amount}}),
             )
         }
         Err(()) => legacy_json(
@@ -2889,8 +3296,8 @@ async fn pancake_subscription_product_options(
                 })
                 .and_then(|store| {
                     store
-                        .get("onetime_products")
-                        .or_else(|| store.get("onetimeProducts"))
+                        .get("subscription_products")
+                        .or_else(|| store.get("subscriptionProducts"))
                 })
                 .cloned()
                 .unwrap_or_else(|| json!([]));

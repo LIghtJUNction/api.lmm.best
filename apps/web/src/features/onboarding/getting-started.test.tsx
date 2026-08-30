@@ -15,6 +15,13 @@ import type { ApiRequestConfig } from '@/lib/api'
 import type { AuthUser } from '@/stores/auth-store'
 
 const domWindow = new Window({ url: 'https://console.example.test/' })
+domWindow.document.write(
+  '<!doctype html><html><head></head><body></body></html>'
+)
+Object.defineProperty(domWindow.document, 'compatMode', {
+  configurable: true,
+  value: 'CSS1Compat',
+})
 for (const key of [
   'window',
   'document',

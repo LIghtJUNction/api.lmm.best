@@ -19,6 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use rust_decimal::{Decimal, prelude::ToPrimitive};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -28,6 +29,8 @@ use uuid::Uuid;
 use crate::auth::{
     AuthErrorKind, DashboardAuth, UserAuthPolicyError, enforce_user_auth, user_auth_message,
 };
+
+use super::missing_identity_topup::standard_topup_settlement;
 
 const STRIPE: &str = "stripe";
 const CREEM: &str = "creem";
@@ -121,7 +124,8 @@ pub struct TopupUser {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StripeSettings {
     pub min_topup: i64,
-    pub unit_price: f64,
+    pub cny_per_usd: f64,
+    pub platform_units_per_cny: f64,
     pub quota_display_type: String,
     /// Mirrors Go's `common.QuotaPerUnit`, which is a float and may be
     /// configured independently of the display type.
@@ -135,7 +139,8 @@ impl Default for StripeSettings {
     fn default() -> Self {
         Self {
             min_topup: 1,
-            unit_price: 8.0,
+            cny_per_usd: 7.3,
+            platform_units_per_cny: 1.0,
             quota_display_type: "USD".to_owned(),
             quota_per_unit: 500_000.0,
             group_ratios: BTreeMap::new(),
@@ -277,7 +282,8 @@ impl StripeCreemStore for PgStripeCreemStore {
         let rows = sqlx::query("SELECT key, value FROM options WHERE key = ANY($1)")
             .bind(vec![
                 "StripeMinTopUp",
-                "StripeUnitPrice",
+                "USDExchangeRate",
+                "TopUpPlatformUnitsPerCNY",
                 // `general_setting.quota_display_type` is the registered
                 // operation-setting field used by Go at runtime.  The old
                 // standalone `QuotaDisplayType` option is not authoritative.
@@ -355,7 +361,8 @@ fn stripe_settings_from_options(
         .unwrap_or_default();
     StripeSettings {
         min_topup: parsed_i64(options.get("StripeMinTopUp"), 1),
-        unit_price: finite_f64(options.get("StripeUnitPrice"), 8.0),
+        cny_per_usd: finite_f64(options.get("USDExchangeRate"), 7.3),
+        platform_units_per_cny: finite_f64(options.get("TopUpPlatformUnitsPerCNY"), 1.0),
         quota_display_type: options
             .get("general_setting.quota_display_type")
             .cloned()
@@ -731,8 +738,10 @@ async fn stripe_amount(
         Ok(user) => user,
         Err(_) => return legacy("error", "获取用户分组失败"),
     };
-    let money = stripe_money(request.amount, &user.group, &settings);
-    if money <= 0.01 {
+    let Some(money) = stripe_money(request.amount, &user.group, &settings) else {
+        return legacy("error", "充值汇率配置无效");
+    };
+    if money <= Decimal::new(1, 2) {
         return legacy("error", "充值金额过低");
     }
     legacy("success", format!("{money:.2}"))
@@ -782,6 +791,15 @@ async fn stripe_pay(State(state): State<IdentityStripeCreemState>, request: Requ
         Ok(user) => user,
         Err(_) => return legacy("error", "拉起支付失败"),
     };
+    let Some(money) = stripe_money(request.amount, &user.group, &settings) else {
+        return legacy("error", "充值汇率配置无效");
+    };
+    if money <= Decimal::new(1, 2) {
+        return legacy("error", "充值金额过低");
+    }
+    let Some(money_f64) = money.to_f64() else {
+        return legacy("error", "充值金额无效");
+    };
     let trade_no = legacy_trade_no("new-api-ref", actor.user_id);
     let link = match state
         .gateway
@@ -798,12 +816,11 @@ async fn stripe_pay(State(state): State<IdentityStripeCreemState>, request: Requ
         Ok(link) if !link.trim().is_empty() => link,
         _ => return legacy("error", "拉起支付失败"),
     };
-    let ratio = group_ratio(&user.group, &settings);
     let order = PendingTopup {
         trade_no,
         user_id: actor.user_id,
         amount: request.amount,
-        money: (request.amount as f64) * ratio,
+        money: money_f64,
         payment_method: STRIPE.to_owned(),
         payment_provider: STRIPE.to_owned(),
     };
@@ -1019,19 +1036,32 @@ fn group_ratio(group: &str, settings: &StripeSettings) -> f64 {
         .filter(|ratio| ratio.is_finite() && *ratio != 0.0)
         .unwrap_or(1.0)
 }
-fn stripe_money(amount: i64, group: &str, settings: &StripeSettings) -> f64 {
-    let displayed = if settings.quota_display_type == "TOKENS" {
-        (amount as f64) / settings.quota_per_unit
-    } else {
-        amount as f64
-    };
-    let discount = settings
-        .amount_discounts
-        .get(&amount)
-        .copied()
-        .filter(|discount| discount.is_finite() && *discount > 0.0)
-        .unwrap_or(1.0);
-    displayed * settings.unit_price * group_ratio(group, settings) * discount
+fn stripe_money(amount: i64, group: &str, settings: &StripeSettings) -> Option<Decimal> {
+    let mut platform_amount = Decimal::from(amount);
+    if settings.quota_display_type == "TOKENS" {
+        let quota_per_unit = Decimal::from_f64_retain(settings.quota_per_unit)?;
+        platform_amount = platform_amount.checked_div(quota_per_unit)?;
+    }
+    let cny_per_usd = Decimal::from_f64_retain(settings.cny_per_usd)?;
+    let platform_units_per_cny = Decimal::from_f64_retain(settings.platform_units_per_cny)?;
+    let group_multiplier = Decimal::from_f64_retain(group_ratio(group, settings))?;
+    let discount_multiplier = Decimal::from_f64_retain(
+        settings
+            .amount_discounts
+            .get(&amount)
+            .copied()
+            .filter(|discount| discount.is_finite() && *discount > 0.0)
+            .unwrap_or(1.0),
+    )?;
+    standard_topup_settlement(
+        platform_amount,
+        "USD",
+        cny_per_usd,
+        platform_units_per_cny,
+        group_multiplier,
+        discount_multiplier,
+    )
+    .map(|value| value.round_dp(2))
 }
 fn redirect_allowed(raw: &str, trusted: &[String]) -> bool {
     if raw.is_empty() {
@@ -1057,8 +1087,29 @@ fn redirect_allowed(raw: &str, trusted: &[String]) -> bool {
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use std::sync::Mutex;
+    use std::{error::Error, io, sync::Mutex};
     use tower::ServiceExt;
+
+    type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    fn test_error(message: &'static str) -> Box<dyn Error> {
+        Box::new(io::Error::other(message))
+    }
+
+    fn required<T>(value: Option<T>, message: &'static str) -> TestResult<T> {
+        value.ok_or_else(|| test_error(message))
+    }
+
+    fn json_value(body: &[u8]) -> TestResult<Value> {
+        serde_json::from_slice(body).map_err(Into::into)
+    }
+
+    fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        match mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
 
     #[derive(Default)]
     struct Store {
@@ -1092,7 +1143,7 @@ mod tests {
             }])
         }
         async fn create_pending(&self, order: PendingTopup) -> Result<(), TopupStoreError> {
-            self.orders.lock().unwrap().push(order);
+            lock_unpoisoned(&self.orders).push(order);
             Ok(())
         }
     }
@@ -1124,18 +1175,16 @@ mod tests {
             Arc::new(Gateway),
         ))
     }
-    fn request(path: &str, body: Value) -> Request<Body> {
-        Request::post(path)
+    fn request(path: &str, body: Value) -> TestResult<Request<Body>> {
+        Ok(Request::post(path)
             .header("authorization", "Bearer ok")
             .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
+            .body(Body::from(body.to_string()))?)
     }
-    fn request_without_content_type(path: &str, body: Value) -> Request<Body> {
-        Request::post(path)
+    fn request_without_content_type(path: &str, body: Value) -> TestResult<Request<Body>> {
+        Ok(Request::post(path)
             .header("authorization", "Bearer ok")
-            .body(Body::from(body.to_string()))
-            .unwrap()
+            .body(Body::from(body.to_string()))?)
     }
     struct QuoteStore {
         settings: StripeSettings,
@@ -1167,84 +1216,80 @@ mod tests {
             Arc::new(DisabledStripeCreemGateway),
         ))
     }
-    async fn response_json(app: Router, path: &str, body: Value) -> Value {
-        let response = app.oneshot(request(path, body)).await.unwrap();
+    async fn response_json(app: Router, path: &str, body: Value) -> TestResult<Value> {
+        let response = app.oneshot(request(path, body)?).await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        serde_json::from_slice(&body).unwrap()
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+        json_value(&body)
     }
     #[tokio::test]
-    async fn stripe_amount_keeps_group_ratio_and_preset_discount() {
+    async fn stripe_amount_keeps_group_ratio_and_preset_discount() -> TestResult {
         let store = Arc::new(Store::default());
         let response = app(store)
-            .oneshot(request("/api/user/stripe/amount", json!({"amount":100})))
-            .await
-            .unwrap();
+            .oneshot(request("/api/user/stripe/amount", json!({"amount":100}))?)
+            .await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"message":"success","data":"768.00"})
+            json_value(&body)?,
+            json!({"message":"success","data":"13.15"})
         );
+        Ok(())
     }
     #[tokio::test]
-    async fn authenticated_quote_keeps_should_bind_json_content_type_independence() {
+    async fn authenticated_quote_keeps_should_bind_json_content_type_independence() -> TestResult {
         let response = app(Arc::new(Store::default()))
             .oneshot(request_without_content_type(
                 "/api/user/stripe/amount",
                 json!({"amount":100}),
-            ))
-            .await
-            .unwrap();
+            )?)
+            .await?;
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"message":"success","data":"768.00"})
+            json_value(&body)?,
+            json!({"message":"success","data":"13.15"})
         );
+        Ok(())
     }
     #[tokio::test]
-    async fn null_or_missing_amount_keeps_go_zero_value_validation() {
+    async fn null_or_missing_amount_keeps_go_zero_value_validation() -> TestResult {
         for body in [Value::Null, json!({}), json!({"amount":null})] {
             let response = app(Arc::new(Store::default()))
-                .oneshot(request("/api/user/stripe/amount", body))
-                .await
-                .unwrap();
+                .oneshot(request("/api/user/stripe/amount", body)?)
+                .await?;
             assert_eq!(response.status(), StatusCode::OK);
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
             assert_eq!(
-                serde_json::from_slice::<Value>(&body).unwrap(),
+                json_value(&body)?,
                 json!({"message":"error","data":"充值数量不能小于 1"})
             );
         }
+        Ok(())
     }
     #[tokio::test]
-    async fn string_amount_remains_a_legacy_json_type_error() {
+    async fn string_amount_remains_a_legacy_json_type_error() -> TestResult {
         let body = response_json(
             app(Arc::new(Store::default())),
             "/api/user/stripe/amount",
             json!({"amount":"0"}),
         )
-        .await;
+        .await?;
         assert_eq!(body, json!({"message":"error","data":"参数错误"}));
+        Ok(())
     }
     #[test]
-    fn creem_products_keep_null_slice_and_null_scalar_field_rules() {
-        assert!(parse_creem_products("null").unwrap().is_empty());
+    fn creem_products_keep_null_slice_and_null_scalar_field_rules() -> TestResult {
+        let null_products = parse_creem_products("null")
+            .map_err(|_| test_error("top-level null should parse as an empty product list"))?;
+        assert!(null_products.is_empty());
+        let products = parse_creem_products(
+            r#"[{"productId":null,"name":null,"price":null,"currency":null,"quota":null}]"#,
+        )
+        .map_err(|_| test_error("null product fields should preserve Go zero values"))?;
         assert_eq!(
-            parse_creem_products(
-                r#"[{"productId":null,"name":null,"price":null,"currency":null,"quota":null}]"#,
-            )
-            .unwrap(),
+            products,
             vec![CreemProduct {
                 product_id: String::new(),
                 name: String::new(),
@@ -1257,16 +1302,18 @@ mod tests {
             parse_creem_products(r#""not-an-array""#),
             Err(TopupStoreError::Unavailable)
         );
+        Ok(())
     }
     #[test]
-    fn bearer_matches_legacy_bearer_case_and_bare_token_forms() {
+    fn bearer_matches_legacy_bearer_case_and_bare_token_forms() -> TestResult {
         let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, "bEaReR token".parse().unwrap());
+        headers.insert(header::AUTHORIZATION, "bEaReR token".parse()?);
         assert_eq!(bearer(&headers), Some("token"));
-        headers.insert(header::AUTHORIZATION, "raw-token".parse().unwrap());
+        headers.insert(header::AUTHORIZATION, "raw-token".parse()?);
         assert_eq!(bearer(&headers), Some("raw-token"));
-        headers.insert(header::AUTHORIZATION, "Bearer one two".parse().unwrap());
+        headers.insert(header::AUTHORIZATION, "Bearer one two".parse()?);
         assert_eq!(bearer(&headers), None);
+        Ok(())
     }
     #[test]
     fn legacy_trade_number_uses_the_go_sha1_shape() {
@@ -1284,7 +1331,7 @@ mod tests {
         );
     }
     #[test]
-    fn loopback_fixture_rejects_egress_and_preserves_default_url_payload() {
+    fn loopback_fixture_rejects_egress_and_preserves_default_url_payload() -> TestResult {
         assert!(
             LoopbackStripeCreemGateway::new(
                 "https://provider.example.test",
@@ -1305,18 +1352,19 @@ mod tests {
             "https://console.example.test/usage-logs".into(),
             "https://console.example.test/wallet".into(),
         )
-        .unwrap();
+        .map_err(|_| test_error("loopback Stripe/Creem fixture URL should be valid"))?;
+        let stripe_payload = gateway
+            .stripe_fixture_payload(&StripeCheckoutRequest {
+                trade_no: "ref_trade".into(),
+                customer: String::new(),
+                email: "user@example.test".into(),
+                amount: 3,
+                success_url: String::new(),
+                cancel_url: String::new(),
+            })
+            .map_err(|_| test_error("valid Stripe fixture input should produce a payload"))?;
         assert_eq!(
-            gateway
-                .stripe_fixture_payload(&StripeCheckoutRequest {
-                    trade_no: "ref_trade".into(),
-                    customer: String::new(),
-                    email: "user@example.test".into(),
-                    amount: 3,
-                    success_url: String::new(),
-                    cancel_url: String::new(),
-                })
-                .unwrap(),
+            stripe_payload,
             json!({
                 "client_reference_id":"ref_trade",
                 "customer":"",
@@ -1347,9 +1395,10 @@ mod tests {
                 "metadata":{"username":"light","product_name":"Pro","quota":"100"},
             })
         );
+        Ok(())
     }
     #[tokio::test]
-    async fn loopback_fixture_rejects_empty_provider_credentials_before_network() {
+    async fn loopback_fixture_rejects_empty_provider_credentials_before_network() -> TestResult {
         let empty_stripe = LoopbackStripeCreemGateway::new(
             "http://127.0.0.1:19093/",
             SecretString::from(""),
@@ -1358,7 +1407,9 @@ mod tests {
             "https://console.example.test/usage-logs".into(),
             "https://console.example.test/wallet".into(),
         )
-        .unwrap();
+        .map_err(|_| {
+            test_error("empty Stripe credentials should not invalidate the fixture URL")
+        })?;
         assert_eq!(
             empty_stripe
                 .stripe_checkout(StripeCheckoutRequest {
@@ -1381,7 +1432,7 @@ mod tests {
             "https://console.example.test/usage-logs".into(),
             "https://console.example.test/wallet".into(),
         )
-        .unwrap();
+        .map_err(|_| test_error("empty Creem credentials should not invalidate the fixture URL"))?;
         assert_eq!(
             empty_creem
                 .creem_checkout(CreemCheckoutRequest {
@@ -1399,11 +1450,14 @@ mod tests {
                 .await,
             Err(CheckoutError::Unavailable)
         );
+        Ok(())
     }
     #[test]
     fn stripe_settings_read_registered_display_type_and_fractional_quota_per_unit() {
         let options = BTreeMap::from([
             ("QuotaDisplayType".into(), "TOKENS".into()),
+            ("USDExchangeRate".into(), "6.8".into()),
+            ("TopUpPlatformUnitsPerCNY".into(), "1.25".into()),
             ("general_setting.quota_display_type".into(), "CNY".into()),
             ("QuotaPerUnit".into(), "12.5".into()),
             (
@@ -1415,6 +1469,8 @@ mod tests {
         let settings = stripe_settings_from_options(&options, Vec::new());
 
         assert_eq!(settings.quota_display_type, "CNY");
+        assert_eq!(settings.cny_per_usd, 6.8);
+        assert_eq!(settings.platform_units_per_cny, 1.25);
         assert_eq!(settings.quota_per_unit, 12.5);
         assert_eq!(settings.amount_discounts.get(&100), Some(&0.8));
     }
@@ -1429,12 +1485,13 @@ mod tests {
         assert_eq!(settings.amount_discounts.get(&100), Some(&0.75));
     }
     #[tokio::test]
-    async fn stripe_quote_http_seam_preserves_usd_cny_and_tokens_display_rules() {
-        let cases = [("USD", "1200.00"), ("CNY", "1200.00"), ("TOKENS", "48.00")];
+    async fn stripe_quote_http_seam_preserves_usd_cny_and_tokens_display_rules() -> TestResult {
+        let cases = [("USD", "12.00"), ("CNY", "12.00"), ("TOKENS", "0.48")];
         for (display_type, expected) in cases {
             let settings = StripeSettings {
                 min_topup: 2,
-                unit_price: 10.0,
+                cny_per_usd: 10.0,
+                platform_units_per_cny: 1.0,
                 quota_display_type: display_type.into(),
                 quota_per_unit: 25.0,
                 group_ratios: BTreeMap::from([("vip".into(), 1.5)]),
@@ -1446,9 +1503,10 @@ mod tests {
                 "/api/user/stripe/amount",
                 json!({"amount":100}),
             )
-            .await;
+            .await?;
             assert_eq!(body, json!({"message":"success","data":expected}));
         }
+        Ok(())
     }
     #[test]
     fn stripe_minimum_uses_truncated_non_default_quota_per_unit_only_for_tokens() {
@@ -1463,20 +1521,20 @@ mod tests {
         assert_eq!(stripe_minimum(&settings), 3);
     }
     #[tokio::test]
-    async fn stripe_rejects_untrusted_redirect_before_gateway_or_order() {
+    async fn stripe_rejects_untrusted_redirect_before_gateway_or_order() -> TestResult {
         let store = Arc::new(Store::default());
         let response = app(store.clone())
             .oneshot(request(
                 "/api/user/stripe/pay",
                 json!({"amount":2,"payment_method":"stripe","success_url":"https://evil.test"}),
-            ))
-            .await
-            .unwrap();
+            )?)
+            .await?;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(store.orders.lock().unwrap().is_empty());
+        assert!(lock_unpoisoned(&store.orders).is_empty());
+        Ok(())
     }
     #[tokio::test]
-    async fn stripe_accepts_trusted_subdomain_with_injected_no_egress_gateway() {
+    async fn stripe_accepts_trusted_subdomain_with_injected_no_egress_gateway() -> TestResult {
         let store = Arc::new(Store::default());
         let body = response_json(
             app(store.clone()),
@@ -1488,15 +1546,20 @@ mod tests {
                 "cancel_url":"http://example.test/cancel"
             }),
         )
-        .await;
+        .await?;
 
-        assert_eq!(body["message"], "success");
-        let orders = store.orders.lock().unwrap();
+        let message = required(
+            body.get("message").and_then(Value::as_str),
+            "successful Stripe response should contain a string message",
+        )?;
+        assert_eq!(message, "success");
+        let orders = lock_unpoisoned(&store.orders);
         assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].money, 2.4);
+        assert_eq!(orders[0].money, 0.33);
+        Ok(())
     }
     #[tokio::test]
-    async fn stripe_provider_failure_is_fail_closed_without_pending_order() {
+    async fn stripe_provider_failure_is_fail_closed_without_pending_order() -> TestResult {
         let store = Arc::new(Store::default());
         let app = router(IdentityStripeCreemState::new(
             store.clone(),
@@ -1507,14 +1570,14 @@ mod tests {
             .oneshot(request(
                 "/api/user/stripe/pay",
                 json!({"amount":2,"payment_method":"stripe"}),
-            ))
-            .await
-            .unwrap();
+            )?)
+            .await?;
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(store.orders.lock().unwrap().is_empty());
+        assert!(lock_unpoisoned(&store.orders).is_empty());
+        Ok(())
     }
     #[tokio::test]
-    async fn unauthenticated_user_cannot_quote_or_start_checkout() {
+    async fn unauthenticated_user_cannot_quote_or_start_checkout() -> TestResult {
         for (uri, body) in [
             ("/api/user/stripe/amount", r#"{"amount":100}"#),
             (
@@ -1526,65 +1589,55 @@ mod tests {
                 r#"{"product_id":"p1","payment_method":"creem"}"#,
             ),
         ] {
-            let response = app(Arc::new(Store::default()))
-                .oneshot(
-                    Request::post(uri)
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from(body))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let request = Request::post(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))?;
+            let response = app(Arc::new(Store::default())).oneshot(request).await?;
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{uri}");
+            let content_type = required(
+                response.headers().get(header::CONTENT_TYPE),
+                "authentication error response should contain a content type",
+            )?;
+            assert_eq!(content_type, "application/json", "{uri}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
             assert_eq!(
-                response.headers().get(header::CONTENT_TYPE).unwrap(),
-                "application/json",
-                "{uri}"
-            );
-            assert_eq!(
-                serde_json::from_slice::<Value>(
-                    &axum::body::to_bytes(response.into_body(), usize::MAX)
-                        .await
-                        .unwrap()
-                )
-                .unwrap(),
+                json_value(&body)?,
                 json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token"}),
                 "{uri}"
             );
         }
+        Ok(())
     }
     #[tokio::test]
-    async fn creem_persists_legacy_pending_order_before_checkout() {
+    async fn creem_persists_legacy_pending_order_before_checkout() -> TestResult {
         let store = Arc::new(Store::default());
         let response = app(store.clone())
             .oneshot(request(
                 "/api/user/creem/pay",
                 json!({"product_id":"p1","payment_method":"creem"}),
-            ))
-            .await
-            .unwrap();
+            )?)
+            .await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let orders = store.orders.lock().unwrap();
+        let orders = lock_unpoisoned(&store.orders);
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].amount, 100);
         assert_eq!(orders[0].money, 3.5);
+        Ok(())
     }
     #[tokio::test]
-    async fn creem_space_only_product_id_follows_legacy_lookup_not_empty_rejection() {
+    async fn creem_space_only_product_id_follows_legacy_lookup_not_empty_rejection() -> TestResult {
         let response = app(Arc::new(Store::default()))
             .oneshot(request(
                 "/api/user/creem/pay",
                 json!({"product_id":"   ","payment_method":"creem"}),
-            ))
-            .await
-            .unwrap();
+            )?)
+            .await?;
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
+            json_value(&body)?,
             json!({"message":"error","data":"产品不存在"})
         );
+        Ok(())
     }
 }

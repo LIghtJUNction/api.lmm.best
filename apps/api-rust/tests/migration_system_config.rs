@@ -1,4 +1,9 @@
-use std::{env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    env,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use axum::{
@@ -12,7 +17,7 @@ use lmm_api_rs::{
         TwoFactorLoginRequest,
     },
     migration_routes::system_config::{
-        DashboardRootAuthorizer, ProjectUpdateClient, SystemConfigAuthorizer,
+        DashboardRootAuthorizer, ExchangeRateProvider, ProjectUpdateClient, SystemConfigAuthorizer,
         SystemConfigHttpState, SystemConfigIdentity, SystemConfigRuntimeWriter,
         WaffoPancakeGateway, system_config_router,
     },
@@ -64,6 +69,67 @@ impl ProjectUpdateClient for Update {
 
 struct Pancake;
 
+struct ExchangeRateProbe {
+    calls: Mutex<Vec<String>>,
+    result: Result<f64, ()>,
+}
+
+impl ExchangeRateProbe {
+    fn succeeding(rate: f64) -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            result: Ok(rate),
+        }
+    }
+
+    fn failing() -> Self {
+        Self {
+            calls: Mutex::new(Vec::new()),
+            result: Err(()),
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("exchange-rate calls").clone()
+    }
+}
+
+#[async_trait]
+impl ExchangeRateProvider for ExchangeRateProbe {
+    async fn settlement_units_per_usd(&self, currency: &str) -> Result<f64, ()> {
+        self.calls
+            .lock()
+            .expect("exchange-rate calls")
+            .push(currency.to_owned());
+        self.result
+    }
+}
+
+struct CatalogProbe {
+    catalog_calls: Mutex<Vec<(String, String)>>,
+    fail_catalog: bool,
+}
+
+impl CatalogProbe {
+    fn succeeding() -> Self {
+        Self {
+            catalog_calls: Mutex::new(Vec::new()),
+            fail_catalog: false,
+        }
+    }
+
+    fn failing() -> Self {
+        Self {
+            catalog_calls: Mutex::new(Vec::new()),
+            fail_catalog: true,
+        }
+    }
+
+    fn catalog_calls(&self) -> Vec<(String, String)> {
+        self.catalog_calls.lock().expect("catalog calls").clone()
+    }
+}
+
 struct OracleProbeRuntimeWriter;
 
 #[async_trait]
@@ -101,6 +167,63 @@ impl WaffoPancakeGateway for Pancake {
     ) -> Result<Value, ()> {
         Ok(json!("product-fixture"))
     }
+
+    async fn create_subscription_product(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<Value, ()> {
+        Ok(json!("subscription-product-fixture"))
+    }
+}
+
+#[async_trait]
+impl WaffoPancakeGateway for CatalogProbe {
+    async fn catalog(&self, merchant_id: &str, private_key: &str) -> Result<Value, ()> {
+        self.catalog_calls
+            .lock()
+            .expect("catalog calls")
+            .push((merchant_id.to_owned(), private_key.to_owned()));
+        if self.fail_catalog {
+            Err(())
+        } else {
+            Ok(json!({"stores": []}))
+        }
+    }
+
+    async fn create_pair(&self, _: &str, _: &str, _: &str) -> Result<Value, Value> {
+        Err(json!({}))
+    }
+
+    async fn create_product(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<Value, ()> {
+        Err(())
+    }
+
+    async fn create_subscription_product(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<Value, ()> {
+        Err(())
+    }
 }
 
 struct Dashboard {
@@ -118,6 +241,143 @@ async fn spawn_tcp_router(app: axum::Router) -> (String, tokio::task::JoinHandle
             .expect("test server");
     });
     (format!("http://{address}"), server)
+}
+
+fn exchange_rate_app(
+    authorizer: Arc<dyn SystemConfigAuthorizer>,
+    provider: Arc<dyn ExchangeRateProvider>,
+) -> axum::Router {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("valid deferred PostgreSQL URL");
+    let valkey = redis::Client::open("redis://127.0.0.1:1/").expect("valid deferred Valkey URL");
+    system_config_router(
+        SystemConfigHttpState::new(
+            pool,
+            valkey,
+            authorizer,
+            Arc::new(Update),
+            Arc::new(Pancake),
+        )
+        .with_exchange_rate_provider(provider),
+    )
+}
+
+async fn response_json(response: axum::response::Response) -> Value {
+    serde_json::from_slice(
+        &to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded response body"),
+    )
+    .expect("JSON response")
+}
+
+#[tokio::test]
+async fn exchange_rate_requires_root_auth_before_query_validation() {
+    let provider = Arc::new(ExchangeRateProbe::succeeding(6.8));
+    let response = exchange_rate_app(Arc::new(Denied), provider.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/option/exchange-rate?currency=CNY")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(provider.calls().is_empty());
+}
+
+#[tokio::test]
+async fn exchange_rate_validates_iso_code_normalizes_case_and_bypasses_provider_for_usd() {
+    let provider = Arc::new(ExchangeRateProbe::succeeding(6.8));
+    let app = exchange_rate_app(Arc::new(Root), provider.clone());
+
+    for uri in [
+        "/api/option/exchange-rate",
+        "/api/option/exchange-rate?currency=CN",
+        "/api/option/exchange-rate?currency=C%24Y",
+        "/api/option/exchange-rate?currency=CNY1",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(
+            response_json(response).await,
+            json!({"success": false, "message": "currency must be a three-letter ISO code"}),
+            "{uri}"
+        );
+    }
+
+    let usd = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/option/exchange-rate?currency=usd")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(usd.status(), StatusCode::OK);
+    let usd_body = response_json(usd).await;
+    assert_eq!(usd_body["success"], true);
+    assert_eq!(usd_body["message"], "");
+    assert_eq!(usd_body["data"]["base_currency"], "USD");
+    assert_eq!(usd_body["data"]["quote_currency"], "USD");
+    assert_eq!(usd_body["data"]["rate"], 1.0);
+    assert_eq!(usd_body["data"]["provider"], "base");
+    assert!(usd_body["data"]["fetched_at"].is_string());
+    assert!(provider.calls().is_empty());
+
+    let cny = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/option/exchange-rate?currency=cny")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(cny.status(), StatusCode::OK);
+    let cny_body = response_json(cny).await;
+    assert_eq!(cny_body["success"], true);
+    assert_eq!(cny_body["data"]["base_currency"], "USD");
+    assert_eq!(cny_body["data"]["quote_currency"], "CNY");
+    assert_eq!(cny_body["data"]["rate"], 6.8);
+    assert_eq!(cny_body["data"]["provider"], "pinned-providers");
+    assert!(cny_body["data"]["fetched_at"].is_string());
+    assert_eq!(provider.calls(), vec!["CNY"]);
+}
+
+#[tokio::test]
+async fn exchange_rate_fails_closed_when_both_pinned_providers_are_unavailable() {
+    let provider = Arc::new(ExchangeRateProbe::failing());
+    let response = exchange_rate_app(Arc::new(Root), provider.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/api/option/exchange-rate?currency=CNY")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        response_json(response).await,
+        json!({"success": false, "message": "failed to fetch the latest USD exchange rate"})
+    );
+    assert_eq!(provider.calls(), vec!["CNY"]);
 }
 
 #[tokio::test]
@@ -172,6 +432,151 @@ async fn option_route_anonymous_contract_is_frozen_over_real_tcp_with_locale() {
         })
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn waffo_catalog_get_is_unavailable_and_never_forwards_query_credentials() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("valid deferred PostgreSQL URL");
+    let valkey = redis::Client::open("redis://127.0.0.1:1/").expect("valid deferred Valkey URL");
+    let pancake = Arc::new(CatalogProbe::succeeding());
+    let app = system_config_router(SystemConfigHttpState::new(
+        pool,
+        valkey,
+        Arc::new(Root),
+        Arc::new(Update),
+        pancake.clone(),
+    ));
+    let private_key = "url-private-key-must-not-be-read";
+
+    let response = app
+        .oneshot(
+            Request::get(format!(
+                "/api/option/waffo-pancake/catalog?merchant_id=url-merchant&private_key={private_key}&return_url=https%3A%2F%2Fexample.invalid"
+            ))
+            .body(Body::empty())
+            .expect("GET request"),
+        )
+        .await
+        .expect("GET response");
+
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(pancake.catalog_calls().is_empty());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert!(!String::from_utf8_lossy(&body).contains(private_key));
+}
+
+#[tokio::test]
+async fn waffo_catalog_post_requires_root_before_parsing_credentials() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("valid deferred PostgreSQL URL");
+    let valkey = redis::Client::open("redis://127.0.0.1:1/").expect("valid deferred Valkey URL");
+    let pancake = Arc::new(CatalogProbe::succeeding());
+    let app = system_config_router(SystemConfigHttpState::new(
+        pool,
+        valkey,
+        Arc::new(Denied),
+        Arc::new(Update),
+        pancake.clone(),
+    ));
+    let private_key = "body-private-key-must-not-leak";
+
+    let response = app
+        .oneshot(
+            Request::post("/api/option/waffo-pancake/catalog")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"merchant_id":"merchant","private_key":"{private_key}"}}"#
+                )))
+                .expect("POST request"),
+        )
+        .await
+        .expect("POST response");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(pancake.catalog_calls().is_empty());
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert!(!String::from_utf8_lossy(&body).contains(private_key));
+}
+
+#[tokio::test]
+async fn waffo_catalog_post_uses_only_json_credentials_and_keeps_errors_redacted() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("valid deferred PostgreSQL URL");
+    let valkey = redis::Client::open("redis://127.0.0.1:1/").expect("valid deferred Valkey URL");
+    let pancake = Arc::new(CatalogProbe::failing());
+    let app = system_config_router(SystemConfigHttpState::new(
+        pool,
+        valkey,
+        Arc::new(Root),
+        Arc::new(Update),
+        pancake.clone(),
+    ));
+    let body_private_key = "body-private-key-must-not-leak";
+    let query_private_key = "query-private-key-must-be-ignored";
+
+    let response = app
+        .oneshot(
+            Request::post(format!(
+                "/api/option/waffo-pancake/catalog?merchant_id=query-merchant&private_key={query_private_key}"
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(format!(
+                r#"{{"merchant_id":" body-merchant ","private_key":" {body_private_key} "}}"#
+            )))
+            .expect("POST request"),
+        )
+        .await
+        .expect("POST response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        pancake.catalog_calls(),
+        vec![("body-merchant".to_owned(), body_private_key.to_owned())]
+    );
+    let body = serde_json::from_slice::<Value>(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body"),
+    )
+    .expect("JSON response");
+    assert_eq!(body, json!({"message":"error","data":"拉取目录失败"}));
+    let serialized = body.to_string();
+    assert!(!serialized.contains(body_private_key));
+    assert!(!serialized.contains(query_private_key));
+}
+
+#[tokio::test]
+async fn waffo_catalog_post_enforces_the_go_body_limit_after_root_auth() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("valid deferred PostgreSQL URL");
+    let valkey = redis::Client::open("redis://127.0.0.1:1/").expect("valid deferred Valkey URL");
+    let app = system_config_router(SystemConfigHttpState::new(
+        pool,
+        valkey,
+        Arc::new(Root),
+        Arc::new(Update),
+        Arc::new(Pancake),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::post("/api/option/waffo-pancake/catalog")
+                .body(Body::from(vec![b'x'; (16 << 10) + 1]))
+                .expect("oversized POST request"),
+        )
+        .await
+        .expect("oversized POST response");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[async_trait]
@@ -301,6 +706,11 @@ async fn malformed_protected_payloads_keep_the_frozen_legacy_envelopes() {
             "/api/option/payment_compliance",
             StatusCode::OK,
             json!({"success":false,"message":"参数错误"}),
+        ),
+        (
+            "/api/option/waffo-pancake/catalog",
+            StatusCode::OK,
+            json!({"message":"error","data":"参数错误"}),
         ),
         (
             "/api/option/waffo-pancake/pair",

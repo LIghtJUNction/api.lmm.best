@@ -3,6 +3,8 @@
 //! The database is the source of truth: all balance-changing operations use a
 //! PostgreSQL transaction and lock the user row.  The small [`Clock`] and
 //! [`Awarder`] seams keep the calendar and random reward boundary testable.
+//! SMTP-backed affiliate invitations are mounted but explicitly fail closed
+//! until the isolated Rust candidate receives a real mailer adapter.
 
 use std::{
     collections::BTreeMap,
@@ -202,6 +204,7 @@ impl IdentityCheckinAffState {
 pub fn router(state: IdentityCheckinAffState) -> Router {
     checkin_read_routes()
         .route("/api/user/checkin", post(checkin))
+        .route("/api/user/aff/invite", post(send_affiliate_invitation))
         .route("/api/user/aff_transfer", post(aff_transfer))
         .route("/api/user/amount", post(amount))
         .with_state(state)
@@ -324,6 +327,64 @@ fn user_auth_error(headers: &HeaderMap, error: UserAuthPolicyError) -> Response 
         })),
     )
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct AffiliateInvitationRequest {
+    email: String,
+}
+
+fn normalize_invitation_email(value: &str) -> Option<String> {
+    let email = value.trim().to_ascii_lowercase();
+    if email.is_empty()
+        || email.len() > 254
+        || email
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return None;
+    }
+    let (local, domain) = email.split_once('@')?;
+    if local.is_empty()
+        || local.len() > 64
+        || domain.is_empty()
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || domain.contains("..")
+        || domain.contains('@')
+    {
+        return None;
+    }
+    Some(email)
+}
+
+async fn send_affiliate_invitation(
+    State(state): State<IdentityCheckinAffState>,
+    headers: HeaderMap,
+    request: Request,
+) -> Response {
+    let actor = match user(&state, &headers).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let body = match to_bytes(request.into_body(), 2 * 1024).await {
+        Ok(value) => value,
+        Err(_) => return fail("请求体过大"),
+    };
+    let request: AffiliateInvitationRequest = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return fail("参数无效"),
+    };
+    let Some(recipient) = normalize_invitation_email(&request.email) else {
+        return fail("参数无效");
+    };
+    if recipient == actor.email.trim().to_ascii_lowercase() {
+        return fail("不能向自己的邮箱发送邀请。");
+    }
+    // The normal Rust listener deliberately has no SMTP credentials. Keep the
+    // frozen path visible for migration coverage without pretending delivery
+    // succeeded or allowing a request to escape the isolated candidate.
+    fail("邀请邮件暂时无法发送，请稍后重试。")
 }
 
 #[derive(Default, Deserialize)]
@@ -847,142 +908,91 @@ async fn option_f64(pg: &PgPool, key: &str, default: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::migration_routes::test_support::RejectingDashboardAuth;
     use axum::{
         body::{Body, to_bytes},
         http::Request,
     };
     use tower::ServiceExt;
 
-    struct RejectingAuth;
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    #[async_trait]
-    impl DashboardAuth for RejectingAuth {
-        async fn check_critical_rate_limit(
-            &self,
-            _: &str,
-        ) -> Result<crate::auth::CriticalRateLimitOutcome, crate::auth::AuthError> {
-            Ok(crate::auth::CriticalRateLimitOutcome::Allowed)
-        }
-        async fn login(
-            &self,
-            _: crate::auth::LoginRequest,
-            _: crate::auth::RequestMetadata,
-        ) -> Result<crate::auth::LoginOutcome, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn login_2fa(
-            &self,
-            _: crate::auth::TwoFactorLoginRequest,
-            _: crate::auth::RequestMetadata,
-        ) -> Result<crate::auth::AuthBundle, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn refresh(
-            &self,
-            _: SecretString,
-            _: Option<String>,
-            _: crate::auth::RequestMetadata,
-        ) -> Result<crate::auth::AuthBundle, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn self_user(
-            &self,
-            _: SecretString,
-        ) -> Result<DashboardUser, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn logout(
-            &self,
-            _: crate::auth::LogoutRequest,
-        ) -> Result<crate::auth::LogoutResult, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
-        async fn generate_personal_access_token(
-            &self,
-            _: SecretString,
-        ) -> Result<String, crate::auth::AuthError> {
-            Err(crate::auth::AuthError::new(AuthErrorKind::Unauthorized))
-        }
+    fn test_pool() -> Result<PgPool, sqlx::Error> {
+        PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
     }
 
-    fn app() -> Router {
-        router(IdentityCheckinAffState::new(
-            PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap(),
-            Arc::new(RejectingAuth),
-        ))
+    fn app() -> Result<Router, sqlx::Error> {
+        Ok(router(IdentityCheckinAffState::new(
+            test_pool()?,
+            Arc::new(RejectingDashboardAuth),
+        )))
     }
 
-    fn read_app() -> Router {
-        read_router(IdentityCheckinAffState::new(
-            PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused").unwrap(),
-            Arc::new(RejectingAuth),
-        ))
+    fn read_app() -> Result<Router, sqlx::Error> {
+        Ok(read_router(IdentityCheckinAffState::new(
+            test_pool()?,
+            Arc::new(RejectingDashboardAuth),
+        )))
     }
 
     #[tokio::test]
-    async fn every_checkin_and_affiliate_public_seam_requires_a_dashboard_credential() {
+    async fn every_checkin_and_affiliate_public_seam_requires_a_dashboard_credential() -> TestResult
+    {
         for (method, uri) in [
             ("GET", "/api/user/checkin"),
             ("POST", "/api/user/checkin"),
+            ("POST", "/api/user/aff/invite"),
             ("POST", "/api/user/aff_transfer"),
             ("POST", "/api/user/amount"),
         ] {
-            let response = app()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())?;
+            let response = app()?.oneshot(request).await?;
             assert_eq!(
                 response.status(),
                 StatusCode::UNAUTHORIZED,
                 "{method} {uri}"
             );
+            let body = to_bytes(response.into_body(), 1024).await?;
             assert_eq!(
-                serde_json::from_slice::<Value>(
-                    &to_bytes(response.into_body(), 1024).await.unwrap()
-                )
-                .unwrap(),
+                serde_json::from_slice::<Value>(&body)?,
                 json!({"success":false,"code":"AUTH_UNAUTHORIZED","message":"Unauthorized, invalid access token"}),
                 "{method} {uri}"
             );
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn read_router_does_not_expose_quota_changing_methods() {
+    async fn read_router_does_not_expose_quota_changing_methods() -> TestResult {
         for (method, uri, expected_status) in [
             ("POST", "/api/user/checkin", StatusCode::METHOD_NOT_ALLOWED),
+            ("POST", "/api/user/aff/invite", StatusCode::NOT_FOUND),
             ("POST", "/api/user/aff_transfer", StatusCode::NOT_FOUND),
             ("POST", "/api/user/amount", StatusCode::NOT_FOUND),
         ] {
-            let response = read_app()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
+            let request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())?;
+            let response = read_app()?.oneshot(request).await?;
             assert_eq!(response.status(), expected_status, "{method} {uri}");
         }
+        Ok(())
     }
 
     #[test]
-    fn checkin_calendar_uses_an_injected_process_local_timezone_across_midnight() {
+    fn checkin_calendar_uses_an_injected_process_local_timezone_across_midnight() -> TestResult {
         // 2026-08-01T16:30:00Z is already 2026-08-02 in the Go process's
         // configured UTC+8 local timezone.
         let now = 1_785_601_800;
-        let utc_plus_eight = FixedOffset::east_opt(8 * 60 * 60).unwrap();
+        let utc_plus_eight = FixedOffset::east_opt(8 * 60 * 60)
+            .ok_or_else(|| std::io::Error::other("invalid UTC+8 test offset"))?;
         assert_eq!(date(now, utc_plus_eight), "2026-08-02");
         assert_eq!(month(now, utc_plus_eight), "2026-08");
+        Ok(())
     }
 
     #[test]
@@ -1023,10 +1033,10 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_token_matches_go_bare_and_bearer_forms() {
+    fn dashboard_token_matches_go_bare_and_bearer_forms() -> TestResult {
         for value in ["token", "Bearer token", "bearer token"] {
             let mut headers = HeaderMap::new();
-            headers.insert(header::AUTHORIZATION, value.parse().unwrap());
+            headers.insert(header::AUTHORIZATION, value.parse()?);
             assert_eq!(
                 dashboard_token(&headers).as_deref(),
                 Some("token"),
@@ -1034,8 +1044,9 @@ mod tests {
             );
         }
         let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, "Bearer token extra".parse().unwrap());
+        headers.insert(header::AUTHORIZATION, "Bearer token extra".parse()?);
         assert_eq!(dashboard_token(&headers), None);
+        Ok(())
     }
 
     #[test]
@@ -1060,14 +1071,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn checkin_status_success_omits_message_like_frozen_go() {
+    async fn checkin_status_success_omits_message_like_frozen_go() -> TestResult {
         let response = checkin_status_ok(json!({"enabled": true}));
         assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&to_bytes(response.into_body(), 1024).await.unwrap())
-                .unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({"success": true, "data": {"enabled": true}})
         );
+        Ok(())
     }
 
     #[test]
@@ -1100,43 +1112,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn affiliate_transfer_compliance_rejection_matches_go_and_has_no_side_effects() {
+    async fn affiliate_transfer_compliance_rejection_matches_go_and_has_no_side_effects()
+    -> TestResult {
         let options = BTreeMap::new();
         assert!(!payment_compliance(&options));
         // The gate runs before body binding or the transfer transaction, so a
         // rejected request has no durable affiliate or log side effect.
         let response = fail(compliance_message(&HeaderMap::new()));
         assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024).await?;
         assert_eq!(
-            serde_json::from_slice::<Value>(&to_bytes(response.into_body(), 1024).await.unwrap())
-                .unwrap(),
+            serde_json::from_slice::<Value>(&body)?,
             json!({
                 "success": false,
                 "message": "Payment, redemption, subscription, and invitation reward features are disabled. The administrator must confirm compliance terms before enabling them."
             })
         );
+        Ok(())
     }
 
     #[test]
-    fn affiliate_transfer_success_message_matches_go_locales() {
+    fn affiliate_transfer_success_message_matches_go_locales() -> TestResult {
         let mut headers = HeaderMap::new();
         assert_eq!(transfer_success_message(&headers), "Transfer successful");
         assert_eq!(
             transfer_failure_message(&headers, "邀请额度不足！"),
             "Transfer failed 邀请额度不足！"
         );
-        headers.insert(header::ACCEPT_LANGUAGE, "zh-CN".parse().unwrap());
+        headers.insert(header::ACCEPT_LANGUAGE, "zh-CN".parse()?);
         assert_eq!(transfer_success_message(&headers), "划转成功");
         assert_eq!(
             transfer_failure_message(&headers, "邀请额度不足！"),
             "划转失败 邀请额度不足！"
         );
-        headers.insert(header::ACCEPT_LANGUAGE, "zh-TW".parse().unwrap());
+        headers.insert(header::ACCEPT_LANGUAGE, "zh-TW".parse()?);
         assert_eq!(transfer_success_message(&headers), "劃轉成功");
         assert_eq!(
             transfer_failure_message(&headers, "邀请额度不足！"),
             "劃轉失敗 邀请额度不足！"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn affiliate_invitation_email_normalization_rejects_ambiguous_recipients() {
+        assert_eq!(
+            normalize_invitation_email(" Friend@Example.COM "),
+            Some("friend@example.com".to_owned())
+        );
+        for invalid in [
+            "",
+            "missing-at.example.com",
+            "two@@example.com",
+            "space @example.com",
+            "local@.example.com",
+            "local@example.com.",
+            "local@example..com",
+        ] {
+            assert_eq!(normalize_invitation_email(invalid), None, "{invalid}");
+        }
     }
 
     #[test]

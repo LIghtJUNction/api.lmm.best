@@ -784,8 +784,14 @@ export function SecurityAuditPanel() {
   }, [])
   const selectedReviewQuery = useQuery({
     queryKey: ['admin-assistant-review-task', selectedReviewTaskId],
-    queryFn: () =>
-      getAssistantReviewRun<AssistantReviewTask>(selectedReviewTaskId!),
+    queryFn: () => {
+      if (!selectedReviewTaskId) {
+        throw new Error(
+          'A review task must be selected before loading details.'
+        )
+      }
+      return getAssistantReviewRun<AssistantReviewTask>(selectedReviewTaskId)
+    },
     enabled: Boolean(selectedReviewTaskId),
     retry: false,
     refetchOnWindowFocus: false,
@@ -806,7 +812,7 @@ export function SecurityAuditPanel() {
       ]
         .concat('assistant_review')
         .filter((value, index, values) => values.indexOf(value) === index)
-        .sort(),
+        .sort((left, right) => left.localeCompare(right)),
     [policy]
   )
   const sources = useMemo(
@@ -818,7 +824,7 @@ export function SecurityAuditPanel() {
             .filter(Boolean),
           'ai_review',
         ]),
-      ].sort(),
+      ].sort((left, right) => left.localeCompare(right)),
     [policy]
   )
 

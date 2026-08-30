@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 checker="$repo_root/apps/api-rust/tests/scripts/check-migration-plan.sh"
+route_stub_checker="$repo_root/apps/api-rust/tests/scripts/route-local-stub-state.pl"
 # shellcheck source=route-gate-fixture-lib.sh
 # shellcheck disable=SC1091 # Repository root is resolved at runtime.
 source "$repo_root/apps/api-rust/tests/scripts/route-gate-fixture-lib.sh"
@@ -15,13 +16,46 @@ cleanup() {
 }
 trap cleanup EXIT
 
+route_local_fixture="$runtime/relay-shared.rs"
+cat >"$route_local_fixture" <<'RS'
+use axum::{Router, http::StatusCode, routing::{delete, post}};
+
+fn router() -> Router {
+    Router::new()
+        .route("/v1/engines/{model}/embeddings", post(complete_embedding))
+        .route("/v1/models/{model}", delete(frozen_model_delete))
+}
+
+async fn complete_embedding() -> StatusCode {
+    StatusCode::OK
+}
+
+async fn frozen_model_delete() -> StatusCode {
+    StatusCode::NOT_IMPLEMENTED
+}
+RS
+[[ $(perl "$route_stub_checker" "$route_local_fixture" POST '/v1/engines/{model}/embeddings') == complete ]] || {
+  echo "route-local stub checker confused a normal embedding handler with a sibling 501 route" >&2
+  exit 1
+}
+[[ $(perl "$route_stub_checker" "$route_local_fixture" DELETE '/v1/models/{model}') == stub ]] || {
+  echo "route-local stub checker missed the frozen DELETE 501 handler" >&2
+  exit 1
+}
+route_local_stub_fixture="$runtime/relay-shared-normal-is-stub.rs"
+sed '0,/StatusCode::OK/s//StatusCode::NOT_IMPLEMENTED/' "$route_local_fixture" >"$route_local_stub_fixture"
+[[ $(perl "$route_stub_checker" "$route_local_stub_fixture" POST '/v1/engines/{model}/embeddings') == stub ]] || {
+  echo "route-local stub checker accepted a 501 embedding handler beside a frozen DELETE 501 handler" >&2
+  exit 1
+}
+
 checker_output=$(bash "$checker")
 printf '%s\n' "$checker_output"
 
 # The deployed Rust archive intentionally has no .git directory.  The checker
 # must resolve its repository root from the script location instead of Git.
 no_git_output=$(cd "$runtime" && bash "$checker")
-[[ $no_git_output == *"migration plan valid: 352 frozen legacy routes covered exactly; route ownership policy satisfied"* ]] || {
+[[ $no_git_output == *"migration plan valid: 353 frozen legacy routes covered exactly; route ownership policy satisfied"* ]] || {
   echo "migration plan checker requires Git metadata when launched outside the checkout" >&2
   exit 1
 }
@@ -34,13 +68,13 @@ sed 's/$/\r/' "$repo_root/apps/api-rust/tests/fixtures/routes/legacy-go-routes.t
 sed 's/$/\r/' "$plan" >"$crlf_plan"
 sed 's/$/\r/' "$gate" >"$crlf_gate"
 sed 's/$/\r/' "$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv" >"$crlf_review"
-crlf_output=$(cd "$runtime" && \
+crlf_output=$(cd "$runtime" &&
   MIGRATION_LEGACY_PATH="$crlf_legacy" \
-  MIGRATION_PLAN_PATH="$crlf_plan" \
-  MIGRATION_GATE_PATH="$crlf_gate" \
-  MIGRATION_INTEGRATION_REVIEW_PATH="$crlf_review" \
-  bash "$checker")
-[[ $crlf_output == *"migration plan valid: 352 frozen legacy routes covered exactly; route ownership policy satisfied"* ]] || {
+    MIGRATION_PLAN_PATH="$crlf_plan" \
+    MIGRATION_GATE_PATH="$crlf_gate" \
+    MIGRATION_INTEGRATION_REVIEW_PATH="$crlf_review" \
+    bash "$checker")
+[[ $crlf_output == *"migration plan valid: 353 frozen legacy routes covered exactly; route ownership policy satisfied"* ]] || {
   echo "migration plan checker did not normalize CRLF across all ledgers" >&2
   exit 1
 }
@@ -131,7 +165,7 @@ awk -F '\t' 'BEGIN { OFS=FS }
   END { if (!changed) exit 1 }
 ' "$approved_gate" >"$owner_mismatch_gate"
 if MIGRATION_GATE_PATH="$owner_mismatch_gate" MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" \
-    bash "$checker" >/dev/null 2>&1; then
+  bash "$checker" >/dev/null 2>&1; then
   echo "migration gate checker accepted Rust ownership without independent eligibility" >&2
   exit 1
 fi
@@ -139,7 +173,7 @@ fi
 missing_approval_evidence_gate="$runtime/missing-approval-evidence.tsv"
 sed 's/;approval=[^;]*$//' "$approved_gate" >"$missing_approval_evidence_gate"
 if MIGRATION_GATE_PATH="$missing_approval_evidence_gate" \
-    MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" bash "$checker" >/dev/null 2>&1; then
+  MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" bash "$checker" >/dev/null 2>&1; then
   echo "migration gate checker accepted Rust ownership with missing approval evidence" >&2
   exit 1
 fi

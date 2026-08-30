@@ -125,9 +125,13 @@ func ApplyPaymentRefund(
 					// successful provider refund into an untracked debt. Returning
 					// an error rolls back the cumulative refund and ledger rows,
 					// allowing the webhook provider to retry after reconciliation.
-					debit := tx.Model(&User{}).
-						Where("id = ? AND quota >= ?", topUp.UserId, refundQuota).
-						Update("quota", gorm.Expr("quota - ?", refundQuota))
+					if refundQuota > int64(common.MaxWalletQuota) {
+						return fmt.Errorf("%w: refund quota exceeds the wallet safe range", ErrRefundAmountInvalid)
+					}
+					debit := UpdateWalletQuotaByDelta(
+						tx.Model(&User{}).Where("id = ? AND quota >= ?", topUp.UserId, refundQuota),
+						-int(refundQuota),
+					)
 					if debit.Error != nil {
 						return debit.Error
 					}
@@ -164,7 +168,15 @@ func ApplyPaymentRefund(
 				return ErrPaymentRefundOrderConflict
 			}
 			alreadyApplied := ledgerExists && order.RefundedAmountMicros > 0
-			paidMicros := moneyToMicros(order.Money)
+			paidMicros := order.ExpectedAmountMicros
+			if paidMicros <= 0 {
+				// Legacy fallback only. New subscription orders snapshot the real
+				// provider amount independently from their plan list currency.
+				paidMicros = moneyToMicros(order.Money)
+			}
+			if expectedCurrency := strings.ToUpper(strings.TrimSpace(order.SettlementCurrency)); expectedCurrency != "" && expectedCurrency != currency {
+				return fmt.Errorf("%w: subscription refund currency mismatch", ErrPaymentEvidenceConflict)
+			}
 			if paidMicros > 0 && !alreadyApplied {
 				remaining := paidMicros - order.RefundedAmountMicros
 				if remaining < 0 || appliedAmount > remaining {

@@ -1,3 +1,5 @@
+//go:build !windows
+
 package appcli
 
 import (
@@ -35,6 +37,8 @@ type fakeProductionRunner struct {
 	serviceActive, timerActive, rollbackServiceActive           bool
 	migrationFailure, rollbackMigrationFailure, failTimerEnable bool
 	invalidCandidateEdgePolicy, alteredCandidatePackage         bool
+	legacyDeployInstalled, alteredLegacyDeployPackage           bool
+	legacyDeployBinary                                          string
 	sudoFailure, restartOnEnable, restartOnWebInstall           bool
 	restartOnRequestAfterBaseline, restartBaselineRead          bool
 	cancelOnStop                                                context.CancelFunc
@@ -281,7 +285,16 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 		if len(args) != 1 {
 			return nil, errors.New("invalid pacman package-list arguments")
 		}
-		return []byte(productionAURPackageName + "\n" + productionWebPackageName + "\n" + productionOperatorPackageName + "\n"), nil
+		installed := productionAURPackageName + "\n" + productionWebPackageName + "\n"
+		if runner.legacyDeployInstalled {
+			installed += "lmm-api-deploy-bin\n"
+		}
+		return []byte(installed), nil
+	case "-Qqo":
+		if len(args) != 3 || args[1] != "--" {
+			return nil, errors.New("invalid pacman owner arguments")
+		}
+		return []byte(productionAURPackageName + "\n"), nil
 	case "-Qp":
 		name, version, _, _, _, ok := runner.packageData(args[1])
 		if !ok {
@@ -289,11 +302,17 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 		}
 		return []byte(name + " " + version + "\n"), nil
 	case "-Qkk":
+		if runner.alteredLegacyDeployPackage && args[1] == "lmm-api-deploy-bin" {
+			return []byte(args[1] + ": 25 total files, 1 altered file\n"), nil
+		}
 		if runner.alteredCandidatePackage && args[1] == productionAURPackageName && runner.installedGoVersion == runner.newVersion {
 			return []byte(args[1] + ": 42 total files, 1 altered file\n"), nil
 		}
 		return []byte(args[1] + ": 42 total files, 0 altered files\n"), nil
 	case "-Qo":
+		if runner.legacyDeployInstalled && args[1] == runner.legacyDeployBinary {
+			return []byte(args[1] + " is owned by lmm-api-deploy-bin 0.1.51-1\n"), nil
+		}
 		if args[1] == productionOperatorBinary {
 			return []byte(productionOperatorBinary + " is owned by " + productionOperatorPackageName + " 1.0.0-1\n"), nil
 		}
@@ -302,6 +321,15 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 		return []byte("Name : " + productionAURPackageName + "\nVersion : " + runner.installedGoVersion + "-1\n"), nil
 	case "-U":
 		return nil, errors.New("direct pacman -U is forbidden")
+	case "--remove":
+		if len(args) != 4 || args[1] != "--noconfirm" || args[2] != "--" || args[3] != "lmm-api-deploy-bin" || !runner.legacyDeployInstalled {
+			return nil, errors.New("invalid legacy package removal")
+		}
+		runner.legacyDeployInstalled = false
+		if err := os.Remove(runner.legacyDeployBinary); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 	return nil, fmt.Errorf("unexpected pacman arguments: %v", args)
 }
@@ -333,32 +361,40 @@ func (runner *fakeProductionRunner) runuser(args []string) ([]byte, error) {
 	if len(args) != 8 || args[3] != "/usr/bin/paru" || args[4] != "-U" || args[5] != "--noconfirm" || args[6] != "--" {
 		return nil, fmt.Errorf("unsafe runuser invocation: %v", args)
 	}
-	path := args[7]
-	name, version, revision, _, _, ok := runner.packageData(path)
-	if !ok {
-		return nil, errors.New("unknown paru package")
-	}
-	version = strings.TrimSuffix(version, "-1")
-	switch name {
-	case productionAURPackageName:
-		runner.events = append(runner.events, "paru-go")
-		runner.installedGoVersion, runner.installedGoRevision = version, revision
-		if err := os.WriteFile(runner.goRevisionFile, []byte(revision+"\n"), 0o644); err != nil {
-			return nil, err
+	for _, path := range args[7:] {
+		name, version, revision, _, _, ok := runner.packageData(path)
+		if !ok {
+			return nil, errors.New("unknown paru package")
 		}
-	case productionWebPackageName:
-		runner.events = append(runner.events, "paru-web-hook")
-		if runner.restartOnWebInstall {
-			runner.restartCounter++
-			runner.restartOnWebInstall = false
-		}
-		runner.installedWebVersion, runner.installedWebRevision = version, revision
-		if err := os.WriteFile(runner.webRevisionFile, []byte(revision+"\n"), 0o644); err != nil {
-			return nil, err
-		}
-		release := version + "-1.g" + revision[:12]
-		if err := executeFrontendDeploy(frontendDeployOptions{Action: "rollback", Root: runner.frontendRoot, Release: release, Keep: 3}); err != nil {
-			return nil, err
+		version = strings.TrimSuffix(version, "-1")
+		switch name {
+		case productionAURPackageName:
+			runner.events = append(runner.events, "paru-go")
+			runner.installedGoVersion, runner.installedGoRevision = version, revision
+			providerPath := filepath.Join(filepath.Dir(runner.installedBinary), backendGoName)
+			if err := os.RemoveAll(providerPath); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(providerPath, []byte("installed "+version+"\n"), 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(runner.goRevisionFile, []byte(revision+"\n"), 0o644); err != nil {
+				return nil, err
+			}
+		case productionWebPackageName:
+			runner.events = append(runner.events, "paru-web-hook")
+			if runner.restartOnWebInstall {
+				runner.restartCounter++
+				runner.restartOnWebInstall = false
+			}
+			runner.installedWebVersion, runner.installedWebRevision = version, revision
+			if err := os.WriteFile(runner.webRevisionFile, []byte(revision+"\n"), 0o644); err != nil {
+				return nil, err
+			}
+			release := version + "-1.g" + revision[:12]
+			if err := executeFrontendDeploy(frontendDeployOptions{Action: "rollback", Root: runner.frontendRoot, Release: release, Keep: 3}); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return nil, nil
@@ -517,7 +553,10 @@ func newProductionFixture(t *testing.T) productionFixture {
 	oldRevision := strings.Repeat("1", 40)
 	newRevision := strings.Repeat("2", 40)
 	contract := strings.Repeat("a", 64)
-	if err := os.Symlink(filepath.Base(paths.InstalledBinary), paths.LegacyGoBinary); err != nil {
+	if err := os.WriteFile(paths.LegacyGoBinary, []byte("installed "+oldVersion+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(paths.LegacyGoBinary), paths.InstalledBinary); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(paths.GoRevisionFile, []byte(oldRevision+"\n"), 0o644); err != nil {
@@ -580,13 +619,13 @@ func newProductionFixture(t *testing.T) productionFixture {
 		t.Fatal(err)
 	}
 	clockValue := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
-	runner := &fakeProductionRunner{t: t, goCandidate: goCandidate, goRollback: goRollback, webCandidate: webCandidate, webRollback: webRollback, probeBinary: probe, installedBinary: paths.InstalledBinary, frontendRoot: paths.FrontendRoot, oldWebIndex: filepath.Join(oldFrontend, "index.html"), newWebIndex: filepath.Join(newFrontend, "index.html"), oldVersion: oldVersion, newVersion: newVersion, oldRevision: oldRevision, newRevision: newRevision, contractRevision: contract, installedGoVersion: oldVersion, installedWebVersion: oldVersion, installedGoRevision: oldRevision, installedWebRevision: oldRevision, goRevisionFile: paths.GoRevisionFile, webRevisionFile: paths.WebRevisionFile, goContractFile: paths.GoContractFile, webContractFile: paths.WebContractFile, serviceActive: true, timerDeadline: clockValue.Add(productionDefaultRollback)}
+	runner := &fakeProductionRunner{t: t, goCandidate: goCandidate, goRollback: goRollback, webCandidate: webCandidate, webRollback: webRollback, probeBinary: probe, installedBinary: paths.InstalledBinary, frontendRoot: paths.FrontendRoot, oldWebIndex: filepath.Join(oldFrontend, "index.html"), newWebIndex: filepath.Join(newFrontend, "index.html"), oldVersion: oldVersion, newVersion: newVersion, oldRevision: oldRevision, newRevision: newRevision, contractRevision: contract, installedGoVersion: oldVersion, installedWebVersion: oldVersion, installedGoRevision: oldRevision, installedWebRevision: oldRevision, goRevisionFile: paths.GoRevisionFile, webRevisionFile: paths.WebRevisionFile, goContractFile: paths.GoContractFile, webContractFile: paths.WebContractFile, serviceActive: true, timerDeadline: clockValue.Add(10 * time.Minute)}
 	runtime := &productionRuntime{paths: paths, runner: runner, now: func() time.Time { return clockValue }, sleep: func(d time.Duration) { clockValue = clockValue.Add(d) }, effectiveUID: func() int { return 0 }, hostname: func() (string, error) { return productionExpectedHost, nil }, probeAttempts: 1, requiredOwnerUID: uint32(os.Getuid())}
 	workspace, err := runtime.openWorkspace(workspaceRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := productionTransactionOptions{Action: "apply", Workspace: workspaceRoot, OperatorUser: productionOperatorUser, GoPackage: goCandidate, GoPackageSHA256: mustHashFile(t, goCandidate), GoRollbackPackage: goRollback, GoRollbackSHA256: mustHashFile(t, goRollback), WebPackage: webCandidate, WebPackageSHA256: mustHashFile(t, webCandidate), WebRollbackPackage: webRollback, WebRollbackSHA256: mustHashFile(t, webRollback), GoChanged: true, WebChanged: true, ProbeBinary: probe, ProbeBinarySHA256: mustHashFile(t, probe), OperatorBinary: operator, OperatorBinarySHA256: mustHashFile(t, operator), ExpectedVersion: newVersion, BackupDir: backupDir, WithBackups: true, RollbackWindow: 10 * time.Minute, ObservationWindow: 2 * time.Minute, ManualConfirm: true}
+	options := productionTransactionOptions{Action: "apply", Workspace: workspaceRoot, OperatorUser: productionOperatorUser, GoPackage: goCandidate, GoPackageSHA256: mustHashFile(t, goCandidate), GoRollbackPackage: goRollback, GoRollbackSHA256: mustHashFile(t, goRollback), WebPackage: webCandidate, WebPackageSHA256: mustHashFile(t, webCandidate), WebRollbackPackage: webRollback, WebRollbackSHA256: mustHashFile(t, webRollback), GoChanged: true, WebChanged: true, ProbeBinary: probe, ProbeBinarySHA256: mustHashFile(t, probe), OperatorBinary: operator, OperatorBinarySHA256: mustHashFile(t, operator), ExpectedVersion: newVersion, BackupDir: backupDir, WithBackups: true, ObservationWindow: 2 * time.Minute}
 	return productionFixture{runtime: runtime, runner: runner, workspace: workspace, options: options, environment: environment, clock: &clockValue}
 }
 
@@ -649,7 +688,7 @@ func mustHashFile(t *testing.T, path string) string {
 	return digest
 }
 
-func TestProductionDualPackageApplyUsesParuAndCanonicalWatchdog(t *testing.T) {
+func TestProductionDualPackageApplyUsesParuAndAwaitsExplicitConfirmationWithoutTimerUnits(t *testing.T) {
 	fixture := newProductionFixture(t)
 	status, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
 	if err != nil {
@@ -709,12 +748,10 @@ func TestProductionDualPackageApplyUsesParuAndCanonicalWatchdog(t *testing.T) {
 			t.Fatalf("operator workspace %s mode=%v want=%v", path, info.Mode().Perm(), wantMode)
 		}
 	}
-	unit, err := os.ReadFile(fixture.workspace.rollbackPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(unit), "ExecStart="+fixture.options.OperatorBinary+" deploy production rollback") || strings.Contains(string(unit), fixture.options.ProbeBinary) {
-		t.Fatalf("rollback unit=%s", unit)
+	for _, command := range fixture.runner.commands {
+		if command.Name == commandSystemctl && len(command.Args) > 2 && (command.Args[0] == "enable" || command.Args[0] == "disable") && strings.HasPrefix(command.Args[2], "lmm-api-go-rollback-") {
+			t.Fatalf("deployment managed a rollback timer/service: %#v", command)
+		}
 	}
 }
 
@@ -736,24 +773,13 @@ func TestProductionRollbackRestoresBothPackagesAndFrontend(t *testing.T) {
 	}
 }
 
-func TestProductionAutoConfirmObservesForAtLeastTwoMinutes(t *testing.T) {
-	fixture := newProductionFixture(t)
-	fixture.options.ManualConfirm = false
-	confirmed, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if confirmed.Phase != "CONFIRMED" || fixture.runner.timerActive {
-		t.Fatalf("auto-confirm=%#v timer=%v", confirmed, fixture.runner.timerActive)
-	}
-}
-
 func TestProductionConfirmRequiresObservationAndExactIdentities(t *testing.T) {
 	fixture := newProductionFixture(t)
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
 		t.Fatal(err)
 	}
 	manifest, _ := fixture.runtime.readManifest(fixture.workspace)
+	*fixture.clock = manifest.ObservationStartedUTC.Add(119 * time.Second)
 	if _, err := fixture.runtime.confirmLoaded(context.Background(), fixture.workspace, manifest); err == nil || !strings.Contains(err.Error(), "120 seconds") {
 		t.Fatalf("early confirm error=%v", err)
 	}
@@ -762,12 +788,31 @@ func TestProductionConfirmRequiresObservationAndExactIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if confirmed.Phase != "CONFIRMED" || fixture.runner.timerActive {
-		t.Fatalf("confirmed=%#v timer=%v", confirmed, fixture.runner.timerActive)
+	if confirmed.Phase != "CONFIRMED" {
+		t.Fatalf("confirmed=%#v", confirmed)
 	}
 }
 
-func TestProductionManifestTamperKeepsRollbackArmed(t *testing.T) {
+func TestProductionConfirmingStateRemainsManuallyRollbackEligible(t *testing.T) {
+	fixture := newProductionFixture(t)
+	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.runtime.writeStatus(fixture.workspace, productionStatus{
+		Phase: "CONFIRMING", Version: fixture.runner.newVersion, Previous: fixture.runner.oldVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := fixture.runtime.rollback(context.Background(), fixture.workspace, "operator-confirm-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "ROLLED_BACK" || fixture.runner.installedGoVersion != fixture.runner.oldVersion {
+		t.Fatalf("manual rollback=%#v installed=%q", status, fixture.runner.installedGoVersion)
+	}
+}
+
+func TestProductionManifestTamperRejectsConfirmationAndKeepsRecoveryEvidence(t *testing.T) {
 	fixture := newProductionFixture(t)
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
 		t.Fatal(err)
@@ -783,8 +828,8 @@ func TestProductionManifestTamperKeepsRollbackArmed(t *testing.T) {
 	if _, err := fixture.runtime.executeTransaction(context.Background(), productionTransactionOptions{Action: "confirm", Workspace: fixture.workspace.root}); err == nil {
 		t.Fatal("tampered manifest accepted")
 	}
-	if !fixture.runner.timerActive {
-		t.Fatal("tamper disarmed rollback timer")
+	if _, err := os.Stat(fixture.runtime.paths.TransactionLock); err != nil {
+		t.Fatalf("tampered confirmation released transaction evidence: %v", err)
 	}
 }
 
@@ -798,29 +843,29 @@ func TestProductionWorkspaceRejectsWritablePayload(t *testing.T) {
 	}
 }
 
-func TestProductionRejectsRootOperatorBeforeWatchdog(t *testing.T) {
+func TestProductionRejectsRootOperatorBeforeMutation(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.operatorUID = "0"
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "uid greater than zero") {
 		t.Fatalf("root operator error=%v", err)
 	}
 	if fixture.runner.timerActive {
-		t.Fatal("root operator armed watchdog")
+		t.Fatal("root operator failure created a rollback timer")
 	}
 }
 
-func TestProductionRejectsContractMismatchBeforeWatchdog(t *testing.T) {
+func TestProductionRejectsContractMismatchBeforeMutation(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.webContractRevision = "other-contract"
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "contract revisions differ") {
 		t.Fatalf("contract mismatch error=%v", err)
 	}
 	if fixture.runner.timerActive {
-		t.Fatal("contract mismatch armed watchdog")
+		t.Fatal("contract mismatch created a rollback timer")
 	}
 }
 
-func TestProductionGoStartupRestartHardStopsBeforeHealthProbe(t *testing.T) {
+func TestProductionActivationFailureRequiresExplicitRetryableRollback(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.restartCounter = 9
 	fixture.runner.restartOnEnable = true
@@ -828,47 +873,25 @@ func TestProductionGoStartupRestartHardStopsBeforeHealthProbe(t *testing.T) {
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "restart baseline hard stop") {
 		t.Fatalf("startup restart error=%v", err)
 	}
-	if fixture.runner.timerActive {
-		t.Fatal("successful automatic rollback left the watchdog armed")
-	}
-	if fixture.runner.installedGoVersion != fixture.runner.oldVersion {
-		t.Fatalf("installed Go version=%q, want rollback version %q", fixture.runner.installedGoVersion, fixture.runner.oldVersion)
-	}
-	resetIndex, startIndex, rollbackInstallIndex := -1, -1, -1
-	for index, event := range fixture.runner.events {
-		switch event {
-		case "systemd-reset-failed":
-			resetIndex = index
-		case "systemd-start":
-			if startIndex < 0 {
-				startIndex = index
-			}
-		case "paru-go":
-			if startIndex >= 0 && rollbackInstallIndex < 0 {
-				rollbackInstallIndex = index
-			}
-		default:
-			if startIndex >= 0 && rollbackInstallIndex < 0 && strings.HasPrefix(event, "request:") {
-				t.Fatalf("candidate health probe ran after startup restart: events=%v", fixture.runner.events)
-			}
-		}
-	}
-	if resetIndex < 0 || startIndex < 0 || rollbackInstallIndex < 0 || resetIndex >= startIndex || startIndex >= rollbackInstallIndex {
-		t.Fatalf("reset/start/rollback order is unsafe: events=%v", fixture.runner.events)
-	}
-	manifest, err := fixture.runtime.readManifest(fixture.workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !manifest.ObservationStartedUTC.IsZero() {
-		t.Fatalf("failed startup persisted an observation start: %s", manifest.ObservationStartedUTC)
-	}
 	status, err := fixture.runtime.readStatus(fixture.workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Phase != "ROLLED_BACK" || status.Reason != "activation-failure" {
-		t.Fatalf("startup restart status=%#v", status)
+	if status.Phase != "ROLLBACK_REQUIRED" || status.Failure == "" {
+		t.Fatalf("activation failure status=%#v", status)
+	}
+	if fixture.runner.installedGoVersion != fixture.runner.newVersion {
+		t.Fatalf("apply automatically rolled back candidate: installed=%q", fixture.runner.installedGoVersion)
+	}
+	if _, err := os.Stat(fixture.runtime.paths.TransactionLock); err != nil {
+		t.Fatalf("activation failure released transaction lock: %v", err)
+	}
+	rolledBack, err := fixture.runtime.rollback(context.Background(), fixture.workspace, "operator-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack.Phase != "ROLLED_BACK" || fixture.runner.installedGoVersion != fixture.runner.oldVersion {
+		t.Fatalf("manual rollback=%#v installed=%q", rolledBack, fixture.runner.installedGoVersion)
 	}
 }
 
@@ -972,7 +995,7 @@ func TestProductionSchemaIncompatibilityIsPreflightHardStop(t *testing.T) {
 		t.Fatalf("schema incompatibility error=%v", err)
 	}
 	if fixture.runner.timerActive {
-		t.Fatal("schema incompatibility armed watchdog instead of hard stopping")
+		t.Fatal("schema incompatibility created a rollback timer instead of hard stopping")
 	}
 	for _, event := range fixture.runner.events {
 		if event == "paru-go" || event == "paru-web-hook" || event == "systemd-stop" {
@@ -981,14 +1004,14 @@ func TestProductionSchemaIncompatibilityIsPreflightHardStop(t *testing.T) {
 	}
 }
 
-func TestProductionRejectsInvalidCandidateEdgePolicyBeforeWatchdogAndStop(t *testing.T) {
+func TestProductionRejectsInvalidCandidateEdgePolicyBeforeMutation(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.invalidCandidateEdgePolicy = true
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "candidate edge-policy preflight") {
 		t.Fatalf("edge-policy preflight error=%v", err)
 	}
 	if fixture.runner.timerActive || !fixture.runner.serviceActive {
-		t.Fatalf("invalid candidate changed runtime state: timer=%v service=%v", fixture.runner.timerActive, fixture.runner.serviceActive)
+		t.Fatalf("invalid candidate changed runtime state: rollback_timer=%v service=%v", fixture.runner.timerActive, fixture.runner.serviceActive)
 	}
 	for _, event := range fixture.runner.events {
 		if event == "systemd-stop" || strings.HasPrefix(event, "paru-") {
@@ -1004,22 +1027,22 @@ func TestProductionRejectsInvalidCandidateEdgePolicyBeforeWatchdogAndStop(t *tes
 	}
 }
 
-func TestProductionAutomaticRollbackUsesValidatedStagedOperatorWhenCandidatePackageIsAltered(t *testing.T) {
+func TestProductionMutationFailureNeverAutomaticallyRollsBack(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.alteredCandidatePackage = true
 	_, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
 	if err == nil || !strings.Contains(err.Error(), "integrity check failed") {
 		t.Fatalf("candidate integrity error=%v", err)
 	}
-	if strings.Contains(err.Error(), "automatic rollback failed") {
-		t.Fatalf("rollback depended on altered candidate package: %v", err)
-	}
 	status, statusErr := fixture.runtime.readStatus(fixture.workspace)
 	if statusErr != nil {
 		t.Fatal(statusErr)
 	}
-	if status.Phase != "ROLLED_BACK" || fixture.runner.installedGoVersion != fixture.runner.oldVersion || !fixture.runner.serviceActive || fixture.runner.timerActive {
-		t.Fatalf("rollback state=%#v go=%s service=%v timer=%v", status, fixture.runner.installedGoVersion, fixture.runner.serviceActive, fixture.runner.timerActive)
+	if status.Phase != "ROLLBACK_REQUIRED" || status.Failure == "" {
+		t.Fatalf("mutation failure state=%#v", status)
+	}
+	if _, err := os.Stat(fixture.runtime.paths.TransactionLock); err != nil {
+		t.Fatalf("mutation failure released lock/evidence: %v", err)
 	}
 }
 
@@ -1029,12 +1052,12 @@ func TestPersistRollbackFailureReturnsStatusWriteError(t *testing.T) {
 	workspace.statusPath = filepath.Join(workspace.root, "missing-state", "status.json")
 	operationErr := errors.New("rollback package install failed")
 	err := fixture.runtime.persistRollbackFailure(workspace, productionStatus{Phase: "ROLLING_BACK"}, "test", operationErr)
-	if !errors.Is(err, operationErr) || !strings.Contains(err.Error(), "persist ROLLBACK_FAILED status") {
+	if !errors.Is(err, operationErr) || !strings.Contains(err.Error(), "persist ROLLBACK_REQUIRED status") {
 		t.Fatalf("rollback failure error=%v", err)
 	}
 }
 
-func TestProductionCancelledActivationUsesDetachedAutomaticRollback(t *testing.T) {
+func TestProductionCancelledActivationRetainsManualRecovery(t *testing.T) {
 	fixture := newProductionFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	fixture.runner.cancelOnStop = cancel
@@ -1042,36 +1065,19 @@ func TestProductionCancelledActivationUsesDetachedAutomaticRollback(t *testing.T
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled activation error=%v", err)
 	}
-	if strings.Contains(err.Error(), "automatic rollback failed") {
-		t.Fatalf("cancelled activation reused its failed context: %v", err)
-	}
 	status, statusErr := fixture.runtime.readStatus(fixture.workspace)
 	if statusErr != nil {
 		t.Fatal(statusErr)
 	}
-	if status.Phase != "ROLLED_BACK" || fixture.runner.installedGoVersion != fixture.runner.oldVersion || !fixture.runner.serviceActive || fixture.runner.timerActive {
-		t.Fatalf("rollback state=%#v go=%s service=%v timer=%v", status, fixture.runner.installedGoVersion, fixture.runner.serviceActive, fixture.runner.timerActive)
+	if status.Phase != "ROLLBACK_REQUIRED" {
+		t.Fatalf("cancel recovery state=%#v installed=%q", status, fixture.runner.installedGoVersion)
+	}
+	if _, rollbackErr := fixture.runtime.rollback(context.Background(), fixture.workspace, "operator-after-cancellation"); rollbackErr != nil {
+		t.Fatal(rollbackErr)
 	}
 }
 
-func TestProductionDeadlineLeavesRollbackToPersistentWatchdog(t *testing.T) {
-	fixture := newProductionFixture(t)
-	fixture.runner.migrationFailure = true
-	fixture.runner.onCandidateApply = func() { *fixture.clock = fixture.runner.timerDeadline }
-	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "systemd watchdog owns rollback") {
-		t.Fatalf("deadline ownership error=%v", err)
-	}
-	if !fixture.runner.timerActive {
-		t.Fatal("deadline path disarmed persistent watchdog")
-	}
-	for _, event := range fixture.runner.events {
-		if strings.HasPrefix(event, "paru-") {
-			t.Fatalf("in-process deadline path raced watchdog rollback: events=%v", fixture.runner.events)
-		}
-	}
-}
-
-func TestProductionAutomaticRollbackNeverRestoresDatabaseAndPreservesOnlineWrites(t *testing.T) {
+func TestProductionManualRollbackNeverRestoresDatabaseAndPreservesOnlineWrites(t *testing.T) {
 	fixture := newProductionFixture(t)
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
 		t.Fatal(err)
@@ -1081,24 +1087,36 @@ func TestProductionAutomaticRollbackNeverRestoresDatabaseAndPreservesOnlineWrite
 		t.Fatal("fixture did not simulate an online write after the optional backup")
 	}
 	commandsBeforeRollback := len(fixture.runner.commands)
-	if _, err := fixture.runtime.rollback(context.Background(), fixture.workspace, "watchdog-deadline"); err != nil {
+	if _, err := fixture.runtime.rollback(context.Background(), fixture.workspace, "operator-request"); err != nil {
 		t.Fatal(err)
 	}
 	if fixture.runner.onlineWriteCount != writesAfterBackup {
-		t.Fatalf("automatic rollback lost online writes: got=%d want=%d", fixture.runner.onlineWriteCount, writesAfterBackup)
+		t.Fatalf("manual rollback lost online writes: got=%d want=%d", fixture.runner.onlineWriteCount, writesAfterBackup)
 	}
+	rollbackPackages := make([]string, 0, 2)
 	for _, command := range fixture.runner.commands[commandsBeforeRollback:] {
 		if filepath.Base(command.Name) == "pg_restore" {
-			t.Fatalf("automatic rollback invoked pg_restore: %#v", command)
+			t.Fatalf("manual rollback invoked pg_restore: %#v", command)
 		}
+		if command.Name == commandRunuser && len(command.Args) == 8 && command.Args[3] == "/usr/bin/paru" && command.Args[4] == "-U" {
+			rollbackPackages = append(rollbackPackages, command.Args[7])
+		}
+	}
+	if !slices.Equal(rollbackPackages, []string{fixture.options.WebRollbackPackage, fixture.options.GoRollbackPackage}) {
+		t.Fatalf("rollback package order=%v", rollbackPackages)
 	}
 }
 
-func TestProductionBusinessBackupIsOptionalButValidatedWhenAuthorized(t *testing.T) {
-	t.Run("omitted", func(t *testing.T) {
+func TestProductionBackupsMayBeOmittedOnlyForWebOnlyTransactions(t *testing.T) {
+	t.Run("Web-only omitted", func(t *testing.T) {
 		fixture := newProductionFixture(t)
+		fixture.options.GoChanged = false
+		fixture.options.GoPackage = fixture.options.GoRollbackPackage
+		fixture.options.GoPackageSHA256 = fixture.options.GoRollbackSHA256
+		fixture.options.ExpectedVersion = fixture.runner.oldVersion
 		fixture.options.BackupDir = ""
 		fixture.options.WithBackups = false
+		fixture.runner.probeVersion = fixture.runner.oldVersion
 		if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
 			t.Fatal(err)
 		}
@@ -1107,7 +1125,21 @@ func TestProductionBusinessBackupIsOptionalButValidatedWhenAuthorized(t *testing
 			t.Fatal(err)
 		}
 		if manifest.BackupsEnabled || manifest.BackupDir != "" || manifest.DatabaseBackupSHA256 != "" {
-			t.Fatalf("unauthorized optional backup state persisted: %#v", manifest)
+			t.Fatalf("backup state persisted for Web-only release without backups: %#v", manifest)
+		}
+	})
+	t.Run("Go change omitted", func(t *testing.T) {
+		fixture := newProductionFixture(t)
+		fixture.options.BackupDir = ""
+		fixture.options.WithBackups = false
+		if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "Go transactions require verified three-copy backups") {
+			t.Fatalf("Go backup requirement error=%v", err)
+		}
+		if _, err := os.Lstat(fixture.workspace.statusPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rejected Go transaction wrote status: %v", err)
+		}
+		if _, err := os.Lstat(fixture.workspace.manifestPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rejected Go transaction wrote manifest: %v", err)
 		}
 	})
 	t.Run("authorized-empty-database", func(t *testing.T) {
@@ -1119,66 +1151,19 @@ func TestProductionBusinessBackupIsOptionalButValidatedWhenAuthorized(t *testing
 			t.Fatal("unsafe authorized backup was accepted")
 		}
 		if fixture.runner.timerActive {
-			t.Fatal("unsafe authorized backup armed watchdog")
+			t.Fatal("unsafe authorized backup created a rollback timer")
 		}
 	})
 }
 
-func TestProductionRejectsMissingSudoPrivilegeBeforeWatchdog(t *testing.T) {
+func TestProductionRejectsMissingSudoPrivilegeBeforeMutation(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.sudoFailure = true
 	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err == nil || !strings.Contains(err.Error(), "exact non-interactive pacman") {
 		t.Fatalf("sudo preflight error=%v", err)
 	}
 	if fixture.runner.timerActive {
-		t.Fatal("failed sudo preflight armed watchdog")
-	}
-}
-
-func TestProductionConfirmRejectsDeadlineAndWatchdogBoundaries(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(productionFixture, productionManifest) productionManifest
-		want   string
-	}{
-		{"deadline-equal", func(f productionFixture, m productionManifest) productionManifest { *f.clock = m.DeadlineUTC; return m }, "deadline has expired"},
-		{"timer-inactive", func(f productionFixture, m productionManifest) productionManifest {
-			*f.clock = m.ObservationStartedUTC.Add(time.Duration(m.ObservationSeconds) * time.Second)
-			f.runner.timerActive = false
-			return m
-		}, "not loaded, enabled, active, and waiting"},
-		{"rollback-triggered", func(f productionFixture, m productionManifest) productionManifest {
-			*f.clock = m.ObservationStartedUTC.Add(time.Duration(m.ObservationSeconds) * time.Second)
-			f.runner.timerLastTrigger = *f.clock
-			return m
-		}, "already triggered"},
-		{"window-meets-deadline", func(f productionFixture, m productionManifest) productionManifest {
-			m.DeadlineUTC = m.ObservationStartedUTC.Add(time.Duration(m.ObservationSeconds) * time.Second)
-			return m
-		}, "cannot complete"},
-		{"deadline-599-seconds", func(f productionFixture, m productionManifest) productionManifest {
-			*f.clock = m.ArmedUTC.Add(599 * time.Second)
-			return m
-		}, "insufficient time"},
-		{"deadline-600-seconds", func(f productionFixture, m productionManifest) productionManifest {
-			*f.clock = m.ArmedUTC.Add(600 * time.Second)
-			return m
-		}, "deadline has expired"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			fixture := newProductionFixture(t)
-			if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
-				t.Fatal(err)
-			}
-			manifest, _ := fixture.runtime.readManifest(fixture.workspace)
-			manifest = test.mutate(fixture, manifest)
-			if _, err := fixture.runtime.confirmLoaded(context.Background(), fixture.workspace, manifest); err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("confirm error=%v, want %q", err, test.want)
-			}
-			if test.name != "timer-inactive" && !fixture.runner.timerActive {
-				t.Fatal("rejected confirmation disarmed watchdog")
-			}
-		})
+		t.Fatal("failed sudo preflight created a rollback timer")
 	}
 }
 
@@ -1216,65 +1201,7 @@ func TestParuPackageGateRejectsMaliciousAndNonCanonicalPaths(t *testing.T) {
 	}
 }
 
-func TestSystemctlShowParsingRequiresExactLiveTimerState(t *testing.T) {
-	deadline := time.Unix(1_786_323_000, 0).UTC()
-	properties, err := parseSystemctlProperties([]byte("LoadState=loaded\nActiveState=active\nSubState=waiting\nUnitFileState=enabled\nNextElapseUSecRealtime=@1786323000\nLastTriggerUSec=n/a\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	next, err := parseSystemdTimestamp(properties["NextElapseUSecRealtime"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	last, err := parseSystemdTimestamp(properties["LastTriggerUSec"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := productionRollbackTimerState{LoadState: properties["LoadState"], ActiveState: properties["ActiveState"], SubState: properties["SubState"], UnitFileState: properties["UnitFileState"], NextElapseUTC: next, LastTriggerUTC: last}
-	if err := validateArmedRollbackTimer(state, deadline); err != nil {
-		t.Fatal(err)
-	}
-	state.LastTriggerUTC = deadline.Add(-time.Second)
-	if err := validateArmedRollbackTimer(state, deadline); err == nil || !strings.Contains(err.Error(), "triggered") {
-		t.Fatalf("triggered timer error=%v", err)
-	}
-	if _, err := parseSystemctlProperties([]byte("ActiveState=active\nActiveState=inactive\n")); err == nil {
-		t.Fatal("duplicate live systemd state was accepted")
-	}
-}
-
-func TestRollbackTimerUnitIsPersistentAndExactlyTenMinutes(t *testing.T) {
-	fixture := newProductionFixture(t)
-	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := fixture.runtime.readManifest(fixture.workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := manifest.DeadlineUTC.Sub(manifest.ArmedUTC); got != 600*time.Second {
-		t.Fatalf("watchdog window=%s want=600s", got)
-	}
-	unit, err := os.ReadFile(fixture.workspace.timerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantCalendar := "OnCalendar=@" + strconv.FormatInt(manifest.DeadlineUTC.Unix(), 10)
-	if !strings.Contains(string(unit), wantCalendar) || !strings.Contains(string(unit), "Persistent=true") || strings.Contains(string(unit), "OnActiveSec=3600") {
-		t.Fatalf("timer unit does not encode a persistent fixed deadline:\n%s", unit)
-	}
-	foundShow := false
-	for _, command := range fixture.runner.commands {
-		if command.Name == commandSystemctl && len(command.Args) > 2 && command.Args[0] == "show" && command.Args[1] == fixture.workspace.timerUnit && slices.Contains(command.Args, "--property=NextElapseUSecRealtime") {
-			foundShow = true
-		}
-	}
-	if !foundShow {
-		t.Fatal("watchdog arm never parsed real systemctl show timer state")
-	}
-}
-
-func TestParseProductionTransactionRejectsNon600WatchdogDefaults(t *testing.T) {
+func TestParseProductionTransactionRejectsRemovedAutomaticRollbackFlags(t *testing.T) {
 	fixture := newProductionFixture(t)
 	base := []string{
 		"--workspace", fixture.workspace.root, "--operator-user", productionOperatorUser,
@@ -1284,20 +1211,39 @@ func TestParseProductionTransactionRejectsNon600WatchdogDefaults(t *testing.T) {
 		"--web-rollback-package", fixture.options.WebRollbackPackage, "--web-rollback-sha256", fixture.options.WebRollbackSHA256,
 		"--probe-binary", fixture.options.ProbeBinary, "--probe-binary-sha256", fixture.options.ProbeBinarySHA256,
 		"--expected-version", fixture.options.ExpectedVersion, "--go-changed", "--web-changed",
+		"--with-backups", "--backup-dir", fixture.options.BackupDir,
 	}
-	for _, seconds := range []string{"599", "601", "3600"} {
-		arguments := append(slices.Clone(base), "--rollback-seconds", seconds)
+	for _, removed := range [][]string{{"--rollback-seconds", "600"}, {"--manual-confirm"}} {
+		arguments := append(slices.Clone(base), removed...)
 		_, err := parseProductionTransactionOptions("apply", arguments, &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "exactly 600") {
-			t.Fatalf("rollback seconds %s error=%v", seconds, err)
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("removed flags %v error=%v", removed, err)
 		}
 	}
-	options, err := parseProductionTransactionOptions("apply", base, &bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestParseProductionTransactionRequiresBackupsForGoChanges(t *testing.T) {
+	fixture := newProductionFixture(t)
+	base := []string{
+		"--workspace", fixture.workspace.root, "--operator-user", productionOperatorUser,
+		"--go-package", fixture.options.GoPackage, "--go-package-sha256", fixture.options.GoPackageSHA256,
+		"--go-rollback-package", fixture.options.GoRollbackPackage, "--go-rollback-sha256", fixture.options.GoRollbackSHA256,
+		"--web-package", fixture.options.WebPackage, "--web-package-sha256", fixture.options.WebPackageSHA256,
+		"--web-rollback-package", fixture.options.WebRollbackPackage, "--web-rollback-sha256", fixture.options.WebRollbackSHA256,
+		"--probe-binary", fixture.options.ProbeBinary, "--probe-binary-sha256", fixture.options.ProbeBinarySHA256,
+		"--expected-version", fixture.options.ExpectedVersion,
 	}
-	if options.RollbackWindow != 600*time.Second || productionDefaultRollback != 600*time.Second {
-		t.Fatalf("rollback defaults: parsed=%s default=%s", options.RollbackWindow, productionDefaultRollback)
+	_, err := parseProductionTransactionOptions("apply", append(slices.Clone(base), "--go-changed"), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "--go-changed requires verified three-copy backups") {
+		t.Fatalf("Go backup parse error=%v", err)
+	}
+
+	webOnly, err := parseProductionTransactionOptions("apply", append(slices.Clone(base), "--web-changed"), &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("Web-only transaction without backups rejected: %v", err)
+	}
+	if webOnly.WithBackups || webOnly.BackupDir != "" {
+		t.Fatalf("Web-only backup options=%#v", webOnly)
 	}
 }
 
@@ -1375,6 +1321,116 @@ func TestRetireContractlessMemoryDropInForPackageAdoption(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("unknown drop-in was removed: %v", err)
 	}
+}
+
+func TestRemoveLegacyDeployPackageForProviderMigrationIsExactAndFailClosed(t *testing.T) {
+	newRuntime := func(t *testing.T, version string, installed, altered bool) (*productionRuntime, *fakeProductionRunner, string) {
+		t.Helper()
+		legacyBinary := filepath.Join(t.TempDir(), "lmm-api-deploy")
+		if err := os.WriteFile(legacyBinary, []byte("legacy operator\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runner := &fakeProductionRunner{
+			t:                          t,
+			installedGoVersion:         version,
+			legacyDeployInstalled:      installed,
+			alteredLegacyDeployPackage: altered,
+			legacyDeployBinary:         legacyBinary,
+		}
+		return &productionRuntime{runner: runner, paths: productionPaths{LegacyDeployBinary: legacyBinary}}, runner, legacyBinary
+	}
+	candidate := productionPackageMetadata{Name: productionAURPackageName, Version: "0.2.7-1"}
+
+	t.Run("verified-package", func(t *testing.T) {
+		runtime, runner, legacyBinary := newRuntime(t, "0.1.69", true, false)
+		if err := runtime.removeLegacyDeployPackageForProviderMigration(context.Background(), candidate); err != nil {
+			t.Fatalf("verified migration removal failed: %v", err)
+		}
+		if runner.legacyDeployInstalled {
+			t.Fatal("legacy package remains installed")
+		}
+		if _, err := os.Lstat(legacyBinary); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy binary remains: %v", err)
+		}
+	})
+	t.Run("wrong-rollback-floor", func(t *testing.T) {
+		runtime, _, legacyBinary := newRuntime(t, "0.1.68", true, false)
+		if err := runtime.removeLegacyDeployPackageForProviderMigration(context.Background(), candidate); err == nil || !strings.Contains(err.Error(), "rollback floor") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := os.Lstat(legacyBinary); err != nil {
+			t.Fatalf("legacy package mutated after rejection: %v", err)
+		}
+	})
+	t.Run("altered-package", func(t *testing.T) {
+		runtime, _, legacyBinary := newRuntime(t, "0.1.69", true, true)
+		if err := runtime.removeLegacyDeployPackageForProviderMigration(context.Background(), candidate); err == nil || !strings.Contains(err.Error(), "integrity") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := os.Lstat(legacyBinary); err != nil {
+			t.Fatalf("altered package was mutated: %v", err)
+		}
+	})
+	t.Run("unowned-binary", func(t *testing.T) {
+		runtime, _, _ := newRuntime(t, "0.1.69", false, false)
+		if err := runtime.removeLegacyDeployPackageForProviderMigration(context.Background(), candidate); err == nil || !strings.Contains(err.Error(), "unowned") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestVerifyCanonicalOperatorAcceptsOnlyExactLegacyMigrationLayout(t *testing.T) {
+	newRuntime := func(t *testing.T, version string) (*productionRuntime, string, string) {
+		t.Helper()
+		root := t.TempDir()
+		canonical := filepath.Join(root, "lmm-api")
+		provider := filepath.Join(root, "lmm-api-go")
+		if err := os.WriteFile(canonical, []byte("legacy provider\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Base(canonical), provider); err != nil {
+			t.Fatal(err)
+		}
+		runner := &fakeProductionRunner{t: t, installedGoVersion: version}
+		return &productionRuntime{
+			runner: runner,
+			paths:  productionPaths{InstalledBinary: canonical, LegacyGoBinary: provider},
+		}, canonical, provider
+	}
+
+	t.Run("exact-0.1.69-layout", func(t *testing.T) {
+		runtime, _, _ := newRuntime(t, "0.1.69")
+		if err := runtime.verifyCanonicalOperator(context.Background()); err != nil {
+			t.Fatalf("exact legacy migration layout rejected: %v", err)
+		}
+	})
+	t.Run("other-version", func(t *testing.T) {
+		runtime, _, _ := newRuntime(t, "0.1.68")
+		if err := runtime.verifyCanonicalOperator(context.Background()); err == nil || !strings.Contains(err.Error(), "legacy package identity") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	t.Run("writable-canonical", func(t *testing.T) {
+		runtime, canonical, _ := newRuntime(t, "0.1.69")
+		if err := os.Chmod(canonical, 0o775); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.verifyCanonicalOperator(context.Background()); err == nil || !strings.Contains(err.Error(), "legacy layout") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	t.Run("wrong-reverse-link", func(t *testing.T) {
+		runtime, _, provider := newRuntime(t, "0.1.69")
+		if err := os.Remove(provider); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("lmm-api-rs", provider); err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.verifyCanonicalOperator(context.Background()); err == nil || !strings.Contains(err.Error(), "legacy layout") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestPackageIntegritySummaryIsExact(t *testing.T) {

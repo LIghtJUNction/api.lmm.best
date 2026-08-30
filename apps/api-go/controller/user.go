@@ -540,15 +540,9 @@ func GetAffCode(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if user.AffCode == "" {
-		user.AffCode = common.GetRandomString(4)
-		if err := user.Update(false); err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
+	if err := ensureAffiliateCode(user); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1392,6 +1386,10 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
+			if err := common.ValidateWalletQuota(req.Value); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 			if err := model.IncreaseUserQuota(user.Id, req.Value, true); err != nil {
 				common.ApiError(c, err)
 				return
@@ -1404,6 +1402,10 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
+			if err := common.ValidateWalletQuota(req.Value); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 			if err := model.DecreaseUserQuota(user.Id, req.Value, true); err != nil {
 				common.ApiError(c, err)
 				return
@@ -1412,10 +1414,17 @@ func ManageUser(c *gin.Context) {
 				"quota": logger.LogQuota(req.Value),
 			})
 		case "override":
+			if err := common.ValidateWalletQuota(req.Value); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 			oldQuota := user.Quota
 			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
 				common.ApiError(c, err)
 				return
+			}
+			if err := model.InvalidateUserCache(user.Id); err != nil {
+				common.SysLog(fmt.Sprintf("failed to invalidate quota cache for user %d: %s", user.Id, err.Error()))
 			}
 			recordManageAuditFor(c, user.Id, "user.quota_override", map[string]interface{}{
 				"from": logger.LogQuota(oldQuota),

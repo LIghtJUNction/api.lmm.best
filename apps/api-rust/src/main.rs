@@ -58,7 +58,8 @@ use lmm_api_rs::{
         finance_export::{FinanceExportState, router as finance_export_router},
         gifts::{GiftState, router as gift_router},
         hero_sms::{
-            DisabledHeroSmsGateway, HeroSmsState, ReqwestHeroSmsGateway, router as hero_sms_router,
+            DisabledHeroSmsGateway, HeroSmsRateLimitConfig, HeroSmsState, ReqwestHeroSmsGateway,
+            router as hero_sms_router,
         },
         identity_2fa::{Identity2FAState, router as identity_2fa_router},
         identity_admin::{IdentityAdminState, router as identity_admin_router},
@@ -213,6 +214,12 @@ impl ControlTaskStatusProbe for ListenerControlTaskStatusProbe {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    match lmm_api_rs::cli::dispatch_environment().await {
+        lmm_api_rs::cli::DispatchOutcome::Serve => {}
+        lmm_api_rs::cli::DispatchOutcome::Exit(0) => return Ok(()),
+        lmm_api_rs::cli::DispatchOutcome::Exit(code) => std::process::exit(code),
+    }
+
     lmm_observability::init()?;
     let config = Config::from_env()?;
     let protocol_registry = Arc::new(validated_current_registry().map_err(|error| {
@@ -632,11 +639,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
         let hero_sms = http::api_global_rate_limited_surface(
             &app_state,
-            hero_sms_router(HeroSmsState::new(
-                pg.clone(),
-                Arc::clone(&auth),
-                hero_sms_gateway,
-            )),
+            hero_sms_router(
+                HeroSmsState::new(pg.clone(), Arc::clone(&auth), hero_sms_gateway)
+                    .with_sms_user_rate_limit(
+                        valkey.clone(),
+                        HeroSmsRateLimitConfig {
+                            enabled: config.auth_critical_rate_limit_enabled,
+                            max_requests: config.auth_critical_rate_limit,
+                            window: config.auth_critical_rate_limit_window,
+                            dependency_timeout: config.dependency_timeout,
+                        },
+                    ),
+            ),
         );
         let finance_export = http::api_global_rate_limited_surface(
             &app_state,
@@ -1109,15 +1123,15 @@ mod tests {
     #[tokio::test]
     async fn bounded_drain_should_complete_finished_work() {
         let result = bounded_drain(Duration::from_secs(1), future::ready(7)).await;
-        assert_eq!(result.expect("ready work completes"), 7);
+        assert_eq!(result.ok(), Some(7));
     }
 
     #[tokio::test]
     async fn bounded_drain_should_time_out_stuck_work() {
         let result = bounded_drain(Duration::from_millis(1), future::pending::<()>()).await;
         assert_eq!(
-            result.expect_err("stuck work times out").kind(),
-            io::ErrorKind::TimedOut
+            result.err().map(|error| error.kind()),
+            Some(io::ErrorKind::TimedOut)
         );
     }
 }

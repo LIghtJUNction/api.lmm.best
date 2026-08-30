@@ -37,7 +37,9 @@ const DEFAULT_PAGE_SIZE: i64 = 10;
 const MAX_PAGE_SIZE: i64 = 100;
 const DEFAULT_REVIEW_HISTORY_KEEP: i64 = 30;
 const MAX_REVIEW_HISTORY_KEEP: i64 = 100;
+const MAX_REVIEW_HISTORY_EXPECTED_COUNT: i64 = 100_000;
 const REVIEW_RUN_CLEANUP_SCOPE: &str = "security.review_runs.delete";
+const STALE_REVIEW_CLEANUP_MESSAGE: &str = "cleanup preview is stale; refresh and confirm again";
 const SECURITY_PROOF_HEADER: &str = "x-security-proof";
 
 #[derive(Clone)]
@@ -131,6 +133,7 @@ pub trait SecurityAdminBackend: Send + Sync {
     async fn delete_review_runs(
         &self,
         keep: i64,
+        expected_count: i64,
         admin_user_id: i64,
     ) -> Result<i64, SecurityAdminError>;
 
@@ -425,13 +428,22 @@ async fn delete_review_runs(State(state): State<SecurityAdminState>, request: Re
         Ok(keep) => keep,
         Err(response) => return with_auth_version(no_store(response)),
     };
-    let response = match state.backend.delete_review_runs(keep, admin.id).await {
+    let expected_count = match parse_review_history_expected_count(request.uri().query()) {
+        Ok(expected_count) => expected_count,
+        Err(response) => return with_auth_version(no_store(response)),
+    };
+    let response = match state
+        .backend
+        .delete_review_runs(keep, expected_count, admin.id)
+        .await
+    {
         Ok(deleted_count) => api_success(json!(ReviewRunCleanupResponse {
             task_type: "assistant_review",
             keep,
             eligible_count: deleted_count,
             deleted_count,
         })),
+        Err(error) if error.0 == STALE_REVIEW_CLEANUP_MESSAGE => stale_cleanup(),
         Err(error) => api_error(&error.0),
     };
     with_auth_version(no_store(response))
@@ -779,6 +791,7 @@ impl SecurityAdminBackend for PgSecurityAdminBackend {
     async fn delete_review_runs(
         &self,
         keep: i64,
+        expected_count: i64,
         admin_user_id: i64,
     ) -> Result<i64, SecurityAdminError> {
         let mut transaction = self.pg.begin().await.map_err(db_error)?;
@@ -791,6 +804,11 @@ impl SecurityAdminBackend for PgSecurityAdminBackend {
         .fetch_all(&mut *transaction)
         .await
         .map_err(db_error)?;
+        let candidate_count = i64::try_from(ids.len())
+            .map_err(|_| SecurityAdminError("cleanup row count overflow".to_owned()))?;
+        if candidate_count != expected_count {
+            return Err(SecurityAdminError(STALE_REVIEW_CLEANUP_MESSAGE.to_owned()));
+        }
         let deleted_count = if ids.is_empty() {
             0
         } else {
@@ -808,7 +826,7 @@ impl SecurityAdminBackend for PgSecurityAdminBackend {
         };
         let content =
             format!("deleted {deleted_count} assistant review run history records (keep={keep})");
-        sqlx::query(
+        let audit_result = sqlx::query(
             "INSERT INTO logs (user_id, created_at, type, content, username) \
              SELECT id, EXTRACT(EPOCH FROM NOW())::BIGINT, 4, $2, username \
              FROM users WHERE id = $1",
@@ -818,6 +836,11 @@ impl SecurityAdminBackend for PgSecurityAdminBackend {
         .execute(&mut *transaction)
         .await
         .map_err(db_error)?;
+        if audit_result.rows_affected() != 1 {
+            return Err(SecurityAdminError(
+                "cleanup audit record could not be written".to_owned(),
+            ));
+        }
         transaction.commit().await.map_err(db_error)?;
         Ok(deleted_count)
     }
@@ -1047,7 +1070,8 @@ async fn authenticate_dashboard(
     state: &SecurityAdminState,
     headers: &HeaderMap,
 ) -> Result<DashboardUserView, Response> {
-    let Some(credential) = dashboard_credential(headers) else {
+    let Some(credential) = crate::migration_routes::legacy_http::dashboard_credential(headers)
+    else {
         return Err(dashboard_auth_error(headers, None));
     };
     state
@@ -1108,6 +1132,41 @@ fn cleanup_invalid_keep() -> Response {
     )
 }
 
+fn parse_review_history_expected_count(raw: Option<&str>) -> Result<i64, Response> {
+    let query = parse_query(raw);
+    let expected_count = query
+        .get("expected_count")
+        .ok_or_else(cleanup_invalid_expected_count)?
+        .parse::<i64>()
+        .map_err(|_| cleanup_invalid_expected_count())?;
+    if !(0..=MAX_REVIEW_HISTORY_EXPECTED_COUNT).contains(&expected_count) {
+        return Err(cleanup_invalid_expected_count());
+    }
+    Ok(expected_count)
+}
+
+fn cleanup_invalid_expected_count() -> Response {
+    legacy_json(
+        StatusCode::BAD_REQUEST,
+        json!({
+            "success": false,
+            "code": "INVALID_PARAMS",
+            "message": "expected_count must be between 0 and 100000",
+        }),
+    )
+}
+
+fn stale_cleanup() -> Response {
+    legacy_json(
+        StatusCode::CONFLICT,
+        json!({
+            "success": false,
+            "code": "STALE_PREVIEW",
+            "message": STALE_REVIEW_CLEANUP_MESSAGE,
+        }),
+    )
+}
+
 fn client_ip(request: &Request) -> &str {
     request
         .extensions()
@@ -1144,9 +1203,10 @@ async fn require_cleanup_security_proof(
         .ok_or_else(|| {
             security_proof_error("SECURITY_PROOF_REQUIRED", "Secure verification is required")
         })?;
-    let credential = dashboard_credential(headers).ok_or_else(|| {
-        security_proof_error("SECURITY_PROOF_INVALID", "Security proof is invalid")
-    })?;
+    let credential = crate::migration_routes::legacy_http::dashboard_credential(headers)
+        .ok_or_else(|| {
+            security_proof_error("SECURITY_PROOF_INVALID", "Security proof is invalid")
+        })?;
     let session = state
         .auth
         .current_session(SecretString::from(credential))
@@ -1387,23 +1447,6 @@ fn with_auth_version(mut response: Response) -> Response {
     response
 }
 
-fn dashboard_credential(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?.trim();
-    let mut fields = value.split_whitespace();
-    let first = fields.next()?;
-    let second = fields.next();
-    if fields.next().is_some() {
-        return None;
-    }
-    match second {
-        Some(token) if first.eq_ignore_ascii_case("bearer") && !token.is_empty() => {
-            Some(token.to_owned())
-        }
-        None if !first.is_empty() => Some(first.to_owned()),
-        _ => None,
-    }
-}
-
 fn dashboard_auth_error(headers: &HeaderMap, kind: Option<AuthErrorKind>) -> Response {
     if kind == Some(AuthErrorKind::UserDisabled) {
         return user_policy_error(headers, UserAuthPolicyError::UserDisabled);
@@ -1457,25 +1500,49 @@ mod cleanup_tests {
     #[test]
     fn cleanup_keep_defaults_and_enforces_bounds() {
         assert_eq!(
-            parse_review_history_keep(None).expect("default keep"),
-            DEFAULT_REVIEW_HISTORY_KEEP
+            parse_review_history_keep(None).ok(),
+            Some(DEFAULT_REVIEW_HISTORY_KEEP)
         );
-        assert_eq!(
-            parse_review_history_keep(Some("keep=1")).expect("minimum keep"),
-            1
-        );
-        assert_eq!(
-            parse_review_history_keep(Some("keep=100")).expect("maximum keep"),
-            100
-        );
+        assert_eq!(parse_review_history_keep(Some("keep=1")).ok(), Some(1));
+        assert_eq!(parse_review_history_keep(Some("keep=100")).ok(), Some(100));
         for query in ["keep=0", "keep=101", "keep=invalid"] {
             assert_eq!(
                 parse_review_history_keep(Some(query))
-                    .expect_err("invalid keep")
-                    .status(),
-                StatusCode::BAD_REQUEST
+                    .err()
+                    .map(|response| response.status()),
+                Some(StatusCode::BAD_REQUEST)
             );
         }
+    }
+
+    #[test]
+    fn cleanup_expected_count_requires_a_safe_non_negative_value() {
+        assert_eq!(
+            parse_review_history_expected_count(Some("keep=30&expected_count=0")).ok(),
+            Some(0)
+        );
+        assert_eq!(
+            parse_review_history_expected_count(Some("expected_count=100000")).ok(),
+            Some(MAX_REVIEW_HISTORY_EXPECTED_COUNT)
+        );
+        for query in [
+            "keep=30",
+            "expected_count=-1",
+            "expected_count=100001",
+            "expected_count=invalid",
+        ] {
+            assert_eq!(
+                parse_review_history_expected_count(Some(query))
+                    .err()
+                    .map(|response| response.status()),
+                Some(StatusCode::BAD_REQUEST)
+            );
+        }
+    }
+
+    #[test]
+    fn stale_cleanup_uses_conflict_status() {
+        assert_eq!(stale_cleanup().status(), StatusCode::CONFLICT);
     }
 
     #[test]

@@ -105,6 +105,7 @@ For commercial licensing, please contact support@quantumnous.com
 .forge-home-hero {
   position: relative;
   display: flex;
+  isolation: isolate;
   min-height: min(42rem, calc(100svh - 4rem));
   align-items: center;
   justify-content: center;
@@ -239,6 +240,8 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .forge-home-hero-content {
+  position: relative;
+  z-index: 1;
   display: flex;
   width: 100%;
   max-width: 80rem;
@@ -580,14 +583,6 @@ For commercial licensing, please contact support@quantumnous.com
   display: flex;
   gap: 0.4rem;
   margin-bottom: 0.75rem;
-}
-
-.forge-home-window-bar span {
-  width: 0.5rem;
-  height: 0.5rem;
-  border: 1px solid color-mix(in oklch, var(--foreground) 14%, transparent);
-  border-radius: 999px;
-  background: color-mix(in oklch, var(--foreground) 7%, transparent);
 }
 
 .forge-home-code-tabs {
