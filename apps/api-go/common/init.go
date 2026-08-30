@@ -89,7 +89,9 @@ func InitEnv() error {
 	DebugEnabled = os.Getenv("DEBUG") == "true"
 	MemoryCacheEnabled = os.Getenv("MEMORY_CACHE_ENABLED") == "true"
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
-	initNodeNameIdentity()
+	if err := initNodeNameIdentity(); err != nil {
+		return err
+	}
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
 	if TLSInsecureSkipVerify {
 		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {
@@ -137,6 +139,11 @@ func InitEnv() error {
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
 	initConstantEnv()
 	return nil
+}
+
+// InitializeEnvironment is the error-returning process startup entry point.
+func InitializeEnvironment() error {
+	return InitEnv()
 }
 
 func initUserSessionSettings() {

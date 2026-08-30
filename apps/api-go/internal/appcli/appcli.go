@@ -6,7 +6,6 @@ package appcli
 import (
 	"fmt"
 	"io"
-	"strings"
 )
 
 const (
@@ -50,6 +49,8 @@ func Dispatch(args []string, version string, stdout, stderr io.Writer) Result {
 		return Result{ExitCode: RunRequest(args[1:], version, stdout, stderr)}
 	case "deploy":
 		return Result{ExitCode: RunDeploy(args[1:], stdout, stderr)}
+	case "backend":
+		return Result{ExitCode: RunBackend(args[1:], stdout, stderr)}
 	case "geoip":
 		return Result{ExitCode: RunGeoIP(args[1:], stdout, stderr)}
 	case "status":
@@ -63,11 +64,8 @@ func Dispatch(args []string, version string, stdout, stderr io.Writer) Result {
 		WriteUsage(stdout)
 		return Result{ExitCode: ExitOK}
 	default:
-		// Server flags may be passed without spelling out the optional serve
-		// command. Unknown words fail instead of starting a service unexpectedly.
-		if strings.HasPrefix(command, "-") {
-			return Result{Mode: ModeServe, ServeArgs: append([]string(nil), args...)}
-		}
+		// The service unit spells out `serve`; unknown flags must never start a
+		// backend process as a side effect of a mistyped client command.
 		_, _ = fmt.Fprintf(stderr, "%s: unknown command %q\n", ProgramName, command)
 		WriteUsage(stderr)
 		return Result{ExitCode: ExitUsage}
@@ -118,13 +116,17 @@ func WriteUsage(output io.Writer) {
     --plan FILE --plan-sha256 HEX --confirm api.lmm.best
   lmm-api deploy production edge-policy install|verify
   lmm-api geoip update
+  lmm-api backend status
+  lmm-api backend select go|rust
   lmm-api status [request options]
   lmm-api doctor [request options]
   lmm-api version
   lmm-api help
 
-The lmm-api executable is the Go backend itself. Migration mode is explicit:
---apply may change the database, while --verify is read-only. The request, status,
+The lmm-api invocation is a one-hop provider-selection symlink. This Go build is
+installed as lmm-api-go; backend status/select validates and atomically manages
+the canonical link. Migration mode is explicit: --apply may change the database,
+while --verify is read-only. The request, status,
 and doctor commands use the binary's native HTTP client and do not initialize the
 server, database, or cache. Deployment commands are implemented by this binary;
 they do not delegate release state to shell scripts.`)

@@ -269,6 +269,20 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	})
 }
 
+func roundDerivedTokenCount(value float64) int {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return -1
+	}
+	rounded := math.Round(value)
+	if rounded > float64(math.MaxInt) {
+		return -1
+	}
+	if rounded == float64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(rounded)
+}
+
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
 	if priceData.CacheCreationRatio == 1 {
 		return 0
@@ -283,11 +297,12 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	completionTokens := float64(usage.CompletionTokens)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)
 
-	return int(math.Round((cost -
+	value := (cost -
 		totalPromptTokens*quotaPrice +
 		promptCacheReadTokens*(quotaPrice-promptCacheReadPrice) -
 		completionTokens*completionPrice) /
-		(promptCacheCreatePrice - quotaPrice)))
+		(promptCacheCreatePrice - quotaPrice)
+	return roundDerivedTokenCount(value)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {

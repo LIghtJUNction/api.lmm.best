@@ -236,6 +236,12 @@ func initDBWithMigrationSession(chooser databaseChooser) (*StartupMigrationSessi
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
+		// Verify an existing production schema before AutoMigrate can inspect
+		// the new bigint tags. This check never performs ALTER TABLE.
+		if err := check64BitQuotaSchema(DB, dbType); err != nil {
+			return nil, errors.Join(session.closeOnFailure(err), closeDB(DB))
+		}
+
 		if mode == DBMigrationModeApply && !common.IsMasterNode {
 			// Register before the master migration finishes so relevant writes
 			// fail closed until the shared revision singleton exists.
@@ -330,14 +336,14 @@ func mainMigrationModels() []interface{} {
 	return []interface{}{
 		&Channel{}, &Token{}, &UserRankingRevision{}, &User{}, &UserSession{}, &AuthFlow{}, &ExternalIdentityClaim{},
 		&PasskeyCredential{}, &Option{}, &Redemption{}, &Ability{}, &Log{}, &Midjourney{},
-		&DiscountCode{},
+		&DiscountCode{}, &DiscountCodeReservation{},
 		&TopUp{}, &QuotaData{}, &Task{}, &Model{}, &Vendor{}, &PrefillGroup{}, &Setup{}, &TwoFA{},
 		&TwoFABackupCode{}, &Checkin{}, &Gift{}, &GiftClaim{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
 		&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{},
 		&AccountActionRequest{},
 		&OpenSourceBountyLedger{}, &OpenSourceBountyDispute{}, &OpenSourceBountyMCPToken{},
 		&OpenSourceBountyMCPConfirmation{}, &OpenSourceBountyMCPOperation{}, &OpenSourceBountyRESTOperation{},
-		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
+		&SubscriptionOrder{}, &SubscriptionPaymentEvent{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{},
 		&WaffoPancakeWebhookReceipt{},
@@ -396,7 +402,23 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := migrateLegacySubscriptionPlanCurrencies(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateLegacySubscriptionPlanCurrencies corrects the old contract where the
+// API forced Currency=USD even though PriceAmount was consumed as platform
+// units whose monetary base is CNY. The version column makes this idempotent
+// and preserves explicitly chosen USD prices created by the new contract.
+func migrateLegacySubscriptionPlanCurrencies() error {
+	return DB.Model(&SubscriptionPlan{}).
+		Where("price_currency_version = ?", 0).
+		Updates(map[string]any{
+			"currency":               "CNY",
+			"price_currency_version": 1,
+		}).Error
 }
 
 func migrateDBFast() error {
@@ -419,6 +441,7 @@ func migrateDBFast() error {
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&DiscountCode{}, "DiscountCode"},
+		{&DiscountCodeReservation{}, "DiscountCodeReservation"},
 		{&Ability{}, "Ability"},
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
@@ -446,6 +469,7 @@ func migrateDBFast() error {
 		{&OpenSourceBountyMCPOperation{}, "OpenSourceBountyMCPOperation"},
 		{&OpenSourceBountyRESTOperation{}, "OpenSourceBountyRESTOperation"},
 		{&SubscriptionOrder{}, "SubscriptionOrder"},
+		{&SubscriptionPaymentEvent{}, "SubscriptionPaymentEvent"},
 		{&UserSubscription{}, "UserSubscription"},
 		{&WaffoPancakeWebhookReceipt{}, "WaffoPancakeWebhookReceipt"},
 		{&FinanceLedgerEntry{}, "FinanceLedgerEntry"},
@@ -669,7 +693,8 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`title`" + ` varchar(128) NOT NULL,
 ` + "`subtitle`" + ` varchar(255) DEFAULT '',
 ` + "`price_amount`" + ` decimal(10,6) NOT NULL,
-` + "`currency`" + ` varchar(8) NOT NULL DEFAULT 'USD',
+` + "`currency`" + ` varchar(8) NOT NULL DEFAULT 'CNY',
+` + "`price_currency_version`" + ` integer NOT NULL DEFAULT 0,
 ` + "`duration_unit`" + ` varchar(16) NOT NULL DEFAULT 'month',
 ` + "`duration_value`" + ` integer NOT NULL DEFAULT 1,
 ` + "`custom_seconds`" + ` bigint NOT NULL DEFAULT 0,
@@ -706,7 +731,8 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "title", DDL: "`title` varchar(128) NOT NULL"},
 		{Name: "subtitle", DDL: "`subtitle` varchar(255) DEFAULT ''"},
 		{Name: "price_amount", DDL: "`price_amount` decimal(10,6) NOT NULL"},
-		{Name: "currency", DDL: "`currency` varchar(8) NOT NULL DEFAULT 'USD'"},
+		{Name: "currency", DDL: "`currency` varchar(8) NOT NULL DEFAULT 'CNY'"},
+		{Name: "price_currency_version", DDL: "`price_currency_version` integer NOT NULL DEFAULT 0"},
 		{Name: "duration_unit", DDL: "`duration_unit` varchar(16) NOT NULL DEFAULT 'month'"},
 		{Name: "duration_value", DDL: "`duration_value` integer NOT NULL DEFAULT 1"},
 		{Name: "custom_seconds", DDL: "`custom_seconds` bigint NOT NULL DEFAULT 0"},

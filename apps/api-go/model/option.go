@@ -1,8 +1,10 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -101,6 +103,7 @@ func InitOptionMap() {
 	common.OptionMap["EpayKey"] = ""
 	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
 	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
+	common.OptionMap["TopUpPlatformUnitsPerCNY"] = strconv.FormatFloat(operation_setting.TopUpPlatformUnitsPerCNY, 'f', -1, 64)
 	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
 	common.OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.StripeMinTopUp)
 	common.OptionMap["StripeApiSecret"] = setting.StripeApiSecret
@@ -266,10 +269,23 @@ func loadOptionsFromDatabase() {
 }
 
 func SyncOptions(frequency int) {
+	SyncOptionsContext(context.Background(), frequency)
+}
+
+func SyncOptionsContext(ctx context.Context, frequency int) {
+	if frequency <= 0 {
+		return
+	}
+	ticker := time.NewTicker(time.Duration(frequency) * time.Second)
+	defer ticker.Stop()
 	for {
-		time.Sleep(time.Duration(frequency) * time.Second)
-		common.SysLog("syncing options from database")
-		loadOptionsFromDatabase()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			common.SysLog("syncing options from database")
+			loadOptionsFromDatabase()
+		}
 	}
 }
 
@@ -654,6 +670,12 @@ func updateOptionMap(key string, value string) (err error) {
 	if err := setting.ValidateIPAccessRoutingOption(key, value); err != nil {
 		return err
 	}
+	if key == "USDExchangeRate" || key == "TopUpPlatformUnitsPerCNY" {
+		rate, parseErr := strconv.ParseFloat(value, 64)
+		if parseErr != nil || math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 {
+			return fmt.Errorf("%s must be a positive finite number", key)
+		}
+	}
 	// Legacy model-specific Grok violation options are intentionally ignored.
 	// The active policy is now operation_setting's provider-agnostic group
 	// policy; deleting these keys from the runtime map keeps old database rows
@@ -910,6 +932,8 @@ func updateOptionMap(key string, value string) (err error) {
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":
 		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+	case "TopUpPlatformUnitsPerCNY":
+		operation_setting.TopUpPlatformUnitsPerCNY, _ = strconv.ParseFloat(value, 64)
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
 	case "StripeApiSecret":
