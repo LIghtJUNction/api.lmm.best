@@ -20,7 +20,10 @@ const recordSource = readFileSync(
 )
 const typeSource = readFileSync(new URL('./types.ts', import.meta.url), 'utf8')
 const routeSource = readFileSync(
-  new URL('../../routes/_authenticated/subscriptions/reset.tsx', import.meta.url),
+  new URL(
+    '../../routes/_authenticated/subscriptions/reset.tsx',
+    import.meta.url
+  ),
   'utf8'
 )
 const voucherSource = readFileSync(
@@ -49,13 +52,21 @@ describe('subscription reset workspace safety contract', () => {
   test('keeps stale target rows and bulk selection non-interactive', () => {
     assert.match(
       source,
-      /const filtersSettled =[\s\S]{0,120}!eligibleQuery\.isFetching/
+      /const filtersSettled =[\s\S]{0,160}!eligibleQuery\.isFetching/
     )
     assert.match(
       source,
       /disabled={[\s\S]{0,100}!filtersSettled[\s\S]{0,100}allMatching/
     )
     assert.match(source, /const canPreview =[\s\S]{0,80}filtersSettled/)
+  })
+
+  test('applies explicit user filters to eligibility and frozen previews', () => {
+    assert.match(source, /const userFilter = useMemo\(/)
+    assert.match(source, /userIds: userFilter\.ids/)
+    assert.match(source, /user_ids: userFilter\.ids\.length/)
+    assert.match(source, /enabled: !userFilter\.invalid/)
+    assert.match(source, /aria-invalid={userFilter\.invalid}/)
   })
 
   test('discloses banked resets in selection and preview', () => {

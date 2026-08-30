@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -60,6 +61,30 @@ import type {
 const PAGE_SIZE = 20
 const PREVIEW_TARGET_DISPLAY_LIMIT = 100
 const MAX_PLAN_FILTERS = 100
+const MAX_USER_FILTERS = 100
+
+function parseResetUserIds(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return { ids: [] as number[], invalid: false }
+
+  const ids: number[] = []
+  const seen = new Set<number>()
+  for (const raw of trimmed.split(',')) {
+    const token = raw.trim()
+    if (!/^\d+$/.test(token)) return { ids: [] as number[], invalid: true }
+    const id = Number(token)
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return { ids: [] as number[], invalid: true }
+    }
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+    if (ids.length > MAX_USER_FILTERS) {
+      return { ids: [] as number[], invalid: true }
+    }
+  }
+  return { ids, invalid: false }
+}
 
 function targetKey(
   target: Pick<AdminSubscriptionResetEligible, 'user_id' | 'plan_id'>
@@ -71,6 +96,7 @@ export function SubscriptionResetWorkspace() {
   const { t } = useTranslation()
   const [mode, setMode] = useState<SubscriptionResetMode>('hard')
   const [query, setQuery] = useState('')
+  const [userIdsInput, setUserIdsInput] = useState('')
   const [page, setPage] = useState(1)
   const [planIds, setPlanIds] = useState<number[]>([])
   const [selected, setSelected] = useState<
@@ -94,6 +120,11 @@ export function SubscriptionResetWorkspace() {
     () => [...planIds].sort((a, b) => a - b).join(','),
     [planIds]
   )
+  const userFilter = useMemo(
+    () => parseResetUserIds(userIdsInput),
+    [userIdsInput]
+  )
+  const userKey = userFilter.ids.join(',')
 
   const invalidateApproval = useCallback(() => {
     previewRequestId.current += 1
@@ -110,7 +141,7 @@ export function SubscriptionResetWorkspace() {
     setSelected(new Map())
     setAllMatching(false)
     invalidateApproval()
-  }, [query, planKey, invalidateApproval])
+  }, [query, planKey, userIdsInput, invalidateApproval])
 
   const plansQuery = useQuery({
     queryKey: ['admin-subscription-plans', 'reset-workspace'],
@@ -118,7 +149,13 @@ export function SubscriptionResetWorkspace() {
     staleTime: 30_000,
   })
   const eligibleQuery = useQuery({
-    queryKey: ['subscription-reset-eligible', page, debouncedQuery, planKey],
+    queryKey: [
+      'subscription-reset-eligible',
+      page,
+      debouncedQuery,
+      planKey,
+      userKey,
+    ],
     queryFn: ({ signal }) =>
       getSubscriptionResetEligible(
         {
@@ -126,10 +163,12 @@ export function SubscriptionResetWorkspace() {
           pageSize: PAGE_SIZE,
           query: debouncedQuery || undefined,
           planIds,
+          userIds: userFilter.ids,
         },
         signal
       ),
     placeholderData: keepPreviousData,
+    enabled: !userFilter.invalid,
   })
 
   const plans = plansQuery.data?.data ?? []
@@ -140,6 +179,7 @@ export function SubscriptionResetWorkspace() {
     selected.has(targetKey(item))
   ).length
   const filtersSettled =
+    !userFilter.invalid &&
     query.trim() === debouncedQuery &&
     !eligibleQuery.isFetching &&
     !eligibleQuery.isError
@@ -189,6 +229,7 @@ export function SubscriptionResetWorkspace() {
         filter: {
           query: debouncedQuery || undefined,
           plan_ids: planIds.length ? planIds : undefined,
+          user_ids: userFilter.ids.length ? userFilter.ids : undefined,
         },
       })
       if (requestId !== previewRequestId.current) return
@@ -337,17 +378,48 @@ export function SubscriptionResetWorkspace() {
                 </Select>
               </div>
 
-              <div className='relative'>
-                <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2' />
-                <Input
-                  value={query}
-                  maxLength={200}
-                  disabled={executing}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder={t('Search eligible users or plans')}
-                  aria-label={t('Search eligible subscriptions')}
-                  className='pl-9'
-                />
+              <div className='grid gap-3 sm:grid-cols-2'>
+                <div className='relative self-end'>
+                  <Search className='text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2' />
+                  <Input
+                    value={query}
+                    maxLength={200}
+                    disabled={executing}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder={t('Search eligible users or plans')}
+                    aria-label={t('Search eligible subscriptions')}
+                    className='pl-9'
+                  />
+                </div>
+                <div className='space-y-1'>
+                  <Label htmlFor='subscription-reset-user-ids'>
+                    {t('User IDs')}
+                  </Label>
+                  <Input
+                    id='subscription-reset-user-ids'
+                    value={userIdsInput}
+                    disabled={executing}
+                    onChange={(event) => setUserIdsInput(event.target.value)}
+                    placeholder={t('For example: 12, 34, 56')}
+                    aria-invalid={userFilter.invalid}
+                    aria-describedby='subscription-reset-user-ids-help'
+                  />
+                  <p
+                    id='subscription-reset-user-ids-help'
+                    className={
+                      userFilter.invalid
+                        ? 'text-destructive text-xs'
+                        : 'text-muted-foreground text-xs'
+                    }
+                  >
+                    {userFilter.invalid
+                      ? t(
+                          'User IDs must be positive integers separated by commas, with at most {{count}} entries.',
+                          { count: MAX_USER_FILTERS }
+                        )
+                      : t('Optional comma-separated user ID filter.')}
+                  </p>
+                </div>
               </div>
 
               <fieldset className='space-y-2'>
