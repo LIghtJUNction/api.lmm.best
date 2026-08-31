@@ -222,6 +222,56 @@ fn contract_six_verifier_rejects_wrong_default_and_index_columns() {
             .to_string()
             .contains("idx_subscription_reset_operations_preview_token")
     );
+    transaction
+        .batch_execute(&format!(
+            "DROP INDEX {quoted_schema}.idx_subscription_reset_operations_preview_token; \
+             CREATE UNIQUE INDEX idx_subscription_reset_operations_preview_token \
+             ON {quoted_schema}.subscription_reset_operations(preview_token); \
+             ALTER TABLE {quoted_schema}.subscription_reset_previews \
+             DROP CONSTRAINT subscription_reset_previews_pkey"
+        ))
+        .expect("replace preview primary key");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("missing preview primary key must fail");
+    assert!(error.to_string().contains("subscription_reset_previews"));
+    transaction
+        .batch_execute(&format!(
+            "ALTER TABLE {quoted_schema}.subscription_reset_previews ADD PRIMARY KEY (token); \
+             ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN id DROP DEFAULT"
+        ))
+        .expect("remove voucher sequence default");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("missing voucher sequence default must fail");
+    assert!(error.to_string().contains("subscription_reset_vouchers.id"));
+    transaction
+        .batch_execute(&format!(
+            "ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN id \
+             SET DEFAULT nextval('{quoted_schema}.subscription_reset_vouchers_id_seq'::regclass); \
+             ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN status SET DEFAULT 'invalid'"
+        ))
+        .expect("replace voucher status default");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("wrong voucher status default must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("subscription_reset_vouchers.status")
+    );
+    transaction
+        .batch_execute(&format!(
+            "ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN status SET DEFAULT 'available'; \
+             DROP INDEX {quoted_schema}.idx_subscription_reset_vouchers_status; \
+             CREATE INDEX idx_subscription_reset_vouchers_status \
+             ON {quoted_schema}.subscription_reset_vouchers(plan_id)"
+        ))
+        .expect("replace voucher status index");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("wrong secondary index columns must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("idx_subscription_reset_vouchers_status")
+    );
     transaction.rollback().expect("roll back contract-6 test");
 }
 
