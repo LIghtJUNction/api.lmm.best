@@ -23,12 +23,15 @@ import {
   getPerfMetrics,
   getPerfMetricsSummary,
 } from '@/features/performance-metrics/api'
+import type { PerfSummaryAllData } from '@/features/performance-metrics/types'
 
 import type { ModelPerformanceSnapshot, StatusDetectionMetrics } from './types'
 
 const MAX_CONCURRENCY = 6
 
-export async function getStatusDetectionSummary(hours = 24) {
+export async function getStatusDetectionSummary(
+  hours = 24
+): Promise<PerfSummaryAllData> {
   const response = await getPerfMetricsSummary(hours)
   if (!response.success) {
     throw new Error(

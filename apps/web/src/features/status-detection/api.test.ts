@@ -49,9 +49,11 @@ describe('status detection API', () => {
   })
 
   test('counts unsuccessful detail responses without hiding successful data', async () => {
-    api.get = (async (_url, config) => {
-      const modelName = (config as { params?: { model?: string } })?.params
-        ?.model
+    api.get = (async (
+      _url: string,
+      config?: { params?: { model?: string } }
+    ) => {
+      const modelName = config?.params?.model
       if (modelName === 'failed-model') {
         return {
           data: {
