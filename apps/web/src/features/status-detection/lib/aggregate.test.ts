@@ -22,7 +22,7 @@ Copyright (C) 2026 LIghtJUNction
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { aggregateStatusGroups } from './aggregate'
+import { aggregateStatusGroups, sortStatusGroups } from './aggregate'
 
 describe('aggregateStatusGroups', () => {
   test('averages model group metrics and aligns trend buckets', () => {
@@ -39,14 +39,14 @@ describe('aggregateStatusGroups', () => {
             series: [
               {
                 ts: 2,
-                avg_ttft_ms: 0,
+                avg_ttft_ms: 300,
                 avg_latency_ms: 0,
                 avg_tps: 0,
                 success_rate: 80,
               },
               {
                 ts: 1,
-                avg_ttft_ms: 0,
+                avg_ttft_ms: 100,
                 avg_latency_ms: 0,
                 avg_tps: 0,
                 success_rate: 100,
@@ -67,7 +67,7 @@ describe('aggregateStatusGroups', () => {
             series: [
               {
                 ts: 2,
-                avg_ttft_ms: 0,
+                avg_ttft_ms: 500,
                 avg_latency_ms: 0,
                 avg_tps: 0,
                 success_rate: 60,
@@ -81,10 +81,12 @@ describe('aggregateStatusGroups', () => {
     assert.equal(groups.length, 1)
     assert.deepEqual(groups[0], {
       group: 'paid',
+      avgTtftMs: 100,
       avgLatencyMs: 300,
       avgTps: 15,
       successRate: 90,
-      trend: [100, 70],
+      successTrend: [100, 70],
+      ttftTrend: [100, 400],
       modelCount: 2,
     })
   })
@@ -107,5 +109,33 @@ describe('aggregateStatusGroups', () => {
     ])
 
     assert.deepEqual(groups, [])
+  })
+
+  test('sorts groups by first-token latency with missing data last', () => {
+    const base = {
+      avgLatencyMs: 0,
+      avgTps: 0,
+      successTrend: [],
+      ttftTrend: [],
+      modelCount: 1,
+    }
+    const groups = [
+      { ...base, group: 'slow', avgTtftMs: 2_000, successRate: 99 },
+      { ...base, group: 'unknown', avgTtftMs: Number.NaN, successRate: 100 },
+      { ...base, group: 'fast', avgTtftMs: 250, successRate: 98 },
+    ]
+
+    assert.deepEqual(
+      sortStatusGroups(groups, 'ttft').map((group) => group.group),
+      ['fast', 'slow', 'unknown']
+    )
+    assert.deepEqual(
+      sortStatusGroups(groups, 'reliability').map((group) => group.group),
+      ['unknown', 'slow', 'fast']
+    )
+    assert.deepEqual(
+      sortStatusGroups(groups, 'name').map((group) => group.group),
+      ['fast', 'slow', 'unknown']
+    )
   })
 })

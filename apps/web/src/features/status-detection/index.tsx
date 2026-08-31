@@ -20,24 +20,28 @@ For commercial licensing, please contact support@quantumnous.com
 Copyright (C) 2026 LIghtJUNction
 */
 import {
-  Activity,
   AlertCircle,
   CircleCheck,
   CircleHelp,
   CircleX,
-  Gauge,
-  HeartPulse,
   RefreshCw,
-  Timer,
   TriangleAlert,
 } from 'lucide-react'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PublicLayout } from '@/components/layout'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   formatLatency,
@@ -51,7 +55,8 @@ import {
 import { cn } from '@/lib/utils'
 
 import { useStatusDetection } from './hooks/use-status-detection'
-import type { StatusGroup } from './types'
+import { sortStatusGroups } from './lib/aggregate'
+import type { StatusGroup, StatusSort } from './types'
 
 function statusLabel(t: (key: string) => string, level: SuccessRateLevel) {
   switch (level) {
@@ -82,84 +87,97 @@ function statusIcon(level: SuccessRateLevel) {
   }
 }
 
-function statusSurface(level: SuccessRateLevel) {
-  switch (level) {
-    case 'excellent':
-    case 'good':
-      return 'border-emerald-500/25 bg-emerald-500/5'
-    case 'warning':
-      return 'border-amber-500/25 bg-amber-500/5'
-    case 'critical':
-      return 'border-red-500/25 bg-red-500/5'
-    default:
-      return 'border-border/60 bg-muted/15'
-  }
-}
-
-function OverviewMetric(props: {
-  icon: React.ComponentType<{ className?: string }>
+function SummaryMetric(props: {
   label: string
   value: string
-  hint: string
+  detail?: string
 }) {
-  const Icon = props.icon
   return (
-    <div className='border-border/70 bg-card rounded-xl border px-4 py-3 sm:px-5 sm:py-4'>
-      <div className='text-muted-foreground flex items-center gap-2 text-xs font-medium'>
-        <Icon className='size-3.5' aria-hidden='true' />
-        <span>{props.label}</span>
-      </div>
-      <div className='text-foreground mt-2 font-mono text-xl font-semibold tabular-nums sm:text-2xl'>
+    <div className='flex min-w-0 items-baseline gap-2'>
+      <dt className='text-muted-foreground shrink-0 text-xs'>{props.label}</dt>
+      <dd className='text-foreground min-w-0 truncate font-mono text-sm font-semibold tabular-nums'>
         {props.value}
-      </div>
-      <div className='text-muted-foreground/75 mt-1 text-[11px]'>
-        {props.hint}
-      </div>
+      </dd>
+      {props.detail && (
+        <span className='text-muted-foreground min-w-0 truncate text-xs'>
+          {props.detail}
+        </span>
+      )}
     </div>
   )
 }
 
-function StatusTrend(props: { values: number[]; label: string }) {
-  if (props.values.length === 0) {
+function TtftTrend(props: { values: number[]; label: string }) {
+  const values = props.values.filter(
+    (value) => Number.isFinite(value) && value > 0
+  )
+  if (values.length === 0) {
     return (
-      <div className='border-border/50 bg-muted/10 text-muted-foreground/70 flex h-16 items-center justify-center rounded-md border border-dashed text-xs'>
+      <div className='border-border/50 text-muted-foreground flex h-16 items-center justify-center rounded-md border border-dashed text-xs'>
         {props.label}
       </div>
     )
   }
 
+  const max = Math.max(...values)
   return (
-    <div
-      className='border-border/50 bg-muted/10 flex h-16 items-end gap-0.5 rounded-md border px-2 py-2'
-      aria-label={props.label}
-    >
-      {props.values.map((value, index) => {
-        const safeValue = Number.isFinite(value)
-          ? Math.max(0, Math.min(100, value))
-          : 0
-        return (
+    <div className='flex flex-col gap-1.5'>
+      <div className='text-muted-foreground flex items-center justify-between gap-3 text-[11px]'>
+        <span>{props.label}</span>
+        <span>{formatLatency(values.at(-1) ?? Number.NaN)}</span>
+      </div>
+      <div
+        className='border-border/50 bg-muted/10 flex h-14 items-end gap-0.5 rounded-md border px-2 py-2'
+        role='img'
+        aria-label={props.label}
+      >
+        {values.map((value, index) => (
           <span
             key={`${index}-${value}`}
-            title={`${formatUptimePct(safeValue)} ${props.label}`}
-            className={cn(
-              'min-w-0 flex-1 rounded-[2px]',
-              getSuccessRateDotClass(value)
-            )}
-            style={{ height: `${Math.max(8, safeValue)}%` }}
+            title={formatLatency(value)}
+            className='bg-primary/55 hover:bg-primary min-w-0 flex-1 rounded-[2px] transition-colors'
+            style={{ height: `${Math.max(12, (value / max) * 100)}%` }}
+            aria-hidden='true'
           />
-        )
-      })}
+        ))}
+      </div>
     </div>
   )
 }
 
-function GroupStatusCard(props: { group: StatusGroup; trendLabel: string }) {
+function SuccessPips(props: { values: number[]; label: string }) {
+  const values = props.values.filter(Number.isFinite).slice(-12)
+  if (values.length === 0) return null
+
+  return (
+    <div
+      className='flex items-center gap-1'
+      role='img'
+      aria-label={props.label}
+    >
+      {values.map((value, index) => (
+        <span
+          key={`${index}-${value}`}
+          title={formatUptimePct(value)}
+          className={cn('size-1.5 rounded-full', getSuccessRateDotClass(value))}
+          aria-hidden='true'
+        />
+      ))}
+    </div>
+  )
+}
+
+function GroupStatusCard(props: {
+  group: StatusGroup
+  ttftTrendLabel: string
+  successTrendLabel: string
+}) {
   const { t } = useTranslation()
   const level = getSuccessRateLevel(props.group.successRate)
   const Icon = statusIcon(level)
 
   return (
-    <Card className={cn('min-w-0 shadow-xs', statusSurface(level))} size='sm'>
+    <Card className='border-border/70 bg-card min-w-0 shadow-none' size='sm'>
       <CardHeader className='border-border/60 gap-2 border-b px-4 py-3'>
         <div className='flex min-w-0 items-start justify-between gap-3'>
           <CardTitle className='min-w-0 truncate text-base font-semibold tracking-tight'>
@@ -178,57 +196,55 @@ function GroupStatusCard(props: { group: StatusGroup; trendLabel: string }) {
             </span>
           </div>
         </div>
-        <div className='text-muted-foreground flex items-center gap-1.5 text-[11px]'>
-          <Activity className='size-3' aria-hidden='true' />
-          {t('{{count}} models reporting', { count: props.group.modelCount })}
+        <div className='flex items-center justify-between gap-3'>
+          <span className='text-muted-foreground text-[11px]'>
+            {t('{{count}} models reporting', { count: props.group.modelCount })}
+          </span>
+          <SuccessPips
+            values={props.group.successTrend}
+            label={props.successTrendLabel}
+          />
         </div>
       </CardHeader>
-      <CardContent className='space-y-3 px-4 py-3'>
-        <StatusTrend values={props.group.trend} label={props.trendLabel} />
-        <div className='grid grid-cols-3 gap-2'>
+      <CardContent className='flex flex-col gap-3 px-4 py-3'>
+        <dl>
+          <div className='flex items-baseline justify-between gap-3'>
+            <dt className='text-muted-foreground text-xs font-medium'>
+              {t('Average TTFT')}
+            </dt>
+            <dd className='text-foreground font-mono text-xl font-semibold tabular-nums'>
+              {formatLatency(props.group.avgTtftMs)}
+            </dd>
+          </div>
+        </dl>
+        <TtftTrend
+          values={props.group.ttftTrend}
+          label={props.ttftTrendLabel}
+        />
+        <dl className='border-border/60 grid grid-cols-2 border-t pt-3'>
           <MetricValue
-            icon={Timer}
             label={t('Average latency')}
             value={formatLatency(props.group.avgLatencyMs)}
           />
           <MetricValue
-            icon={Gauge}
             label={t('Throughput')}
             value={formatThroughput(props.group.avgTps)}
           />
-          <MetricValue
-            icon={HeartPulse}
-            label={t('Status')}
-            value={statusLabel(t, level)}
-            valueClassName={getSuccessRateTextClass(props.group.successRate)}
-          />
-        </div>
+        </dl>
       </CardContent>
     </Card>
   )
 }
 
-function MetricValue(props: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  value: string
-  valueClassName?: string
-}) {
-  const Icon = props.icon
+function MetricValue(props: { label: string; value: string }) {
   return (
-    <div className='border-border/50 bg-background/45 min-w-0 rounded-md border px-2.5 py-2'>
-      <div className='text-muted-foreground flex items-center gap-1 text-[10px] font-medium'>
-        <Icon className='size-3 shrink-0' aria-hidden='true' />
-        <span className='truncate'>{props.label}</span>
-      </div>
-      <div
-        className={cn(
-          'text-foreground mt-1 truncate font-mono text-sm font-semibold tabular-nums',
-          props.valueClassName
-        )}
-      >
+    <div className='min-w-0 first:pr-3 last:border-l last:pl-3'>
+      <dt className='text-muted-foreground truncate text-[11px]'>
+        {props.label}
+      </dt>
+      <dd className='text-foreground mt-0.5 truncate font-mono text-sm font-semibold tabular-nums'>
         {props.value}
-      </div>
+      </dd>
     </div>
   )
 }
@@ -267,20 +283,18 @@ function EmptyStatusState(props: { message: string }) {
 export function StatusDetection() {
   const { t } = useTranslation()
   const status = useStatusDetection()
-  const healthyCount = useMemo(
-    () =>
-      status.groups.filter((group) =>
-        ['excellent', 'good'].includes(getSuccessRateLevel(group.successRate))
-      ).length,
+  const [sort, setSort] = useState<StatusSort>('ttft')
+  const sortedGroups = useMemo(
+    () => sortStatusGroups(status.groups, sort),
+    [sort, status.groups]
+  )
+  const fastestGroup = useMemo(
+    () => sortStatusGroups(status.groups, 'ttft')[0],
     [status.groups]
   )
-  const attentionCount = useMemo(
-    () =>
-      status.groups.filter((group) =>
-        ['warning', 'critical'].includes(getSuccessRateLevel(group.successRate))
-      ).length,
-    [status.groups]
-  )
+  const healthyCount = status.groups.filter((group) =>
+    ['excellent', 'good'].includes(getSuccessRateLevel(group.successRate))
+  ).length
   const hasError = Boolean(status.error)
 
   return (
@@ -292,16 +306,11 @@ export function StatusDetection() {
         <div className='mx-auto w-full max-w-[1280px] space-y-5 px-3 pt-8 pb-14 sm:px-6 sm:pt-12 xl:px-8'>
           <div className='flex flex-wrap items-end justify-between gap-3'>
             <div className='min-w-0'>
-              <p className='text-muted-foreground mb-1 text-xs font-medium tracking-[0.14em] uppercase'>
-                {t('Service observability')}
-              </p>
               <h1 className='text-foreground text-2xl font-semibold tracking-tight sm:text-3xl'>
                 {t('Status detection')}
               </h1>
-              <p className='text-muted-foreground mt-1.5 max-w-2xl text-sm'>
-                {t(
-                  'Check recent availability and performance for each model group.'
-                )}
+              <p className='text-muted-foreground mt-1 text-sm'>
+                {t('Last 24 hours')}
               </p>
             </div>
             <Button
@@ -312,7 +321,8 @@ export function StatusDetection() {
               aria-label={t('Refresh')}
             >
               <RefreshCw
-                className={cn('size-3.5', status.isFetching && 'animate-spin')}
+                data-icon='inline-start'
+                className={cn(status.isFetching && 'animate-spin')}
                 aria-hidden='true'
               />
               {t('Refresh')}
@@ -342,32 +352,37 @@ export function StatusDetection() {
             <EmptyStatusState message={t('No status data is available yet.')} />
           ) : (
             <>
-              <div className='grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3'>
-                <OverviewMetric
-                  icon={Activity}
+              <dl className='border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border px-4 py-3'>
+                <SummaryMetric
+                  label={t('Fastest first token')}
+                  value={
+                    fastestGroup &&
+                    Number.isFinite(fastestGroup.avgTtftMs) &&
+                    fastestGroup.avgTtftMs > 0
+                      ? formatLatency(fastestGroup.avgTtftMs)
+                      : '—'
+                  }
+                  detail={
+                    fastestGroup &&
+                    Number.isFinite(fastestGroup.avgTtftMs) &&
+                    fastestGroup.avgTtftMs > 0
+                      ? fastestGroup.group
+                      : undefined
+                  }
+                />
+                <SummaryMetric
                   label={t('Groups monitored')}
                   value={String(status.groups.length)}
-                  hint={t('Active groups with recent traffic')}
                 />
-                <OverviewMetric
-                  icon={HeartPulse}
+                <SummaryMetric
                   label={t('Operational')}
                   value={String(healthyCount)}
-                  hint={t('Groups at 90% success or higher')}
                 />
-                <OverviewMetric
-                  icon={TriangleAlert}
-                  label={t('Groups needing attention')}
-                  value={String(attentionCount)}
-                  hint={t('Groups needing attention')}
-                />
-                <OverviewMetric
-                  icon={Gauge}
+                <SummaryMetric
                   label={t('Models checked')}
                   value={String(status.modelsWithData)}
-                  hint={t('Top models by recent traffic')}
                 />
-              </div>
+              </dl>
 
               {status.failedModelCount > 0 && (
                 <p className='text-muted-foreground text-xs'>
@@ -378,7 +393,7 @@ export function StatusDetection() {
               )}
 
               <section aria-labelledby='status-groups-heading'>
-                <div className='mb-3 flex items-center justify-between gap-3'>
+                <div className='mb-3 flex flex-wrap items-end justify-between gap-3'>
                   <div>
                     <h2
                       id='status-groups-heading'
@@ -387,19 +402,48 @@ export function StatusDetection() {
                       {t('Group status')}
                     </h2>
                     <p className='text-muted-foreground mt-0.5 text-xs'>
-                      {t('Last 24 hours')}
+                      {t('{{count}} groups', { count: status.groups.length })}
                     </p>
                   </div>
-                  <span className='text-muted-foreground text-xs tabular-nums'>
-                    {t('{{count}} groups', { count: status.groups.length })}
-                  </span>
+                  <Select
+                    value={sort}
+                    onValueChange={(value) =>
+                      value !== null && setSort(value as StatusSort)
+                    }
+                  >
+                    <SelectTrigger
+                      size='sm'
+                      className='w-full sm:w-48'
+                      aria-label={t('Sort groups')}
+                    >
+                      <SelectValue>
+                        {sort === 'ttft'
+                          ? t('Fastest first token')
+                          : sort === 'reliability'
+                            ? t('Highest success rate')
+                            : t('Group name')}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        <SelectItem value='ttft'>
+                          {t('Fastest first token')}
+                        </SelectItem>
+                        <SelectItem value='reliability'>
+                          {t('Highest success rate')}
+                        </SelectItem>
+                        <SelectItem value='name'>{t('Group name')}</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className='grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'>
-                  {status.groups.map((group) => (
+                  {sortedGroups.map((group) => (
                     <GroupStatusCard
                       key={group.group}
                       group={group}
-                      trendLabel={t('Success rate trend')}
+                      ttftTrendLabel={t('First-token trend')}
+                      successTrendLabel={t('Success rate trend')}
                     />
                   ))}
                 </div>

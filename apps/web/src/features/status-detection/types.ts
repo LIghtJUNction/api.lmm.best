@@ -28,12 +28,16 @@ export type ModelPerformanceSnapshot = {
 
 export type StatusGroup = {
   group: string
+  avgTtftMs: number
   avgLatencyMs: number
   avgTps: number
   successRate: number
-  trend: number[]
+  successTrend: number[]
+  ttftTrend: number[]
   modelCount: number
 }
+
+export type StatusSort = 'ttft' | 'reliability' | 'name'
 
 export type StatusDetectionMetrics = {
   entries: ModelPerformanceSnapshot[]

@@ -6465,6 +6465,12 @@ for (const [locale, translations] of Object.entries(
 
 const statusDetectionTranslations = {
   en: {
+    'Average TTFT': 'Average TTFT',
+    Degraded: 'Degraded',
+    'Fastest first token': 'Fastest first token',
+    'First-token trend': 'First-token trend',
+    'Highest success rate': 'Highest success rate',
+    'Sort groups': 'Sort groups',
     'Service observability': 'Service observability',
     'Status detection': 'Status detection',
     'Check recent availability and performance for each model group.':
@@ -6487,6 +6493,12 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} models reporting',
   },
   zh: {
+    'Average TTFT': '平均首字延迟',
+    Degraded: '服务降级',
+    'Fastest first token': '最快首字响应',
+    'First-token trend': '首字延迟趋势',
+    'Highest success rate': '成功率最高',
+    'Sort groups': '分组排序',
     'Service observability': '服务可观测性',
     'Status detection': '状态检测',
     'Check recent availability and performance for each model group.':
@@ -6509,6 +6521,12 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} 个模型有数据',
   },
   'zh-TW': {
+    'Average TTFT': '平均首字延遲',
+    Degraded: '服務降級',
+    'Fastest first token': '最快首字回應',
+    'First-token trend': '首字延遲趨勢',
+    'Highest success rate': '成功率最高',
+    'Sort groups': '分組排序',
     'Service observability': '服務可觀測性',
     'Status detection': '狀態檢測',
     'Check recent availability and performance for each model group.':
@@ -6531,6 +6549,12 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} 個模型有資料',
   },
   fr: {
+    'Average TTFT': 'TTFT moyen',
+    Degraded: 'Dégradé',
+    'Fastest first token': 'Premier jeton le plus rapide',
+    'First-token trend': 'Évolution du premier jeton',
+    'Highest success rate': 'Meilleur taux de réussite',
+    'Sort groups': 'Trier les groupes',
     'Service observability': 'Observabilité du service',
     'Status detection': 'Détection de l’état',
     'Check recent availability and performance for each model group.':
@@ -6554,6 +6578,12 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} modèles avec des données',
   },
   ja: {
+    'Average TTFT': '平均 TTFT',
+    Degraded: 'パフォーマンス低下',
+    'Fastest first token': '最速の最初のトークン',
+    'First-token trend': '最初のトークンの推移',
+    'Highest success rate': '成功率が高い順',
+    'Sort groups': 'グループを並べ替え',
     'Service observability': 'サービスの可観測性',
     'Status detection': 'ステータス検出',
     'Check recent availability and performance for each model group.':
@@ -6578,6 +6608,12 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} モデルが報告',
   },
   ru: {
+    'Average TTFT': 'Средний TTFT',
+    Degraded: 'Работа ухудшена',
+    'Fastest first token': 'Самый быстрый первый токен',
+    'First-token trend': 'Динамика первого токена',
+    'Highest success rate': 'По успешности',
+    'Sort groups': 'Сортировка групп',
     'Service observability': 'Наблюдаемость сервиса',
     'Status detection': 'Проверка состояния',
     'Check recent availability and performance for each model group.':
@@ -6600,6 +6636,12 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} моделей с данными',
   },
   vi: {
+    'Average TTFT': 'TTFT trung bình',
+    Degraded: 'Suy giảm',
+    'Fastest first token': 'Token đầu tiên nhanh nhất',
+    'First-token trend': 'Xu hướng token đầu tiên',
+    'Highest success rate': 'Tỷ lệ thành công cao nhất',
+    'Sort groups': 'Sắp xếp nhóm',
     'Service observability': 'Khả năng quan sát dịch vụ',
     'Status detection': 'Kiểm tra trạng thái',
     'Check recent availability and performance for each model group.':
