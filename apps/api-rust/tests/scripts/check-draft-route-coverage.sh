@@ -310,10 +310,14 @@ sub is_known_models_shared_alias {
         my %owners;
         $owners{"$first->{source_path}\t$first->{handler}"} = 1;
         $owners{"$source_path\t$handler"} = 1;
-        return $raw_path eq '/v1/models/:model'
+        my $matches = $raw_path eq '/v1/models/:model'
             && $first->{raw_path} eq '/v1/models/:model'
             && $owners{"$relay\tdelete_openai_model_not_implemented"}
             && $owners{"$delete_candidate\tdelete_model_route"};
+        return 0 if !$matches;
+        # Canonicalize the audited 501 owner to the relay declaration even when
+        # the test-only model-delete module sorts first on disk.
+        return $source_path eq $relay ? 2 : 1;
     }
     return 0;
 }
@@ -627,7 +631,7 @@ for my $file (@source_files) {
             }
             my $key = "$method\t$candidate_path";
             if (exists $candidates{$key}) {
-                next if is_known_models_shared_alias(
+                my $shared_alias = is_known_models_shared_alias(
                     $method,
                     $candidate_path,
                     $path,
@@ -635,6 +639,22 @@ for my $file (@source_files) {
                     $source_path,
                     $candidate_metadata{$key},
                 );
+                if ($shared_alias) {
+                    if ($method eq 'DELETE' && $candidate_path eq '/v1/models/:model') {
+                        if ($shared_alias == 2) {
+                            $handler =~ s/^\s+|\s+$//g;
+                            $candidates{$key} = $source_location;
+                            $candidate_metadata{$key} = {
+                                source_path => $source_path,
+                                handler => $handler,
+                                raw_path => $path,
+                            };
+                        }
+                        $not_implemented{$key} = 1;
+                        $placeholders{$key} = 1;
+                    }
+                    next;
+                }
                 $failed |= fail("$file:$line: duplicate normalized route $method $candidate_path (first at $candidates{$key})");
                 next;
             }
