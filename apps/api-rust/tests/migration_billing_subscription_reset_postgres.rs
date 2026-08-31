@@ -221,9 +221,13 @@ async fn voucher_race_should_not_commit_zero_reset(
         .execute(&harness.pool)
         .await?;
     sqlx::query(&format!(
-        "CREATE FUNCTION block_voucher_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock({advisory_key}); RETURN NEW; END $$; \
-         CREATE TRIGGER block_voucher_claim BEFORE UPDATE OF status ON subscription_reset_vouchers FOR EACH ROW WHEN (NEW.status='redeemed') EXECUTE FUNCTION block_voucher_claim()"
+        "CREATE FUNCTION block_voucher_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock({advisory_key}); RETURN NEW; END $$"
     ))
+    .execute(&harness.pool)
+    .await?;
+    sqlx::query(
+        "CREATE TRIGGER block_voucher_claim BEFORE UPDATE OF status ON subscription_reset_vouchers FOR EACH ROW WHEN (NEW.status='redeemed') EXECUTE FUNCTION block_voucher_claim()",
+    )
     .execute(&harness.pool)
     .await?;
 
@@ -288,7 +292,12 @@ async fn reset_execute_audit_failure_rolls_back_mutation() -> TestResult {
     let harness = PgHarness::new().await?;
     seed_active_subscription(&harness.pool, 7, 3, 11, 53).await?;
     sqlx::query(
-        "CREATE FUNCTION reject_reset_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.other::jsonb #>> '{op,action}' = 'subscription.reset.execute' THEN RAISE EXCEPTION 'forced reset audit failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_reset_audit BEFORE INSERT ON logs FOR EACH ROW EXECUTE FUNCTION reject_reset_audit()",
+        "CREATE FUNCTION reject_reset_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.other::jsonb #>> '{op,action}' = 'subscription.reset.execute' THEN RAISE EXCEPTION 'forced reset audit failure'; END IF; RETURN NEW; END $$",
+    )
+    .execute(&harness.pool)
+    .await?;
+    sqlx::query(
+        "CREATE TRIGGER reject_reset_audit BEFORE INSERT ON logs FOR EACH ROW EXECUTE FUNCTION reject_reset_audit()",
     )
     .execute(&harness.pool)
     .await?;

@@ -810,7 +810,7 @@ struct BatchResult {
     reset_subscriptions: i64,
     restored_quota: i64,
     vouchers_issued: i64,
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(default, skip_serializing_if = "is_zero")]
     voucher_expires_at: i64,
 }
 
@@ -1465,6 +1465,30 @@ mod tests {
             Err(ResetError::RequiresActive)
         ));
         assert_eq!(locked_voucher_reset_count(2).expect("locked rows"), 2);
+    }
+
+    #[test]
+    fn hard_reset_replay_defaults_the_omitted_voucher_expiry() -> Result<(), ResetError> {
+        let result_json = serde_json::to_string(&BatchResult {
+            operation_id: "hard-reset".to_owned(),
+            mode: "hard".to_owned(),
+            requested_targets: 1,
+            processed_targets: 1,
+            skipped_targets: 0,
+            reset_subscriptions: 1,
+            restored_quota: 10,
+            vouchers_issued: 0,
+            voucher_expires_at: 0,
+        })?;
+        assert!(!result_json.contains("voucher_expires_at"));
+        let operation = OperationRow {
+            preview_token: "preview".to_owned(),
+            actor_user_id: 1,
+            result_json,
+        };
+        let replay = operation_result(&operation, 1, "preview")?;
+        assert_eq!(replay.voucher_expires_at, 0);
+        Ok(())
     }
 
     #[test]
