@@ -17,7 +17,9 @@ use lmm_api_rs::{
         AuthBundle, AuthError, AuthErrorKind, DashboardAuth, DashboardUser, LoginOutcome,
         LoginRequest, LogoutRequest, LogoutResult, RequestMetadata, TwoFactorLoginRequest,
     },
-    migration_routes::billing_subscriptions::{BillingSubscriptionsState, router},
+    migration_routes::billing_subscriptions::{
+        BillingSubscriptionsState, router, spawn_maintenance,
+    },
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::{Value, json};
@@ -400,6 +402,94 @@ async fn reset_execute_rejects_a_deleted_target_user_without_consuming_preview()
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
+async fn admin_delete_waits_for_user_before_locking_subscription() -> TestResult {
+    let harness = PgHarness::new().await?;
+    seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
+    sqlx::query("UPDATE users SET \"group\"='pro' WHERE id=8")
+        .execute(&harness.pool)
+        .await?;
+    sqlx::query("UPDATE user_subscriptions SET upgrade_group='pro',prev_user_group='default',downgrade_group='default' WHERE id=12")
+        .execute(&harness.pool)
+        .await?;
+    let app = harness.app();
+
+    let mut payment = harness.pool.begin().await?;
+    let payment_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *payment)
+        .await?;
+    sqlx::query("SELECT id FROM users WHERE id=8 FOR UPDATE")
+        .execute(&mut *payment)
+        .await?;
+    let deletion = tokio::spawn(request(
+        app,
+        Method::DELETE,
+        "/api/subscription/admin/user_subscriptions/12",
+        "root",
+        None,
+    ));
+    wait_until_blocked_by(&harness.pool, payment_pid).await?;
+    assert_subscription_row_unlocked(&harness.pool, 12).await?;
+    payment.rollback().await?;
+
+    let body = response_json(deletion.await??).await?;
+    assert_eq!(body["success"], true, "delete failed: {body}");
+    let state: (i64, String) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM user_subscriptions WHERE id=12), (SELECT \"group\" FROM users WHERE id=8)",
+    )
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(state, (0, "default".to_owned()));
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
+async fn maintenance_expiration_waits_for_user_before_updating_subscription() -> TestResult {
+    let harness = PgHarness::new().await?;
+    seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
+    let current = database_timestamp(&harness.pool).await?;
+    sqlx::query("UPDATE users SET \"group\"='pro' WHERE id=8")
+        .execute(&harness.pool)
+        .await?;
+    sqlx::query("UPDATE user_subscriptions SET end_time=$1-1,upgrade_group='pro',prev_user_group='default',downgrade_group='default' WHERE id=12")
+        .bind(current)
+        .execute(&harness.pool)
+        .await?;
+
+    let mut payment = harness.pool.begin().await?;
+    let payment_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *payment)
+        .await?;
+    sqlx::query("SELECT id FROM users WHERE id=8 FOR UPDATE")
+        .execute(&mut *payment)
+        .await?;
+    let maintenance = spawn_maintenance(harness.pool.clone(), None)
+        .ok_or_else(|| std::io::Error::other("subscription maintenance is disabled"))?;
+    wait_until_blocked_by(&harness.pool, payment_pid).await?;
+    assert_subscription_row_unlocked(&harness.pool, 12).await?;
+    payment.rollback().await?;
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let state: (String, String) = sqlx::query_as(
+                "SELECT (SELECT status FROM user_subscriptions WHERE id=12), (SELECT \"group\" FROM users WHERE id=8)",
+            )
+            .fetch_one(&harness.pool)
+            .await?;
+            if state == ("expired".to_owned(), "default".to_owned()) {
+                return Ok::<(), sqlx::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    maintenance.abort();
+    let _ = maintenance.await;
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
 async fn reset_execute_rechecks_subscriptions_after_waiting_for_user_lock() -> TestResult {
     let harness = PgHarness::new().await?;
     seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
@@ -615,6 +705,18 @@ async fn database_timestamp(pool: &PgPool) -> TestResult<i64> {
             .fetch_one(pool)
             .await?,
     )
+}
+
+async fn assert_subscription_row_unlocked(pool: &PgPool, id: i64) -> TestResult {
+    let mut probe = pool.begin().await?;
+    let locked_id: i64 =
+        sqlx::query_scalar("SELECT id FROM user_subscriptions WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(id)
+            .fetch_one(&mut *probe)
+            .await?;
+    probe.rollback().await?;
+    assert_eq!(locked_id, id);
+    Ok(())
 }
 
 async fn wait_until_blocked_by(pool: &PgPool, blocker_pid: i32) -> TestResult {

@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -12,7 +13,46 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func TestSubscriptionMutationLocksUserBeforeSubscriptionPostgres(t *testing.T) {
+func TestAdminInvalidateLocksUserBeforeSubscriptionPostgres(t *testing.T) {
+	db := setupSubscriptionLockOrderPostgres(t, time.Now().Add(time.Hour).Unix())
+
+	assertSubscriptionMutationWaitsForUser(t, db, func() error {
+		_, err := AdminInvalidateUserSubscription(9101)
+		return err
+	})
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, 9101).Error)
+	require.Equal(t, "cancelled", subscription.Status)
+	var group string
+	require.NoError(t, db.Model(&User{}).Where("id = ?", 9001).Select("group").Scan(&group).Error)
+	require.Equal(t, "default", group)
+}
+
+func TestExpireDueSubscriptionsLocksUserBeforeSubscriptionPostgres(t *testing.T) {
+	db := setupSubscriptionLockOrderPostgres(t, time.Now().Add(-time.Hour).Unix())
+
+	assertSubscriptionMutationWaitsForUser(t, db, func() error {
+		count, err := ExpireDueSubscriptionsContext(context.Background(), 200)
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("expired %d subscriptions, want 1", count)
+		}
+		return nil
+	})
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, 9101).Error)
+	require.Equal(t, "expired", subscription.Status)
+	var group string
+	require.NoError(t, db.Model(&User{}).Where("id = ?", 9001).Select("group").Scan(&group).Error)
+	require.Equal(t, "default", group)
+}
+
+func setupSubscriptionLockOrderPostgres(t *testing.T, endTime int64) *gorm.DB {
+	t.Helper()
 	if strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN")) == "" {
 		t.Skip("set TEST_POSTGRES_DSN to run PostgreSQL subscription lock-order tests")
 	}
@@ -26,16 +66,23 @@ func TestSubscriptionMutationLocksUserBeforeSubscriptionPostgres(t *testing.T) {
 	usePostgresDatabaseType(t)
 	t.Cleanup(func() { DB, LOG_DB = previousDB, previousLogDB })
 
-	require.NoError(t, db.Create(&User{Id: 9001, Username: "lock-order", Group: "default"}).Error)
+	require.NoError(t, db.Create(&User{Id: 9001, Username: "lock-order", Group: "pro"}).Error)
 	require.NoError(t, db.Create(&UserSubscription{
-		Id:          9101,
-		UserId:      9001,
-		PlanId:      1,
-		Status:      "active",
-		AmountTotal: 100,
-		EndTime:     time.Now().Add(time.Hour).Unix(),
+		Id:             9101,
+		UserId:         9001,
+		PlanId:         1,
+		Status:         "active",
+		AmountTotal:    100,
+		EndTime:        endTime,
+		UpgradeGroup:   "pro",
+		PrevUserGroup:  "default",
+		DowngradeGroup: "default",
 	}).Error)
+	return db
+}
 
+func assertSubscriptionMutationWaitsForUser(t *testing.T, db *gorm.DB, mutate func() error) {
+	t.Helper()
 	blocker := db.Begin()
 	require.NoError(t, blocker.Error)
 	blockerReleased := false
@@ -49,13 +96,8 @@ func TestSubscriptionMutationLocksUserBeforeSubscriptionPostgres(t *testing.T) {
 	require.NoError(t, blocker.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Select("id").Where("id = ?", 9001).First(&User{}).Error)
 
-	mutation := make(chan error, 1)
-	go func() {
-		mutation <- db.Transaction(func(tx *gorm.DB) error {
-			_, _, err := lockUserSubscriptionForMutationTx(tx, 9101, 9001)
-			return err
-		})
-	}()
+	result := make(chan error, 1)
+	go func() { result <- mutate() }()
 	waitForPostgresBlocker(t, db, blockerPID)
 
 	probe := db.Begin()
@@ -72,7 +114,7 @@ func TestSubscriptionMutationLocksUserBeforeSubscriptionPostgres(t *testing.T) {
 	require.NoError(t, blocker.Rollback().Error)
 	blockerReleased = true
 	select {
-	case err := <-mutation:
+	case err := <-result:
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("subscription mutation did not resume after releasing the user lock")

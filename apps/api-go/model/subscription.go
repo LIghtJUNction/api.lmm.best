@@ -656,6 +656,9 @@ func lockUserSubscriptionForMutationTx(tx *gorm.DB, subscriptionId, expectedUser
 	if tx == nil || subscriptionId <= 0 || expectedUserId < 0 {
 		return nil, nil, errors.New("invalid subscription mutation lock args")
 	}
+	// Read the owner only to establish the global user -> subscription lock
+	// order. The final locked query revalidates that the subscription still
+	// belongs to this user.
 	var owner struct {
 		UserId int
 	}
@@ -1644,6 +1647,10 @@ func ExpireDueSubscriptionsContext(ctx context.Context, limit int) (int, error) 
 	for userId := range userIds {
 		cacheGroup := ""
 		err := db.Transaction(func(tx *gorm.DB) error {
+			currentGroup, err := getUserGroupByIdTx(tx, userId)
+			if err != nil {
+				return err
+			}
 			res := tx.Model(&UserSubscription{}).
 				Where("user_id = ? AND status = ? AND end_time > 0 AND end_time <= ?", userId, "active", now).
 				Updates(map[string]interface{}{
@@ -1676,10 +1683,6 @@ func ExpireDueSubscriptionsContext(ctx context.Context, limit int) (int, error) 
 				Find(&lastExpired)
 			if expiredQuery.Error != nil || expiredQuery.RowsAffected == 0 {
 				return nil
-			}
-			currentGroup, err := getUserGroupByIdTx(tx, userId)
-			if err != nil {
-				return err
 			}
 			// An explicit downgrade group takes precedence; otherwise revert to the
 			// group held before purchase (legacy behavior, only when the subscription
