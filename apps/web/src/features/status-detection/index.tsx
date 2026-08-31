@@ -21,6 +21,7 @@ Copyright (C) 2026 LIghtJUNction
 */
 import {
   AlertCircle,
+  ArrowDownWideNarrow,
   CircleCheck,
   CircleHelp,
   CircleX,
@@ -91,18 +92,23 @@ function SummaryMetric(props: {
   label: string
   value: string
   detail?: string
+  className?: string
 }) {
   return (
-    <div className='flex min-w-0 items-baseline gap-2'>
-      <dt className='text-muted-foreground shrink-0 text-xs'>{props.label}</dt>
-      <dd className='text-foreground min-w-0 truncate font-mono text-sm font-semibold tabular-nums'>
-        {props.value}
-      </dd>
-      {props.detail && (
-        <span className='text-muted-foreground min-w-0 truncate text-xs'>
-          {props.detail}
+    <div className={cn('min-w-0 px-4 py-3', props.className)}>
+      <dt className='text-muted-foreground text-sm sm:text-xs'>
+        {props.label}
+      </dt>
+      <dd className='mt-1 flex min-w-0 items-baseline gap-2'>
+        <span className='text-foreground shrink-0 font-mono text-base font-semibold tabular-nums'>
+          {props.value}
         </span>
-      )}
+        {props.detail && (
+          <span className='text-muted-foreground min-w-0 truncate text-sm sm:text-xs'>
+            {props.detail}
+          </span>
+        )}
+      </dd>
     </div>
   )
 }
@@ -121,21 +127,23 @@ function TtftTrend(props: { values: number[]; label: string }) {
 
   const max = Math.max(...values)
   return (
-    <div className='flex flex-col gap-1.5'>
-      <div className='text-muted-foreground flex items-center justify-between gap-3 text-[11px]'>
+    <div className='flex flex-col gap-2'>
+      <div className='text-muted-foreground flex items-center justify-between gap-3 text-sm sm:text-xs'>
         <span>{props.label}</span>
-        <span>{formatLatency(values.at(-1) ?? Number.NaN)}</span>
+        <span className='font-mono tabular-nums'>
+          {formatLatency(values.at(-1) ?? Number.NaN)}
+        </span>
       </div>
       <div
-        className='border-border/50 bg-muted/10 flex h-14 items-end gap-0.5 rounded-md border px-2 py-2'
+        className='bg-muted/45 flex h-12 items-end gap-1 rounded-md px-2 py-2 sm:h-14'
         role='img'
-        aria-label={props.label}
+        aria-label={`${props.label}: ${values.map(formatLatency).join(', ')}`}
       >
         {values.map((value, index) => (
           <span
             key={`${index}-${value}`}
             title={formatLatency(value)}
-            className='bg-primary/55 hover:bg-primary min-w-0 flex-1 rounded-[2px] transition-colors'
+            className='bg-primary/45 hover:bg-primary/70 min-w-0 flex-1 rounded-[2px] transition-colors'
             style={{ height: `${Math.max(12, (value / max) * 100)}%` }}
             aria-hidden='true'
           />
@@ -153,7 +161,7 @@ function SuccessPips(props: { values: number[]; label: string }) {
     <div
       className='flex items-center gap-1'
       role='img'
-      aria-label={props.label}
+      aria-label={`${props.label}: ${values.map(formatUptimePct).join(', ')}`}
     >
       {values.map((value, index) => (
         <span
@@ -167,6 +175,17 @@ function SuccessPips(props: { values: number[]; label: string }) {
   )
 }
 
+function statusSurfaceClass(level: SuccessRateLevel) {
+  switch (level) {
+    case 'warning':
+      return 'border-warning/35 bg-warning/10'
+    case 'critical':
+      return 'border-destructive/35 bg-destructive/10'
+    default:
+      return 'border-border/70 bg-muted/40'
+  }
+}
+
 function GroupStatusCard(props: {
   group: StatusGroup
   ttftTrendLabel: string
@@ -177,29 +196,44 @@ function GroupStatusCard(props: {
   const Icon = statusIcon(level)
 
   return (
-    <Card className='border-border/70 bg-card min-w-0 shadow-none' size='sm'>
-      <CardHeader className='border-border/60 gap-2 border-b px-4 py-3'>
-        <div className='flex min-w-0 items-start justify-between gap-3'>
-          <CardTitle className='min-w-0 truncate text-base font-semibold tracking-tight'>
+    <Card
+      data-card-hover='false'
+      className='border-border/70 bg-card min-w-0 rounded-xl shadow-none'
+      size='sm'
+    >
+      <CardHeader className='border-border/60 gap-3 border-b px-4 py-3'>
+        <div className='min-w-0'>
+          <CardTitle
+            className='line-clamp-2 min-w-0 text-base leading-5 font-semibold tracking-normal break-words'
+            title={props.group.group}
+          >
             {props.group.group}
           </CardTitle>
+          <span className='text-muted-foreground mt-1 block text-sm sm:text-xs'>
+            {t('{{count}} models reporting', { count: props.group.modelCount })}
+          </span>
+        </div>
+        <div className='flex min-w-0 items-center justify-between gap-3'>
           <div
             className={cn(
-              'flex shrink-0 items-center gap-1.5 text-xs font-semibold',
-              getSuccessRateTextClass(props.group.successRate)
+              'flex min-w-0 items-center gap-1.5 rounded-full border px-2 py-1 text-sm sm:text-xs',
+              statusSurfaceClass(level)
             )}
           >
-            <Icon className='size-3.5' aria-hidden='true' />
-            <span>{statusLabel(t, level)}</span>
-            <span className='font-mono tabular-nums'>
+            <Icon
+              className={cn(
+                'size-3.5 shrink-0',
+                getSuccessRateTextClass(props.group.successRate)
+              )}
+              aria-hidden='true'
+            />
+            <span className='text-foreground truncate font-medium'>
+              {statusLabel(t, level)}
+            </span>
+            <span className='text-muted-foreground shrink-0 font-mono tabular-nums'>
               {formatUptimePct(props.group.successRate)}
             </span>
           </div>
-        </div>
-        <div className='flex items-center justify-between gap-3'>
-          <span className='text-muted-foreground text-[11px]'>
-            {t('{{count}} models reporting', { count: props.group.modelCount })}
-          </span>
           <SuccessPips
             values={props.group.successTrend}
             label={props.successTrendLabel}
@@ -209,10 +243,10 @@ function GroupStatusCard(props: {
       <CardContent className='flex flex-col gap-3 px-4 py-3'>
         <dl>
           <div className='flex items-baseline justify-between gap-3'>
-            <dt className='text-muted-foreground text-xs font-medium'>
+            <dt className='text-muted-foreground text-sm font-medium sm:text-xs'>
               {t('Average TTFT')}
             </dt>
-            <dd className='text-foreground font-mono text-xl font-semibold tabular-nums'>
+            <dd className='text-foreground font-mono text-2xl font-semibold tabular-nums'>
               {formatLatency(props.group.avgTtftMs)}
             </dd>
           </div>
@@ -239,10 +273,10 @@ function GroupStatusCard(props: {
 function MetricValue(props: { label: string; value: string }) {
   return (
     <div className='min-w-0 first:pr-3 last:border-l last:pl-3'>
-      <dt className='text-muted-foreground truncate text-[11px]'>
+      <dt className='text-muted-foreground truncate text-sm sm:text-xs'>
         {props.label}
       </dt>
-      <dd className='text-foreground mt-0.5 truncate font-mono text-sm font-semibold tabular-nums'>
+      <dd className='text-foreground mt-1 truncate font-mono text-sm font-semibold tabular-nums'>
         {props.value}
       </dd>
     </div>
@@ -251,15 +285,11 @@ function MetricValue(props: { label: string; value: string }) {
 
 function StatusDetectionSkeleton() {
   return (
-    <div className='space-y-4'>
-      <div className='grid grid-cols-2 gap-2 sm:grid-cols-4'>
-        {Array.from({ length: 4 }).map((_, index) => (
-          <Skeleton key={index} className='h-24 rounded-xl' />
-        ))}
-      </div>
+    <div className='space-y-5'>
+      <Skeleton className='h-[116px] rounded-lg sm:h-[74px]' />
       <div className='grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'>
         {Array.from({ length: 6 }).map((_, index) => (
-          <Skeleton key={index} className='h-52 rounded-xl' />
+          <Skeleton key={index} className='h-64 rounded-xl' />
         ))}
       </div>
     </div>
@@ -268,7 +298,7 @@ function StatusDetectionSkeleton() {
 
 function EmptyStatusState(props: { message: string }) {
   return (
-    <div className='border-border/70 bg-card rounded-xl border border-dashed px-6 py-14 text-center'>
+    <div className='border-border/70 bg-card rounded-lg border border-dashed px-6 py-14 text-center'>
       <AlertCircle
         className='text-muted-foreground/60 mx-auto size-8'
         aria-hidden='true'
@@ -302,11 +332,11 @@ export function StatusDetection() {
       showMainContainer={false}
       headerProps={{ className: 'forge-public-header' }}
     >
-      <main className='min-h-svh pt-16'>
-        <div className='mx-auto w-full max-w-[1280px] space-y-5 px-3 pt-8 pb-14 sm:px-6 sm:pt-12 xl:px-8'>
+      <main className='min-h-svh'>
+        <div className='mx-auto w-full max-w-[1280px] space-y-6 px-3 pt-4 pb-14 sm:px-6 sm:pt-8 xl:px-8'>
           <div className='flex flex-wrap items-end justify-between gap-3'>
             <div className='min-w-0'>
-              <h1 className='text-foreground text-2xl font-semibold tracking-tight sm:text-3xl'>
+              <h1 className='text-foreground text-2xl font-semibold tracking-normal'>
                 {t('Status detection')}
               </h1>
               <p className='text-muted-foreground mt-1 text-sm'>
@@ -316,13 +346,16 @@ export function StatusDetection() {
             <Button
               variant='outline'
               size='sm'
+              className='h-11 sm:h-8'
               onClick={() => void status.refresh()}
               disabled={status.isFetching}
               aria-label={t('Refresh')}
             >
               <RefreshCw
                 data-icon='inline-start'
-                className={cn(status.isFetching && 'animate-spin')}
+                className={cn(
+                  status.isFetching && 'animate-spin motion-reduce:animate-none'
+                )}
                 aria-hidden='true'
               />
               {t('Refresh')}
@@ -352,8 +385,9 @@ export function StatusDetection() {
             <EmptyStatusState message={t('No status data is available yet.')} />
           ) : (
             <>
-              <dl className='border-border/70 bg-card flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border px-4 py-3'>
+              <dl className='border-border/70 bg-card grid grid-cols-2 overflow-hidden rounded-lg border sm:grid-cols-4'>
                 <SummaryMetric
+                  className='border-border/60 border-r border-b sm:border-b-0'
                   label={t('Fastest first token')}
                   value={
                     fastestGroup &&
@@ -371,10 +405,12 @@ export function StatusDetection() {
                   }
                 />
                 <SummaryMetric
+                  className='border-border/60 border-b sm:border-r sm:border-b-0'
                   label={t('Groups monitored')}
                   value={String(status.groups.length)}
                 />
                 <SummaryMetric
+                  className='border-border/60 border-r'
                   label={t('Operational')}
                   value={String(healthyCount)}
                 />
@@ -385,23 +421,32 @@ export function StatusDetection() {
               </dl>
 
               {status.failedModelCount > 0 && (
-                <p className='text-muted-foreground text-xs'>
-                  {t('{{count}} model checks could not be completed.', {
-                    count: status.failedModelCount,
-                  })}
-                </p>
+                <div
+                  className='bg-muted/40 text-muted-foreground flex items-center gap-2 rounded-md px-3 py-2 text-sm sm:text-xs'
+                  role='status'
+                >
+                  <TriangleAlert
+                    className='size-4 shrink-0'
+                    aria-hidden='true'
+                  />
+                  <p>
+                    {t('{{count}} model checks could not be completed.', {
+                      count: status.failedModelCount,
+                    })}
+                  </p>
+                </div>
               )}
 
               <section aria-labelledby='status-groups-heading'>
-                <div className='mb-3 flex flex-wrap items-end justify-between gap-3'>
-                  <div>
+                <div className='mb-3 flex flex-wrap items-center justify-between gap-3'>
+                  <div className='flex items-baseline gap-2'>
                     <h2
                       id='status-groups-heading'
-                      className='text-foreground text-base font-semibold tracking-tight'
+                      className='text-foreground text-base font-semibold tracking-normal'
                     >
                       {t('Group status')}
                     </h2>
-                    <p className='text-muted-foreground mt-0.5 text-xs'>
+                    <p className='text-muted-foreground text-sm sm:text-xs'>
                       {t('{{count}} groups', { count: status.groups.length })}
                     </p>
                   </div>
@@ -413,15 +458,23 @@ export function StatusDetection() {
                   >
                     <SelectTrigger
                       size='sm'
-                      className='w-full sm:w-48'
+                      className='h-11 w-full sm:h-8 sm:w-52'
                       aria-label={t('Sort groups')}
                     >
                       <SelectValue>
-                        {sort === 'ttft'
-                          ? t('Fastest first token')
-                          : sort === 'reliability'
-                            ? t('Highest success rate')
-                            : t('Group name')}
+                        <span className='flex min-w-0 items-center gap-2'>
+                          <ArrowDownWideNarrow
+                            className='text-muted-foreground size-4 shrink-0'
+                            aria-hidden='true'
+                          />
+                          <span className='truncate'>
+                            {sort === 'ttft'
+                              ? t('Fastest first token')
+                              : sort === 'reliability'
+                                ? t('Highest success rate')
+                                : t('Group name')}
+                          </span>
+                        </span>
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent alignItemWithTrigger={false}>
@@ -437,7 +490,7 @@ export function StatusDetection() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className='grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'>
+                <div className='grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 xl:grid-cols-3'>
                   {sortedGroups.map((group) => (
                     <GroupStatusCard
                       key={group.group}
