@@ -19,11 +19,24 @@ For commercial licensing, please contact support@quantumnous.com
 /*
 Copyright (C) 2026 LIghtJUNction
 */
-import { getPerfMetrics } from '@/features/performance-metrics/api'
+import {
+  getPerfMetrics,
+  getPerfMetricsSummary,
+} from '@/features/performance-metrics/api'
 
 import type { ModelPerformanceSnapshot, StatusDetectionMetrics } from './types'
 
 const MAX_CONCURRENCY = 6
+
+export async function getStatusDetectionSummary(hours = 24) {
+  const response = await getPerfMetricsSummary(hours)
+  if (!response.success) {
+    throw new Error(
+      response.message?.trim() || 'Unable to load performance summary'
+    )
+  }
+  return response
+}
 
 /** Fetches model details with a small worker pool so large catalogs do not
  * open one connection per model at once. A single unavailable model should
@@ -43,7 +56,11 @@ export async function getStatusDetectionMetrics(
       if (!modelName) continue
       try {
         const response = await getPerfMetrics(modelName, hours)
-        const groups = response.success ? response.data.groups : []
+        if (!response.success) {
+          failedModels.push(modelName)
+          continue
+        }
+        const groups = response.data.groups
         if (groups.length > 0) {
           entries.push({ modelName, groups })
         }
@@ -55,6 +72,10 @@ export async function getStatusDetectionMetrics(
 
   const workers = Math.min(MAX_CONCURRENCY, modelNames.length)
   await Promise.all(Array.from({ length: workers }, () => worker()))
+
+  if (modelNames.length > 0 && failedModels.length === modelNames.length) {
+    throw new Error('Unable to load performance details')
+  }
 
   return { entries, failedModels }
 }

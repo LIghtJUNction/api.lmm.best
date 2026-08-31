@@ -6500,7 +6500,8 @@ const statusDetectionTranslations = {
     'Groups needing attention': '需要关注的分组',
     'Models checked': '已检测模型',
     'Top models by recent traffic': '按近期流量排序的模型',
-    '{{count}} model checks could not be completed.': '有 {{count}} 个模型检测未完成。',
+    '{{count}} model checks could not be completed.':
+      '有 {{count}} 个模型检测未完成。',
     'Group status': '分组状态',
     'Last 24 hours': '最近 24 小时',
     '{{count}} groups': '{{count}} 个分组',
@@ -6521,7 +6522,8 @@ const statusDetectionTranslations = {
     'Groups needing attention': '需要關注的分組',
     'Models checked': '已檢測模型',
     'Top models by recent traffic': '依近期流量排序的模型',
-    '{{count}} model checks could not be completed.': '有 {{count}} 個模型檢測未完成。',
+    '{{count}} model checks could not be completed.':
+      '有 {{count}} 個模型檢測未完成。',
     'Group status': '分組狀態',
     'Last 24 hours': '最近 24 小時',
     '{{count}} groups': '{{count}} 個群組',
@@ -6535,14 +6537,16 @@ const statusDetectionTranslations = {
       'Consultez la disponibilité et les performances récentes de chaque groupe de modèles.',
     'Unable to load status data': 'Impossible de charger les données d’état',
     'Please try again in a moment.': 'Réessayez dans un instant.',
-    'No status data is available yet.': 'Aucune donnée d’état disponible pour le moment.',
+    'No status data is available yet.':
+      'Aucune donnée d’état disponible pour le moment.',
     'Groups monitored': 'Groupes surveillés',
     'Active groups with recent traffic': 'Groupes actifs avec du trafic récent',
     'Groups at 90% success or higher': 'Groupes avec au moins 90 % de réussite',
     'Groups needing attention': 'Groupes nécessitant une attention',
     'Models checked': 'Modèles vérifiés',
     'Top models by recent traffic': 'Modèles selon le trafic récent',
-    '{{count}} model checks could not be completed.': '{{count}} vérifications de modèles n’ont pas abouti.',
+    '{{count}} model checks could not be completed.':
+      '{{count}} vérifications de modèles n’ont pas abouti.',
     'Group status': 'État des groupes',
     'Last 24 hours': 'Dernières 24 heures',
     '{{count}} groups': '{{count}} groupes',
@@ -6556,14 +6560,17 @@ const statusDetectionTranslations = {
       'モデルグループごとの最近の可用性とパフォーマンスを確認します。',
     'Unable to load status data': 'ステータスデータを読み込めません',
     'Please try again in a moment.': 'しばらくしてからもう一度お試しください。',
-    'No status data is available yet.': '利用可能なステータスデータはまだありません。',
+    'No status data is available yet.':
+      '利用可能なステータスデータはまだありません。',
     'Groups monitored': '監視グループ',
-    'Active groups with recent traffic': '最近トラフィックがあるアクティブグループ',
+    'Active groups with recent traffic':
+      '最近トラフィックがあるアクティブグループ',
     'Groups at 90% success or higher': '成功率 90% 以上のグループ',
     'Groups needing attention': '要注意のグループ',
     'Models checked': '確認済みモデル',
     'Top models by recent traffic': '最近のトラフィック上位モデル',
-    '{{count}} model checks could not be completed.': '{{count}} 件のモデル確認を完了できませんでした。',
+    '{{count}} model checks could not be completed.':
+      '{{count}} 件のモデル確認を完了できませんでした。',
     'Group status': 'グループステータス',
     'Last 24 hours': '過去 24 時間',
     '{{count}} groups': '{{count}} グループ',
@@ -6584,7 +6591,8 @@ const statusDetectionTranslations = {
     'Groups needing attention': 'Группы, требующие внимания',
     'Models checked': 'Проверено моделей',
     'Top models by recent traffic': 'Модели с наибольшим недавним трафиком',
-    '{{count}} model checks could not be completed.': 'Не удалось проверить {{count}} моделей.',
+    '{{count}} model checks could not be completed.':
+      'Не удалось проверить {{count}} моделей.',
     'Group status': 'Состояние групп',
     'Last 24 hours': 'Последние 24 часа',
     '{{count}} groups': '{{count}} групп',
@@ -6600,12 +6608,14 @@ const statusDetectionTranslations = {
     'Please try again in a moment.': 'Vui lòng thử lại sau ít phút.',
     'No status data is available yet.': 'Chưa có dữ liệu trạng thái.',
     'Groups monitored': 'Nhóm được giám sát',
-    'Active groups with recent traffic': 'Nhóm đang hoạt động có lưu lượng gần đây',
+    'Active groups with recent traffic':
+      'Nhóm đang hoạt động có lưu lượng gần đây',
     'Groups at 90% success or higher': 'Nhóm có tỷ lệ thành công từ 90%',
     'Groups needing attention': 'Nhóm cần được chú ý',
     'Models checked': 'Mô hình đã kiểm tra',
     'Top models by recent traffic': 'Mô hình theo lưu lượng gần đây',
-    '{{count}} model checks could not be completed.': 'Không thể hoàn tất kiểm tra {{count}} mô hình.',
+    '{{count}} model checks could not be completed.':
+      'Không thể hoàn tất kiểm tra {{count}} mô hình.',
     'Group status': 'Trạng thái nhóm',
     'Last 24 hours': '24 giờ qua',
     '{{count}} groups': '{{count}} nhóm',
@@ -6613,7 +6623,9 @@ const statusDetectionTranslations = {
     '{{count}} models reporting': '{{count}} mô hình có dữ liệu',
   },
 }
-for (const [locale, translations] of Object.entries(statusDetectionTranslations)) {
+for (const [locale, translations] of Object.entries(
+  statusDetectionTranslations
+)) {
   Object.assign(newKeys[locale], translations)
 }
 

@@ -338,7 +338,7 @@ export function StatusDetection() {
 
           {status.isLoading ? (
             <StatusDetectionSkeleton />
-          ) : status.groups.length === 0 ? (
+          ) : hasError ? null : status.groups.length === 0 ? (
             <EmptyStatusState message={t('No status data is available yet.')} />
           ) : (
             <>
