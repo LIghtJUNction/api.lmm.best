@@ -374,7 +374,8 @@ func awaitH2ServerResult(t *testing.T, resultCh <-chan h2ServerResult) h2ServerR
 // been fully written, and then resets the stream with REFUSED_STREAM (the
 // retry-safe reset some proxy/CDN-fronted upstreams send under load or during
 // graceful shutdown, see RFC 9113 section 8.7). When expectRetry is true it
-// serves the retried stream a 200 response; otherwise it stops after the reset.
+// serves the retried stream a 200 response; otherwise it waits for the release
+// signal after sending the reset before closing the connection and returning.
 func runResetOnFirstStreamServer(
 	ln net.Listener,
 	expectRetry bool,
