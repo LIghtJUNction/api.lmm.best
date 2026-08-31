@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -807,8 +808,9 @@ func verifySubscriptionResetUsersTx(tx *gorm.DB, targets []SubscriptionResetPrev
 	for userId := range userIds {
 		ids = append(ids, userId)
 	}
+	sort.Ints(ids)
 	var lockedIds []int
-	if err := lockForUpdate(tx).Model(&User{}).Where("id IN ?", ids).Pluck("id", &lockedIds).Error; err != nil {
+	if err := lockForUpdate(tx).Model(&User{}).Where("id IN ?", ids).Order("id").Pluck("id", &lockedIds).Error; err != nil {
 		return err
 	}
 	if len(lockedIds) != len(ids) {
