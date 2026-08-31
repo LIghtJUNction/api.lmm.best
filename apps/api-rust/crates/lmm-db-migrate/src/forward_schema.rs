@@ -1,7 +1,7 @@
 //! Forward-only schema checks for mounted Rust business routes.
 //!
-//! Contract 1 intentionally remains the frozen 38-table SQLite baseline.  The Go-owned bounty
-//! tables are an expand step and become required only once a release advances to contract 2.
+//! Contract 1 remains the frozen 34-table SQLite baseline. The Go-owned bounty tables are an
+//! expand step and become required only once a release advances to contract 2.
 
 use postgres::Transaction;
 
