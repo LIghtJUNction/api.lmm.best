@@ -72,12 +72,14 @@ await i18n.use(initReactI18next).init({
 
 const description =
   'A complete bounty description that must remain readable instead of being clamped after three lines.'
+const ownerUsername = `maintainer${'x'.repeat(96)}`
+const title = `Fix${'x'.repeat(128)}`
 const project = {
   id: 42,
   owner_user_id: 21,
-  owner_username: 'maintainer-with-a-long-name',
+  owner_username: ownerUsername,
   repository_url: 'https://github.com/example/a-very-long-repository-name',
-  title: 'Fix first-token latency reporting across streaming providers',
+  title,
   description,
   rules: 'Submit a focused fix with tests.',
   reward_quota: 500_000,
@@ -174,11 +176,26 @@ describe('open-source bounty layout', () => {
       assert.match(tab.className, /(?:^|\s)whitespace-normal(?:\s|$)/)
     }
 
+    const titleElement = [
+      ...container.querySelectorAll<HTMLElement>('[data-slot="card-title"]'),
+    ].find((element) => element.textContent === title)
+    assert.ok(titleElement)
+    assert.match(titleElement.className, /\[overflow-wrap:anywhere\]/)
+
+    const ownerElement = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="card-description"]'
+      ),
+    ].find((element) => element.textContent?.startsWith(ownerUsername))
+    assert.ok(ownerElement)
+    assert.match(ownerElement.className, /\[overflow-wrap:anywhere\]/)
+
     const descriptionElement = [...container.querySelectorAll('p')].find(
       (element) => element.textContent === description
     )
     assert.ok(descriptionElement)
     assert.match(descriptionElement.className, /whitespace-pre-wrap/)
+    assert.match(descriptionElement.className, /\[overflow-wrap:anywhere\]/)
     assert.doesNotMatch(descriptionElement.className, /line-clamp/)
 
     await act(async () => root.unmount())

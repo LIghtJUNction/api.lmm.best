@@ -1389,15 +1389,15 @@ export function BountyCard({
     <TitledCard
       title={project.title}
       description={`${project.owner_username} · ${statusLabel(t, project.status)}`}
-      titleClassName='break-words'
-      descriptionClassName='break-words'
+      titleClassName='[overflow-wrap:anywhere]'
+      descriptionClassName='[overflow-wrap:anywhere]'
       icon={<HugeiconsIcon icon={Bug01Icon} strokeWidth={1.8} />}
       iconTone='primary'
       action={<BountyRankBadge rank={rank} />}
       disableHoverEffect
       contentClassName='flex h-full flex-col gap-4'
     >
-      <p className='text-muted-foreground text-sm leading-relaxed break-words whitespace-pre-wrap'>
+      <p className='text-muted-foreground text-sm leading-relaxed [overflow-wrap:anywhere] whitespace-pre-wrap'>
         {project.description}
       </p>
       <div className='grid grid-cols-2 gap-2 sm:grid-cols-5'>
@@ -1497,7 +1497,7 @@ function OwnerProjectCard(props: {
     <TitledCard
       title={project.title}
       description={project.repository_url}
-      titleClassName='break-words'
+      titleClassName='[overflow-wrap:anywhere]'
       descriptionClassName='break-all'
       icon={<HugeiconsIcon icon={SourceCodeIcon} strokeWidth={1.8} />}
       iconTone='info'
@@ -1693,8 +1693,8 @@ function ChallengeCard({
     <TitledCard
       title={challenge.project_title || t('Bounty challenge')}
       description={`${challenge.owner_username ?? ''} · ${statusLabel(t, challenge.status)}`}
-      titleClassName='break-words'
-      descriptionClassName='break-words'
+      titleClassName='[overflow-wrap:anywhere]'
+      descriptionClassName='[overflow-wrap:anywhere]'
       icon={<HugeiconsIcon icon={Bug01Icon} strokeWidth={1.8} />}
       iconTone='neutral'
       action={rank != null ? <BountyRankBadge rank={rank} /> : undefined}
@@ -1807,8 +1807,12 @@ function ChallengeCard({
 function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className='bg-muted/50 min-w-0 rounded-lg border p-3'>
-      <p className='text-muted-foreground text-xs break-words'>{label}</p>
-      <p className='mt-1 text-sm font-semibold break-words'>{value}</p>
+      <p className='text-muted-foreground text-xs [overflow-wrap:anywhere]'>
+        {label}
+      </p>
+      <p className='mt-1 text-sm font-semibold [overflow-wrap:anywhere]'>
+        {value}
+      </p>
     </div>
   )
 }
