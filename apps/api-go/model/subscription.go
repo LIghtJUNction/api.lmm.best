@@ -652,6 +652,31 @@ func getUserGroupByIdTx(tx *gorm.DB, userId int) (string, error) {
 	return group, nil
 }
 
+func lockUserSubscriptionForMutationTx(tx *gorm.DB, subscriptionId, expectedUserId int) (*UserSubscription, *User, error) {
+	if tx == nil || subscriptionId <= 0 || expectedUserId < 0 {
+		return nil, nil, errors.New("invalid subscription mutation lock args")
+	}
+	var owner struct {
+		UserId int
+	}
+	query := tx.Model(&UserSubscription{}).Select("user_id").Where("id = ?", subscriptionId)
+	if expectedUserId > 0 {
+		query = query.Where("user_id = ?", expectedUserId)
+	}
+	if err := query.First(&owner).Error; err != nil {
+		return nil, nil, err
+	}
+	var user User
+	if err := lockForUpdate(tx).Select("id", commonGroupCol).Where("id = ?", owner.UserId).First(&user).Error; err != nil {
+		return nil, nil, err
+	}
+	var subscription UserSubscription
+	if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", subscriptionId, owner.UserId).First(&subscription).Error; err != nil {
+		return nil, nil, err
+	}
+	return &subscription, &user, nil
+}
+
 func downgradeUserGroupForSubscriptionTx(tx *gorm.DB, sub *UserSubscription, now int64) (string, error) {
 	if tx == nil || sub == nil {
 		return "", errors.New("invalid downgrade args")
@@ -968,8 +993,8 @@ func ApplySubscriptionPaymentEvent(tradeNo string, paymentEvent *SubscriptionPay
 			return err
 		}
 
-		var subscription UserSubscription
-		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", order.UserSubscriptionId, order.UserId).First(&subscription).Error; err != nil {
+		subscription, lockedUser, err := lockUserSubscriptionForMutationTx(tx, order.UserSubscriptionId, order.UserId)
+		if err != nil {
 			return err
 		}
 		now := common.GetTimestamp()
@@ -991,21 +1016,15 @@ func ApplySubscriptionPaymentEvent(tradeNo string, paymentEvent *SubscriptionPay
 			if subscription.NextResetTime == 0 || subscription.NextResetTime > subscription.EndTime {
 				subscription.NextResetTime = subscription.EndTime
 			}
-			if upgradeGroup := strings.TrimSpace(subscription.UpgradeGroup); upgradeGroup != "" {
-				var user User
-				if err := lockForUpdate(tx).Where("id = ?", subscription.UserId).First(&user).Error; err != nil {
+			if upgradeGroup := strings.TrimSpace(subscription.UpgradeGroup); upgradeGroup != "" && lockedUser.Group != upgradeGroup {
+				if err := tx.Model(lockedUser).Update("group", upgradeGroup).Error; err != nil {
 					return err
 				}
-				if user.Group != upgradeGroup {
-					if err := tx.Model(&user).Update("group", upgradeGroup).Error; err != nil {
-						return err
-					}
-					groupChanged = true
-				}
+				groupChanged = true
 			}
 		}
 		subscription.UpdatedAt = now
-		if err := tx.Save(&subscription).Error; err != nil {
+		if err := tx.Save(subscription).Error; err != nil {
 			return err
 		}
 
@@ -1061,8 +1080,8 @@ func UpdateSubscriptionProviderState(tradeNo, expectedProvider, providerSubscrip
 		if !terminalState || order.UserSubscriptionId <= 0 {
 			return nil
 		}
-		var subscription UserSubscription
-		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", order.UserSubscriptionId, order.UserId).First(&subscription).Error; err != nil {
+		subscription, _, err := lockUserSubscriptionForMutationTx(tx, order.UserSubscriptionId, order.UserId)
+		if err != nil {
 			return err
 		}
 		now := common.GetTimestamp()
@@ -1075,10 +1094,10 @@ func UpdateSubscriptionProviderState(tradeNo, expectedProvider, providerSubscrip
 		}
 		subscription.Status = "cancelled"
 		subscription.UpdatedAt = now
-		if err := tx.Save(&subscription).Error; err != nil {
+		if err := tx.Save(subscription).Error; err != nil {
 			return err
 		}
-		restoredGroup, err := downgradeUserGroupForSubscriptionTx(tx, &subscription, now)
+		restoredGroup, err := downgradeUserGroupForSubscriptionTx(tx, subscription, now)
 		if err != nil {
 			return err
 		}
@@ -1438,20 +1457,19 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 	downgradeGroup := ""
 	var userId int
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+		sub, _, err := lockUserSubscriptionForMutationTx(tx, userSubscriptionId, 0)
+		if err != nil {
 			return err
 		}
 		userId = sub.UserId
-		if err := tx.Model(&sub).Updates(map[string]interface{}{
+		if err := tx.Model(sub).Updates(map[string]interface{}{
 			"status":     "cancelled",
 			"end_time":   now,
 			"updated_at": now,
 		}).Error; err != nil {
 			return err
 		}
-		target, err := downgradeUserGroupForSubscriptionTx(tx, &sub, now)
+		target, err := downgradeUserGroupForSubscriptionTx(tx, sub, now)
 		if err != nil {
 			return err
 		}
@@ -1483,13 +1501,12 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 	downgradeGroup := ""
 	var userId int
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := lockForUpdate(tx).
-			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
+		sub, _, err := lockUserSubscriptionForMutationTx(tx, userSubscriptionId, 0)
+		if err != nil {
 			return err
 		}
 		userId = sub.UserId
-		target, err := downgradeUserGroupForSubscriptionTx(tx, &sub, now)
+		target, err := downgradeUserGroupForSubscriptionTx(tx, sub, now)
 		if err != nil {
 			return err
 		}

@@ -907,6 +907,22 @@ async fn verify_frozen(
     if expected.len() > MAX_ACTIVE_SUBSCRIPTIONS {
         return Err(ResetError::Stale);
     }
+    let mut user_ids = users
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    user_ids.sort_unstable();
+    let locked_users = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM users WHERE id=ANY($1::BIGINT[]) AND deleted_at IS NULL ORDER BY id FOR UPDATE",
+    )
+    .bind(&user_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    if locked_users != user_ids {
+        return Err(ResetError::Stale);
+    }
     let rows = sqlx::query_as::<_, FrozenSubscription>(
         "SELECT us.id,us.user_id,us.plan_id,us.amount_used,us.status,us.end_time,COALESCE(us.updated_at,0) updated_at FROM unnest($1::BIGINT[],$2::BIGINT[]) selected(user_id,plan_id) JOIN user_subscriptions us ON us.user_id=selected.user_id AND us.plan_id=selected.plan_id WHERE us.status='active' AND us.end_time>$3 ORDER BY us.user_id,us.plan_id,us.id FOR UPDATE OF us",
     )
@@ -941,22 +957,6 @@ async fn verify_frozen(
             .push(row.id);
     }
     if current_by_pair != expected_by_pair {
-        return Err(ResetError::Stale);
-    }
-    let mut user_ids = users
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    user_ids.sort_unstable();
-    let locked_users = sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM users WHERE id=ANY($1::BIGINT[]) AND deleted_at IS NULL ORDER BY id FOR UPDATE",
-    )
-    .bind(&user_ids)
-    .fetch_all(&mut **tx)
-    .await?;
-    if locked_users != user_ids {
         return Err(ResetError::Stale);
     }
     Ok(())

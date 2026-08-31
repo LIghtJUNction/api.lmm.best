@@ -400,6 +400,48 @@ async fn reset_execute_rejects_a_deleted_target_user_without_consuming_preview()
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
+async fn reset_execute_rechecks_subscriptions_after_waiting_for_user_lock() -> TestResult {
+    let harness = PgHarness::new().await?;
+    seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
+    let now = database_timestamp(&harness.pool).await?;
+    let app = harness.app();
+    let token = create_preview(&app, "hard", json!([{"user_id":8,"plan_id":4}])).await?;
+
+    let mut payment = harness.pool.begin().await?;
+    let payment_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *payment)
+        .await?;
+    sqlx::query("SELECT id FROM users WHERE id=8 FOR UPDATE")
+        .execute(&mut *payment)
+        .await?;
+    let execute = tokio::spawn(request(
+        app,
+        Method::POST,
+        "/api/subscription/root/reset",
+        "root",
+        Some(json!({"operation_id":"payment-race","preview_token":token})),
+    ));
+    wait_until_blocked_by(&harness.pool, payment_pid).await?;
+    sqlx::query("INSERT INTO user_subscriptions (id,user_id,plan_id,amount_total,amount_used,start_time,end_time,status,source,created_at,updated_at) VALUES (13,8,4,100,29,$1-60,$1+3600,'active','order',$1,$1)")
+        .bind(now)
+        .execute(&mut *payment)
+        .await?;
+    payment.commit().await?;
+
+    let body = response_json(execute.await??).await?;
+    assert_eq!(body["success"], false, "stale preview executed: {body}");
+    let state: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT consumed_at FROM subscription_reset_previews WHERE token=$1), (SELECT COUNT(*) FROM subscription_reset_operations WHERE operation_id='payment-race'), (SELECT amount_used FROM user_subscriptions WHERE id=12), (SELECT amount_used FROM user_subscriptions WHERE id=13)",
+    )
+    .bind(&token)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(state, (0, 0, 71, 29));
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
 async fn target_search_and_all_matching_preview_match_plan_titles() -> TestResult {
     let harness = PgHarness::new().await?;
     seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
