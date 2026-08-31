@@ -13,6 +13,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/constant"
 	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
 	relayconstant "github.com/LIghtJUNction/api.lmm.best/relay/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 	relaytypes "github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -136,7 +137,9 @@ func TestOaiStreamHandlerFlushesFirstChunkWithForcedFormat(t *testing.T) {
 	require.Contains(t, body, `"content":"hello"`)
 }
 
-func TestOaiStreamHandlerAudioUsageStillUsesSecondLastChunk(t *testing.T) {
+func runOaiAudioStream(t *testing.T, shouldIncludeUsage bool) (*dto.Usage, string) {
+	t.Helper()
+
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })
@@ -166,14 +169,28 @@ func TestOaiStreamHandlerAudioUsageStillUsesSecondLastChunk(t *testing.T) {
 		IsStream:           true,
 		RelayMode:          relayconstant.RelayModeChatCompletions,
 		RelayFormat:        relaytypes.RelayFormatOpenAI,
-		ShouldIncludeUsage: true,
+		ShouldIncludeUsage: shouldIncludeUsage,
 		DisablePing:        true,
 	}
 
 	usage, apiErr := OaiStreamHandler(c, info, resp)
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
+	return usage, recorder.Body.String()
+}
+
+func TestOaiStreamHandlerAudioUsageStillUsesSecondLastChunk(t *testing.T) {
+	usage, _ := runOaiAudioStream(t, true)
+
 	require.Equal(t, 4, usage.PromptTokens)
 	require.Equal(t, 5, usage.CompletionTokens)
 	require.Equal(t, 9, usage.TotalTokens)
+}
+
+func TestOaiStreamHandlerDoesNotLeakHeldUsageBeforeLaterEvent(t *testing.T) {
+	usage, body := runOaiAudioStream(t, false)
+
+	require.Equal(t, 9, usage.TotalTokens)
+	require.Contains(t, body, `"finish_reason":"stop"`)
+	require.NotContains(t, body, `"usage":`)
 }
