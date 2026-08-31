@@ -1244,6 +1244,11 @@ fn is_zero_i64(value: &i64) -> bool {
     *value == 0
 }
 
+const PLAN_REMOVAL_HISTORY_SQL: &str = "SELECT EXISTS(SELECT 1 FROM user_subscriptions WHERE plan_id=$1) \
+     OR EXISTS(SELECT 1 FROM subscription_orders WHERE plan_id=$1 AND status IN ('pending','success')) \
+     OR EXISTS(SELECT 1 FROM subscription_reset_vouchers WHERE plan_id=$1) \
+     OR EXISTS(SELECT 1 FROM subscription_reset_events WHERE plan_id=$1)";
+
 async fn admin_delete_plan(
     State(state): State<BillingSubscriptionsState>,
     headers: HeaderMap,
@@ -1276,15 +1281,10 @@ async fn admin_delete_plan(
             return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误"));
         }
     }
-    let history = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM user_subscriptions WHERE plan_id=$1) \
-         OR EXISTS(SELECT 1 FROM subscription_orders WHERE plan_id=$1 AND status='success') \
-         OR EXISTS(SELECT 1 FROM subscription_reset_vouchers WHERE plan_id=$1) \
-         OR EXISTS(SELECT 1 FROM subscription_reset_events WHERE plan_id=$1)",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await;
+    let history = sqlx::query_scalar::<_, bool>(PLAN_REMOVAL_HISTORY_SQL)
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await;
     let history = match history {
         Ok(value) => value,
         Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
@@ -1317,17 +1317,6 @@ async fn admin_delete_plan(
             cancelled_orders: 0,
         }
     } else {
-        let cancelled = match sqlx::query(
-            "UPDATE subscription_orders SET status='expired',complete_time=$2,provider_subscription_state='plan_deleted' WHERE plan_id=$1 AND status='pending'",
-        )
-        .bind(id)
-        .bind(current)
-        .execute(&mut *tx)
-        .await
-        {
-            Ok(value) => value.rows_affected() as i64,
-            Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
-        };
         if sqlx::query("DELETE FROM subscription_plans WHERE id=$1")
             .bind(id)
             .execute(&mut *tx)
@@ -1339,7 +1328,7 @@ async fn admin_delete_plan(
         PlanRemovalResult {
             action: "deleted",
             archived_at: 0,
-            cancelled_orders: cancelled,
+            cancelled_orders: 0,
         }
     };
     let audit = json!({"op":{"action":"subscription.plan_remove","params":{
@@ -2188,8 +2177,8 @@ mod tests {
     use std::{error::Error, io};
 
     use super::{
-        LegacyUserSetting, Plan, end_time, include_archived_requested, next_reset,
-        normalize_preference, parse_preference_request, plan_list_sql,
+        LegacyUserSetting, PLAN_REMOVAL_HISTORY_SQL, Plan, end_time, include_archived_requested,
+        next_reset, normalize_preference, parse_preference_request, plan_list_sql,
     };
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -2245,6 +2234,12 @@ mod tests {
         assert!(plan_list_sql(false, false).contains("WHERE archived_at = 0"));
         assert!(!plan_list_sql(false, true).contains("WHERE archived_at = 0"));
         assert!(plan_list_sql(true, true).contains("archived_at = 0"));
+    }
+
+    #[test]
+    fn plan_removal_history_preserves_pending_external_checkouts() {
+        assert!(PLAN_REMOVAL_HISTORY_SQL.contains("status IN ('pending','success')"));
+        assert!(!PLAN_REMOVAL_HISTORY_SQL.contains("status='success'"));
     }
 
     #[test]

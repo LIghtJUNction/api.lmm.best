@@ -508,16 +508,16 @@ func AdminDeleteSubscriptionPlan(planId int) (*SubscriptionPlanRemovalResult, er
 		if err := tx.Model(&UserSubscription{}).Where("plan_id = ?", planId).Count(&subscriptionCount).Error; err != nil {
 			return err
 		}
-		var completedOrderCount int64
+		var protectedOrderCount int64
 		if subscriptionCount == 0 {
 			if err := tx.Model(&SubscriptionOrder{}).
-				Where("plan_id = ? AND status = ?", planId, common.TopUpStatusSuccess).
-				Count(&completedOrderCount).Error; err != nil {
+				Where("plan_id = ? AND status IN ?", planId, []string{common.TopUpStatusPending, common.TopUpStatusSuccess}).
+				Count(&protectedOrderCount).Error; err != nil {
 				return err
 			}
 		}
 		var resetHistoryCount int64
-		if subscriptionCount == 0 && completedOrderCount == 0 {
+		if subscriptionCount == 0 && protectedOrderCount == 0 {
 			if err := tx.Model(&SubscriptionResetVoucher{}).Where("plan_id = ?", planId).Count(&resetHistoryCount).Error; err != nil {
 				return err
 			}
@@ -528,7 +528,7 @@ func AdminDeleteSubscriptionPlan(planId int) (*SubscriptionPlanRemovalResult, er
 			}
 		}
 		now := getDBTimestamp(tx)
-		if subscriptionCount > 0 || completedOrderCount > 0 || resetHistoryCount > 0 {
+		if subscriptionCount > 0 || protectedOrderCount > 0 || resetHistoryCount > 0 {
 			if err := tx.Model(&SubscriptionPlan{}).Where("id = ?", planId).Updates(map[string]any{
 				"archived_at": now,
 				"enabled":     false,
@@ -539,20 +539,10 @@ func AdminDeleteSubscriptionPlan(planId int) (*SubscriptionPlanRemovalResult, er
 			result = SubscriptionPlanRemovalResult{Action: "archived", ArchivedAt: now}
 			return nil
 		}
-		cancelled := tx.Model(&SubscriptionOrder{}).
-			Where("plan_id = ? AND status = ?", planId, common.TopUpStatusPending).
-			Updates(map[string]any{
-				"status":                      common.TopUpStatusExpired,
-				"complete_time":               now,
-				"provider_subscription_state": "plan_deleted",
-			})
-		if cancelled.Error != nil {
-			return cancelled.Error
-		}
 		if err := tx.Where("id = ?", planId).Delete(&SubscriptionPlan{}).Error; err != nil {
 			return err
 		}
-		result = SubscriptionPlanRemovalResult{Action: "deleted", CancelledOrders: cancelled.RowsAffected}
+		result = SubscriptionPlanRemovalResult{Action: "deleted"}
 		return nil
 	})
 	if err != nil {
