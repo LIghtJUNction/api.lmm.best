@@ -22,9 +22,7 @@ Copyright (C) 2026 LIghtJUNction
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useMemo } from 'react'
 
-import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
-
-import { getStatusDetectionMetrics } from '../api'
+import { getStatusDetectionMetrics, getStatusDetectionSummary } from '../api'
 import { aggregateStatusGroups } from '../lib/aggregate'
 
 const WINDOW_HOURS = 24
@@ -33,7 +31,7 @@ const MAX_MODELS = 48
 export function useStatusDetection() {
   const summaryQuery = useQuery({
     queryKey: ['perf-metrics-summary', WINDOW_HOURS],
-    queryFn: () => getPerfMetricsSummary(WINDOW_HOURS),
+    queryFn: () => getStatusDetectionSummary(WINDOW_HOURS),
     staleTime: 60 * 1000,
     retry: false,
   })
