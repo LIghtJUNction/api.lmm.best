@@ -1,3 +1,6 @@
+/*
+Copyright (C) 2026 LIghtJUNction
+*/
 import {
   Cancel01Icon,
   Copy01Icon,
@@ -8,9 +11,6 @@ import {
   SparklesIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-/*
-Copyright (C) 2026 LIghtJUNction
-*/
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
