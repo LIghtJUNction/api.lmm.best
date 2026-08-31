@@ -6,13 +6,15 @@ production cutover. Production may already be running Go with PostgreSQL after
 a historical coordinator run, but that runtime fact does not replace current
 boundary, schema, canary, backup, and operator evidence.
 
-The fresh contract-1 PostgreSQL baseline requires `users.console_activated_at BIGINT NOT NULL DEFAULT 0`. This fresh-schema contract does not upgrade an existing PostgreSQL schema. Contract 2 is the separately reviewed, forward-only expand step for the eight open-source-bounty tables used by the mounted Rust routes; it never changes the frozen 34-table manifest.
+The immutable contract-1 evidence remains under `schema/contract-1/`: 34 tables and the exact reviewed manifest, baseline, and catalog exporter from commit `0bbc4f5d85c0fa4260502fa905bbdfde4a7b9cbe`. Contract 2 remains the separately reviewed, forward-only open-source-bounty expansion. These historical artifacts must never be rewritten to represent a later schema.
+
+The root `schema/table-map.json` and `schema/postgresql-baseline.sql` are the current cumulative **contract-6** full-copy materialization. Manifest version 2 binds `contract_id: 6`. A fresh rehearsal installs the immutable `0001` through `0006` migration identities into one continuous ledger inside the same PostgreSQL transaction, then runs the contract-6 verifier. It cannot publish a 39-table schema as contract 1.
 
 ## Evidence and scope
 
-The versioned manifest contains exactly 34 application tables and explicitly lists source and target columns, primary keys, indexes, converters, sequence ownership, and the verifier algorithm. The PostgreSQL 18 baseline was generated from the current Go/GORM models on an empty native cluster. `schema/provenance.json` binds the offline SQLite evidence, model inputs, manifest, baseline, and catalog query with SHA-256 hashes.
+The current manifest contains exactly 39 application tables and explicitly lists source and target columns, primary keys, indexes, converters, sequence ownership, and the verifier algorithm. The PostgreSQL 18 baseline was generated from the current Go/GORM models on an empty native cluster.
 
-CI verifies provenance and hard-runs a native PostgreSQL 18 cluster. It validates all 34 tables, 422 columns, 172 indexes, and 29 owned sequences. Docker is not used.
+CI hard-runs a native PostgreSQL 18 cluster. It validates all 39 tables, 490 columns, 206 indexes, and 32 owned sequences, proves the installed ledger is the contiguous chain `1..=6`, and injects contract-6 default/index corruption to prove the verifier rejects it. Docker is not used.
 
 ## Commands
 
@@ -34,14 +36,29 @@ cargo run -p lmm-db-migrate -- rehearse \
   --manifest crates/lmm-db-migrate/schema/table-map.json \
   --baseline crates/lmm-db-migrate/schema/postgresql-baseline.sql \
   --catalog-sql crates/lmm-db-migrate/schema/export-postgres-catalog.sql \
+  --contract-migration migrations/0006_subscription_reset_system.sql \
   --schema lmm_rehearsal_20260801 \
-  --report /path/to/audit/rehearse.json
+  --report /path/to/audit/rehearse.json \
+  --contract-id 6 \
+  --contract-sha256 "$(sha256sum migrations/0006_subscription_reset_system.sql | awk '{print $1}')" \
+  --min-reader-version 1 --max-reader-version 6 \
+  --min-writer-version 1 --max-writer-version 6 \
+  --release-id REHEARSAL_RELEASE_ID \
+  --release-sha256 SHA256_RELEASE_ARTIFACT \
+  --component-sha256 NAME=SHA256 # repeat for every mandatory component
 
 cargo run -p lmm-db-migrate -- verify \
   --sqlite /path/to/offline/one-api.db \
   --manifest crates/lmm-db-migrate/schema/table-map.json \
   --schema lmm_rehearsal_20260801 \
-  --report /path/to/audit/verify.json
+  --report /path/to/audit/verify.json \
+  --contract-id 6 \
+  --contract-sha256 "$(sha256sum migrations/0006_subscription_reset_system.sql | awk '{print $1}')" \
+  --min-reader-version 1 --max-reader-version 6 \
+  --min-writer-version 1 --max-writer-version 6 \
+  --release-id REHEARSAL_RELEASE_ID \
+  --release-sha256 SHA256_RELEASE_ARTIFACT \
+  --component-sha256 NAME=SHA256 # repeat for every mandatory component
 
 # Only after contract 1 is installed in the existing target schema:
 export LMM_MIGRATE_DATABASE_URL='postgresql://migration-role@/database?host=/run/postgresql'
@@ -81,9 +98,9 @@ A single SQLite read-only transaction remains open throughout COPY and source-si
 
 The target schema identifier must match the strict lower-case identifier contract. A PostgreSQL transaction-scoped advisory lock serializes creation of that schema, and schema existence is checked under the same transaction.
 
-The baseline is applied to a new isolated schema. All 34 tables are streamed through PostgreSQL COPY using the manifest's explicit column lists and converters. Rows use complete primary-key order: SQLite text keys use byte ordering and PostgreSQL text keys use `COLLATE "C"`. JSON, booleans, UTC timestamps, fixed-scale decimals, finite REAL values, NULL, and COPY control characters have explicit canonical behavior.
+The baseline is applied to a new isolated schema. All 39 contract-6 tables are streamed through PostgreSQL COPY using the manifest's explicit column lists and converters. Rows use complete primary-key order: SQLite text keys use byte ordering and PostgreSQL text keys use `COLLATE "C"`. JSON, booleans, UTC timestamps, fixed-scale decimals, finite REAL values, NULL, and COPY control characters have explicit canonical behavior.
 
-After COPY, all 29 owned sequences are advanced with `setval`; an empty table correctly produces `nextval = 1`. The live PostgreSQL catalog is validated against the manifest. SQLite and PostgreSQL are then read independently and compared using per-table counts and canonical BLAKE3 table hashes. Financial aggregate checks cover users, tokens, logs, quota data, top-ups, subscription orders, and channels without publishing aggregate values.
+After COPY, all 32 owned sequences are advanced with `setval`; an empty table correctly produces `nextval = 1`. The live PostgreSQL catalog is validated against the manifest. SQLite and PostgreSQL are then read independently and compared using per-table counts and canonical BLAKE3 table hashes. Financial aggregate checks cover users, tokens, logs, quota data, top-ups, subscription orders, and channels without publishing aggregate values.
 
 COPY, catalog, sequence, or verification failure rolls back the complete target schema transaction. `verify` uses a read-only, repeatable-read PostgreSQL snapshot.
 

@@ -22,7 +22,7 @@ fn full_copy_should_verify_all_tables_and_rollback_both_fault_phases() {
     let manifest_path = crate_dir.join("schema/table-map.json");
     let baseline = crate_dir.join("schema/postgresql-baseline.sql");
     let catalog_sql = crate_dir.join("schema/export-postgres-catalog.sql");
-    let contract_migration = crate_dir.join("../../migrations/0001_schema_contract.sql");
+    let contract_migration = crate_dir.join("../../migrations/0006_subscription_reset_system.sql");
     let release = release_binding(&contract_migration, "full-copy-release");
     let manifest = Manifest::load(&manifest_path).unwrap();
     let directory = tempfile::tempdir().unwrap();
@@ -38,9 +38,10 @@ fn full_copy_should_verify_all_tables_and_rollback_both_fault_phases() {
     };
 
     let report = rehearse(&options(&fixtures, "lmm_copy_success", &database_url)).unwrap();
-    assert_eq!(report.table_count, 38);
-    assert_eq!(report.sequence_count, 31);
+    assert_eq!(report.table_count, 39);
+    assert_eq!(report.sequence_count, 32);
     assert_eq!(report.financial_aggregates.len(), 15);
+    assert_contract_chain(&database_url, "lmm_copy_success");
     assert!(
         verify(&VerifyOptions {
             sqlite: &sqlite,
@@ -87,7 +88,7 @@ fn subscription_reset_manifest_should_copy_representative_rows() {
     let manifest_path = crate_dir.join("schema/table-map.json");
     let baseline = crate_dir.join("schema/postgresql-baseline.sql");
     let catalog_sql = crate_dir.join("schema/export-postgres-catalog.sql");
-    let contract_migration = crate_dir.join("../../migrations/0001_schema_contract.sql");
+    let contract_migration = crate_dir.join("../../migrations/0006_subscription_reset_system.sql");
     let release = release_binding(&contract_migration, "subscription-reset-copy-release");
     let manifest = Manifest::load(&manifest_path).expect("load migration manifest");
     let mut reset_tables = manifest
@@ -123,8 +124,8 @@ fn subscription_reset_manifest_should_copy_representative_rows() {
     };
     let report = rehearse(&options(&fixtures, &schema, &database_url))
         .expect("copy representative subscription-reset rows");
-    assert_eq!(report.table_count, 38);
-    assert_eq!(report.sequence_count, 31);
+    assert_eq!(report.table_count, 39);
+    assert_eq!(report.sequence_count, 32);
     verify(&VerifyOptions {
         sqlite: &sqlite,
         manifest: &manifest,
@@ -571,6 +572,35 @@ fn schema_exists(database_url: &str, schema: &str) -> bool {
         .get(0)
 }
 
+fn assert_contract_chain(database_url: &str, schema: &str) {
+    let mut client = Client::connect(database_url, NoTls).unwrap();
+    let rows = client
+        .query(
+            &format!(
+                "SELECT DISTINCT contract_id FROM {}.lmm_schema_release_ledger ORDER BY contract_id",
+                quote(schema)
+            ),
+            &[],
+        )
+        .unwrap();
+    let contract_ids = rows
+        .into_iter()
+        .map(|row| row.get::<_, i64>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(contract_ids, vec![1, 2, 3, 4, 5, 6]);
+    let current: i64 = client
+        .query_one(
+            &format!(
+                "SELECT contract_id FROM {}.lmm_schema_contract WHERE singleton=TRUE",
+                quote(schema)
+            ),
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(current, 6);
+}
+
 fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
@@ -578,17 +608,17 @@ fn quote(value: &str) -> String {
 fn release_binding(contract_migration: &Path, release_id: &str) -> ReleaseBinding {
     let contract_sha256 = contract_sha256(contract_migration);
     ReleaseBinding::new(
-        Version::new(1, "contract_id").expect("valid contract version"),
+        Version::new(6, "contract_id").expect("valid contract version"),
         contract_sha256.parse().expect("valid contract digest"),
         CompatibilityRange::new(
             Version::new(1, "reader").expect("valid reader version"),
-            Version::new(1, "reader").expect("valid reader version"),
+            Version::new(6, "reader").expect("valid reader version"),
             "reader",
         )
         .expect("valid reader range"),
         CompatibilityRange::new(
             Version::new(1, "writer").expect("valid writer version"),
-            Version::new(1, "writer").expect("valid writer version"),
+            Version::new(6, "writer").expect("valid writer version"),
             "writer",
         )
         .expect("valid writer range"),
@@ -613,17 +643,17 @@ fn contract_sha256(contract_migration: &Path) -> String {
 fn add_release_arguments(command: &mut Command, contract_migration: &Path, release_id: &str) {
     command.args([
         "--contract-id",
-        "1",
+        "6",
         "--contract-sha256",
         &contract_sha256(contract_migration),
         "--min-reader-version",
         "1",
         "--max-reader-version",
-        "1",
+        "6",
         "--min-writer-version",
         "1",
         "--max-writer-version",
-        "1",
+        "6",
         "--release-id",
         release_id,
         "--release-sha256",
@@ -642,8 +672,8 @@ fn cli_failure_should_publish_private_non_sensitive_audit() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let report = directory.path().join("failure.json");
-    let contract_migration =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations/0001_schema_contract.sql");
+    let contract_migration = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../migrations/0006_subscription_reset_system.sql");
     let mut command = Command::new(env!("CARGO_BIN_EXE_lmm-db-migrate"));
     command
         .args([
