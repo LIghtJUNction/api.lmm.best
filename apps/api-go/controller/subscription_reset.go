@@ -177,20 +177,16 @@ func RootResetSubscriptionsBatch(c *gin.Context) {
 	result, err := model.AdminResetSubscriptionsBatch(model.AdminSubscriptionResetBatchInput{
 		ActorUserId: c.GetInt("id"), OperationId: strings.TrimSpace(req.OperationId),
 		PreviewToken: strings.TrimSpace(req.PreviewToken),
+		Audit: model.SubscriptionResetAuditContext{
+			Username: c.GetString("username"), IP: c.ClientIP(), Role: c.GetInt("role"),
+			AuthMethod: auditAuthMethod(c),
+		},
 	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	recordManageAudit(c, "subscription.reset.execute", map[string]interface{}{
-		"operation_id":        result.OperationId,
-		"mode":                result.Mode,
-		"requested_targets":   result.RequestedTargets,
-		"processed_targets":   result.ProcessedTargets,
-		"reset_subscriptions": result.ResetSubscriptions,
-		"restored_quota":      result.RestoredQuota,
-		"vouchers_issued":     result.VouchersIssued,
-	})
+	markAuditLogged(c)
 	common.ApiSuccess(c, result)
 }
 
@@ -209,7 +205,10 @@ func RedeemSubscriptionResetVoucher(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的重置券")
 		return
 	}
-	result, err := model.RedeemUserSubscriptionResetVoucher(c.GetInt("id"), voucherId)
+	result, err := model.RedeemUserSubscriptionResetVoucherWithAudit(c.GetInt("id"), voucherId, model.SubscriptionResetAuditContext{
+		Username: c.GetString("username"), IP: c.ClientIP(), Role: c.GetInt("role"),
+		AuthMethod: auditAuthMethod(c),
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
@@ -225,10 +224,6 @@ func RedeemSubscriptionResetVoucher(c *gin.Context) {
 		}
 		return
 	}
-	recordManageAudit(c, "subscription.reset.voucher_redeem", map[string]interface{}{
-		"voucher_id":          voucherId,
-		"reset_subscriptions": result.ResetCount,
-		"restored_quota":      result.RestoredQuota,
-	})
+	markAuditLogged(c)
 	common.ApiSuccess(c, result)
 }

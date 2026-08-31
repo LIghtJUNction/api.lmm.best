@@ -1299,17 +1299,15 @@ async fn redeem(
     if voucher.expires_at <= now {
         return Err(ResetError::VoucherExpired);
     }
-    let active = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM user_subscriptions WHERE user_id=$1 AND plan_id=$2 AND status='active' AND end_time>$3)",
+    let rows = sqlx::query(
+        "SELECT id,amount_used FROM user_subscriptions WHERE user_id=$1 AND plan_id=$2 AND status='active' AND end_time>$3 ORDER BY end_time,id FOR UPDATE",
     )
     .bind(user.id)
     .bind(voucher.plan_id)
     .bind(now)
-    .fetch_one(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
-    if !active {
-        return Err(ResetError::RequiresActive);
-    }
+    let reset_count = locked_voucher_reset_count(rows.len())?;
     let claimed = sqlx::query(
         "UPDATE subscription_reset_vouchers SET status='redeemed',redeemed_at=$3,updated_at=$3 WHERE id=$1 AND user_id=$2 AND status='available' AND expires_at>$3",
     )
@@ -1321,14 +1319,6 @@ async fn redeem(
     if claimed.rows_affected() != 1 {
         return Err(ResetError::VoucherUnavailable);
     }
-    let rows = sqlx::query(
-        "SELECT id,amount_used FROM user_subscriptions WHERE user_id=$1 AND plan_id=$2 AND status='active' AND end_time>$3 ORDER BY end_time,id FOR UPDATE",
-    )
-    .bind(user.id)
-    .bind(voucher.plan_id)
-    .bind(now)
-    .fetch_all(&mut *tx)
-    .await?;
     let mut restored_quota = 0_i64;
     for row in &rows {
         let amount_used = row.try_get::<i64, _>("amount_used")?;
@@ -1343,7 +1333,6 @@ async fn redeem(
             .execute(&mut *tx)
             .await?;
     }
-    let reset_count = i64::try_from(rows.len()).map_err(|_| ResetError::Stale)?;
     sqlx::query(
         "INSERT INTO subscription_reset_events (operation_id,user_id,plan_id,mode,actor_user_id,voucher_id,reset_count,restored_quota,voucher_expiry,created_at) VALUES ($1,$2,$3,'voucher_redeem',$2,$4,$5,$6,0,$7)",
     )
@@ -1377,6 +1366,14 @@ async fn redeem(
         restored_quota,
         affected_user_ids: vec![user.id],
     })
+}
+
+fn locked_voucher_reset_count(locked_subscription_count: usize) -> Result<i64, ResetError> {
+    let reset_count = i64::try_from(locked_subscription_count).map_err(|_| ResetError::Stale)?;
+    if reset_count == 0 {
+        return Err(ResetError::RequiresActive);
+    }
+    Ok(reset_count)
 }
 
 async fn insert_audit(
@@ -1460,6 +1457,15 @@ fn error_response(error: ResetError) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voucher_redemption_rejects_an_empty_locked_subscription_set() {
+        assert!(matches!(
+            locked_voucher_reset_count(0),
+            Err(ResetError::RequiresActive)
+        ));
+        assert_eq!(locked_voucher_reset_count(2).expect("locked rows"), 2);
+    }
 
     #[test]
     fn preview_filter_uses_go_snake_case_contract() -> Result<(), Box<dyn std::error::Error>> {

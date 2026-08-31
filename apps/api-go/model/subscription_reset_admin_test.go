@@ -1,13 +1,33 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
+
+func subscriptionResetAuditCount(t *testing.T, action string) int64 {
+	t.Helper()
+	var count int64
+	require.NoError(t, DB.Model(&Log{}).Where("other LIKE ?", "%\"action\":\""+action+"\"%").Count(&count).Error)
+	return count
+}
+
+func installSubscriptionResetAuditFailure(t *testing.T) func() {
+	t.Helper()
+	name := "test:fail_subscription_reset_audit"
+	require.NoError(t, DB.Callback().Create().Before("gorm:create").Register(name, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Table == "logs" {
+			tx.AddError(fmt.Errorf("injected reset audit failure"))
+		}
+	}))
+	return func() { require.NoError(t, DB.Callback().Create().Remove(name)) }
+}
 
 func seedResetSubscription(t *testing.T, userId, planId, subscriptionId int, used int64) (int64, int64) {
 	t.Helper()
@@ -68,6 +88,7 @@ func TestHardSubscriptionResetRequiresPreviewAndChangesOnlyQuota(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, result.RestoredQuota, retry.RestoredQuota)
+	require.Equal(t, int64(1), subscriptionResetAuditCount(t, "subscription.reset.execute"))
 	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
 		ActorUserId: 1, OperationId: "different-operation", PreviewToken: preview.Token,
 	})
@@ -124,6 +145,8 @@ func TestSoftSubscriptionResetIssuesExpiringBankedVoucher(t *testing.T) {
 	replayed, err := RedeemUserSubscriptionResetVoucher(9711, vouchers[0].Id)
 	require.NoError(t, err)
 	require.Equal(t, redeemed, replayed)
+	require.Equal(t, int64(1), subscriptionResetAuditCount(t, "subscription.reset.execute"))
+	require.Equal(t, int64(1), subscriptionResetAuditCount(t, "subscription.reset.voucher_redeem"))
 }
 
 func TestSubscriptionResetVoucherListPrioritizesAvailableVouchers(t *testing.T) {
@@ -362,6 +385,116 @@ func TestSubscriptionResetOperationIDCannotBindAnotherPreview(t *testing.T) {
 		ActorUserId: 1, OperationId: "shared-operation", PreviewToken: secondPreview.Token,
 	})
 	require.ErrorIs(t, err, ErrSubscriptionResetOperationConflict)
+}
+
+func TestSubscriptionResetAuditFailureRollsBackMutations(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9791, 9792, 9793, 140)
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9791, PlanId: 9792}},
+	})
+	require.NoError(t, err)
+
+	removeFailure := installSubscriptionResetAuditFailure(t)
+	_, err = AdminResetSubscriptionsBatch(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, OperationId: "audit-failure-batch", PreviewToken: preview.Token,
+	})
+	removeFailure()
+	require.ErrorContains(t, err, "injected reset audit failure")
+	var subscription UserSubscription
+	require.NoError(t, DB.First(&subscription, 9793).Error)
+	require.Equal(t, int64(140), subscription.AmountUsed)
+	var persistedPreview SubscriptionResetPreview
+	require.NoError(t, DB.First(&persistedPreview, "token = ?", preview.Token).Error)
+	require.Zero(t, persistedPreview.ConsumedAt)
+	var operationCount, eventCount int64
+	require.NoError(t, DB.Model(&SubscriptionResetOperation{}).Where("operation_id = ?", "audit-failure-batch").Count(&operationCount).Error)
+	require.NoError(t, DB.Model(&SubscriptionResetEvent{}).Where("operation_id = ?", "audit-failure-batch").Count(&eventCount).Error)
+	require.Zero(t, operationCount)
+	require.Zero(t, eventCount)
+
+	voucher := SubscriptionResetVoucher{
+		UserId: 9791, PlanId: 9792, OperationId: "audit-failure-voucher",
+		Status: SubscriptionResetVoucherAvailable, ExpiresAt: GetDBTimestamp() + 3600,
+	}
+	require.NoError(t, DB.Create(&voucher).Error)
+	removeFailure = installSubscriptionResetAuditFailure(t)
+	_, err = RedeemUserSubscriptionResetVoucher(9791, voucher.Id)
+	removeFailure()
+	require.ErrorContains(t, err, "injected reset audit failure")
+	require.NoError(t, DB.First(&voucher, voucher.Id).Error)
+	require.Equal(t, SubscriptionResetVoucherAvailable, voucher.Status)
+	require.NoError(t, DB.First(&subscription, 9793).Error)
+	require.Equal(t, int64(140), subscription.AmountUsed)
+	require.NoError(t, DB.Model(&SubscriptionResetEvent{}).Where("voucher_id = ?", voucher.Id).Count(&eventCount).Error)
+	require.Zero(t, eventCount)
+}
+
+func TestSubscriptionResetPreviewCleanupIsBoundedAndPreservesReplay(t *testing.T) {
+	truncateTables(t)
+	seedResetSubscription(t, 9801, 9802, 9803, 75)
+	preview, err := AdminPreviewSubscriptionsReset(AdminSubscriptionResetBatchInput{
+		ActorUserId: 1, Mode: SubscriptionResetModeHard,
+		Targets: []SubscriptionResetTarget{{UserId: 9801, PlanId: 9802}},
+	})
+	require.NoError(t, err)
+	input := AdminSubscriptionResetBatchInput{ActorUserId: 1, OperationId: "cleanup-replay", PreviewToken: preview.Token}
+	first, err := AdminResetSubscriptionsBatch(input)
+	require.NoError(t, err)
+
+	now := GetDBTimestamp()
+	stale := now - subscriptionResetPreviewRetentionSeconds - 60
+	require.NoError(t, DB.Model(&SubscriptionResetPreview{}).Where("token = ?", preview.Token).
+		Updates(map[string]any{"consumed_at": stale, "expires_at": stale}).Error)
+	for _, candidate := range []SubscriptionResetPreview{
+		{Token: "cleanup-active", ActorUserId: 1, Mode: SubscriptionResetModeHard, TargetsJSON: "[]", PayloadHash: "active", ExpiresAt: now + 600, CreatedAt: stale},
+		{Token: "cleanup-recent-expired", ActorUserId: 1, Mode: SubscriptionResetModeHard, TargetsJSON: "[]", PayloadHash: "recent", ExpiresAt: now - subscriptionResetPreviewRetentionSeconds + 60, CreatedAt: stale},
+		{Token: "cleanup-stale-expired", ActorUserId: 1, Mode: SubscriptionResetModeHard, TargetsJSON: "[]", PayloadHash: "stale", ExpiresAt: stale, CreatedAt: stale},
+		{Token: "cleanup-consumed-without-operation", ActorUserId: 1, Mode: SubscriptionResetModeHard, TargetsJSON: "[]", PayloadHash: "unsafe", ExpiresAt: stale, ConsumedAt: stale, CreatedAt: stale},
+	} {
+		require.NoError(t, DB.Create(&candidate).Error)
+	}
+
+	deleted, err := CleanupSubscriptionResetPreviewsContext(context.Background(), 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	deleted, err = CleanupSubscriptionResetPreviewsContext(context.Background(), 300)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	for _, token := range []string{"cleanup-active", "cleanup-recent-expired", "cleanup-consumed-without-operation"} {
+		var count int64
+		require.NoError(t, DB.Model(&SubscriptionResetPreview{}).Where("token = ?", token).Count(&count).Error)
+		require.Equal(t, int64(1), count, token)
+	}
+	var removed int64
+	require.NoError(t, DB.Model(&SubscriptionResetPreview{}).Where("token IN ?", []string{preview.Token, "cleanup-stale-expired"}).Count(&removed).Error)
+	require.Zero(t, removed)
+
+	replayed, err := AdminResetSubscriptionsBatch(input)
+	require.NoError(t, err)
+	require.Equal(t, first, replayed)
+	require.Equal(t, int64(1), subscriptionResetAuditCount(t, "subscription.reset.execute"))
+	var operationCount, eventCount int64
+	require.NoError(t, DB.Model(&SubscriptionResetOperation{}).Where("operation_id = ?", input.OperationId).Count(&operationCount).Error)
+	require.NoError(t, DB.Model(&SubscriptionResetEvent{}).Where("operation_id = ?", input.OperationId).Count(&eventCount).Error)
+	require.Equal(t, int64(1), operationCount)
+	require.Equal(t, int64(1), eventCount)
+}
+
+func TestSubscriptionResetVoucherEmptyLockedSetDoesNotClaim(t *testing.T) {
+	truncateTables(t)
+	now := GetDBTimestamp()
+	require.NoError(t, DB.Create(&User{Id: 9811, Username: "empty-lock", Password: "password", Status: 1}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 9812, Title: "Empty lock", PriceAmount: 1, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 100}).Error)
+	voucher := SubscriptionResetVoucher{UserId: 9811, PlanId: 9812, OperationId: "empty-lock", Status: SubscriptionResetVoucherAvailable, ExpiresAt: now + 3600}
+	require.NoError(t, DB.Create(&voucher).Error)
+
+	_, err := RedeemUserSubscriptionResetVoucher(9811, voucher.Id)
+	require.ErrorIs(t, err, ErrSubscriptionResetRequiresActiveSubscription)
+	require.NoError(t, DB.First(&voucher, voucher.Id).Error)
+	require.Equal(t, SubscriptionResetVoucherAvailable, voucher.Status)
+	require.Zero(t, subscriptionResetAuditCount(t, "subscription.reset.voucher_redeem"))
 }
 
 func TestCheckedSubscriptionResetAddRejectsOverflow(t *testing.T) {

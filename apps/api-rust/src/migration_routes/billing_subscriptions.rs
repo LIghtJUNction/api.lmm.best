@@ -158,15 +158,38 @@ async fn maintenance_once_at(
 
     let cleaned = if cleanup {
         let cutoff = current.saturating_sub(7 * 24 * 60 * 60);
-        sqlx::query("DELETE FROM subscription_pre_consume_records WHERE updated_at < $1")
-            .bind(cutoff)
-            .execute(pg)
-            .await?
-            .rows_affected() as i64
+        let pre_consume =
+            sqlx::query("DELETE FROM subscription_pre_consume_records WHERE updated_at < $1")
+                .bind(cutoff)
+                .execute(pg)
+                .await?
+                .rows_affected() as i64;
+        pre_consume.saturating_add(cleanup_reset_previews(pg, cutoff, 300).await?)
     } else {
         0
     };
     Ok((expired, reset, cleaned))
+}
+
+async fn cleanup_reset_previews(pg: &PgPool, cutoff: i64, limit: i64) -> Result<i64, sqlx::Error> {
+    let deleted = sqlx::query(
+        "WITH candidates AS (\
+            SELECT preview.token FROM subscription_reset_previews AS preview \
+            WHERE (preview.consumed_at=0 AND preview.expires_at<$1) \
+               OR (preview.consumed_at>0 AND preview.consumed_at<$1 AND EXISTS (\
+                    SELECT 1 FROM subscription_reset_operations AS operation \
+                    WHERE operation.preview_token=preview.token)) \
+            ORDER BY CASE WHEN preview.consumed_at>0 THEN preview.consumed_at ELSE preview.expires_at END, preview.token \
+            LIMIT $2 FOR UPDATE SKIP LOCKED\
+         ) \
+         DELETE FROM subscription_reset_previews AS preview USING candidates \
+         WHERE preview.token=candidates.token",
+    )
+    .bind(cutoff)
+    .bind(limit)
+    .execute(pg)
+    .await?;
+    Ok(i64::try_from(deleted.rows_affected()).unwrap_or(i64::MAX))
 }
 
 async fn expire_due_subscriptions(

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -25,6 +27,8 @@ const (
 
 	maxSubscriptionResetTargets       = 5000
 	maxSubscriptionResetSubscriptions = 20_000
+
+	subscriptionResetPreviewRetentionSeconds int64 = 7 * 24 * 60 * 60
 )
 
 var (
@@ -551,6 +555,13 @@ func AdminPreviewSubscriptionsReset(input AdminSubscriptionResetBatchInput) (*Ad
 	return result, nil
 }
 
+type SubscriptionResetAuditContext struct {
+	Username   string
+	IP         string
+	Role       int
+	AuthMethod string
+}
+
 type AdminSubscriptionResetBatchInput struct {
 	ActorUserId  int
 	OperationId  string
@@ -559,6 +570,7 @@ type AdminSubscriptionResetBatchInput struct {
 	Targets      []SubscriptionResetTarget
 	AllMatching  bool
 	Filter       AdminSubscriptionResetEligibleFilter
+	Audit        SubscriptionResetAuditContext
 }
 
 type AdminSubscriptionResetBatchResult struct {
@@ -672,6 +684,28 @@ func subscriptionResetOperationResult(operation *SubscriptionResetOperation) (*A
 		return nil, errors.New("subscription reset operation result is malformed")
 	}
 	return &result, nil
+}
+
+func createSubscriptionResetAuditTx(tx *gorm.DB, actorUserId int, audit SubscriptionResetAuditContext, now int64, action, content string, params map[string]any) error {
+	username := strings.TrimSpace(audit.Username)
+	if username == "" {
+		if err := tx.Model(&User{}).Select("username").Where("id = ?", actorUserId).Scan(&username).Error; err != nil {
+			return err
+		}
+	}
+	other := map[string]any{
+		"op": buildOpField(action, params),
+		"admin_info": map[string]any{
+			"admin_id": actorUserId, "admin_username": username,
+			"admin_role": audit.Role, "auth_method": audit.AuthMethod,
+		},
+	}
+	log := &Log{
+		UserId: actorUserId, Username: username, CreatedAt: now, Type: LogTypeManage,
+		Content: content, Ip: strings.TrimSpace(audit.IP), Other: common.MapToJsonStr(other),
+	}
+	ensureLogRequestId(log)
+	return tx.Create(log).Error
 }
 
 func subscriptionResetOperationMatches(operation *SubscriptionResetOperation, actorUserId int, previewToken string) bool {
@@ -881,11 +915,24 @@ func AdminResetSubscriptionsBatch(input AdminSubscriptionResetBatchInput) (*Admi
 		if err != nil {
 			return err
 		}
-		return tx.Create(&SubscriptionResetOperation{
+		if err := tx.Create(&SubscriptionResetOperation{
 			OperationId: operationId, PreviewToken: previewToken, ActorUserId: input.ActorUserId,
 			Mode: preview.Mode, PayloadHash: preview.PayloadHash, ResultJSON: string(resultJSON),
 			CreatedAt: now, CompletedAt: now,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		return createSubscriptionResetAuditTx(
+			tx, input.ActorUserId, input.Audit, now, "subscription.reset.execute",
+			fmt.Sprintf("Executed %s subscription reset %s", result.Mode, result.OperationId),
+			map[string]any{
+				"operation_id": result.OperationId, "mode": result.Mode,
+				"requested_targets": result.RequestedTargets, "processed_targets": result.ProcessedTargets,
+				"reset_subscriptions": result.ResetSubscriptions, "restored_quota": result.RestoredQuota,
+				"vouchers_issued": result.VouchersIssued,
+			},
+		)
+
 	})
 	if err == nil {
 		return result, nil
@@ -901,6 +948,34 @@ type UserSubscriptionResetVoucher struct {
 	SubscriptionResetVoucher
 	PlanTitle string `json:"plan_title"`
 	Expired   bool   `json:"expired"`
+}
+
+func CleanupSubscriptionResetPreviewsContext(ctx context.Context, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	cutoff := getDBTimestamp(DB.WithContext(ctx)) - subscriptionResetPreviewRetentionSeconds
+	eligible := "(consumed_at = 0 AND expires_at < ?) OR (consumed_at > 0 AND consumed_at < ? AND EXISTS (SELECT 1 FROM subscription_reset_operations AS operations WHERE operations.preview_token = subscription_reset_previews.token))"
+	var deleted int64
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var tokens []string
+		if err := lockForUpdate(tx).Model(&SubscriptionResetPreview{}).
+			Where(eligible, cutoff, cutoff).
+			Order("CASE WHEN consumed_at > 0 THEN consumed_at ELSE expires_at END, token").
+			Limit(batchSize).
+			Pluck("token", &tokens).Error; err != nil {
+			return err
+		}
+		if len(tokens) == 0 {
+			return nil
+		}
+		result := tx.Where("token IN ?", tokens).
+			Where(eligible, cutoff, cutoff).
+			Delete(&SubscriptionResetPreview{})
+		deleted = result.RowsAffected
+		return result.Error
+	})
+	return deleted, err
 }
 
 func ListUserSubscriptionResetVouchers(userId int) ([]UserSubscriptionResetVoucher, error) {
@@ -927,6 +1002,10 @@ func ListUserSubscriptionResetVouchers(userId int) ([]UserSubscriptionResetVouch
 }
 
 func RedeemUserSubscriptionResetVoucher(userId, voucherId int) (*SubscriptionResetResult, error) {
+	return RedeemUserSubscriptionResetVoucherWithAudit(userId, voucherId, SubscriptionResetAuditContext{})
+}
+
+func RedeemUserSubscriptionResetVoucherWithAudit(userId, voucherId int, audit SubscriptionResetAuditContext) (*SubscriptionResetResult, error) {
 	if userId <= 0 || voucherId <= 0 {
 		return nil, errors.New("invalid reset voucher")
 	}
@@ -984,11 +1063,21 @@ func RedeemUserSubscriptionResetVoucher(userId, voucherId int) (*SubscriptionRes
 		if err != nil {
 			return err
 		}
-		return tx.Create(&SubscriptionResetEvent{
+		if err := tx.Create(&SubscriptionResetEvent{
 			OperationId: operationId, UserId: userId, PlanId: voucher.PlanId,
 			Mode: "voucher_redeem", ActorUserId: userId, VoucherId: voucher.Id,
 			ResetCount: result.ResetCount, RestoredQuota: result.RestoredQuota, CreatedAt: now,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		return createSubscriptionResetAuditTx(
+			tx, userId, audit, now, "subscription.reset.voucher_redeem",
+			fmt.Sprintf("Redeemed subscription reset voucher %d", voucherId),
+			map[string]any{
+				"voucher_id": voucherId, "reset_subscriptions": result.ResetCount,
+				"restored_quota": result.RestoredQuota,
+			},
+		)
 	})
 	if err != nil {
 		return nil, err
