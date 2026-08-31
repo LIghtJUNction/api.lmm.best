@@ -751,7 +751,7 @@ async fn reset_schema(pool: &PgPool) {
     sqlx::query("CREATE TABLE subscription_pre_consume_records (id BIGSERIAL PRIMARY KEY, request_id TEXT NOT NULL, user_id BIGINT NOT NULL, user_subscription_id BIGINT NOT NULL, pre_consumed BIGINT NOT NULL, status TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)")
         .execute(pool).await.expect("pre-consume schema");
     sqlx::query(
-        "CREATE TABLE subscription_orders (id BIGSERIAL PRIMARY KEY, plan_id BIGINT NOT NULL)",
+        "CREATE TABLE subscription_orders (id BIGSERIAL PRIMARY KEY, plan_id BIGINT NOT NULL, status TEXT, complete_time BIGINT, provider_subscription_state TEXT NOT NULL DEFAULT '')",
     )
     .execute(pool)
     .await
