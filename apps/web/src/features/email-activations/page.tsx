@@ -357,7 +357,8 @@ export function EmailActivationsPage() {
   const { t } = useTranslation()
   const [activationKind, setActivationKind] = useState<'sms' | 'email'>('sms')
   useHeroSmsTranslations()
-  const isMobile = useMediaQuery('(max-width: 640px)')
+  // Match Tailwind's `sm` breakpoint: at 640px the side drawer uses desktop layout.
+  const isMobile = useMediaQuery('(max-width: 639px)')
   const queryClient = useQueryClient()
   const emailMode = activationKind === 'email'
 
