@@ -245,6 +245,17 @@ fn contract_six_verifier_rejects_wrong_default_and_index_columns() {
     assert!(error.to_string().contains("subscription_reset_vouchers.id"));
     transaction
         .batch_execute(&format!(
+            "CREATE SEQUENCE {quoted_schema}.wrong_voucher_id_seq; \
+             ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN id \
+             SET DEFAULT nextval('{quoted_schema}.wrong_voucher_id_seq'::regclass) + \
+                         nextval('{quoted_schema}.subscription_reset_vouchers_id_seq'::regclass) * 0"
+        ))
+        .expect("replace voucher sequence expression");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("compound voucher sequence default must fail");
+    assert!(error.to_string().contains("subscription_reset_vouchers.id"));
+    transaction
+        .batch_execute(&format!(
             "ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN id \
              SET DEFAULT nextval('{quoted_schema}.subscription_reset_vouchers_id_seq'::regclass); \
              ALTER TABLE {quoted_schema}.subscription_reset_vouchers ALTER COLUMN status SET DEFAULT 'invalid'"
@@ -267,6 +278,20 @@ fn contract_six_verifier_rejects_wrong_default_and_index_columns() {
         .expect("replace voucher status index");
     let error = verify_subscription_reset_schema(&mut transaction, &schema)
         .expect_err("wrong secondary index columns must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("idx_subscription_reset_vouchers_status")
+    );
+    transaction
+        .batch_execute(&format!(
+            "DROP INDEX {quoted_schema}.idx_subscription_reset_vouchers_status; \
+             ALTER TABLE {quoted_schema}.subscription_reset_vouchers \
+             ADD CONSTRAINT idx_subscription_reset_vouchers_status EXCLUDE USING btree (status WITH =)"
+        ))
+        .expect("replace voucher status index with exclusion constraint");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("exclusion constraint must not satisfy a normal index contract");
     assert!(
         error
             .to_string()

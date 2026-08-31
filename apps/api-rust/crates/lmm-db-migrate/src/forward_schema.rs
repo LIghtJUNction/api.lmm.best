@@ -859,11 +859,9 @@ pub fn verify_subscription_reset_schema(
                         JOIN pg_catalog.pg_namespace AS table_namespace ON table_namespace.oid=table_class.relnamespace
                         JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid=table_class.oid
                         JOIN pg_catalog.pg_attrdef AS default_value ON default_value.adrelid=table_class.oid AND default_value.adnum=attribute.attnum
-                        JOIN pg_catalog.pg_depend AS dependency ON dependency.classid='pg_attrdef'::regclass AND dependency.objid=default_value.oid AND dependency.refclassid='pg_class'::regclass
-                        JOIN pg_catalog.pg_class AS sequence_class ON sequence_class.oid=dependency.refobjid AND sequence_class.relkind='S'
-                        JOIN pg_catalog.pg_namespace AS sequence_namespace ON sequence_namespace.oid=sequence_class.relnamespace
                         WHERE table_namespace.nspname=$1 AND table_class.relname=$2 AND attribute.attname=$3
-                          AND sequence_namespace.nspname=$1 AND sequence_class.relname=$4
+                          AND pg_catalog.pg_get_expr(default_value.adbin, default_value.adrelid, false) =
+                              format('nextval(%L::regclass)', to_regclass(format('%I.%I',$1::TEXT,$4::TEXT))::TEXT)
                     )"#,
                 &[&schema, &requirement.table, &requirement.column, &requirement.sequence],
             )?
@@ -901,6 +899,7 @@ pub fn verify_subscription_reset_schema(
                 metadata.indisvalid,
                 metadata.indisready,
                 metadata.indisprimary,
+                metadata.indisexclusion,
                 access_method.amname::TEXT,
                 ARRAY(
                     SELECT attribute.attname::TEXT
@@ -925,13 +924,15 @@ pub fn verify_subscription_reset_schema(
             let found_valid: bool = row.get(1);
             let found_ready: bool = row.get(2);
             let found_primary: bool = row.get(3);
-            let found_method: String = row.get(4);
-            let found_columns: Vec<String> = row.get(5);
-            let found_predicate: Option<String> = row.get(6);
+            let found_exclusion: bool = row.get(4);
+            let found_method: String = row.get(5);
+            let found_columns: Vec<String> = row.get(6);
+            let found_predicate: Option<String> = row.get(7);
             found_unique == requirement.unique
                 && found_valid
                 && found_ready
                 && !found_primary
+                && !found_exclusion
                 && found_method == "btree"
                 && found_columns.len() == requirement.columns.len()
                 && found_columns
