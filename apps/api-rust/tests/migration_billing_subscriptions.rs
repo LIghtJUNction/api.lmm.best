@@ -301,6 +301,118 @@ async fn subscription_routes_should_preserve_legacy_method_boundaries() {
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
+/// This is intentionally ignored by default: it requires a disposable
+/// PostgreSQL 18 database and exercises archive-management handler behavior.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18; no production services"]
+async fn archived_plans_are_management_only_and_restore_retry_preserves_enabled_state() {
+    let database_url = env::var("LMM_BILLING_SUBSCRIPTIONS_TEST_DATABASE_URL")
+        .expect("set isolated PostgreSQL 18 URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(Duration::from_secs(3))
+        .connect(&database_url)
+        .await
+        .expect("isolated PostgreSQL must be reachable");
+    reset_schema(&pool).await;
+    seed(&pool).await;
+    sqlx::query("UPDATE subscription_plans SET archived_at=123,enabled=TRUE WHERE id=3")
+        .execute(&pool)
+        .await
+        .expect("archived plan fixture");
+
+    let app = router(BillingSubscriptionsState::new(
+        pool.clone(),
+        None,
+        Arc::new(FixtureAuth),
+    ));
+    let request = |method: &str, uri: &str, body: Body| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", "Bearer admin")
+            .header("content-type", "application/json")
+            .body(body)
+            .expect("request")
+    };
+
+    let default_list = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/subscription/admin/plans",
+            Body::empty(),
+        ))
+        .await
+        .expect("default list response");
+    assert!(
+        error_body(default_list).await["data"]
+            .as_array()
+            .expect("plan list")
+            .is_empty()
+    );
+    let archive_list = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/subscription/admin/plans?include_archived=true",
+            Body::empty(),
+        ))
+        .await
+        .expect("archive list response");
+    assert_eq!(
+        error_body(archive_list).await["data"]
+            .as_array()
+            .expect("archive plan list")
+            .len(),
+        1
+    );
+
+    for (uri, body) in [
+        (
+            "/api/subscription/admin/bind",
+            json!({"user_id":7,"plan_id":3}),
+        ),
+        (
+            "/api/subscription/admin/users/7/subscriptions",
+            json!({"plan_id":3}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("POST", uri, Body::from(body.to_string())))
+            .await
+            .expect("archived bind response");
+        assert_eq!(error_body(response).await["success"], false);
+    }
+    assert_eq!(subscription_count(&pool).await, 0);
+    assert_eq!(user_group(&pool).await, "default");
+
+    let restore_uri = "/api/subscription/admin/plans/3/restore";
+    let restored = app
+        .clone()
+        .oneshot(request("POST", restore_uri, Body::empty()))
+        .await
+        .expect("restore response");
+    assert_eq!(error_body(restored).await["data"]["enabled"], false);
+    sqlx::query("UPDATE subscription_plans SET enabled=TRUE WHERE id=3")
+        .execute(&pool)
+        .await
+        .expect("active enabled fixture");
+
+    let retried = app
+        .oneshot(request("POST", restore_uri, Body::empty()))
+        .await
+        .expect("restore retry response");
+    assert_eq!(error_body(retried).await["data"]["enabled"], true);
+    let state: (i64, bool) =
+        sqlx::query_as("SELECT archived_at,enabled FROM subscription_plans WHERE id=3")
+            .fetch_one(&pool)
+            .await
+            .expect("restored plan state");
+    assert_eq!(state, (0, true));
+}
+
 /// This is intentionally ignored by default: it fails if the caller has not
 /// explicitly supplied disposable loopback PostgreSQL 18 and Valkey services.
 #[tokio::test]

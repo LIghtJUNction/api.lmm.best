@@ -201,7 +201,12 @@ func subscriptionPlanPaymentMethodRequired(c *gin.Context) {
 
 func AdminListSubscriptionPlans(c *gin.Context) {
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	query := model.DB
+	includeArchived := c.Query("include_archived")
+	if includeArchived != "1" && !strings.EqualFold(includeArchived, "true") {
+		query = query.Where("archived_at = 0")
+	}
+	if err := query.Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}

@@ -158,6 +158,30 @@ func TestAdminDeleteSubscriptionPlanRejectsInvalidOrMissingPlan(t *testing.T) {
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
+func TestAdminBindSubscriptionRejectsArchivedPlanWithoutMutation(t *testing.T) {
+	truncateTables(t)
+	const userId = 9630
+	const planId = 9631
+	require.NoError(t, DB.Create(&User{
+		Id: userId, Username: "archived-plan-bind", Password: "password", Status: common.UserStatusEnabled,
+		Group: "default",
+	}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{
+		Id: planId, Title: "Archived plan", DurationUnit: SubscriptionDurationMonth,
+		DurationValue: 1, TotalAmount: 100, UpgradeGroup: "pro", Enabled: true, ArchivedAt: 1,
+	}).Error)
+
+	_, err := AdminBindSubscription(userId, planId, "test")
+	require.ErrorIs(t, err, ErrSubscriptionPlanArchived)
+
+	var subscriptionCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ?", userId).Count(&subscriptionCount).Error)
+	require.Zero(t, subscriptionCount)
+	var user User
+	require.NoError(t, DB.First(&user, userId).Error)
+	require.Equal(t, "default", user.Group)
+}
+
 func runDeletePersistenceRace(delete func() error, persist func() error) (error, error) {
 	start := make(chan struct{})
 	var wait sync.WaitGroup

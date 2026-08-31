@@ -10,7 +10,7 @@ mod reset;
 use axum::{
     Json, Router,
     body::to_bytes,
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -944,16 +944,24 @@ async fn list_enabled_plans(
         }
         Ok(true) => {}
     }
-    plan_list_response(plans(&state.pg, true).await)
+    plan_list_response(plans(&state.pg, true, false).await)
 }
+
+#[derive(Default, Deserialize)]
+struct AdminPlanListQuery {
+    include_archived: Option<String>,
+}
+
 async fn admin_list_plans(
     State(state): State<BillingSubscriptionsState>,
     headers: HeaderMap,
+    Query(query): Query<AdminPlanListQuery>,
 ) -> Response {
     if let Err(response) = admin(&state, &headers).await {
         return response;
     }
-    plan_list_response(plans(&state.pg, false).await)
+    let include_archived = include_archived_requested(query.include_archived.as_deref());
+    plan_list_response(plans(&state.pg, false, include_archived).await)
 }
 
 fn plan_list_response(result: Result<Vec<Plan>, sqlx::Error>) -> Response {
@@ -969,14 +977,28 @@ fn plan_list_response(result: Result<Vec<Plan>, sqlx::Error>) -> Response {
     )
 }
 
-async fn plans(pg: &PgPool, enabled_only: bool) -> Result<Vec<Plan>, sqlx::Error> {
-    let sql = if enabled_only {
+fn include_archived_requested(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn plan_list_sql(enabled_only: bool, include_archived: bool) -> String {
+    if enabled_only {
         format!(
             "{PLAN_SELECT} WHERE enabled = TRUE AND archived_at = 0 ORDER BY sort_order DESC, id DESC"
         )
-    } else {
+    } else if include_archived {
         format!("{PLAN_SELECT} ORDER BY sort_order DESC, id DESC")
-    };
+    } else {
+        format!("{PLAN_SELECT} WHERE archived_at = 0 ORDER BY sort_order DESC, id DESC")
+    }
+}
+
+async fn plans(
+    pg: &PgPool,
+    enabled_only: bool,
+    include_archived: bool,
+) -> Result<Vec<Plan>, sqlx::Error> {
+    let sql = plan_list_sql(enabled_only, include_archived);
     sqlx::query(&sql)
         .fetch_all(pg)
         .await?
@@ -986,7 +1008,7 @@ async fn plans(pg: &PgPool, enabled_only: bool) -> Result<Vec<Plan>, sqlx::Error
 }
 
 pub(crate) async fn enabled_plan_views(pg: &PgPool) -> Result<Vec<PlanView>, sqlx::Error> {
-    plans(pg, true)
+    plans(pg, true, false)
         .await
         .map(|plans| plans.into_iter().map(|plan| PlanView { plan }).collect())
 }
@@ -1347,7 +1369,7 @@ async fn admin_restore_plan(
             }
         };
     let restored = sqlx::query(
-        "UPDATE subscription_plans SET archived_at=0,enabled=FALSE,updated_at=$2 WHERE id=$1 RETURNING id",
+        "UPDATE subscription_plans SET archived_at=0,enabled=FALSE,updated_at=$2 WHERE id=$1 AND archived_at<>0 RETURNING id",
     )
     .bind(id)
     .bind(current)
@@ -1356,10 +1378,25 @@ async fn admin_restore_plan(
     match restored {
         Ok(Some(_)) => {}
         Ok(None) => {
-            return with_auth_version(failure(
-                StatusCode::BAD_REQUEST,
-                "Subscription plan not found",
-            ));
+            let existing = match locked_plan(&mut tx, id).await {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    return with_auth_version(failure(
+                        StatusCode::BAD_REQUEST,
+                        "Subscription plan not found",
+                    ));
+                }
+                Err(_) => {
+                    return with_auth_version(failure(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "系统错误",
+                    ));
+                }
+            };
+            if tx.commit().await.is_err() {
+                return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误"));
+            }
+            return with_auth_version(ok(existing));
         }
         Err(_) => return with_auth_version(failure(StatusCode::INTERNAL_SERVER_ERROR, "系统错误")),
     }
@@ -1740,6 +1777,9 @@ async fn create_subscription(
     plan: &Plan,
     source: &str,
 ) -> Result<Option<String>, &'static str> {
+    if plan.archived_at != 0 {
+        return Err("Subscription plan is archived");
+    }
     let user =
         sqlx::query("SELECT \"group\" FROM users WHERE id=$1 AND deleted_at IS NULL FOR UPDATE")
             .bind(user_id)
@@ -2125,8 +2165,8 @@ mod tests {
     use std::{error::Error, io};
 
     use super::{
-        LegacyUserSetting, Plan, end_time, next_reset, normalize_preference,
-        parse_preference_request,
+        LegacyUserSetting, Plan, end_time, include_archived_requested, next_reset,
+        normalize_preference, parse_preference_request, plan_list_sql,
     };
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -2172,6 +2212,18 @@ mod tests {
             updated_at: 0,
         }
     }
+    #[test]
+    fn admin_plan_archive_filter_is_explicit_and_management_only() {
+        assert!(!include_archived_requested(None));
+        assert!(!include_archived_requested(Some("false")));
+        assert!(include_archived_requested(Some("1")));
+        assert!(include_archived_requested(Some("TRUE")));
+
+        assert!(plan_list_sql(false, false).contains("WHERE archived_at = 0"));
+        assert!(!plan_list_sql(false, true).contains("WHERE archived_at = 0"));
+        assert!(plan_list_sql(true, true).contains("archived_at = 0"));
+    }
+
     #[test]
     fn preference_matches_go_enum_and_default() -> TestResult {
         for preference in [

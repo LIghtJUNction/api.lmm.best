@@ -133,6 +133,10 @@ type rootSubscriptionResetExecuteRequest struct {
 }
 
 func RootPreviewSubscriptionsBatch(c *gin.Context) {
+	if !requirePaymentCompliance(c) {
+		return
+	}
+
 	var req rootSubscriptionResetPreviewRequest
 	if err := decodeStrictJSONRequest(c, &req); err != nil {
 		common.ApiErrorMsg(c, "参数错误")
@@ -161,6 +165,10 @@ func RootPreviewSubscriptionsBatch(c *gin.Context) {
 }
 
 func RootResetSubscriptionsBatch(c *gin.Context) {
+	if !requirePaymentCompliance(c) {
+		return
+	}
+
 	var req rootSubscriptionResetExecuteRequest
 	if err := decodeStrictJSONRequest(c, &req); err != nil {
 		common.ApiErrorMsg(c, "参数错误")

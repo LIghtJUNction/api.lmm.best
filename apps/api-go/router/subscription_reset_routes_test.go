@@ -9,6 +9,7 @@ import (
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -44,26 +45,32 @@ func TestSubscriptionResetRoutesExposeOnlyPreviewedRootBatchMutations(t *testing
 	}
 }
 
-func TestSubscriptionResetTargetsRequireRootRole(t *testing.T) {
-	previousDB := model.DB
+func TestSubscriptionResetRoutesRequireRootRole(t *testing.T) {
+	previousDB, previousLogDB := model.DB, model.LOG_DB
 	previousRedisEnabled := common.RedisEnabled
 	previousMainDatabaseType, previousLogDatabaseType := common.MainDatabaseType(), common.LogDatabaseType()
+	paymentSetting := operation_setting.GetPaymentSetting()
+	previousPaymentSetting := *paymentSetting
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
 	common.RedisEnabled = false
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, previousLogDatabaseType)
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	model.DB = db
+	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.AutoMigrate(
 		&model.User{},
+		&model.Log{},
 		&model.SubscriptionPlan{},
 		&model.UserSubscription{},
 		&model.SubscriptionResetVoucher{},
 	))
 	t.Cleanup(func() {
-		model.DB = previousDB
+		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.RedisEnabled = previousRedisEnabled
 		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
+		*paymentSetting = previousPaymentSetting
 		if sqlDB, sqlErr := db.DB(); sqlErr == nil {
 			_ = sqlDB.Close()
 		}
@@ -83,14 +90,24 @@ func TestSubscriptionResetTargetsRequireRootRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	SetApiRouter(engine)
-	request := func(token string) *httptest.ResponseRecorder {
+	request := func(method, path, token string) *httptest.ResponseRecorder {
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/api/subscription/root/reset-targets?page=1&page_size=20", nil)
+		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
 		engine.ServeHTTP(recorder, req)
 		return recorder
 	}
 
-	require.Equal(t, http.StatusForbidden, request(adminToken).Code)
-	require.Equal(t, http.StatusOK, request(rootToken).Code)
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/subscription/root/reset-targets?page=1&page_size=20"},
+		{method: http.MethodPost, path: "/api/subscription/root/reset/preview"},
+		{method: http.MethodPost, path: "/api/subscription/root/reset"},
+	} {
+		require.Equal(t, http.StatusForbidden, request(route.method, route.path, adminToken).Code)
+		require.Equal(t, http.StatusOK, request(route.method, route.path, rootToken).Code)
+	}
 }

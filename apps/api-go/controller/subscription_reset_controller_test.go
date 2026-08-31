@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +47,40 @@ func TestRootSubscriptionResetRequestRejectsUnknownOrTrailingJSON(t *testing.T) 
 	context.Request = httptest.NewRequest("POST", "/", strings.NewReader(`{"preview_token":"p","operation_id":"o","mode":"hard"}`))
 	var executeRequest rootSubscriptionResetExecuteRequest
 	require.Error(t, decodeStrictJSONRequest(context, &executeRequest))
+}
+
+func TestRootSubscriptionResetWritesRequireComplianceBeforeDecoding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	paymentSetting := operation_setting.GetPaymentSetting()
+	original := *paymentSetting
+	t.Cleanup(func() { *paymentSetting = original })
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+
+	for _, test := range []struct {
+		name    string
+		handler func(*gin.Context)
+	}{
+		{name: "preview", handler: RootPreviewSubscriptionsBatch},
+		{name: "execute", handler: RootResetSubscriptionsBatch},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest("POST", "/", strings.NewReader("{"))
+			expectedMessage := common.TranslateMessage(context, i18n.MsgPaymentComplianceRequired)
+
+			test.handler(context)
+
+			var response struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+			require.False(t, response.Success)
+			require.Equal(t, expectedMessage, response.Message)
+		})
+	}
 }
 
 func TestParseSubscriptionResetIdsDeduplicatesAndRejectsInvalidOrOversizedInput(t *testing.T) {

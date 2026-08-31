@@ -64,6 +64,7 @@ var (
 	ErrSubscriptionPlanInUse    = errors.New("subscription plan is in use")
 	ErrSubscriptionPlanChanged  = errors.New("subscription plan changed before persistence")
 	ErrSubscriptionPlanDisabled = errors.New("subscription plan is disabled")
+	ErrSubscriptionPlanArchived = errors.New("subscription plan is archived")
 
 	subscriptionPlanCacheOnce     sync.Once
 	subscriptionPlanInfoCacheOnce sync.Once
@@ -1195,6 +1196,9 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 		plan, err = getSubscriptionPlanForPersistenceTx(tx, planId)
 		if err != nil {
 			return err
+		}
+		if plan.ArchivedAt != 0 {
+			return ErrSubscriptionPlanArchived
 		}
 		// Plan locks precede user locks across purchase paths, preventing a
 		// plan-delete/user-update lock inversion.
