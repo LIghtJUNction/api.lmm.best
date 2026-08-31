@@ -12,6 +12,7 @@ use axum::{
     response::Response,
 };
 use lmm_api_rs::{
+    ClientIpKey,
     auth::{
         AuthBundle, AuthError, AuthErrorKind, DashboardAuth, DashboardUser, LoginOutcome,
         LoginRequest, LogoutRequest, LogoutResult, RequestMetadata, TwoFactorLoginRequest,
@@ -356,12 +357,44 @@ async fn reset_execute_idempotent_replay_does_not_duplicate_durable_audit() -> T
     )
     .await?;
     assert_eq!(first["data"], replay["data"]);
-    let state: (i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT (SELECT amount_used FROM user_subscriptions WHERE id=11), (SELECT COUNT(*) FROM subscription_reset_events WHERE operation_id='audit-replay'), (SELECT COUNT(*) FROM subscription_reset_operations WHERE operation_id='audit-replay'), (SELECT COUNT(*) FROM logs WHERE other::jsonb #>> '{op,action}'='subscription.reset.execute')",
+    let state: (i64, i64, i64, i64, String) = sqlx::query_as(
+        "SELECT (SELECT amount_used FROM user_subscriptions WHERE id=11), (SELECT COUNT(*) FROM subscription_reset_events WHERE operation_id='audit-replay'), (SELECT COUNT(*) FROM subscription_reset_operations WHERE operation_id='audit-replay'), (SELECT COUNT(*) FROM logs WHERE other::jsonb #>> '{op,action}'='subscription.reset.execute'), (SELECT ip FROM logs WHERE other::jsonb #>> '{op,action}'='subscription.reset.execute' LIMIT 1)",
     )
     .fetch_one(&harness.pool)
     .await?;
-    assert_eq!(state, (0, 1, 1, 1));
+    assert_eq!(state, (0, 1, 1, 1, "203.0.113.7".to_owned()));
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_POSTGRES_URL from run-real-integration-gates.sh"]
+async fn reset_execute_rejects_a_deleted_target_user_without_consuming_preview() -> TestResult {
+    let harness = PgHarness::new().await?;
+    seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
+    let app = harness.app();
+    let token = create_preview(&app, "soft", json!([{"user_id":8,"plan_id":4}])).await?;
+    sqlx::query("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id=8")
+        .execute(&harness.pool)
+        .await?;
+    let response = response_json(
+        request(
+            app,
+            Method::POST,
+            "/api/subscription/root/reset",
+            "root",
+            Some(json!({"operation_id":"deleted-target","preview_token":token})),
+        )
+        .await?,
+    )
+    .await?;
+    assert_eq!(response["success"], false);
+    let state: (i64, i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT consumed_at FROM subscription_reset_previews WHERE token=$1), (SELECT COUNT(*) FROM subscription_reset_vouchers WHERE operation_id='deleted-target'), (SELECT COUNT(*) FROM subscription_reset_events WHERE operation_id='deleted-target'), (SELECT COUNT(*) FROM subscription_reset_operations WHERE operation_id='deleted-target'), (SELECT amount_used FROM user_subscriptions WHERE id=12)",
+    )
+    .bind(&token)
+    .fetch_one(&harness.pool)
+    .await?;
+    assert_eq!(state, (0, 0, 0, 0, 71));
     harness.cleanup().await
 }
 
@@ -474,7 +507,11 @@ async fn request(
         }
         None => Body::empty(),
     };
-    app.oneshot(builder.body(body).expect("request")).await
+    let mut request = builder.body(body).expect("request");
+    request
+        .extensions_mut()
+        .insert(ClientIpKey("203.0.113.7".to_owned()));
+    app.oneshot(request).await
 }
 
 async fn response_json(response: Response) -> TestResult<Value> {

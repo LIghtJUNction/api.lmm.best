@@ -195,10 +195,10 @@ func applyAdminSubscriptionSearch(query *gorm.DB, value string) *gorm.DB {
 	}
 	like := "%" + value + "%"
 	predicate := fmt.Sprintf(
-		"CAST(us.user_id AS %s) LIKE ? OR LOWER(users.username) LIKE ? OR LOWER(COALESCE(users.email, '')) LIKE ?",
+		"CAST(us.user_id AS %s) LIKE ? OR LOWER(users.username) LIKE ? OR LOWER(COALESCE(users.email, '')) LIKE ? OR LOWER(plans.title) LIKE ?",
 		adminSubscriptionUserIDCastType(query),
 	)
-	return query.Where(predicate, like, like, like)
+	return query.Where(predicate, like, like, like, like)
 }
 
 func ListAdminSubscriptionRecords(filter AdminSubscriptionRecordFilter) (*AdminSubscriptionRecordPage, error) {
@@ -798,6 +798,25 @@ func verifySubscriptionResetPreviewTx(tx *gorm.DB, targets []SubscriptionResetPr
 	return nil
 }
 
+func verifySubscriptionResetUsersTx(tx *gorm.DB, targets []SubscriptionResetPreviewTarget) error {
+	userIds := make(map[int]struct{}, len(targets))
+	for _, target := range targets {
+		userIds[target.UserId] = struct{}{}
+	}
+	ids := make([]int, 0, len(userIds))
+	for userId := range userIds {
+		ids = append(ids, userId)
+	}
+	var lockedIds []int
+	if err := lockForUpdate(tx).Model(&User{}).Where("id IN ?", ids).Pluck("id", &lockedIds).Error; err != nil {
+		return err
+	}
+	if len(lockedIds) != len(ids) {
+		return ErrSubscriptionResetPreviewStale
+	}
+	return nil
+}
+
 func resetFrozenSubscriptionTargetTx(tx *gorm.DB, target SubscriptionResetPreviewTarget, now int64) (int, int64, error) {
 	resetCount := 0
 	var restoredQuota int64
@@ -883,6 +902,9 @@ func AdminResetSubscriptionsBatch(input AdminSubscriptionResetBatchInput) (*Admi
 			return errors.New("subscription reset preview payload is invalid")
 		}
 		if err := verifySubscriptionResetPreviewTx(tx, targets, now); err != nil {
+			return err
+		}
+		if err := verifySubscriptionResetUsersTx(tx, targets); err != nil {
 			return err
 		}
 		claim := tx.Model(&SubscriptionResetPreview{}).
