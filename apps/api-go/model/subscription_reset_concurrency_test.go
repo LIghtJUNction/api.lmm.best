@@ -22,7 +22,7 @@ func withSubscriptionResetSQLiteDB(t *testing.T, maxOpenConnections int) *gorm.D
 	require.NoError(t, db.AutoMigrate(
 		&User{}, &SubscriptionPlan{}, &UserSubscription{},
 		&SubscriptionResetVoucher{}, &SubscriptionResetEvent{},
-		&SubscriptionResetPreview{}, &SubscriptionResetOperation{},
+		&SubscriptionResetPreview{}, &SubscriptionResetOperation{}, &Log{},
 	))
 	DB = db
 	t.Cleanup(func() {
@@ -65,11 +65,13 @@ func TestSubscriptionResetConcurrentPreviewClaimsExecuteExactlyOnceSQLite(t *tes
 		}
 	}
 	require.Equal(t, 1, successCount)
-	var operations, events int64
+	var operations, events, audits int64
 	require.NoError(t, db.Model(&SubscriptionResetOperation{}).Count(&operations).Error)
 	require.NoError(t, db.Model(&SubscriptionResetEvent{}).Count(&events).Error)
+	require.NoError(t, db.Model(&Log{}).Where("other LIKE ?", "%\"action\":\"subscription.reset.execute\"%").Count(&audits).Error)
 	require.EqualValues(t, 1, operations)
 	require.EqualValues(t, 1, events)
+	require.EqualValues(t, 1, audits)
 	var subscription UserSubscription
 	require.NoError(t, db.First(&subscription, 9793).Error)
 	require.Zero(t, subscription.AmountUsed)
