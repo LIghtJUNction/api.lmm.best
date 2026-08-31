@@ -38,7 +38,7 @@ catalog_columns=$(jq '[.[].columns[]] | length' "${catalog_file}")
 catalog_indexes=$(jq '[.[].indexes[]] | length' "${catalog_file}")
 catalog_sequences=$(jq '[.[] | select(.sequence != null)] | length' "${catalog_file}")
 [[ "${catalog_tables}" == 38 ]] || { echo "catalog export has ${catalog_tables} tables" >&2; exit 1; }
-[[ "${catalog_columns}" == 466 ]] || { echo "catalog export has ${catalog_columns} columns" >&2; exit 1; }
+[[ "${catalog_columns}" == 467 ]] || { echo "catalog export has ${catalog_columns} columns" >&2; exit 1; }
 [[ "${catalog_indexes}" == 193 ]] || { echo "catalog export has ${catalog_indexes} indexes" >&2; exit 1; }
 [[ "${catalog_sequences}" == 31 ]] || { echo "catalog export has ${catalog_sequences} sequences" >&2; exit 1; }
 
@@ -71,7 +71,7 @@ missing_defaults=$(psql -XAt -h "${rehearsal_dir}" -p "${port}" -U postgres -d l
 [[ "${unowned_sequences}" == 0 ]] || { echo "found ${unowned_sequences} unowned sequences" >&2; exit 1; }
 [[ "${missing_defaults}" == 0 ]] || { echo "found ${missing_defaults} invalid sequence defaults" >&2; exit 1; }
 
-echo "PostgreSQL baseline rehearsal passed: 38 tables, 466 columns, 193 indexes, 31 owned id sequences"
+echo "PostgreSQL baseline rehearsal passed: 38 tables, 467 columns, 193 indexes, 31 owned id sequences"
 
 LMM_TEST_PG_SOCKET="${rehearsal_dir}" \
 LMM_TEST_PG_PORT="${port}" \

@@ -6696,6 +6696,17 @@
           "converter": "boolean01"
         },
         {
+          "name": "auto_groups",
+          "sqlite_type": "text",
+          "sqlite_not_null": false,
+          "sqlite_default": null,
+          "pk_position": 0,
+          "postgres_type": "text",
+          "postgres_not_null": false,
+          "postgres_default": null,
+          "converter": "identity"
+        },
+        {
           "name": "deleted_at",
           "sqlite_type": "datetime",
           "sqlite_not_null": false,
