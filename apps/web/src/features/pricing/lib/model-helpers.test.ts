@@ -55,4 +55,13 @@ describe('pricing model group helpers', () => {
 
     assert.equal(getDisplayGroupRatio(sharedModel), 0.6)
   })
+
+  test('excludes hidden groups from the best disclosed ratio', () => {
+    const sharedModel = {
+      ...model(['all']),
+      group_ratio: { default: 1, vip: 0.8, auto: 0.1, '': 0.2 },
+    }
+
+    assert.equal(getDisplayGroupRatio(sharedModel), 0.8)
+  })
 })

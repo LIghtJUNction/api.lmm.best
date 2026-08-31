@@ -82,7 +82,9 @@ export function getDisplayGroupRatio(
 
   let minRatio = Number.POSITIVE_INFINITY
   const pricedGroups = enablesAllGroups
-    ? Object.keys(groupRatio).filter((group) => group !== FILTER_ALL)
+    ? Object.keys(groupRatio).filter(
+        (group) => group !== FILTER_ALL && !EXCLUDED_GROUPS.includes(group)
+      )
     : modelEnableGroups
 
   for (const group of pricedGroups) {
