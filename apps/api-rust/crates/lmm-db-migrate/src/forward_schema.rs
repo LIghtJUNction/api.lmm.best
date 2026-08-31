@@ -1,6 +1,6 @@
 //! Forward-only schema checks for mounted Rust business routes.
 //!
-//! Contract 1 intentionally remains the frozen 34-table SQLite baseline.  The Go-owned bounty
+//! Contract 1 intentionally remains the frozen 38-table SQLite baseline.  The Go-owned bounty
 //! tables are an expand step and become required only once a release advances to contract 2.
 
 use postgres::Transaction;
@@ -654,6 +654,9 @@ mod tests {
         assert!(sql.contains(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_reset_operations_preview_token"
         ));
+        // `forward` executes each content-addressed contract through Transaction::batch_execute;
+        // PostgreSQL therefore forbids CREATE INDEX CONCURRENTLY in this replay-safe artifact.
+        assert!(!sql.to_ascii_uppercase().contains("CONCURRENTLY"));
         assert!(!sql.to_ascii_uppercase().contains("FOREIGN KEY"));
     }
 

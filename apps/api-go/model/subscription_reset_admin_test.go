@@ -2,12 +2,15 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -495,6 +498,89 @@ func TestSubscriptionResetVoucherEmptyLockedSetDoesNotClaim(t *testing.T) {
 	require.NoError(t, DB.First(&voucher, voucher.Id).Error)
 	require.Equal(t, SubscriptionResetVoucherAvailable, voucher.Status)
 	require.Zero(t, subscriptionResetAuditCount(t, "subscription.reset.voucher_redeem"))
+}
+
+func subscriptionResetDialectDB(t *testing.T, dialect string) *gorm.DB {
+	t.Helper()
+	config := &gorm.Config{DryRun: true, DisableAutomaticPing: true}
+	switch dialect {
+	case "mysql":
+		db, err := gorm.Open(mysql.New(mysql.Config{
+			DSN:                       "gorm:gorm@tcp(127.0.0.1:9910)/gorm?charset=utf8mb4&parseTime=True&loc=Local",
+			SkipInitializeWithVersion: true,
+		}), config)
+		require.NoError(t, err)
+		return db
+	case "postgres":
+		db, err := gorm.Open(postgres.New(postgres.Config{
+			DSN:                  "host=127.0.0.1 port=9910 user=gorm dbname=gorm sslmode=disable",
+			PreferSimpleProtocol: true,
+		}), config)
+		require.NoError(t, err)
+		return db
+	case "sqlite":
+		return DB.Session(&gorm.Session{DryRun: true})
+	default:
+		t.Fatalf("unsupported test dialect %q", dialect)
+		return nil
+	}
+}
+
+func TestAdminSubscriptionSearchUsesDialectCompatibleUserIDCast(t *testing.T) {
+	for _, testCase := range []struct {
+		dialect string
+		cast    string
+	}{
+		{dialect: "mysql", cast: "CHAR"},
+		{dialect: "postgres", cast: "TEXT"},
+		{dialect: "sqlite", cast: "TEXT"},
+	} {
+		t.Run(testCase.dialect, func(t *testing.T) {
+			db := subscriptionResetDialectDB(t, testCase.dialect)
+			statement := applyAdminSubscriptionSearch(db.Table("user_subscriptions AS us"), " 42 ").
+				Find(&[]AdminSubscriptionRecord{}).Statement
+			require.NoError(t, statement.Error)
+			require.Contains(t, statement.SQL.String(), "CAST(us.user_id AS "+testCase.cast+")")
+		})
+	}
+}
+
+func TestSubscriptionResetTargetsJSONUsesPortableDialectTypes(t *testing.T) {
+	for _, testCase := range []struct {
+		dialect string
+		want    string
+	}{
+		{dialect: "mysql", want: "LONGTEXT NOT NULL"},
+		{dialect: "postgres", want: "TEXT NOT NULL"},
+		{dialect: "sqlite", want: "TEXT NOT NULL"},
+	} {
+		t.Run(testCase.dialect, func(t *testing.T) {
+			db := subscriptionResetDialectDB(t, testCase.dialect)
+			statement := &gorm.Statement{DB: db}
+			require.NoError(t, statement.Parse(&SubscriptionResetPreview{}))
+			field := statement.Schema.LookUpField("TargetsJSON")
+			require.NotNil(t, field)
+			require.Equal(t, testCase.want, db.Migrator().FullDataTypeOf(field).SQL)
+		})
+	}
+}
+
+func TestSubscriptionResetMaximumPreviewExceedsMySQLTextCapacity(t *testing.T) {
+	targets := make([]SubscriptionResetPreviewTarget, maxSubscriptionResetTargets)
+	for index := range targets {
+		targets[index] = SubscriptionResetPreviewTarget{
+			UserId: index + 1,
+			PlanId: index + 1,
+			Subscriptions: []SubscriptionResetPreviewSubscription{{
+				Id: index + 1, UserId: index + 1, PlanId: index + 1,
+				AmountUsed: 1, Status: "active",
+			}},
+		}
+	}
+	payload, err := json.Marshal(targets)
+	require.NoError(t, err)
+	require.Greater(t, len(payload), 65_535)
+	require.Equal(t, "LONGTEXT", SubscriptionResetTargetsJSON("").GormDBDataType(subscriptionResetDialectDB(t, "mysql"), nil))
 }
 
 func TestCheckedSubscriptionResetAddRejectsOverflow(t *testing.T) {

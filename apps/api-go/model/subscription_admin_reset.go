@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 const (
@@ -70,20 +71,31 @@ type SubscriptionResetEvent struct {
 
 func (SubscriptionResetEvent) TableName() string { return "subscription_reset_events" }
 
+type SubscriptionResetTargetsJSON string
+
+func (SubscriptionResetTargetsJSON) GormDataType() string { return "text" }
+
+func (SubscriptionResetTargetsJSON) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "mysql" {
+		return "LONGTEXT"
+	}
+	return "TEXT"
+}
+
 type SubscriptionResetPreview struct {
-	Token               string `json:"token" gorm:"type:varchar(64);primaryKey"`
-	ActorUserId         int    `json:"actor_user_id" gorm:"not null;index"`
-	Mode                string `json:"mode" gorm:"type:varchar(16);not null"`
-	TargetsJSON         string `json:"-" gorm:"type:text;not null"`
-	PayloadHash         string `json:"payload_hash" gorm:"type:varchar(64);not null"`
-	TargetCount         int    `json:"target_count" gorm:"not null"`
-	ActiveSubscriptions int    `json:"active_subscriptions" gorm:"not null"`
-	QuotaToRestore      int64  `json:"quota_to_restore" gorm:"not null"`
-	VoucherExpiresAt    int64  `json:"voucher_expires_at" gorm:"not null;default:0"`
-	ExpiresAt           int64  `json:"expires_at" gorm:"not null;index"`
-	ConsumedAt          int64  `json:"consumed_at" gorm:"not null;default:0"`
-	OperationId         string `json:"operation_id" gorm:"type:varchar(64);not null;default:''"`
-	CreatedAt           int64  `json:"created_at" gorm:"not null"`
+	Token               string                       `json:"token" gorm:"type:varchar(64);primaryKey"`
+	ActorUserId         int                          `json:"actor_user_id" gorm:"not null;index"`
+	Mode                string                       `json:"mode" gorm:"type:varchar(16);not null"`
+	TargetsJSON         SubscriptionResetTargetsJSON `json:"-" gorm:"not null"`
+	PayloadHash         string                       `json:"payload_hash" gorm:"type:varchar(64);not null"`
+	TargetCount         int                          `json:"target_count" gorm:"not null"`
+	ActiveSubscriptions int                          `json:"active_subscriptions" gorm:"not null"`
+	QuotaToRestore      int64                        `json:"quota_to_restore" gorm:"not null"`
+	VoucherExpiresAt    int64                        `json:"voucher_expires_at" gorm:"not null;default:0"`
+	ExpiresAt           int64                        `json:"expires_at" gorm:"not null;index"`
+	ConsumedAt          int64                        `json:"consumed_at" gorm:"not null;default:0"`
+	OperationId         string                       `json:"operation_id" gorm:"type:varchar(64);not null;default:''"`
+	CreatedAt           int64                        `json:"created_at" gorm:"not null"`
 }
 
 func (SubscriptionResetPreview) TableName() string { return "subscription_reset_previews" }
@@ -169,13 +181,24 @@ func normalizeSubscriptionAdminPage(page, pageSize int) (int, int) {
 	return page, pageSize
 }
 
+func adminSubscriptionUserIDCastType(db *gorm.DB) string {
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "mysql" {
+		return "CHAR"
+	}
+	return "TEXT"
+}
+
 func applyAdminSubscriptionSearch(query *gorm.DB, value string) *gorm.DB {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
 		return query
 	}
 	like := "%" + value + "%"
-	return query.Where("CAST(us.user_id AS TEXT) LIKE ? OR LOWER(users.username) LIKE ? OR LOWER(COALESCE(users.email, '')) LIKE ?", like, like, like)
+	predicate := fmt.Sprintf(
+		"CAST(us.user_id AS %s) LIKE ? OR LOWER(users.username) LIKE ? OR LOWER(COALESCE(users.email, '')) LIKE ?",
+		adminSubscriptionUserIDCastType(query),
+	)
+	return query.Where(predicate, like, like, like)
 }
 
 func ListAdminSubscriptionRecords(filter AdminSubscriptionRecordFilter) (*AdminSubscriptionRecordPage, error) {
@@ -544,7 +567,7 @@ func AdminPreviewSubscriptionsReset(input AdminSubscriptionResetBatchInput) (*Ad
 	}
 	preview := SubscriptionResetPreview{
 		Token: result.Token, ActorUserId: input.ActorUserId, Mode: mode,
-		TargetsJSON: string(targetJSON), PayloadHash: payloadHash,
+		TargetsJSON: SubscriptionResetTargetsJSON(targetJSON), PayloadHash: payloadHash,
 		TargetCount: result.TargetCount, ActiveSubscriptions: result.ActiveSubscriptions,
 		QuotaToRestore: result.QuotaToRestore, VoucherExpiresAt: result.VoucherExpiresAt,
 		ExpiresAt: result.ExpiresAt, CreatedAt: now,

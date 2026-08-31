@@ -38,8 +38,8 @@ fn full_copy_should_verify_all_tables_and_rollback_both_fault_phases() {
     };
 
     let report = rehearse(&options(&fixtures, "lmm_copy_success", &database_url)).unwrap();
-    assert_eq!(report.table_count, 34);
-    assert_eq!(report.sequence_count, 29);
+    assert_eq!(report.table_count, 38);
+    assert_eq!(report.sequence_count, 31);
     assert_eq!(report.financial_aggregates.len(), 15);
     assert!(
         verify(&VerifyOptions {
