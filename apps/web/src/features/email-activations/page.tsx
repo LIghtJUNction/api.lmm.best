@@ -39,9 +39,19 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { CopyButton } from '@/components/copy-button'
 import { useDataTable } from '@/components/data-table/hooks/use-data-table'
 import { DataTablePage } from '@/components/data-table/layout/data-table-page'
+import {
+  sideDrawerContentClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+} from '@/components/drawer-layout'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout/components/section-page-layout'
 import { LoadingState } from '@/components/loading-state'
+import {
+  CardStaggerContainer,
+  CardStaggerItem,
+  FadeIn,
+} from '@/components/page-transition'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -252,90 +262,92 @@ function HistoryMobileCards({
   }
 
   return (
-    <div className='space-y-3'>
+    <CardStaggerContainer className='space-y-3'>
       {items.map((activation) => {
         const canCancel = canCancelHeroSmsActivation(activation.status)
         const canReorder = canReorderHeroSmsActivation(activation.status)
 
         return (
-          <Card key={String(activation.id)}>
-            <CardHeader className='pb-0'>
-              <div className='flex min-w-0 items-start justify-between gap-3'>
-                <div className='min-w-0 space-y-1'>
-                  <CardTitle className='truncate text-sm'>
-                    {activation.email || t('Pending email assignment')}
-                  </CardTitle>
-                  <CardDescription className='truncate'>
-                    {activation.site || '—'} · {activation.domain || '—'}
-                  </CardDescription>
+          <CardStaggerItem key={String(activation.id)}>
+            <Card>
+              <CardHeader className='pb-0'>
+                <div className='flex min-w-0 items-start justify-between gap-3'>
+                  <div className='min-w-0 space-y-1'>
+                    <CardTitle className='truncate text-sm'>
+                      {activation.email || t('Pending email assignment')}
+                    </CardTitle>
+                    <CardDescription className='truncate'>
+                      {activation.site || '—'} · {activation.domain || '—'}
+                    </CardDescription>
+                  </div>
+                  <HeroSmsStatusBadge status={activation.status} t={t} />
                 </div>
-                <HeroSmsStatusBadge status={activation.status} t={t} />
-              </div>
-            </CardHeader>
-            <CardContent className='space-y-3'>
-              <div className='grid grid-cols-2 gap-3 text-sm'>
-                <MetaItem label={t('Code')} value={activation.code || '—'} />
-                <MetaItem
-                  label={t('Quota charge')}
-                  value={formatNumber(activation.charge_quota)}
-                />
-                <MetaItem
-                  label={t('Created')}
-                  value={formatDateTime(activation.created_at)}
-                />
-              </div>
-              <div className='flex flex-wrap gap-2'>
-                <Button
-                  size='sm'
-                  variant='outline'
-                  onClick={() => onOpenDetail(activation)}
-                >
-                  {t('View details')}
-                </Button>
-                <Button
-                  size='sm'
-                  variant='outline'
-                  onClick={() => onRefresh(activation)}
-                >
-                  <HugeiconsIcon
-                    icon={ReloadIcon}
-                    data-icon='inline-start'
-                    strokeWidth={2}
+              </CardHeader>
+              <CardContent className='space-y-3'>
+                <div className='grid grid-cols-2 gap-3 text-sm'>
+                  <MetaItem label={t('Code')} value={activation.code || '—'} />
+                  <MetaItem
+                    label={t('Quota charge')}
+                    value={formatNumber(activation.charge_quota)}
                   />
-                  <span>{t('Refresh')}</span>
-                </Button>
-                <Button
-                  size='sm'
-                  variant='outline'
-                  onClick={() => onCancel(activation)}
-                  disabled={!canCancel}
-                >
-                  <HugeiconsIcon
-                    icon={CancelCircleIcon}
-                    data-icon='inline-start'
-                    strokeWidth={2}
+                  <MetaItem
+                    label={t('Created')}
+                    value={formatDateTime(activation.created_at)}
                   />
-                  <span>{t('Cancel')}</span>
-                </Button>
-                <Button
-                  size='sm'
-                  variant='outline'
-                  onClick={() => onReorder(activation)}
-                  disabled={!canReorder}
-                >
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    data-icon='inline-start'
-                    strokeWidth={2}
-                  />
-                  <span>{t('Reorder')}</span>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+                </div>
+                <div className='flex flex-wrap gap-2'>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    onClick={() => onOpenDetail(activation)}
+                  >
+                    {t('View details')}
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    onClick={() => onRefresh(activation)}
+                  >
+                    <HugeiconsIcon
+                      icon={ReloadIcon}
+                      data-icon='inline-start'
+                      strokeWidth={2}
+                    />
+                    <span>{t('Refresh')}</span>
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    onClick={() => onCancel(activation)}
+                    disabled={!canCancel}
+                  >
+                    <HugeiconsIcon
+                      icon={CancelCircleIcon}
+                      data-icon='inline-start'
+                      strokeWidth={2}
+                    />
+                    <span>{t('Cancel')}</span>
+                  </Button>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    onClick={() => onReorder(activation)}
+                    disabled={!canReorder}
+                  >
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      data-icon='inline-start'
+                      strokeWidth={2}
+                    />
+                    <span>{t('Reorder')}</span>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </CardStaggerItem>
         )
       })}
-    </div>
+    </CardStaggerContainer>
   )
 }
 
@@ -352,7 +364,8 @@ export function EmailActivationsPage() {
   const { t } = useTranslation()
   const [activationKind, setActivationKind] = useState<'sms' | 'email'>('sms')
   useHeroSmsTranslations()
-  const isMobile = useMediaQuery('(max-width: 640px)')
+  // Match Tailwind's `sm` breakpoint: at 640px the side drawer uses desktop layout.
+  const isMobile = useMediaQuery('(max-width: 639px)')
   const queryClient = useQueryClient()
   const emailMode = activationKind === 'email'
 
@@ -420,6 +433,16 @@ export function EmailActivationsPage() {
     detailTarget?.id ?? null,
     emailMode && !!detailTarget
   )
+  const detailActivation =
+    detailTarget &&
+    detailQuery.data?.activation &&
+    String(detailQuery.data.activation.id) === String(detailTarget.id)
+      ? detailQuery.data.activation
+      : null
+  const detailFeedback =
+    !detailActivation && !detailQuery.isPending
+      ? describeHeroSmsError(parseHeroSmsError(detailQuery.error), t)
+      : null
 
   const productsLoading =
     !!trimmedSite && (debouncedSite !== trimmedSite || productsQuery.isLoading)
@@ -1078,7 +1101,7 @@ export function EmailActivationsPage() {
                   ) : null}
 
                   {currentActivation ? (
-                    <>
+                    <FadeIn className='space-y-4'>
                       <div className='rounded-xl border p-4'>
                         <div className='flex flex-wrap items-start justify-between gap-3'>
                           <div className='min-w-0 space-y-2'>
@@ -1198,7 +1221,7 @@ export function EmailActivationsPage() {
                           <span>{t('Reorder')}</span>
                         </Button>
                       </div>
-                    </>
+                    </FadeIn>
                   ) : (
                     <Alert>
                       <HugeiconsIcon
@@ -1278,9 +1301,11 @@ export function EmailActivationsPage() {
         >
           <SheetContent
             side={isMobile ? 'bottom' : 'right'}
-            className='max-h-[88dvh] w-full overflow-y-auto sm:max-w-xl'
+            className={sideDrawerContentClassName(
+              'h-[88dvh] sm:h-dvh sm:max-w-xl'
+            )}
           >
-            <SheetHeader>
+            <SheetHeader className={sideDrawerHeaderClassName()}>
               <SheetTitle>{t('Activation details')}</SheetTitle>
               <SheetDescription>
                 {t(
@@ -1289,104 +1314,107 @@ export function EmailActivationsPage() {
               </SheetDescription>
             </SheetHeader>
 
-            <div className='mt-6 space-y-4'>
-              {detailQuery.isLoading && !detailQuery.data ? (
-                <LoadingState message={t('Loading activation details...')} />
-              ) : null}
-
-              {(() => {
-                const detailActivation =
-                  detailQuery.data?.activation ?? detailTarget
-                if (!detailActivation) {
-                  return null
-                }
-
-                return (
-                  <>
-                    <div className='flex flex-wrap items-start justify-between gap-3'>
-                      <div className='min-w-0 space-y-2'>
-                        <HeroSmsStatusBadge
-                          status={detailActivation.status}
-                          t={t}
-                        />
-                        <div className='min-w-0'>
-                          <p className='text-muted-foreground text-xs'>
-                            {t('Email')}
+            <div
+              className={sideDrawerFormClassName('gap-4')}
+              aria-busy={!detailActivation && detailQuery.isPending}
+            >
+              {!detailActivation && detailQuery.isPending ? (
+                <div role='status' aria-live='polite'>
+                  <LoadingState message={t('Loading activation details...')} />
+                </div>
+              ) : detailFeedback ? (
+                <div role='alert'>
+                  <ErrorState
+                    title={detailFeedback.title}
+                    description={detailFeedback.description}
+                    onRetry={() => void detailQuery.refetch()}
+                  />
+                </div>
+              ) : detailActivation ? (
+                <>
+                  <div className='flex flex-wrap items-start justify-between gap-3'>
+                    <div className='min-w-0 space-y-2'>
+                      <HeroSmsStatusBadge
+                        status={detailActivation.status}
+                        t={t}
+                      />
+                      <div className='min-w-0'>
+                        <p className='text-muted-foreground text-xs'>
+                          {t('Email')}
+                        </p>
+                        <div className='flex items-center gap-2'>
+                          <p className='truncate font-semibold'>
+                            {detailActivation.email || '—'}
                           </p>
-                          <div className='flex items-center gap-2'>
-                            <p className='truncate font-semibold'>
-                              {detailActivation.email || '—'}
-                            </p>
-                            {detailActivation.email ? (
-                              <CopyButton value={detailActivation.email} />
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className='min-w-0'>
-                          <p className='text-muted-foreground text-xs'>
-                            {t('Verification code')}
-                          </p>
-                          <div className='flex items-center gap-2'>
-                            <p className='font-semibold'>
-                              {detailActivation.code || '—'}
-                            </p>
-                            {detailActivation.code ? (
-                              <CopyButton value={detailActivation.code} />
-                            ) : null}
-                          </div>
+                          {detailActivation.email ? (
+                            <CopyButton value={detailActivation.email} />
+                          ) : null}
                         </div>
                       </div>
-                      <Badge variant='outline'>
-                        {t('Order #{{id}}', { id: detailActivation.order_id })}
-                      </Badge>
+                      <div className='min-w-0'>
+                        <p className='text-muted-foreground text-xs'>
+                          {t('Verification code')}
+                        </p>
+                        <div className='flex items-center gap-2'>
+                          <p className='font-semibold'>
+                            {detailActivation.code || '—'}
+                          </p>
+                          {detailActivation.code ? (
+                            <CopyButton value={detailActivation.code} />
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
+                    <Badge variant='outline'>
+                      {t('Order #{{id}}', { id: detailActivation.order_id })}
+                    </Badge>
+                  </div>
 
-                    {detailActivation.message ? (
-                      <Alert>
-                        <HugeiconsIcon
-                          icon={InformationCircleIcon}
-                          strokeWidth={2}
-                          aria-hidden='true'
-                        />
-                        <AlertTitle>{t('Provider message')}</AlertTitle>
-                        <AlertDescription>
-                          {detailActivation.message}
-                        </AlertDescription>
-                      </Alert>
-                    ) : null}
+                  {detailActivation.message ? (
+                    <Alert>
+                      <HugeiconsIcon
+                        icon={InformationCircleIcon}
+                        strokeWidth={2}
+                        aria-hidden='true'
+                      />
+                      <AlertTitle>{t('Provider message')}</AlertTitle>
+                      <AlertDescription>
+                        {detailActivation.message}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
 
-                    <div className='grid gap-4 rounded-xl border p-4 sm:grid-cols-2'>
-                      <MetaItem
-                        label={t('Site')}
-                        value={detailActivation.site || '—'}
-                      />
-                      <MetaItem
-                        label={t('Domain')}
-                        value={detailActivation.domain || '—'}
-                      />
-                      <MetaItem
-                        label={t('Created')}
-                        value={formatDateTime(detailActivation.created_at)}
-                      />
-                      <MetaItem
-                        label={t('Updated')}
-                        value={formatDateTime(detailActivation.updated_at)}
-                      />
-                      <MetaItem
-                        label={t('Quota charge')}
-                        value={formatNumber(detailActivation.charge_quota)}
-                      />
-                      <MetaItem
-                        label={t('Cancellation reason')}
-                        value={formatCancellationReason(
-                          detailActivation.cancel_reason,
-                          t
-                        )}
-                      />
-                    </div>
-                  </>
-                )
-              })()}
+                  <div className='grid gap-4 rounded-xl border p-4 sm:grid-cols-2'>
+                    <MetaItem
+                      label={t('Site')}
+                      value={detailActivation.site || '—'}
+                    />
+                    <MetaItem
+                      label={t('Domain')}
+                      value={detailActivation.domain || '—'}
+                    />
+                    <MetaItem
+                      label={t('Created')}
+                      value={formatDateTime(detailActivation.created_at)}
+                    />
+                    <MetaItem
+                      label={t('Updated')}
+                      value={formatDateTime(detailActivation.updated_at)}
+                    />
+                    <MetaItem
+                      label={t('Quota charge')}
+                      value={formatNumber(detailActivation.charge_quota)}
+                    />
+                    <MetaItem
+                      label={t('Cancellation reason')}
+                      value={formatCancellationReason(
+                        detailActivation.cancel_reason,
+                        t
+                      )}
+                    />
+                  </div>
+                </>
+              ) : null}
             </div>
           </SheetContent>
         </Sheet>
@@ -1482,18 +1510,22 @@ function Field({
 
 function InlineAlert({ feedback }: { feedback: InlineFeedback }) {
   return (
-    <Alert
-      variant={feedback.tone === 'destructive' ? 'destructive' : 'default'}
-    >
-      <HugeiconsIcon
-        icon={
-          feedback.tone === 'destructive' ? Alert02Icon : InformationCircleIcon
-        }
-        strokeWidth={2}
-        aria-hidden='true'
-      />
-      <AlertTitle>{feedback.title}</AlertTitle>
-      <AlertDescription>{feedback.description}</AlertDescription>
-    </Alert>
+    <FadeIn>
+      <Alert
+        variant={feedback.tone === 'destructive' ? 'destructive' : 'default'}
+      >
+        <HugeiconsIcon
+          icon={
+            feedback.tone === 'destructive'
+              ? Alert02Icon
+              : InformationCircleIcon
+          }
+          strokeWidth={2}
+          aria-hidden='true'
+        />
+        <AlertTitle>{feedback.title}</AlertTitle>
+        <AlertDescription>{feedback.description}</AlertDescription>
+      </Alert>
+    </FadeIn>
   )
 }

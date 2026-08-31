@@ -35,6 +35,7 @@ import {
   PhoneCall,
   Radio,
   RotateCcw,
+  Server,
   ServerCog,
   Settings,
   Ticket,
@@ -94,6 +95,11 @@ export function useSidebarData(): SidebarData {
               title: t('Model Square'),
               url: '/pricing',
               icon: Box,
+            },
+            {
+              title: t('Status detection'),
+              url: '/status',
+              icon: Server,
             },
           ],
         },
@@ -158,6 +164,11 @@ export function useSidebarData(): SidebarData {
             title: t('Model Square'),
             url: '/pricing',
             icon: Box,
+          },
+          {
+            title: t('Status detection'),
+            url: '/status',
+            icon: Server,
           },
           {
             title: t('API Keys'),
