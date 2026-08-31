@@ -476,6 +476,7 @@ fn subscription_method_allowed(path: &str, method: &axum::http::Method) -> bool 
             *method == Method::POST
         }
         _ if path.ends_with("/reset-vouchers/") => false,
+        _ if path.ends_with("/subscriptions/reset") => false,
         _ if path.starts_with("/api/subscription/admin/plans/") && path.ends_with("/restore") => {
             *method == Method::POST
         }
