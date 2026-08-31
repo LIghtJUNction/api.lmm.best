@@ -26,6 +26,15 @@ struct ColumnRequirement {
     nullable: bool,
 }
 
+#[derive(Clone, Copy)]
+struct IndexRequirement {
+    table: &'static str,
+    name: &'static str,
+    unique: bool,
+    columns: &'static [&'static str],
+    predicate: Option<&'static str>,
+}
+
 const fn column(
     name: &'static str,
     data_type: &'static str,
@@ -632,37 +641,37 @@ pub fn verify_subscription_reset_schema(
             }
         }
     }
-    let required_indexes: &[(&str, &str, bool, &[&str], Option<&str>)] = &[
-        (
-            "subscription_plans",
-            "idx_subscription_plans_archived_at",
-            false,
-            &["archived_at"],
-            None,
-        ),
-        (
-            "subscription_reset_vouchers",
-            "idx_subscription_reset_voucher_operation",
-            true,
-            &["user_id", "plan_id", "operation_id"],
-            None,
-        ),
-        (
-            "subscription_reset_events",
-            "idx_subscription_reset_event_operation",
-            true,
-            &["operation_id", "user_id", "plan_id", "mode"],
-            None,
-        ),
-        (
-            "subscription_reset_operations",
-            "idx_subscription_reset_operations_preview_token",
-            true,
-            &["preview_token"],
-            None,
-        ),
+    let required_indexes = [
+        IndexRequirement {
+            table: "subscription_plans",
+            name: "idx_subscription_plans_archived_at",
+            unique: false,
+            columns: &["archived_at"],
+            predicate: None,
+        },
+        IndexRequirement {
+            table: "subscription_reset_vouchers",
+            name: "idx_subscription_reset_voucher_operation",
+            unique: true,
+            columns: &["user_id", "plan_id", "operation_id"],
+            predicate: None,
+        },
+        IndexRequirement {
+            table: "subscription_reset_events",
+            name: "idx_subscription_reset_event_operation",
+            unique: true,
+            columns: &["operation_id", "user_id", "plan_id", "mode"],
+            predicate: None,
+        },
+        IndexRequirement {
+            table: "subscription_reset_operations",
+            name: "idx_subscription_reset_operations_preview_token",
+            unique: true,
+            columns: &["preview_token"],
+            predicate: None,
+        },
     ];
-    for &(table, index, unique, columns, predicate) in required_indexes {
+    for requirement in required_indexes {
         let definition = transaction.query_opt(
             r#"SELECT metadata.indisunique,
                 ARRAY(
@@ -680,23 +689,24 @@ pub fn verify_subscription_reset_schema(
                JOIN pg_catalog.pg_class AS table_class ON table_class.oid=metadata.indrelid
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid=table_class.relnamespace
               WHERE namespace.nspname=$1 AND table_class.relname=$2 AND index_class.relname=$3"#,
-            &[&schema, &table, &index],
+            &[&schema, &requirement.table, &requirement.name],
         )?;
         let compatible = definition.is_some_and(|row| {
             let found_unique: bool = row.get(0);
             let found_columns: Vec<String> = row.get(1);
             let found_predicate: Option<String> = row.get(2);
-            found_unique == unique
-                && found_columns.len() == columns.len()
+            found_unique == requirement.unique
+                && found_columns.len() == requirement.columns.len()
                 && found_columns
                     .iter()
                     .map(String::as_str)
-                    .eq(columns.iter().copied())
-                && found_predicate.as_deref() == predicate
+                    .eq(requirement.columns.iter().copied())
+                && found_predicate.as_deref() == requirement.predicate
         });
         if !compatible {
             return Err(MigrationError::Manifest(format!(
-                "forward schema is missing compatible index {index}"
+                "forward schema is missing compatible index {}",
+                requirement.name
             )));
         }
     }
