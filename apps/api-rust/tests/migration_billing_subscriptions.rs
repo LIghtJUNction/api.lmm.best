@@ -722,6 +722,10 @@ async fn seed(pool: &PgPool) {
 async fn reset_schema(pool: &PgPool) {
     for table in [
         "logs",
+        "subscription_reset_operations",
+        "subscription_reset_previews",
+        "subscription_reset_events",
+        "subscription_reset_vouchers",
         "subscription_orders",
         "user_subscriptions",
         "subscription_pre_consume_records",
@@ -740,7 +744,7 @@ async fn reset_schema(pool: &PgPool) {
         .expect("options schema");
     sqlx::query("CREATE TABLE users (id BIGINT PRIMARY KEY, \"group\" TEXT NOT NULL, setting TEXT NOT NULL DEFAULT '{}', deleted_at TIMESTAMPTZ)")
         .execute(pool).await.expect("users schema");
-    sqlx::query("CREATE TABLE subscription_plans (id BIGINT PRIMARY KEY, title TEXT NOT NULL, subtitle TEXT, price_amount NUMERIC NOT NULL, currency TEXT, duration_unit TEXT, duration_value BIGINT, custom_seconds BIGINT, enabled BOOLEAN NOT NULL, sort_order BIGINT, allow_balance_pay BOOLEAN, allow_wallet_overflow BOOLEAN, stripe_price_id TEXT, creem_product_id TEXT, waffo_pancake_product_id TEXT, waffo_pancake_product_type TEXT NOT NULL DEFAULT 'subscription', max_purchase_per_user BIGINT, total_amount BIGINT NOT NULL, upgrade_group TEXT, downgrade_group TEXT, quota_reset_period TEXT, quota_reset_custom_seconds BIGINT, created_at BIGINT, updated_at BIGINT)")
+    sqlx::query("CREATE TABLE subscription_plans (id BIGINT PRIMARY KEY, title TEXT NOT NULL, subtitle TEXT, price_amount NUMERIC NOT NULL, currency TEXT, duration_unit TEXT, duration_value BIGINT, custom_seconds BIGINT, enabled BOOLEAN NOT NULL, sort_order BIGINT, allow_balance_pay BOOLEAN, allow_wallet_overflow BOOLEAN, stripe_price_id TEXT, creem_product_id TEXT, waffo_pancake_product_id TEXT, waffo_pancake_product_type TEXT NOT NULL DEFAULT 'subscription', max_purchase_per_user BIGINT, total_amount BIGINT NOT NULL, upgrade_group TEXT, downgrade_group TEXT, quota_reset_period TEXT, quota_reset_custom_seconds BIGINT, created_at BIGINT, updated_at BIGINT, archived_at BIGINT NOT NULL DEFAULT 0)")
         .execute(pool).await.expect("plans schema");
     sqlx::query("CREATE TABLE user_subscriptions (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, plan_id BIGINT NOT NULL, amount_total BIGINT NOT NULL CHECK (amount_total > 0), amount_used BIGINT NOT NULL, start_time BIGINT NOT NULL, end_time BIGINT NOT NULL, status TEXT NOT NULL, source TEXT NOT NULL, last_reset_time BIGINT NOT NULL, next_reset_time BIGINT NOT NULL, upgrade_group TEXT NOT NULL, prev_user_group TEXT NOT NULL, downgrade_group TEXT NOT NULL, allow_wallet_overflow BOOLEAN NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)")
         .execute(pool).await.expect("subscriptions schema");
@@ -752,6 +756,14 @@ async fn reset_schema(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("orders schema");
+    sqlx::query("CREATE TABLE subscription_reset_vouchers (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, plan_id BIGINT NOT NULL, operation_id VARCHAR(64) NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'available', expires_at BIGINT NOT NULL, redeemed_at BIGINT NOT NULL DEFAULT 0, created_by BIGINT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, UNIQUE (user_id, plan_id, operation_id))")
+        .execute(pool).await.expect("reset vouchers schema");
+    sqlx::query("CREATE TABLE subscription_reset_events (id BIGSERIAL PRIMARY KEY, operation_id VARCHAR(64) NOT NULL, user_id BIGINT NOT NULL, plan_id BIGINT NOT NULL, mode VARCHAR(24) NOT NULL, actor_user_id BIGINT NOT NULL, voucher_id BIGINT NOT NULL DEFAULT 0, reset_count BIGINT NOT NULL DEFAULT 0, restored_quota BIGINT NOT NULL DEFAULT 0, voucher_expiry BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL, UNIQUE (operation_id, user_id, plan_id, mode))")
+        .execute(pool).await.expect("reset events schema");
+    sqlx::query("CREATE TABLE subscription_reset_previews (token VARCHAR(64) PRIMARY KEY, actor_user_id BIGINT NOT NULL, mode VARCHAR(16) NOT NULL, targets_json TEXT NOT NULL, payload_hash VARCHAR(64) NOT NULL, target_count BIGINT NOT NULL, active_subscriptions BIGINT NOT NULL, quota_to_restore BIGINT NOT NULL, voucher_expires_at BIGINT NOT NULL DEFAULT 0, expires_at BIGINT NOT NULL, consumed_at BIGINT NOT NULL DEFAULT 0, operation_id VARCHAR(64) NOT NULL DEFAULT '', created_at BIGINT NOT NULL)")
+        .execute(pool).await.expect("reset previews schema");
+    sqlx::query("CREATE TABLE subscription_reset_operations (operation_id VARCHAR(64) PRIMARY KEY, preview_token VARCHAR(64) NOT NULL UNIQUE, actor_user_id BIGINT NOT NULL, mode VARCHAR(16) NOT NULL, payload_hash VARCHAR(64) NOT NULL, result_json TEXT NOT NULL, created_at BIGINT NOT NULL, completed_at BIGINT NOT NULL)")
+        .execute(pool).await.expect("reset operations schema");
     sqlx::query("CREATE TABLE logs (user_id BIGINT, created_at BIGINT, type BIGINT, content TEXT, username TEXT, ip TEXT, other TEXT)")
         .execute(pool).await.expect("logs schema");
 }
