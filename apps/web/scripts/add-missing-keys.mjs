@@ -6463,70 +6463,6 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
-const subscriptionResetUserFilterTranslations = {
-  en: {
-    'User IDs': 'User IDs',
-    'For example: 12, 34, 56': 'For example: 12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      'User IDs must be positive integers separated by commas, with at most {{count}} entries.',
-    'Optional comma-separated user ID filter.':
-      'Optional comma-separated user ID filter.',
-  },
-  zh: {
-    'User IDs': '用户 ID',
-    'For example: 12, 34, 56': '例如：12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      '用户 ID 必须为用逗号分隔的正整数，最多 {{count}} 个。',
-    'Optional comma-separated user ID filter.':
-      '可选：用逗号分隔的用户 ID 筛选条件。',
-  },
-  'zh-TW': {
-    'User IDs': '使用者 ID',
-    'For example: 12, 34, 56': '例如：12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      '使用者 ID 必須是以逗號分隔的正整數，最多 {{count}} 個。',
-    'Optional comma-separated user ID filter.':
-      '選填：以逗號分隔的使用者 ID 篩選條件。',
-  },
-  fr: {
-    'User IDs': 'ID utilisateur',
-    'For example: 12, 34, 56': 'Par exemple : 12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      'Les ID utilisateur doivent être des entiers positifs séparés par des virgules, avec un maximum de {{count}} entrées.',
-    'Optional comma-separated user ID filter.':
-      'Filtre facultatif d’ID utilisateur séparés par des virgules.',
-  },
-  ja: {
-    'User IDs': 'ユーザー ID',
-    'For example: 12, 34, 56': '例：12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      'ユーザー ID はカンマ区切りの正の整数で、最大 {{count}} 件までです。',
-    'Optional comma-separated user ID filter.':
-      '任意：カンマ区切りのユーザー ID フィルター。',
-  },
-  ru: {
-    'User IDs': 'ID пользователей',
-    'For example: 12, 34, 56': 'Например: 12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      'ID пользователей должны быть положительными целыми числами, разделёнными запятыми; не более {{count}}.',
-    'Optional comma-separated user ID filter.':
-      'Необязательный фильтр по ID пользователей через запятую.',
-  },
-  vi: {
-    'User IDs': 'ID người dùng',
-    'For example: 12, 34, 56': 'Ví dụ: 12, 34, 56',
-    'User IDs must be positive integers separated by commas, with at most {{count}} entries.':
-      'ID người dùng phải là số nguyên dương, phân tách bằng dấu phẩy, tối đa {{count}} mục.',
-    'Optional comma-separated user ID filter.':
-      'Bộ lọc ID người dùng tùy chọn, phân tách bằng dấu phẩy.',
-  },
-}
-for (const [locale, translations] of Object.entries(
-  subscriptionResetUserFilterTranslations
-)) {
-  Object.assign(newKeys[locale], translations)
-}
-
 const statusDetectionTranslations = {
   en: {
     'Average TTFT': 'Average TTFT',
@@ -6731,6 +6667,64 @@ const statusDetectionTranslations = {
 }
 for (const [locale, translations] of Object.entries(
   statusDetectionTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const externalNavigationTranslations = {
+  en: {
+    'Unable to open CC Switch': 'Unable to open CC Switch',
+    'Unable to open link': 'Unable to open link',
+    'Unable to open email app': 'Unable to open email app',
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      'Unable to open email app. Copy the request and email it to {{email}}.',
+  },
+  zh: {
+    'Unable to open CC Switch': '无法打开 CC Switch',
+    'Unable to open link': '无法打开链接',
+    'Unable to open email app': '无法打开邮件应用',
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      '无法打开邮件应用。请复制请求并发送至 {{email}}。',
+  },
+  'zh-TW': {
+    'Unable to open CC Switch': '無法開啟 CC Switch',
+    'Unable to open link': '無法開啟連結',
+    'Unable to open email app': '無法開啟郵件應用程式',
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      '無法開啟郵件應用程式。請複製請求並傳送至 {{email}}。',
+  },
+  fr: {
+    'Unable to open CC Switch': "Impossible d'ouvrir CC Switch",
+    'Unable to open link': "Impossible d'ouvrir le lien",
+    'Unable to open email app':
+      "Impossible d'ouvrir l'application de messagerie",
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      "Impossible d'ouvrir l'application de messagerie. Copiez la demande et envoyez-la à {{email}}.",
+  },
+  ja: {
+    'Unable to open CC Switch': 'CC Switchを開けません',
+    'Unable to open link': 'リンクを開けません',
+    'Unable to open email app': 'メールアプリを開けません',
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      'メールアプリを開けません。リクエストをコピーして {{email}} 宛てに送信してください。',
+  },
+  ru: {
+    'Unable to open CC Switch': 'Не удалось открыть CC Switch',
+    'Unable to open link': 'Не удалось открыть ссылку',
+    'Unable to open email app': 'Не удалось открыть почтовое приложение',
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      'Не удалось открыть почтовое приложение. Скопируйте запрос и отправьте его на адрес {{email}}.',
+  },
+  vi: {
+    'Unable to open CC Switch': 'Không thể mở CC Switch',
+    'Unable to open link': 'Không thể mở liên kết',
+    'Unable to open email app': 'Không thể mở ứng dụng email',
+    'Unable to open email app. Copy the request and email it to {{email}}.':
+      'Không thể mở ứng dụng email. Hãy sao chép yêu cầu và gửi đến {{email}}.',
+  },
+}
+for (const [locale, translations] of Object.entries(
+  externalNavigationTranslations
 )) {
   Object.assign(newKeys[locale], translations)
 }
