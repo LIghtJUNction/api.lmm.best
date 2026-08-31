@@ -78,15 +78,11 @@ pub struct Table {
     pub verifier: String,
 }
 
-/// Current schema contract represented by the version-2 full-copy manifest.
-pub const CURRENT_SCHEMA_CONTRACT_ID: u32 = 6;
-
 /// Versioned, exhaustive migration contract.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub version: u32,
-    pub contract_id: u32,
     pub evidence: String,
     pub tables: Vec<Table>,
 }
@@ -113,7 +109,7 @@ pub struct PostgresCatalogColumn {
 }
 
 impl Manifest {
-    /// Loads JSON and enforces the exact 39-table production contract.
+    /// Loads JSON and enforces the exact 38-table production contract.
     pub fn load(path: &Path) -> Result<Self, MigrationError> {
         let manifest: Self = serde_json::from_slice(&fs::read(path)?)?;
         manifest.validate()?;
@@ -126,11 +122,6 @@ impl Manifest {
             return Err(MigrationError::Manifest(format!(
                 "unsupported manifest version {}",
                 self.version
-            )));
-        }
-        if self.contract_id != CURRENT_SCHEMA_CONTRACT_ID {
-            return Err(MigrationError::Manifest(format!(
-                "manifest version 2 must bind schema contract {CURRENT_SCHEMA_CONTRACT_ID}"
             )));
         }
         let expected: BTreeSet<_> = EXPECTED_TABLES.iter().copied().collect();
@@ -327,7 +318,7 @@ fn validate_unique_names<'a>(
     Ok(())
 }
 
-const EXPECTED_TABLES: [&str; 39] = [
+const EXPECTED_TABLES: [&str; 38] = [
     "abilities",
     "auth_flows",
     "authz_roles",
@@ -347,7 +338,6 @@ const EXPECTED_TABLES: [&str; 39] = [
     "redemptions",
     "setups",
     "subscription_orders",
-    "subscription_payment_events",
     "subscription_plans",
     "subscription_pre_consume_records",
     "subscription_reset_events",
@@ -371,8 +361,6 @@ const EXPECTED_TABLES: [&str; 39] = [
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest, Sha256};
-
     use super::*;
 
     fn manifest_and_catalog() -> (Manifest, Vec<PostgresCatalogTable>) {
@@ -413,37 +401,7 @@ mod tests {
     #[test]
     fn checked_in_manifest_should_be_strictly_valid() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/table-map.json");
-        let manifest = Manifest::load(&path).unwrap();
-        assert_eq!(manifest.contract_id, CURRENT_SCHEMA_CONTRACT_ID);
-    }
-
-    #[test]
-    fn current_manifest_must_not_claim_contract_one() {
-        let (mut manifest, _) = manifest_and_catalog();
-        manifest.contract_id = 1;
-        assert!(manifest.validate().is_err());
-    }
-
-    #[test]
-    fn frozen_contract_one_artifacts_keep_their_reviewed_hashes() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/contract-1");
-        for (name, expected) in [
-            (
-                "export-postgres-catalog.sql",
-                "21144a5efdf828c602b6bd8f09fd2ec77dbca4c409f71a1870d2cb28e045396d",
-            ),
-            (
-                "postgresql-baseline.sql",
-                "4f24c35c366c1edcb083a9b0f2bcacea24c9d91fe391a202594cc49bdd99216f",
-            ),
-            (
-                "table-map.json",
-                "83d46968f53f16469e273db5d42f100690bb205959bc401c25bc0a0091fa2147",
-            ),
-        ] {
-            let actual = format!("{:x}", Sha256::digest(fs::read(root.join(name)).unwrap()));
-            assert_eq!(actual, expected, "{name}");
-        }
+        Manifest::load(&path).unwrap();
     }
 
     #[test]

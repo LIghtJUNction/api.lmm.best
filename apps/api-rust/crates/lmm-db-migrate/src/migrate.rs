@@ -25,17 +25,13 @@ use crate::{
     },
     forward_schema::{
         BOUNTY_SCHEMA_CONTRACT_ID, CURRENT_DASHBOARD_SCHEMA_CONTRACT_ID,
-        PAYMENT_MONEY_SCHEMA_CONTRACT_ID, SUBSCRIPTION_RESET_SCHEMA_CONTRACT_ID,
-        WAFFO_PRODUCT_TYPE_SCHEMA_CONTRACT_ID, verify_current_dashboard_schema,
-        verify_open_source_bounty_schema, verify_payment_money_schema,
-        verify_subscription_reset_schema, verify_waffo_product_type_schema,
+        SUBSCRIPTION_RESET_SCHEMA_CONTRACT_ID, verify_current_dashboard_schema,
+        verify_open_source_bounty_schema, verify_subscription_reset_schema,
     },
     inspect::inspect_sqlite,
-    manifest::{CURRENT_SCHEMA_CONTRACT_ID, Column, Converter, Manifest, Table},
+    manifest::{Column, Converter, Manifest, Table},
     postgres_catalog::acquire_shared_migration_lock,
-    release::{
-        CompatibilityRange, ComponentHash, ReleaseBinding, ReleaseId, Sha256Digest, Version,
-    },
+    release::ReleaseBinding,
 };
 
 #[derive(Debug, Serialize)]
@@ -85,113 +81,8 @@ pub struct VerifyOptions<'a> {
     pub release: &'a ReleaseBinding,
 }
 
-const CONTRACT_MIGRATIONS: [&str; CURRENT_SCHEMA_CONTRACT_ID as usize] = [
-    "0001_schema_contract.sql",
-    "0002_open_source_bounty_schema.sql",
-    "0003_current_dashboard_schema.sql",
-    "0004_payment_money_contract.sql",
-    "0005_waffo_plan_product_type.sql",
-    "0006_subscription_reset_system.sql",
-];
-
-fn validate_manifest_release_contract(
-    manifest: &Manifest,
-    release: &ReleaseBinding,
-) -> Result<(), MigrationError> {
-    if i64::from(manifest.contract_id) != release.contract_id().as_i64() {
-        return Err(MigrationError::Manifest(format!(
-            "manifest contract {} does not match release contract {}",
-            manifest.contract_id,
-            release.contract_id().as_i64()
-        )));
-    }
-    Ok(())
-}
-
-fn install_bootstrap_contract_chain(
-    transaction: &mut Transaction<'_>,
-    schema: &str,
-    target_migration: &Path,
-    target_release: &ReleaseBinding,
-) -> Result<(), MigrationError> {
-    let target_id = usize::try_from(target_release.contract_id().as_i64())
-        .map_err(|_| MigrationError::Manifest("schema contract id is out of range".into()))?;
-    if target_id == 0 || target_id > CONTRACT_MIGRATIONS.len() {
-        return Err(MigrationError::Manifest(format!(
-            "no bootstrap migration chain is registered for contract {target_id}"
-        )));
-    }
-    let expected_name = CONTRACT_MIGRATIONS[target_id - 1];
-    if target_migration.file_name().and_then(|name| name.to_str()) != Some(expected_name) {
-        return Err(MigrationError::Manifest(format!(
-            "contract {target_id} must use migration {expected_name}"
-        )));
-    }
-    let migration_directory = target_migration.parent().ok_or_else(|| {
-        MigrationError::Manifest("contract migration has no parent directory".into())
-    })?;
-    for contract_id in 1..=target_id {
-        let migration = migration_directory.join(CONTRACT_MIGRATIONS[contract_id - 1]);
-        let bootstrap_release;
-        let release = if contract_id == target_id {
-            target_release
-        } else {
-            bootstrap_release = bootstrap_release_binding(contract_id, &migration, target_release)?;
-            &bootstrap_release
-        };
-        match contract_id as i64 {
-            PAYMENT_MONEY_SCHEMA_CONTRACT_ID => {
-                verify_payment_money_schema(transaction, schema)?;
-                crate::contract::record_preapplied(transaction, schema, &migration, release)?;
-            }
-            WAFFO_PRODUCT_TYPE_SCHEMA_CONTRACT_ID => {
-                verify_waffo_product_type_schema(transaction, schema)?;
-                crate::contract::record_preapplied(transaction, schema, &migration, release)?;
-            }
-            _ => {
-                crate::contract::install_or_verify(transaction, schema, &migration, release)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn bootstrap_release_binding(
-    contract_id: usize,
-    migration: &Path,
-    target: &ReleaseBinding,
-) -> Result<ReleaseBinding, MigrationError> {
-    let contract_sha256 = Sha256Digest::parse(
-        &format!("{:x}", Sha256::digest(fs::read(migration)?)),
-        "contract_sha256",
-    )?;
-    let minimum = Version::new(1, "bootstrap_minimum_version")?;
-    let maximum = Version::new(contract_id as u64, "bootstrap_maximum_version")?;
-    let compatibility = CompatibilityRange::new(minimum, maximum, "bootstrap_compatibility")?;
-    let release_id: ReleaseId = format!(
-        "bootstrap-c{contract_id}-{}",
-        &target.release_sha256().as_str()[..16]
-    )
-    .parse()?;
-    let components = target
-        .components()
-        .iter()
-        .map(|(name, sha256)| format!("{name}={sha256}").parse::<ComponentHash>())
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ReleaseBinding::new(
-        Version::new(contract_id as u64, "bootstrap_contract_id")?,
-        contract_sha256,
-        compatibility,
-        compatibility,
-        release_id,
-        target.release_sha256().clone(),
-        components,
-    )?)
-}
-
 pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, MigrationError> {
     validate_schema(options.schema)?;
-    validate_manifest_release_contract(options.manifest, options.release)?;
     let inspection = inspect_sqlite(options.sqlite, options.manifest)?;
     if !inspection.drift.is_empty() {
         return Err(MigrationError::Manifest(
@@ -246,7 +137,7 @@ pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, Migrat
         options.release,
     )?;
     ensure_source_still_offline(options.sqlite, options.manifest, &source_before)?;
-    install_bootstrap_contract_chain(
+    crate::contract::install_or_verify(
         &mut transaction,
         options.schema,
         options.contract_migration,
@@ -268,7 +159,6 @@ pub fn rehearse(options: &RehearseOptions<'_>) -> Result<MigrationReport, Migrat
 
 pub fn verify(options: &VerifyOptions<'_>) -> Result<MigrationReport, MigrationError> {
     validate_schema(options.schema)?;
-    validate_manifest_release_contract(options.manifest, options.release)?;
     let inspection = inspect_sqlite(options.sqlite, options.manifest)?;
     if !inspection.drift.is_empty() {
         return Err(MigrationError::Manifest(

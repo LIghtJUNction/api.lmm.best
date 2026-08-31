@@ -110,28 +110,6 @@ pub fn install_or_verify(
 ///
 /// Returns [`ContractError`] when tables or rows are absent, inconsistent, downgraded, or do not
 /// match the expected immutable release metadata.
-/// Records an immutable contract whose schema was already materialized by a verified cumulative
-/// baseline. This path never executes migration SQL and requires a complete existing ledger.
-pub(crate) fn record_preapplied(
-    transaction: &mut Transaction<'_>,
-    schema: &str,
-    migration: &Path,
-    binding: &ReleaseBinding,
-) -> Result<ContractInstallOutcome, ContractError> {
-    reject_public_schema(schema)?;
-    let sql = fs::read(migration)?;
-    let actual_hash = format!("{:x}", Sha256::digest(sql));
-    if actual_hash != binding.contract_sha256().as_str() {
-        return Err(ContractError::ContractHashMismatch);
-    }
-    transaction.batch_execute("SET LOCAL search_path = pg_catalog")?;
-    if registry_presence(transaction, schema)? != RegistryPresence::Complete {
-        return Err(ContractError::UnknownState);
-    }
-    let state = load_state(transaction, schema)?;
-    reconcile_existing(transaction, schema, "", binding, &state)
-}
-
 pub fn verify_release(
     transaction: &mut Transaction<'_>,
     schema: &str,

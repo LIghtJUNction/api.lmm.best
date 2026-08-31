@@ -1,7 +1,7 @@
 //! Forward-only schema checks for mounted Rust business routes.
 //!
-//! Contract 1 remains the frozen 34-table historical baseline. The current cumulative full-copy
-//! manifest is explicitly contract 6 and records the complete immutable contract chain.
+//! Contract 1 intentionally remains the frozen 38-table SQLite baseline.  The Go-owned bounty
+//! tables are an expand step and become required only once a release advances to contract 2.
 
 use postgres::Transaction;
 
@@ -11,10 +11,6 @@ use crate::MigrationError;
 pub const BOUNTY_SCHEMA_CONTRACT_ID: i64 = 2;
 /// The first schema contract that supports current dashboard workflow data.
 pub const CURRENT_DASHBOARD_SCHEMA_CONTRACT_ID: i64 = 3;
-/// The first schema contract that requires immutable subscription settlement evidence.
-pub const PAYMENT_MONEY_SCHEMA_CONTRACT_ID: i64 = 4;
-/// The first schema contract that records the Waffo Pancake plan product type.
-pub const WAFFO_PRODUCT_TYPE_SCHEMA_CONTRACT_ID: i64 = 5;
 /// The first schema contract that requires the subscription reset subsystem.
 pub const SUBSCRIPTION_RESET_SCHEMA_CONTRACT_ID: i64 = 6;
 
@@ -223,12 +219,12 @@ const TABLES: &[(&str, &[ColumnRequirement])] = &[
     ("open_source_bounty_rest_operations", REST_OPERATION_COLUMNS),
 ];
 
-fn verify_table_columns(
+/// Verifies the table/column contract needed by the Rust bounty routes.
+pub fn verify_open_source_bounty_schema(
     transaction: &mut Transaction<'_>,
     schema: &str,
-    tables: &[(&str, &[ColumnRequirement])],
 ) -> Result<(), MigrationError> {
-    for &(table, columns) in tables {
+    for &(table, columns) in TABLES {
         let table_exists: bool = transaction
             .query_one(
                 "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'r')",
@@ -265,14 +261,6 @@ fn verify_table_columns(
         }
     }
     Ok(())
-}
-
-/// Verifies the table/column contract needed by the Rust bounty routes.
-pub fn verify_open_source_bounty_schema(
-    transaction: &mut Transaction<'_>,
-    schema: &str,
-) -> Result<(), MigrationError> {
-    verify_table_columns(transaction, schema, TABLES)
 }
 
 const DEVELOPER_ACCESS_COLUMNS: &[ColumnRequirement] = &[
@@ -521,66 +509,6 @@ pub fn verify_current_dashboard_schema(
         }
     }
     Ok(())
-}
-
-const PAYMENT_ORDER_COLUMNS: &[ColumnRequirement] = &[
-    nullable_column("plan_snapshot", "text", None),
-    nullable_column("plan_currency", "character varying", Some(8)),
-    column("expected_amount_micros", "bigint", None),
-    nullable_column("settlement_currency", "character varying", Some(8)),
-    nullable_column("provider_product_id", "character varying", Some(255)),
-    nullable_column("provider_store_id", "character varying", Some(255)),
-    nullable_column("provider_subscription_id", "character varying", Some(255)),
-    nullable_column("provider_subscription_state", "character varying", Some(32)),
-    nullable_column("current_period_start", "bigint", None),
-    nullable_column("current_period_end", "bigint", None),
-    nullable_column("user_subscription_id", "bigint", None),
-    column("refunded_amount_micros", "bigint", None),
-    column("refunded_quota", "bigint", None),
-];
-
-const PAYMENT_EVENT_COLUMNS: &[ColumnRequirement] = &[
-    column("id", "bigint", None),
-    column("subscription_order_id", "bigint", None),
-    column("payment_provider", "character varying", Some(64)),
-    column("provider_event_id", "character varying", Some(255)),
-    column("provider_transaction_id", "character varying", Some(255)),
-    column("settlement_currency", "character varying", Some(8)),
-    column("settlement_amount_micros", "bigint", None),
-    nullable_column("period_start", "bigint", None),
-    nullable_column("period_end", "bigint", None),
-    nullable_column("created_time", "bigint", None),
-];
-
-const PAYMENT_MONEY_TABLES: &[(&str, &[ColumnRequirement])] = &[
-    ("subscription_orders", PAYMENT_ORDER_COLUMNS),
-    ("subscription_payment_events", PAYMENT_EVENT_COLUMNS),
-];
-
-const WAFFO_PRODUCT_TYPE_COLUMNS: &[ColumnRequirement] = &[column(
-    "waffo_pancake_product_type",
-    "character varying",
-    Some(16),
-)];
-
-/// Verifies the schema already materialized for the immutable legacy contract-4 artifact.
-pub fn verify_payment_money_schema(
-    transaction: &mut Transaction<'_>,
-    schema: &str,
-) -> Result<(), MigrationError> {
-    verify_table_columns(transaction, schema, PAYMENT_MONEY_TABLES)
-}
-
-/// Verifies the schema already materialized for the immutable legacy contract-5 artifact.
-pub fn verify_waffo_product_type_schema(
-    transaction: &mut Transaction<'_>,
-    schema: &str,
-) -> Result<(), MigrationError> {
-    verify_table_columns(
-        transaction,
-        schema,
-        &[("subscription_plans", WAFFO_PRODUCT_TYPE_COLUMNS)],
-    )
 }
 
 fn bigint_default_is_exact_zero(default: Option<&str>) -> bool {

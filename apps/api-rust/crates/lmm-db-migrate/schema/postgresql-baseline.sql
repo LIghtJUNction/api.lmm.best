@@ -364,57 +364,25 @@ CREATE SEQUENCE public.setups_id_seq
     CACHE 1;
 ALTER SEQUENCE public.setups_id_seq OWNED BY public.setups.id;
 CREATE TABLE public.subscription_orders (
-id bigint NOT NULL,
-user_id bigint,
-plan_id bigint,
-money numeric,
-plan_currency character varying(8),
-trade_no character varying(255),
-payment_method character varying(50),
-payment_provider character varying(50) DEFAULT ''::character varying,
-user_subscription_id bigint DEFAULT 0,
-refunded_amount_micros bigint DEFAULT 0 NOT NULL,
-refunded_quota bigint DEFAULT 0 NOT NULL,
-status text,
-create_time bigint,
-complete_time bigint,
-plan_snapshot text,
-expected_amount_micros bigint DEFAULT 0 NOT NULL,
-settlement_currency character varying(8),
-provider_product_id character varying(255),
-provider_store_id character varying(255),
-provider_subscription_id character varying(255),
-provider_subscription_state character varying(32),
-current_period_start bigint,
-current_period_end bigint,
-provider_payload text
+    id bigint NOT NULL,
+    user_id bigint,
+    plan_id bigint,
+    money numeric,
+    trade_no character varying(255),
+    payment_method character varying(50),
+    payment_provider character varying(50) DEFAULT ''::character varying,
+    status text,
+    create_time bigint,
+    complete_time bigint,
+    provider_payload text
 );
 CREATE SEQUENCE public.subscription_orders_id_seq
-START WITH 1
-INCREMENT BY 1
-NO MINVALUE
-NO MAXVALUE
-CACHE 1;
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
 ALTER SEQUENCE public.subscription_orders_id_seq OWNED BY public.subscription_orders.id;
-CREATE TABLE public.subscription_payment_events (
-id bigint NOT NULL,
-subscription_order_id bigint NOT NULL,
-payment_provider character varying(64) NOT NULL,
-provider_event_id character varying(255) NOT NULL,
-provider_transaction_id character varying(255) NOT NULL,
-settlement_currency character varying(8) NOT NULL,
-settlement_amount_micros bigint NOT NULL,
-period_start bigint,
-period_end bigint,
-created_time bigint
-);
-CREATE SEQUENCE public.subscription_payment_events_id_seq
-START WITH 1
-INCREMENT BY 1
-NO MINVALUE
-NO MAXVALUE
-CACHE 1;
-ALTER SEQUENCE public.subscription_payment_events_id_seq OWNED BY public.subscription_payment_events.id;
 CREATE TABLE public.subscription_plans (
     id bigint NOT NULL,
     title character varying(128) NOT NULL,
@@ -743,7 +711,6 @@ ALTER TABLE ONLY public.quota_data ALTER COLUMN id SET DEFAULT nextval('public.q
 ALTER TABLE ONLY public.redemptions ALTER COLUMN id SET DEFAULT nextval('public.redemptions_id_seq'::regclass);
 ALTER TABLE ONLY public.setups ALTER COLUMN id SET DEFAULT nextval('public.setups_id_seq'::regclass);
 ALTER TABLE ONLY public.subscription_orders ALTER COLUMN id SET DEFAULT nextval('public.subscription_orders_id_seq'::regclass);
-ALTER TABLE ONLY public.subscription_payment_events ALTER COLUMN id SET DEFAULT nextval('public.subscription_payment_events_id_seq'::regclass);
 ALTER TABLE ONLY public.subscription_plans ALTER COLUMN id SET DEFAULT nextval('public.subscription_plans_id_seq'::regclass);
 ALTER TABLE ONLY public.subscription_pre_consume_records ALTER COLUMN id SET DEFAULT nextval('public.subscription_pre_consume_records_id_seq'::regclass);
 ALTER TABLE ONLY public.system_tasks ALTER COLUMN id SET DEFAULT nextval('public.system_tasks_id_seq'::regclass);
@@ -795,9 +762,7 @@ ALTER TABLE ONLY public.setups
 ALTER TABLE ONLY public.subscription_orders
     ADD CONSTRAINT subscription_orders_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.subscription_orders
-ADD CONSTRAINT subscription_orders_trade_no_key UNIQUE (trade_no);
-ALTER TABLE ONLY public.subscription_payment_events
-ADD CONSTRAINT subscription_payment_events_pkey PRIMARY KEY (id);
+    ADD CONSTRAINT subscription_orders_trade_no_key UNIQUE (trade_no);
 ALTER TABLE ONLY public.subscription_plans
     ADD CONSTRAINT subscription_plans_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY public.subscription_pre_consume_records
@@ -891,21 +856,9 @@ CREATE INDEX idx_quota_data_user_id ON public.quota_data USING btree (user_id);
 CREATE INDEX idx_redemptions_deleted_at ON public.redemptions USING btree (deleted_at);
 CREATE UNIQUE INDEX idx_redemptions_key ON public.redemptions USING btree (key);
 CREATE INDEX idx_redemptions_name ON public.redemptions USING btree (name);
-CREATE INDEX idx_subscription_orders_current_period_end ON public.subscription_orders USING btree (current_period_end);
 CREATE INDEX idx_subscription_orders_plan_id ON public.subscription_orders USING btree (plan_id);
-CREATE INDEX idx_subscription_orders_provider_product_id ON public.subscription_orders USING btree (provider_product_id);
-CREATE INDEX idx_subscription_orders_provider_store_id ON public.subscription_orders USING btree (provider_store_id);
-CREATE INDEX idx_subscription_orders_provider_subscription_id ON public.subscription_orders USING btree (provider_subscription_id);
-CREATE INDEX idx_subscription_orders_provider_subscription_state ON public.subscription_orders USING btree (provider_subscription_state);
-CREATE INDEX idx_subscription_orders_settlement_currency ON public.subscription_orders USING btree (settlement_currency);
 CREATE INDEX idx_subscription_orders_trade_no ON public.subscription_orders USING btree (trade_no);
 CREATE INDEX idx_subscription_orders_user_id ON public.subscription_orders USING btree (user_id);
-CREATE INDEX idx_subscription_orders_user_subscription_id ON public.subscription_orders USING btree (user_subscription_id);
-CREATE UNIQUE INDEX idx_subscription_order_period ON public.subscription_payment_events USING btree (subscription_order_id, period_end);
-CREATE INDEX idx_subscription_payment_events_created_time ON public.subscription_payment_events USING btree (created_time);
-CREATE UNIQUE INDEX idx_subscription_payment_events_provider_event_id ON public.subscription_payment_events USING btree (provider_event_id);
-CREATE INDEX idx_subscription_payment_events_subscription_order_id ON public.subscription_payment_events USING btree (subscription_order_id);
-CREATE UNIQUE INDEX idx_subscription_provider_transaction ON public.subscription_payment_events USING btree (payment_provider, provider_transaction_id);
 CREATE UNIQUE INDEX idx_subscription_pre_consume_records_request_id ON public.subscription_pre_consume_records USING btree (request_id);
 CREATE INDEX idx_subscription_pre_consume_records_status ON public.subscription_pre_consume_records USING btree (status);
 CREATE INDEX idx_subscription_pre_consume_records_updated_at ON public.subscription_pre_consume_records USING btree (updated_at);
