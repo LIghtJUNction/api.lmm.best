@@ -579,7 +579,7 @@ async fn subscription_admin_routes_preserve_tcp_contract_atomicity_and_cache_rec
     .expect("atomic plan-delete audit");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&audit).expect("audit JSON")["op"]["action"],
-        "subscription.plan_delete"
+        "subscription.plan_remove"
     );
     server.abort();
 }
