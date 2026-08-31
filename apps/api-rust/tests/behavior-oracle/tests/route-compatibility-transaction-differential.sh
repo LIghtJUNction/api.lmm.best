@@ -393,7 +393,7 @@ for schema in "$go_schema" "$rust_schema"; do
 done
 # The frozen Go binary always performs its historical AutoMigrate at startup,
 # including harmless default-column repairs.  Give each listener ownership of
-# only its own disposable schema so the test cannot escape its fixture.
+# only its own disposable schema so that migration cannot escape its fixture.
 for owner_pair in "$go_schema:$go_role" "$rust_schema:$rust_role"; do
   schema=${owner_pair%%:*}; role=${owner_pair##*:}
   admin_schema_sql "$schema" "DO \$\$ DECLARE r record; BEGIN
