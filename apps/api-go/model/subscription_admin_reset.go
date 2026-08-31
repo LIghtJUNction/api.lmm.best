@@ -903,10 +903,13 @@ func AdminResetSubscriptionsBatch(input AdminSubscriptionResetBatchInput) (*Admi
 		if err != nil || payloadHash != preview.PayloadHash || len(targets) != preview.TargetCount {
 			return errors.New("subscription reset preview payload is invalid")
 		}
-		if err := verifySubscriptionResetPreviewTx(tx, targets, now); err != nil {
+		// Payment completion locks the user before inserting or updating a
+		// subscription. Keep the same user -> subscription order so a reset
+		// cannot verify an old subscription set while waiting on the user row.
+		if err := verifySubscriptionResetUsersTx(tx, targets); err != nil {
 			return err
 		}
-		if err := verifySubscriptionResetUsersTx(tx, targets); err != nil {
+		if err := verifySubscriptionResetPreviewTx(tx, targets, now); err != nil {
 			return err
 		}
 		claim := tx.Model(&SubscriptionResetPreview{}).

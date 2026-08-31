@@ -136,6 +136,7 @@ fn normalize_admin_search(value: &str) -> String {
 }
 
 const ADMIN_RECORDS_BASE: &str = " FROM user_subscriptions us JOIN users ON users.id=us.user_id AND users.deleted_at IS NULL JOIN subscription_plans plans ON plans.id=us.plan_id WHERE ($1='' OR CAST(us.user_id AS TEXT) LIKE $2 OR LOWER(users.username) LIKE $2 OR LOWER(COALESCE(users.email,'')) LIKE $2 OR LOWER(plans.title) LIKE $2) AND ($3::BIGINT<=0 OR us.plan_id=$3) AND ($4='all' OR $4='' OR us.status=$4)";
+const RESET_TARGETS_BASE: &str = " FROM user_subscriptions us JOIN users ON users.id=us.user_id AND users.deleted_at IS NULL JOIN subscription_plans plans ON plans.id=us.plan_id WHERE us.status='active' AND us.end_time>$1 AND ($2='' OR CAST(us.user_id AS TEXT) LIKE $3 OR LOWER(users.username) LIKE $3 OR LOWER(COALESCE(users.email,'')) LIKE $3 OR LOWER(plans.title) LIKE $3) AND ($4::BIGINT<=0 OR us.plan_id=$4) AND (CARDINALITY($5::BIGINT[])=0 OR us.plan_id=ANY($5)) AND (CARDINALITY($6::BIGINT[])=0 OR us.user_id=ANY($6))";
 
 fn parse_query_ids(value: Option<&str>) -> Result<Vec<i64>, ResetError> {
     let value = value.unwrap_or_default().trim();
@@ -277,13 +278,13 @@ async fn eligible_rows(
     offset: i64,
     limit: i64,
 ) -> Result<(i64, Vec<Eligible>), sqlx::Error> {
-    let like = format!("%{}%", query.trim().to_ascii_lowercase());
-    let base = " FROM user_subscriptions us JOIN users ON users.id=us.user_id AND users.deleted_at IS NULL JOIN subscription_plans plans ON plans.id=us.plan_id WHERE us.status='active' AND us.end_time>$1 AND ($2='' OR CAST(us.user_id AS TEXT) LIKE $3 OR LOWER(users.username) LIKE $3 OR LOWER(COALESCE(users.email,'')) LIKE $3) AND ($4::BIGINT<=0 OR us.plan_id=$4) AND (CARDINALITY($5::BIGINT[])=0 OR us.plan_id=ANY($5)) AND (CARDINALITY($6::BIGINT[])=0 OR us.user_id=ANY($6))";
+    let search = normalize_admin_search(query);
+    let like = format!("%{search}%");
     let total = sqlx::query_scalar::<_, i64>(&format!(
-        "SELECT COUNT(*) FROM (SELECT us.user_id,us.plan_id{base} GROUP BY us.user_id,us.plan_id) eligible"
+        "SELECT COUNT(*) FROM (SELECT us.user_id,us.plan_id{RESET_TARGETS_BASE} GROUP BY us.user_id,us.plan_id) eligible"
     ))
     .bind(now)
-    .bind(query.trim())
+    .bind(&search)
     .bind(&like)
     .bind(plan_id)
     .bind(plan_ids)
@@ -291,10 +292,10 @@ async fn eligible_rows(
     .fetch_one(pg)
     .await?;
     let rows = sqlx::query_as::<_, Eligible>(&format!(
-        "SELECT us.user_id,users.username,COALESCE(users.email,'') email,us.plan_id,plans.title plan_title,COALESCE(plans.archived_at,0) plan_archived_at,COUNT(*)::BIGINT active_subscription_count,COALESCE(SUM(us.amount_total),0)::BIGINT amount_total,COALESCE(SUM(us.amount_used),0)::BIGINT amount_used,COALESCE(MIN(NULLIF(us.next_reset_time,0)),0)::BIGINT next_reset_time,(SELECT COUNT(*) FROM subscription_reset_vouchers v WHERE v.user_id=us.user_id AND v.plan_id=us.plan_id AND v.status='available' AND v.expires_at>$1)::BIGINT banked_voucher_count{base} GROUP BY us.user_id,users.username,users.email,us.plan_id,plans.title,plans.archived_at ORDER BY us.user_id DESC,us.plan_id DESC OFFSET $7 LIMIT $8"
+        "SELECT us.user_id,users.username,COALESCE(users.email,'') email,us.plan_id,plans.title plan_title,COALESCE(plans.archived_at,0) plan_archived_at,COUNT(*)::BIGINT active_subscription_count,COALESCE(SUM(us.amount_total),0)::BIGINT amount_total,COALESCE(SUM(us.amount_used),0)::BIGINT amount_used,COALESCE(MIN(NULLIF(us.next_reset_time,0)),0)::BIGINT next_reset_time,(SELECT COUNT(*) FROM subscription_reset_vouchers v WHERE v.user_id=us.user_id AND v.plan_id=us.plan_id AND v.status='available' AND v.expires_at>$1)::BIGINT banked_voucher_count{RESET_TARGETS_BASE} GROUP BY us.user_id,users.username,users.email,us.plan_id,plans.title,plans.archived_at ORDER BY us.user_id DESC,us.plan_id DESC OFFSET $7 LIMIT $8"
     ))
     .bind(now)
-    .bind(query.trim())
+    .bind(&search)
     .bind(&like)
     .bind(plan_id)
     .bind(plan_ids)
@@ -524,7 +525,7 @@ async fn resolve_targets(
             "plan_id cannot be combined with plan_ids",
         ));
     }
-    let search = filter.query.trim();
+    let search = normalize_admin_search(&filter.query);
     if search.chars().count() > MAX_QUERY_CHARACTERS {
         return Err(ResetError::Business(
             "subscription reset search filter is too long",
@@ -532,12 +533,12 @@ async fn resolve_targets(
     }
     let plan_ids = normalize_ids(&filter.plan_ids, "plan")?;
     let user_ids = normalize_ids(&filter.user_ids, "user")?;
-    let like = format!("%{}%", search.to_ascii_lowercase());
-    let rows = sqlx::query_as::<_, Target>(
-        "SELECT us.user_id,us.plan_id FROM user_subscriptions us JOIN users ON users.id=us.user_id AND users.deleted_at IS NULL WHERE us.status='active' AND us.end_time>$1 AND ($2='' OR CAST(us.user_id AS TEXT) LIKE $3 OR LOWER(users.username) LIKE $3 OR LOWER(COALESCE(users.email,'')) LIKE $3) AND ($4::BIGINT<=0 OR us.plan_id=$4) AND (CARDINALITY($5::BIGINT[])=0 OR us.plan_id=ANY($5)) AND (CARDINALITY($6::BIGINT[])=0 OR us.user_id=ANY($6)) GROUP BY us.user_id,us.plan_id ORDER BY us.user_id,us.plan_id LIMIT 5001",
-    )
+    let like = format!("%{search}%");
+    let rows = sqlx::query_as::<_, Target>(&format!(
+        "SELECT us.user_id,us.plan_id{RESET_TARGETS_BASE} GROUP BY us.user_id,us.plan_id ORDER BY us.user_id,us.plan_id LIMIT 5001"
+    ))
     .bind(now)
-    .bind(search)
+    .bind(&search)
     .bind(like)
     .bind(filter.plan_id)
     .bind(&plan_ids)
@@ -1517,6 +1518,7 @@ mod tests {
     fn admin_record_search_is_unicode_aware_and_matches_plan_titles() {
         assert_eq!(normalize_admin_search("  ÜBER 套餐  "), "über 套餐");
         assert!(ADMIN_RECORDS_BASE.contains("LOWER(plans.title) LIKE $2"));
+        assert!(RESET_TARGETS_BASE.contains("LOWER(plans.title) LIKE $3"));
     }
 
     #[test]

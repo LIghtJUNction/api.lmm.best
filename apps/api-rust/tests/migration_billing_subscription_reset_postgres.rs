@@ -400,6 +400,54 @@ async fn reset_execute_rejects_a_deleted_target_user_without_consuming_preview()
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
+async fn target_search_and_all_matching_preview_match_plan_titles() -> TestResult {
+    let harness = PgHarness::new().await?;
+    seed_active_subscription(&harness.pool, 8, 4, 12, 71).await?;
+    sqlx::query("UPDATE subscription_plans SET title='Enterprise Gold' WHERE id=4")
+        .execute(&harness.pool)
+        .await?;
+    let app = harness.app();
+
+    let targets = response_json(
+        request(
+            app.clone(),
+            Method::GET,
+            "/api/subscription/root/reset-targets?query=ENTERPRISE",
+            "root",
+            None,
+        )
+        .await?,
+    )
+    .await?;
+    assert_eq!(targets["success"], true, "target search failed: {targets}");
+    assert_eq!(targets["data"]["total"], 1);
+    assert_eq!(targets["data"]["items"][0]["user_id"], 8);
+    assert_eq!(targets["data"]["items"][0]["plan_id"], 4);
+
+    let preview = response_json(
+        request(
+            app,
+            Method::POST,
+            "/api/subscription/root/reset/preview",
+            "root",
+            Some(json!({
+                "mode":"hard",
+                "all_matching":true,
+                "filter":{"query":"ENTERPRISE"}
+            })),
+        )
+        .await?,
+    )
+    .await?;
+    assert_eq!(preview["success"], true, "preview failed: {preview}");
+    assert_eq!(preview["data"]["target_count"], 1);
+    assert_eq!(preview["data"]["targets"][0]["user_id"], 8);
+    assert_eq!(preview["data"]["targets"][0]["plan_id"], 4);
+    harness.cleanup().await
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL 18; run this test binary with --test-threads=1"]
 async fn near_limit_reset_preview_payload_is_not_truncated() -> TestResult {
     let harness = PgHarness::new().await?;
     let now = database_timestamp(&harness.pool).await?;
