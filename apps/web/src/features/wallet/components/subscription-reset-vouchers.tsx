@@ -7,7 +7,7 @@ published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
 import { useQuery } from '@tanstack/react-query'
-import { RotateCcw } from 'lucide-react'
+import { RefreshCw, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -39,6 +39,7 @@ export function SubscriptionResetVouchers(props: { onRedeemed?: () => void }) {
     staleTime: 15_000,
   })
   const vouchers = vouchersQuery.data?.data ?? []
+  const hasVoucherData = vouchersQuery.data != null
 
   const redeem = async () => {
     if (!selected) return
@@ -90,91 +91,128 @@ export function SubscriptionResetVouchers(props: { onRedeemed?: () => void }) {
         <Button
           variant='ghost'
           size='sm'
+          className='min-w-24'
           disabled={vouchersQuery.isFetching}
+          aria-describedby={
+            vouchersQuery.isError
+              ? 'banked-reset-query-error'
+              : 'banked-reset-query-status'
+          }
           onClick={() => void vouchersQuery.refetch()}
         >
-          {t('Refresh')}
+          <RefreshCw
+            className={
+              vouchersQuery.isFetching
+                ? 'size-3.5 shrink-0 animate-spin motion-reduce:animate-none'
+                : 'size-3.5 shrink-0'
+            }
+            aria-hidden='true'
+          />
+          {vouchersQuery.isFetching
+            ? t('Refreshing...')
+            : vouchersQuery.isError
+              ? t('Retry')
+              : t('Refresh')}
         </Button>
       </div>
 
-      {vouchersQuery.isPending ? (
-        <div className='mt-3 space-y-2'>
-          <Skeleton className='h-14 w-full' />
-          <Skeleton className='h-14 w-full' />
-        </div>
-      ) : vouchersQuery.isError ? (
-        <div className='mt-3 rounded-md border border-dashed p-3 text-sm'>
-          <p className='font-medium'>{t('Failed to load banked resets')}</p>
-          <Button
-            variant='outline'
-            size='sm'
-            className='mt-2'
-            onClick={() => void vouchersQuery.refetch()}
+      <div
+        id='banked-reset-query-status'
+        className='text-muted-foreground mt-2 flex min-h-5 items-center gap-2 text-xs'
+        role='status'
+        aria-live='polite'
+        aria-atomic='true'
+      >
+        {vouchersQuery.isFetching ? (
+          <span>
+            {vouchersQuery.isPending ? t('Loading...') : t('Refreshing...')}
+          </span>
+        ) : null}
+      </div>
+
+      <div
+        aria-busy={vouchersQuery.isFetching}
+        aria-describedby='banked-reset-query-status'
+      >
+        {vouchersQuery.isError && (
+          <div
+            id='banked-reset-query-error'
+            className='mt-2 rounded-md border border-dashed p-3 text-sm'
+            role='alert'
+            aria-live='assertive'
+            aria-atomic='true'
           >
-            {t('Retry')}
-          </Button>
-        </div>
-      ) : vouchers.length === 0 ? (
-        <p className='text-muted-foreground mt-3 text-sm'>
-          {t('No banked reset vouchers')}
-        </p>
-      ) : (
-        <div className='mt-3 space-y-2'>
-          {vouchers.map((voucher) => {
-            const status = redeemedVoucherIds.has(voucher.id)
-              ? 'redeemed'
-              : voucher.status === 'available' &&
-                  (voucher.expired === true ||
-                    voucher.expires_at <= Date.now() / 1000)
-                ? 'expired'
-                : voucher.status
-            return (
-              <div
-                key={voucher.id}
-                className='flex flex-wrap items-center justify-between gap-3 rounded-md border p-3'
-              >
-                <div className='min-w-0'>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    <span className='text-sm font-medium'>
-                      {voucher.plan_title || `#${voucher.plan_id}`}
-                    </span>
-                    <StatusBadge
-                      label={t(
-                        status === 'available'
-                          ? 'Available'
-                          : status === 'redeemed'
-                            ? 'Redeemed'
-                            : 'Expired'
-                      )}
-                      variant={status === 'available' ? 'success' : 'neutral'}
-                      copyable={false}
-                    />
+            <p className='font-medium'>{t('Failed to load banked resets')}</p>
+          </div>
+        )}
+
+        {vouchersQuery.isPending && !hasVoucherData ? (
+          <div className='mt-3 space-y-2' aria-hidden='true'>
+            <Skeleton className='h-14 w-full' />
+            <Skeleton className='h-14 w-full' />
+          </div>
+        ) : !hasVoucherData ? null : vouchers.length === 0 ? (
+          <p className='text-muted-foreground mt-3 text-sm'>
+            {t('No banked reset vouchers')}
+          </p>
+        ) : (
+          <div className='mt-3 space-y-2'>
+            {vouchers.map((voucher) => {
+              const status = redeemedVoucherIds.has(voucher.id)
+                ? 'redeemed'
+                : voucher.status === 'available' &&
+                    (voucher.expired === true ||
+                      voucher.expires_at <= Date.now() / 1000)
+                  ? 'expired'
+                  : voucher.status
+              return (
+                <div
+                  key={voucher.id}
+                  className='flex flex-wrap items-center justify-between gap-3 rounded-md border p-3'
+                >
+                  <div className='min-w-0'>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <span className='text-sm font-medium'>
+                        {voucher.plan_title || `#${voucher.plan_id}`}
+                      </span>
+                      <StatusBadge
+                        label={t(
+                          status === 'available'
+                            ? 'Available'
+                            : status === 'redeemed'
+                              ? 'Redeemed'
+                              : 'Expired'
+                        )}
+                        variant={status === 'available' ? 'success' : 'neutral'}
+                        copyable={false}
+                      />
+                    </div>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {status === 'redeemed'
+                        ? t('Redeemed at {{time}}', {
+                            time: formatTimestamp(voucher.redeemed_at),
+                          })
+                        : t('Expires at {{time}}', {
+                            time: formatTimestamp(voucher.expires_at),
+                          })}
+                    </p>
                   </div>
-                  <p className='text-muted-foreground mt-1 text-xs'>
-                    {status === 'redeemed'
-                      ? t('Redeemed at {{time}}', {
-                          time: formatTimestamp(voucher.redeemed_at),
-                        })
-                      : t('Expires at {{time}}', {
-                          time: formatTimestamp(voucher.expires_at),
-                        })}
-                  </p>
+                  {status === 'available' && (
+                    <Button
+                      size='sm'
+                      variant='outline'
+                      onClick={() => setSelected(voucher)}
+                    >
+                      <RotateCcw aria-hidden='true' />
+                      {t('Redeem reset')}
+                    </Button>
+                  )}
                 </div>
-                {status === 'available' && (
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    onClick={() => setSelected(voucher)}
-                  >
-                    <RotateCcw aria-hidden='true' />
-                    {t('Redeem reset')}
-                  </Button>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       {selected && (
         <ConfirmDialog

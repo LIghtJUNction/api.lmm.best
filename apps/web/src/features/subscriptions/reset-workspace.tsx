@@ -8,7 +8,13 @@ License, or (at your option) any later version.
 */
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { AlertTriangle, ArrowLeft, Search, ShieldCheck } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -511,7 +517,33 @@ export function SubscriptionResetWorkspace() {
                 </span>
               </label>
 
-              <div className='overflow-hidden rounded-md border'>
+              <div
+                id='subscription-reset-query-status'
+                className='text-muted-foreground flex min-h-5 items-center gap-2 text-xs'
+                role='status'
+                aria-live='polite'
+                aria-atomic='true'
+              >
+                {eligibleQuery.isFetching ? (
+                  <>
+                    <RefreshCw
+                      className='size-3.5 shrink-0 animate-spin motion-reduce:animate-none'
+                      aria-hidden='true'
+                    />
+                    <span>
+                      {eligibleQuery.isPending
+                        ? t('Loading...')
+                        : t('Refreshing...')}
+                    </span>
+                  </>
+                ) : null}
+              </div>
+
+              <div
+                className='overflow-hidden rounded-md border'
+                aria-busy={eligibleQuery.isFetching}
+                aria-describedby='subscription-reset-query-status'
+              >
                 <div className='overflow-x-auto'>
                   <Table>
                     <TableHeader>
