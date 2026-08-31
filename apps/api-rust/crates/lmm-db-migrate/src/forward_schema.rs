@@ -900,6 +900,9 @@ pub fn verify_subscription_reset_schema(
                 metadata.indisready,
                 metadata.indisprimary,
                 metadata.indisexclusion,
+                metadata.indexprs IS NULL,
+                metadata.indnkeyatts::INT,
+                metadata.indnatts::INT,
                 access_method.amname::TEXT,
                 ARRAY(
                     SELECT attribute.attname::TEXT
@@ -925,14 +928,20 @@ pub fn verify_subscription_reset_schema(
             let found_ready: bool = row.get(2);
             let found_primary: bool = row.get(3);
             let found_exclusion: bool = row.get(4);
-            let found_method: String = row.get(5);
-            let found_columns: Vec<String> = row.get(6);
-            let found_predicate: Option<String> = row.get(7);
+            let found_no_expressions: bool = row.get(5);
+            let found_key_attribute_count: i32 = row.get(6);
+            let found_attribute_count: i32 = row.get(7);
+            let found_method: String = row.get(8);
+            let found_columns: Vec<String> = row.get(9);
+            let found_predicate: Option<String> = row.get(10);
             found_unique == requirement.unique
                 && found_valid
                 && found_ready
                 && !found_primary
                 && !found_exclusion
+                && found_no_expressions
+                && found_key_attribute_count == requirement.columns.len() as i32
+                && found_attribute_count == requirement.columns.len() as i32
                 && found_method == "btree"
                 && found_columns.len() == requirement.columns.len()
                 && found_columns

@@ -226,6 +226,34 @@ fn contract_six_verifier_rejects_wrong_default_and_index_columns() {
         .batch_execute(&format!(
             "DROP INDEX {quoted_schema}.idx_subscription_reset_operations_preview_token; \
              CREATE UNIQUE INDEX idx_subscription_reset_operations_preview_token \
+             ON {quoted_schema}.subscription_reset_operations(preview_token, (operation_id || ''))"
+        ))
+        .expect("replace reset operation index with an expression key");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("expression key must not be ignored by index verification");
+    assert!(
+        error
+            .to_string()
+            .contains("idx_subscription_reset_operations_preview_token")
+    );
+    transaction
+        .batch_execute(&format!(
+            "DROP INDEX {quoted_schema}.idx_subscription_reset_operations_preview_token; \
+             CREATE UNIQUE INDEX idx_subscription_reset_operations_preview_token \
+             ON {quoted_schema}.subscription_reset_operations(preview_token) INCLUDE (operation_id)"
+        ))
+        .expect("replace reset operation index with an included column");
+    let error = verify_subscription_reset_schema(&mut transaction, &schema)
+        .expect_err("included columns must not satisfy the exact index contract");
+    assert!(
+        error
+            .to_string()
+            .contains("idx_subscription_reset_operations_preview_token")
+    );
+    transaction
+        .batch_execute(&format!(
+            "DROP INDEX {quoted_schema}.idx_subscription_reset_operations_preview_token; \
+             CREATE UNIQUE INDEX idx_subscription_reset_operations_preview_token \
              ON {quoted_schema}.subscription_reset_operations(preview_token); \
              ALTER TABLE {quoted_schema}.subscription_reset_previews \
              DROP CONSTRAINT subscription_reset_previews_pkey"
