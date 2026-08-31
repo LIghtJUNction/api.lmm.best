@@ -502,6 +502,15 @@ pub fn verify_current_dashboard_schema(
     Ok(())
 }
 
+fn bigint_default_is_exact_zero(default: Option<&str>) -> bool {
+    default.is_some_and(|value| {
+        matches!(
+            value.trim(),
+            "0" | "0::bigint" | "(0)::bigint" | "'0'::bigint"
+        )
+    })
+}
+
 /// Verifies the contract-6 subscription reset tables, archival column, and idempotency indexes.
 pub fn verify_subscription_reset_schema(
     transaction: &mut Transaction<'_>,
@@ -518,7 +527,7 @@ pub fn verify_subscription_reset_schema(
     let default: Option<String> = archived.get(2);
     if data_type != "bigint"
         || nullable != "NO"
-        || !default.as_deref().is_some_and(|value| value.contains('0'))
+        || !bigint_default_is_exact_zero(default.as_deref())
     {
         return Err(MigrationError::Manifest(
             "forward schema column mismatch for subscription_plans.archived_at".to_owned(),
@@ -551,38 +560,69 @@ pub fn verify_subscription_reset_schema(
             }
         }
     }
-    for &(table, index, unique) in &[
+    let required_indexes: &[(&str, &str, bool, &[&str], Option<&str>)] = &[
         (
             "subscription_plans",
             "idx_subscription_plans_archived_at",
             false,
+            &["archived_at"],
+            None,
         ),
         (
             "subscription_reset_vouchers",
             "idx_subscription_reset_voucher_operation",
             true,
+            &["user_id", "plan_id", "operation_id"],
+            None,
         ),
         (
             "subscription_reset_events",
             "idx_subscription_reset_event_operation",
             true,
+            &["operation_id", "user_id", "plan_id", "mode"],
+            None,
         ),
         (
             "subscription_reset_operations",
             "idx_subscription_reset_operations_preview_token",
             true,
+            &["preview_token"],
+            None,
         ),
-    ] {
-        let definition: Option<String> = transaction.query_opt(
-            "SELECT indexdef FROM pg_catalog.pg_indexes WHERE schemaname=$1 AND tablename=$2 AND indexname=$3",
+    ];
+    for &(table, index, unique, columns, predicate) in required_indexes {
+        let definition = transaction.query_opt(
+            r#"SELECT metadata.indisunique,
+                ARRAY(
+                    SELECT attribute.attname::TEXT
+                    FROM pg_catalog.unnest(metadata.indkey::SMALLINT[]) WITH ORDINALITY AS key(attribute_number, ordinality)
+                    JOIN pg_catalog.pg_attribute AS attribute
+                      ON attribute.attrelid=metadata.indrelid
+                     AND attribute.attnum=key.attribute_number
+                    WHERE key.ordinality <= metadata.indnkeyatts
+                    ORDER BY key.ordinality
+                ),
+                pg_catalog.pg_get_expr(metadata.indpred, metadata.indrelid)
+               FROM pg_catalog.pg_index AS metadata
+               JOIN pg_catalog.pg_class AS index_class ON index_class.oid=metadata.indexrelid
+               JOIN pg_catalog.pg_class AS table_class ON table_class.oid=metadata.indrelid
+               JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid=table_class.relnamespace
+              WHERE namespace.nspname=$1 AND table_class.relname=$2 AND index_class.relname=$3"#,
             &[&schema, &table, &index],
-        )?.map(|row| row.get(0));
-        if definition.is_none()
-            || (unique
-                && !definition
-                    .as_deref()
-                    .is_some_and(|value| value.starts_with("CREATE UNIQUE INDEX")))
-        {
+        )?;
+        let compatible = definition.is_some_and(|row| {
+            let found_unique: bool = row.get(0);
+            let found_columns: Vec<String> = row.get(1);
+            let found_predicate: Option<String> = row.get(2);
+            found_unique == unique
+                && found_columns.len() == columns.len()
+                && found_columns
+                    .iter()
+                    .map(String::as_str)
+                    .eq(columns.iter().copied())
+                && found_predicate.as_deref() == predicate
+        });
+        if !compatible {
             return Err(MigrationError::Manifest(format!(
                 "forward schema is missing compatible index {index}"
             )));
@@ -628,6 +668,17 @@ mod tests {
                 "contract-2 SQL does not mention {table}"
             );
         }
+    }
+
+    #[test]
+    fn contract_six_archived_default_requires_exact_zero() {
+        for value in ["0", "0::bigint", "(0)::bigint", "'0'::bigint"] {
+            assert!(bigint_default_is_exact_zero(Some(value)), "{value}");
+        }
+        for value in ["10", "100", "now()", "0 + 1", "'10'::bigint"] {
+            assert!(!bigint_default_is_exact_zero(Some(value)), "{value}");
+        }
+        assert!(!bigint_default_is_exact_zero(None));
     }
 
     #[test]

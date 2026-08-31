@@ -80,7 +80,13 @@ LMM_TEST_PG_DATABASE=lmm_rehearsal \
     -p lmm-db-migrate --test postgres_equivalence --locked -- \
     --ignored --exact --nocapture sqlite_and_postgres_should_have_identical_canonical_table_hashes
 
-LMM_TEST_DATABASE_URL="postgresql://postgres@/lmm_rehearsal?host=${rehearsal_dir}&port=${port}" \
+test_database_url="postgresql://postgres@/lmm_rehearsal?host=${rehearsal_dir}&port=${port}"
+LMM_TEST_DATABASE_URL="${test_database_url}" \
   cargo test --manifest-path "${crate_dir}/../../Cargo.toml" \
     -p lmm-db-migrate --test full_copy --locked -- \
     --ignored --exact --nocapture full_copy_should_verify_all_tables_and_rollback_both_fault_phases
+
+LMM_TEST_DATABASE_URL="${test_database_url}" \
+  cargo test --manifest-path "${crate_dir}/../../Cargo.toml" \
+    -p lmm-db-migrate --test schema_contract --locked -- \
+    --ignored --exact --nocapture contract_six_verifier_rejects_wrong_default_and_index_columns
