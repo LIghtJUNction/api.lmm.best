@@ -541,6 +541,7 @@ async fn native_sse_passthrough_preserves_unknown_frames_and_does_not_append_don
         "text/event-stream; charset=iso-8859-1"
     );
     assert_eq!(response.headers()["cache-control"], "no-cache");
+    assert_eq!(response.headers()["x-accel-buffering"], "no");
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("response body");
