@@ -672,7 +672,11 @@ pub(super) fn filtered_upstream_response(mut response: Response) -> Response {
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("text/event-stream"))
+        .is_some_and(|value| {
+            value.split(';').next().is_some_and(|media_type| {
+                media_type.trim().eq_ignore_ascii_case("text/event-stream")
+            })
+        })
     {
         response.headers_mut().insert(
             header::HeaderName::from_static("x-accel-buffering"),
@@ -1343,7 +1347,7 @@ mod tests {
         let mut response = Response::new(Body::empty());
         response.headers_mut().insert(
             header::CONTENT_TYPE,
-            HeaderValue::from_static("text/event-stream; charset=utf-8"),
+            HeaderValue::from_static("Text/Event-Stream; charset=utf-8"),
         );
 
         let response = filtered_upstream_response(response);

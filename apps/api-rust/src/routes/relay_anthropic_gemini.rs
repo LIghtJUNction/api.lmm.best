@@ -997,7 +997,11 @@ fn add_compat_headers(response: &mut Response, channel_id: i64, request_id: &str
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("text/event-stream"))
+        .is_some_and(|value| {
+            value.split(';').next().is_some_and(|media_type| {
+                media_type.trim().eq_ignore_ascii_case("text/event-stream")
+            })
+        })
     {
         response.headers_mut().insert(
             HeaderName::from_static("x-accel-buffering"),
