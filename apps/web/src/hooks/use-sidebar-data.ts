@@ -164,6 +164,7 @@ export function useSidebarData(): SidebarData {
             title: t('Model Square'),
             url: '/pricing',
             icon: Box,
+            disabled: true,
           },
           {
             title: t('Status detection'),

@@ -122,17 +122,33 @@ function NavBadge({ children }: { children: ReactNode }) {
  */
 function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
   const { setOpenMobile } = useSidebar()
+  const content = (
+    <>
+      {item.icon && <item.icon className='shrink-0' />}
+      <span className='min-w-0 flex-1 truncate'>{item.title}</span>
+      {item.badge && <NavBadge>{item.badge}</NavBadge>}
+    </>
+  )
+
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton
-        isActive={checkIsActive(href, item)}
-        tooltip={item.title}
-        render={<Link to={item.url} onClick={() => setOpenMobile(false)} />}
-      >
-        {item.icon && <item.icon className='shrink-0' />}
-        <span className='min-w-0 flex-1 truncate'>{item.title}</span>
-        {item.badge && <NavBadge>{item.badge}</NavBadge>}
-      </SidebarMenuButton>
+      {item.disabled ? (
+        <SidebarMenuButton
+          isActive={checkIsActive(href, item)}
+          tooltip={item.title}
+          disabled
+        >
+          {content}
+        </SidebarMenuButton>
+      ) : (
+        <SidebarMenuButton
+          isActive={checkIsActive(href, item)}
+          tooltip={item.title}
+          render={<Link to={item.url} onClick={() => setOpenMobile(false)} />}
+        >
+          {content}
+        </SidebarMenuButton>
+      )}
     </SidebarMenuItem>
   )
 }
