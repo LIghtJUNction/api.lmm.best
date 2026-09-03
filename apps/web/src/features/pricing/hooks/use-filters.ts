@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useSearch } from '@tanstack/react-router'
-import { useMemo, useCallback, useState } from 'react'
+import { useNavigate, useSearch } from '@tanstack/react-router'
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   FILTER_ALL,
@@ -53,18 +53,47 @@ function normalizeViewMode(value: unknown): ViewMode {
 
 export function useFilters(models: PricingModel[]) {
   const search = useSearch({ from: '/pricing/' })
-  const [filterState, setFilterState] = useState<FilterState>(() => ({
-    search: search.search,
-    sort: search.sort,
-    vendor: search.vendor,
-    group: search.group,
-    quotaType: search.quotaType,
-    endpointType: search.endpointType,
-    tag: search.tag,
-    tokenUnit: search.tokenUnit,
-    view: search.view,
-    rechargePrice: search.rechargePrice,
-  }))
+  const navigate = useNavigate({ from: '/pricing/' })
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const routeFilters = useMemo<FilterState>(
+    () => ({
+      search: search.search,
+      sort: search.sort,
+      vendor: search.vendor,
+      group: search.group,
+      quotaType: search.quotaType,
+      endpointType: search.endpointType,
+      tag: search.tag,
+      tokenUnit: search.tokenUnit,
+      view: search.view,
+      rechargePrice: search.rechargePrice,
+    }),
+    [
+      search.endpointType,
+      search.group,
+      search.quotaType,
+      search.rechargePrice,
+      search.search,
+      search.sort,
+      search.tag,
+      search.tokenUnit,
+      search.vendor,
+      search.view,
+    ]
+  )
+  const [filterState, setFilterState] = useState<FilterState>(routeFilters)
+
+  useEffect(() => {
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    // Keep browser back/forward navigation in sync with the controlled filters.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFilterState(routeFilters)
+  }, [routeFilters])
 
   const searchInput = filterState.search || ''
   const sortBy = filterState.sort || SORT_OPTIONS.NAME
@@ -78,21 +107,37 @@ export function useFilters(models: PricingModel[]) {
   const viewMode = normalizeViewMode(filterState.view)
   const showRechargePrice = filterState.rechargePrice === true
 
-  const updateFilters = useCallback((updates: Record<string, unknown>) => {
-    setFilterState((prev) => {
-      const next: Record<string, unknown> = { ...prev, ...updates }
-      for (const key of Object.keys(next)) {
-        if (next[key] === undefined || next[key] === null) {
-          delete next[key]
+  const updateFilters = useCallback(
+    (updates: Record<string, unknown>) => {
+      setFilterState((prev) => {
+        const next: Record<string, unknown> = { ...prev, ...updates }
+        for (const key of Object.keys(next)) {
+          if (next[key] === undefined || next[key] === null) {
+            delete next[key]
+          }
         }
-      }
-      return next as FilterState
-    })
-  }, [])
+        return next as FilterState
+      })
+      void navigate({
+        replace: true,
+        search: (previous) => ({ ...previous, ...updates }),
+      })
+    },
+    [navigate]
+  )
 
   const setSearchInput = useCallback(
-    (v: string) => updateFilters({ search: v || undefined }),
-    [updateFilters]
+    (v: string) => {
+      setFilterState((previous) => ({ ...previous, search: v || undefined }))
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = setTimeout(() => {
+        void navigate({
+          replace: true,
+          search: (previous) => ({ ...previous, search: v || undefined }),
+        })
+      }, 180)
+    },
+    [navigate]
   )
   const setSortBy = useCallback(
     (v: string) =>
