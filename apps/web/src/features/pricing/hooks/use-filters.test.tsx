@@ -11,14 +11,7 @@ the Free Software Foundation, either version 3 of the License, or
 // @ts-expect-error Bun's test module is available only in the test runtime.
 import { mock as moduleMock } from 'bun:test'
 import assert from 'node:assert/strict'
-import {
-  after,
-  afterEach,
-  beforeEach,
-  describe,
-  mock as timerMock,
-  test,
-} from 'node:test'
+import { after, afterEach, beforeEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 import type { Root } from 'react-dom/client'
@@ -88,6 +81,37 @@ Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
 
 let routeSearch: SearchState = {}
 const navigateCalls: SearchState[] = []
+type FakeTimerCallback = (...args: never[]) => void
+type FakeTimerId = ReturnType<typeof setTimeout>
+
+const realSetTimeout = globalThis.setTimeout
+const realClearTimeout = globalThis.clearTimeout
+const pendingTimers = new Map<FakeTimerId, FakeTimerCallback>()
+let nextTimerId = 0
+
+function installFakeTimers() {
+  pendingTimers.clear()
+  globalThis.setTimeout = ((callback: FakeTimerCallback) => {
+    const id = ++nextTimerId as unknown as FakeTimerId
+    pendingTimers.set(id, callback)
+    return id
+  }) as unknown as typeof setTimeout
+  globalThis.clearTimeout = ((id: FakeTimerId) => {
+    pendingTimers.delete(id)
+  }) as unknown as typeof clearTimeout
+}
+
+function restoreRealTimers() {
+  globalThis.setTimeout = realSetTimeout
+  globalThis.clearTimeout = realClearTimeout
+  pendingTimers.clear()
+}
+
+function advanceFakeTimers() {
+  const timers = [...pendingTimers.values()]
+  pendingTimers.clear()
+  for (const callback of timers) callback()
+}
 
 moduleMock.module('@tanstack/react-router', () => ({
   useSearch: () => routeSearch,
@@ -114,7 +138,6 @@ function Harness() {
 beforeEach(async () => {
   routeSearch = {}
   navigateCalls.length = 0
-  timerMock.timers.enable({ apis: ['setTimeout'] })
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -124,7 +147,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  timerMock.timers.reset()
+  restoreRealTimers()
   if (root) {
     await act(async () => root?.unmount())
   }
@@ -140,6 +163,7 @@ describe('pricing filter URL synchronization', () => {
   test('does not restore a cleared search after the debounce window', async () => {
     assert.ok(filterResult)
 
+    installFakeTimers()
     await act(async () => {
       filterResult?.setSearchInput('stale search')
     })
@@ -147,7 +171,7 @@ describe('pricing filter URL synchronization', () => {
       filterResult?.clearSearch()
     })
     await act(async () => {
-      timerMock.timers.tick(180)
+      advanceFakeTimers()
     })
 
     assert.equal(routeSearch.search, undefined)
