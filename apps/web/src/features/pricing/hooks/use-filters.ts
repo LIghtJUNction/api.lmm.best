@@ -83,17 +83,22 @@ export function useFilters(models: PricingModel[]) {
   )
   const [filterState, setFilterState] = useState<FilterState>(routeFilters)
 
-  useEffect(() => {
-    return () => {
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
-    }
+  const cancelPendingSearchUpdate = useCallback(() => {
+    if (searchTimerRef.current === null) return
+    clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = null
   }, [])
 
   useEffect(() => {
+    return cancelPendingSearchUpdate
+  }, [cancelPendingSearchUpdate])
+
+  useEffect(() => {
+    cancelPendingSearchUpdate()
     // Keep browser back/forward navigation in sync with the controlled filters.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setFilterState(routeFilters)
-  }, [routeFilters])
+  }, [cancelPendingSearchUpdate, routeFilters])
 
   const searchInput = filterState.search || ''
   const sortBy = filterState.sort || SORT_OPTIONS.NAME
@@ -109,6 +114,7 @@ export function useFilters(models: PricingModel[]) {
 
   const updateFilters = useCallback(
     (updates: Record<string, unknown>) => {
+      cancelPendingSearchUpdate()
       setFilterState((prev) => {
         const next: Record<string, unknown> = { ...prev, ...updates }
         for (const key of Object.keys(next)) {
@@ -123,21 +129,22 @@ export function useFilters(models: PricingModel[]) {
         search: (previous) => ({ ...previous, ...updates }),
       })
     },
-    [navigate]
+    [cancelPendingSearchUpdate, navigate]
   )
 
   const setSearchInput = useCallback(
     (v: string) => {
       setFilterState((previous) => ({ ...previous, search: v || undefined }))
-      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+      cancelPendingSearchUpdate()
       searchTimerRef.current = setTimeout(() => {
+        searchTimerRef.current = null
         void navigate({
           replace: true,
           search: (previous) => ({ ...previous, search: v || undefined }),
         })
       }, 180)
     },
-    [navigate]
+    [cancelPendingSearchUpdate, navigate]
   )
   const setSortBy = useCallback(
     (v: string) =>
