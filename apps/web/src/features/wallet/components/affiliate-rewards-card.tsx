@@ -87,7 +87,7 @@ export function AffiliateRewardsCard({
               (user?.aff_debt ?? 0) > 0 ? t('Reward debt') : t('Pending'),
               formatQuota(
                 (user?.aff_debt ?? 0) > 0
-                  ? user!.aff_debt!
+                  ? (user?.aff_debt ?? 0)
                   : (user?.aff_quota ?? 0)
               ),
             ],

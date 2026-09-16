@@ -72,10 +72,11 @@ export function ReferralHistoryDialog() {
       }>('/api/user/self/aff/rewards', {
         params: before ? { before } : undefined,
       })
-      if (!response.data.success)
+      if (!response.data.success) {
         throw new Error(
           response.data.message || t('Failed to load referral history')
         )
+      }
       if (current !== request.current) return
       const data = response.data.data
       setHistory((previous) => ({
@@ -85,12 +86,13 @@ export function ReferralHistoryDialog() {
           : data.entries,
       }))
     } catch (caught) {
-      if (current === request.current)
+      if (current === request.current) {
         setError(
           caught instanceof Error
             ? caught.message
             : t('Failed to load referral history')
         )
+      }
     } finally {
       if (current === request.current) setLoading(false)
     }
