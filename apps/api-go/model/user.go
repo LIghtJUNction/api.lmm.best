@@ -277,6 +277,9 @@ type User struct {
 	Group                         string          `json:"group" gorm:"type:varchar(64);default:'default'"`
 	AffCode                       string          `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount                      int             `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffDebt                       int             `json:"aff_debt" gorm:"type:bigint;not null;default:0"`
+	ReferralFirstTopUpEligible    bool            `json:"-" gorm:"not null;default:false"`
+	ReferralBanCaseID             uint            `json:"referral_ban_case_id,omitempty" gorm:"not null;default:0"`
 	AffQuota                      int             `json:"aff_quota" gorm:"type:bigint;default:0;column:aff_quota"`           // 邀请剩余额度
 	AffHistoryQuota               int             `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"` // 邀请历史额度
 	InviterId                     int             `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
@@ -798,26 +801,6 @@ func HardDeleteUserById(id int) error {
 	return user.HardDelete()
 }
 
-func inviteUser(inviterId int) error {
-	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
-		"aff_count":   boundedInt32CounterExpr("aff_count", 1),
-		"aff_quota":   boundedQuotaCounterExpr("aff_quota", common.QuotaForInviter),
-		"aff_history": boundedQuotaCounterExpr("aff_history", common.QuotaForInviter),
-	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	if common.RedisEnabled {
-		if err := invalidateUserCache(inviterId); err != nil {
-			common.SysLog("failed to invalidate inviter cache: " + err.Error())
-		}
-	}
-	return nil
-}
-
 func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 检查quota是否小于最小额度
 	if float64(quota) < common.QuotaPerUnit {
@@ -838,13 +821,16 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	if err := lockForUpdate(tx).First(user, user.Id).Error; err != nil {
 		return err
 	}
+	if user.AffDebt > 0 {
+		return ErrReferralDebt
+	}
 	if user.AffQuota < quota {
 		return errors.New("邀请额度不足！")
 	}
 
 	// Keep the affiliate debit and the final wallet ceiling in the same UPDATE.
 	query, err := GuardWalletQuotaDelta(
-		tx.Model(&User{}).Where("id = ? AND aff_quota >= ?", user.Id, quota),
+		tx.Model(&User{}).Where("id = ? AND aff_quota >= ? AND aff_debt = 0", user.Id, quota),
 		quota,
 	)
 	if err != nil {
@@ -936,7 +922,7 @@ func (user *User) Insert(inviterId int) error {
 				user.SetSetting(defaultSetting)
 			}
 
-			return tx.Create(user).Error
+			return createUserWithReferralTx(tx, user, inviterId)
 		})
 	}); err != nil {
 		return err
@@ -972,11 +958,6 @@ func (user *User) finishInsert(inviterId int) {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
 		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
 	}
 }
 
@@ -1001,7 +982,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 			user.SetSetting(defaultSetting)
 		}
 
-		return tx.Create(user).Error
+		return createUserWithReferralTx(tx, user, inviterId)
 	})
 }
 
@@ -1030,10 +1011,6 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		if common.QuotaForInvitee > 0 {
 			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
 			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
 		}
 	}
 }
@@ -1068,8 +1045,11 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	}
 	newUser := *user
 	current := User{}
-	if err = tx.First(&current, user.Id).Error; err != nil {
+	if err = lockForUpdate(tx).First(&current, user.Id).Error; err != nil {
 		return err
+	}
+	if current.ReferralBanCaseID != 0 && newUser.Status == common.UserStatusEnabled {
+		return ErrReferralBanActive
 	}
 	// Updates(struct) ignores zero values. Match that behavior when deciding
 	// whether this request actually changes authentication-sensitive state;
@@ -1092,6 +1072,10 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"aff_count",
 		"aff_quota",
 		"aff_history",
+		"aff_debt",
+		"inviter_id",
+		"referral_first_top_up_eligible",
+		"referral_ban_case_id",
 		"auth_version",
 	).Updates(newUser).Error; err != nil {
 		return err

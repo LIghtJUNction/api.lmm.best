@@ -338,6 +338,7 @@ func mainMigrationModels() []interface{} {
 		&Channel{}, &Token{}, &UserRankingRevision{}, &User{}, &UserSession{}, &AuthFlow{}, &ExternalIdentityClaim{},
 		&PasskeyCredential{}, &Option{}, &Redemption{}, &Ability{}, &Log{}, &Midjourney{},
 		&DiscountCode{}, &DiscountCodeReservation{},
+		&ReferralReward{}, &ReferralLedgerEntry{}, &ReferralBanCase{},
 		&TopUp{}, &QuotaData{}, &Task{}, &Model{}, &Vendor{}, &PrefillGroup{}, &Setup{}, &TwoFA{},
 		&TwoFABackupCode{}, &Checkin{}, &Gift{}, &GiftClaim{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
 		&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{},

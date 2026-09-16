@@ -614,6 +614,7 @@ func buildSelfUserData(user *model.User) map[string]interface{} {
 		"aff_code":                 user.AffCode,
 		"aff_count":                user.AffCount,
 		"aff_quota":                user.AffQuota,
+		"aff_debt":                 user.AffDebt,
 		"aff_history_quota":        user.AffHistoryQuota,
 		"inviter_id":               user.InviterId,
 		"linux_do_id":              user.LinuxDOId,

@@ -27,6 +27,7 @@ type TopUp struct {
 	SettlementCurrency    string  `json:"settlement_currency" gorm:"type:varchar(16);not null;default:''"`
 	Money                 float64 `json:"money"`
 	RefundedAmountMicros  int64   `json:"refunded_amount_micros" gorm:"not null;default:0"`
+	ReferralRewardID      uint    `json:"referral_reward_id,omitempty" gorm:"not null;default:0"`
 	RefundedQuota         int64   `json:"refunded_quota" gorm:"not null;default:0"`
 	TradeNo               string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod         string  `json:"payment_method" gorm:"type:varchar(50)"`
@@ -486,7 +487,7 @@ func completeExternalTopUpOnDB(db *gorm.DB, settlement ExternalTopUpSettlement) 
 			if err := consumeDiscountCodeUsage(tx, &completed); err != nil {
 				return err
 			}
-			return nil
+			return grantFirstTopUpReferralTx(tx, &completed)
 		})
 		if err == nil {
 			return &completed, nil
