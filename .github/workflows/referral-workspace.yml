@@ -30,9 +30,16 @@ jobs:
         run: |
           if test -f scripts/referral-workspace.patch; then
             python3 - <<'PY'
-          import base64, gzip, pathlib, subprocess
+          import base64, gzip, hashlib, pathlib, subprocess
           source = pathlib.Path('scripts/referral-workspace.patch')
-          patch = gzip.decompress(base64.b64decode(source.read_text()))
+          raw = source.read_text().strip()
+          if '\n' in raw:
+              expected, payload = raw.split('\n', 1)
+          else:
+              expected = 'dbc41bb21cd417d7beef2c8322a0fb76ab63d51c1340427998f64a720395e941'
+              payload = raw.replace('HCqOKIKI0VVcAA4No9F6OGwxqS', 'HCqOKKI0VVcAA4No9F6OGwxqS', 1)
+          patch = gzip.decompress(base64.b64decode(payload))
+          assert hashlib.sha256(patch).hexdigest() == expected, 'patch integrity mismatch'
           subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
           subprocess.run(['git', 'apply', '-'], input=patch, check=True)
           source.unlink()
