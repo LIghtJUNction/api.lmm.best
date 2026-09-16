@@ -10,7 +10,6 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/logger"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
-	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -279,6 +278,7 @@ type User struct {
 	AffCount                      int             `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota                      int             `json:"aff_quota" gorm:"type:bigint;default:0;column:aff_quota"`           // 邀请剩余额度
 	AffHistoryQuota               int             `json:"aff_history_quota" gorm:"type:bigint;default:0;column:aff_history"` // 邀请历史额度
+	ReferralFirstTopUpId          int             `json:"-" gorm:"not null;default:0"`
 	InviterId                     int             `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
 	DeletedAt                     gorm.DeletedAt  `gorm:"index"`
 	LinuxDOId                     string          `json:"linux_do_id" gorm:"column:linux_do_id;index"`
@@ -798,26 +798,6 @@ func HardDeleteUserById(id int) error {
 	return user.HardDelete()
 }
 
-func inviteUser(inviterId int) error {
-	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]interface{}{
-		"aff_count":   boundedInt32CounterExpr("aff_count", 1),
-		"aff_quota":   boundedQuotaCounterExpr("aff_quota", common.QuotaForInviter),
-		"aff_history": boundedQuotaCounterExpr("aff_history", common.QuotaForInviter),
-	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	if common.RedisEnabled {
-		if err := invalidateUserCache(inviterId); err != nil {
-			common.SysLog("failed to invalidate inviter cache: " + err.Error())
-		}
-	}
-	return nil
-}
-
 func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 检查quota是否小于最小额度
 	if float64(quota) < common.QuotaPerUnit {
@@ -936,7 +916,7 @@ func (user *User) Insert(inviterId int) error {
 				user.SetSetting(defaultSetting)
 			}
 
-			return tx.Create(user).Error
+			return createUserWithInviterTx(tx, user, inviterId)
 		})
 	}); err != nil {
 		return err
@@ -966,18 +946,7 @@ func (user *User) finishInsert(inviterId int) {
 	if newUserEligible && common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() &&
-		newUserEligible && promotionRewardsAllowedForUserID(inviterId) {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
-	}
+
 }
 
 func (user *User) FinishInsert(inviterId int) {
@@ -986,7 +955,7 @@ func (user *User) FinishInsert(inviterId int) {
 
 // InsertWithTx inserts a new user within an existing transaction.
 // This is used for OAuth registration where user creation and binding need to be atomic.
-// Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
+// Post-creation tasks (sidebar config and logs) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 		if err := user.prepareForInsert(tx); err != nil {
@@ -1001,7 +970,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 			user.SetSetting(defaultSetting)
 		}
 
-		return tx.Create(user).Error
+		return createUserWithInviterTx(tx, user, inviterId)
 	})
 }
 
@@ -1024,17 +993,6 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 	newUserEligible := promotionRewardsAllowedForUser(user)
 	if newUserEligible && common.QuotaForNewUser > 0 {
 		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
-	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() &&
-		newUserEligible && promotionRewardsAllowedForUserID(inviterId) {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
 	}
 }
 
@@ -1092,6 +1050,8 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		"aff_count",
 		"aff_quota",
 		"aff_history",
+		"inviter_id",
+		"referral_first_top_up_id",
 		"auth_version",
 	).Updates(newUser).Error; err != nil {
 		return err
