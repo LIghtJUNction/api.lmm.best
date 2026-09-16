@@ -1,0 +1,86 @@
+name: Todo refactor verification
+
+on:
+  push:
+    branches: [refactor/todo-workspace-20260916]
+    paths:
+      - apps/web/src/features/todos/**
+      - scripts/todo-refactor-preview.mjs
+      - .github/workflows/todo-refactor-verification.yml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: todo-refactor-verification
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.3.14'
+      - name: Install locked dependencies
+        id: install
+        run: |
+          mkdir -p todo-verification-output
+          bun install --frozen-lockfile
+      - name: Format with the repository formatter
+        working-directory: apps/web
+        run: bun run format 2>&1 | tee ../../todo-verification-output/format.log
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/web
+        run: bun run lint 2>&1 | tee ../../todo-verification-output/lint.log
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/web
+        run: bun run typecheck 2>&1 | tee ../../todo-verification-output/typecheck.log
+      - name: Test web workspace
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/web
+        run: bun run test 2>&1 | tee ../../todo-verification-output/test.log
+      - name: Production build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/web
+        run: bun run build 2>&1 | tee ../../todo-verification-output/build.log
+      - name: Browser verification with isolated fixtures
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          PLAYWRIGHT_HOME: ${{ runner.temp }}/todo-browser
+          TODO_VERIFY_OUTPUT: ${{ github.workspace }}/todo-verification-output
+        run: |
+          npm install --prefix "$PLAYWRIGHT_HOME" --no-save --no-package-lock playwright@1.56.1
+          "$PLAYWRIGHT_HOME/node_modules/.bin/playwright" install --with-deps chromium
+          node scripts/todo-refactor-preview.mjs
+          cd apps/web
+          bunx --no-install rsbuild dev --config .todo-review.config.ts > ../../todo-verification-output/preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:4174/ > /dev/null; then break; fi
+            sleep 1
+          done
+          node .todo-review-browser.cjs 2>&1 | tee ../../todo-verification-output/browser.log
+      - name: Upload evidence and formatted source
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: todo-refactor-verification-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            apps/web/src/features/todos/
+            todo-verification-output/
