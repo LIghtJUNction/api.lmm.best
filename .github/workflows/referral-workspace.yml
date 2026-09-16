@@ -1,0 +1,28 @@
+name: Referral workspace
+
+on:
+  push:
+    branches: [feat/referral-first-topup-clawback]
+    paths:
+      - .github/workflows/referral-workspace.yml
+      - scripts/referral-workspace.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Export source for isolated implementation
+        run: git archive --format=tar.gz --output=referral-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: referral-source
+          path: referral-source.tar.gz
+          retention-days: 1
