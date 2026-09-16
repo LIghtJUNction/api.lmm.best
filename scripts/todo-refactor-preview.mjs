@@ -127,6 +127,7 @@ const base = 'http://127.0.0.1:4174'
       { name: 'mobile-user', width: 390, height: 844, dark: false, admin: false },
     ]) {
       const context = await browser.newContext({ viewport: { width: scenario.width, height: scenario.height }, serviceWorkers: 'block' })
+      await context.addCookies([{ name: 'vite-ui-theme', value: scenario.dark ? 'dark' : 'light', url: base }])
       const page = await context.newPage()
       const errors = []
       const blocked = []
@@ -139,26 +140,44 @@ const base = 'http://127.0.0.1:4174'
           await route.abort('blockedbyclient')
         } else await route.continue()
       })
-      await page.goto(base + (scenario.admin ? '/' : '/?viewer=user'))
-      await page.locator('section ul li').first().waitFor({ timeout: 90000 })
-      await page.evaluate(async (dark) => { document.documentElement.classList.toggle('dark', dark); await document.fonts.ready }, scenario.dark)
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, scenario.name + ': horizontal overflow')
-      assert.equal(await page.locator('details').count(), scenario.admin ? 3 : 0)
-      await page.screenshot({ path: path.join(output, scenario.name + '.png') })
-      if (scenario.name === 'desktop-light') {
-        await page.evaluate(() => window.__todoReviewI18n.changeLanguage('en'))
-        await page.getByRole('button', { name: 'Next page', exact: true }).click()
-        await page.getByText('验证待办 #51 ·', { exact: false }).waitFor()
-        await page.getByRole('button', { name: 'Previous page', exact: true }).click()
-        await page.getByText('验证待办 #1 ·', { exact: false }).waitFor()
-        await page.getByRole('button', { name: 'Mark all as read', exact: true }).click()
-        await page.getByRole('button', { name: 'Mark all as read', exact: true }).waitFor({ state: 'detached' })
+      let failure = null
+      try {
+        await page.goto(base + (scenario.admin ? '/' : '/?viewer=user'))
+        await page.locator('section ul li').first().waitFor({ timeout: 90000 })
+        await page.evaluate(async () => { await document.fonts.ready })
+        await page.screenshot({ path: path.join(output, scenario.name + '.png') })
+        const layout = await page.evaluate(() => {
+          const nodes = ['html', 'body', '#root', 'main', '.console-section-content', 'section', 'section ul', 'section li button', 'section [role="group"]']
+          return { viewport: innerWidth, scrollWidth: document.documentElement.scrollWidth, nodes: nodes.map((selector) => {
+            const node = document.querySelector(selector)
+            if (!node) return { selector }
+            const css = getComputedStyle(node)
+            const rect = node.getBoundingClientRect()
+            return { selector, className: node.className, width: rect.width, left: rect.left, minWidth: css.minWidth, color: css.color, background: css.backgroundColor, overflow: css.overflow, scrollWidth: node.scrollWidth }
+          }) }
+        })
+        fs.writeFileSync(path.join(output, scenario.name + '-layout.json'), JSON.stringify(layout, null, 2))
+        assert.equal(layout.scrollWidth <= layout.viewport, true, scenario.name + ': horizontal overflow')
+        assert.equal(await page.locator('details').count(), scenario.admin ? 3 : 0)
+        if (scenario.name === 'desktop-light') {
+          await page.evaluate(() => window.__todoReviewI18n.changeLanguage('en'))
+          await page.getByRole('button', { name: 'Next page', exact: true }).click()
+          await page.getByText('验证待办 #51 ·', { exact: false }).waitFor()
+          await page.getByRole('button', { name: 'Previous page', exact: true }).click()
+          await page.getByText('验证待办 #1 ·', { exact: false }).waitFor()
+          await page.getByRole('button', { name: 'Mark all as read', exact: true }).click()
+          await page.getByRole('button', { name: 'Mark all as read', exact: true }).waitFor({ state: 'detached' })
+        }
+        assert.deepEqual(errors, [], scenario.name + ': browser errors')
+        assert.deepEqual(blocked, [], scenario.name + ': unexpected network requests')
+      } catch (error) {
+        failure = String(error)
+        console.error(scenario.name, error)
       }
-      assert.deepEqual(errors, [], scenario.name + ': browser errors')
-      assert.deepEqual(blocked, [], scenario.name + ': unexpected network requests')
-      evidence.push({ ...scenario, errors, blocked, passed: true })
+      evidence.push({ ...scenario, errors, blocked, failure, passed: failure === null })
       await context.close()
     }
+    assert.equal(evidence.every((item) => item.passed), true, 'Some browser scenarios failed')
   } finally {
     fs.writeFileSync(path.join(output, 'browser-report.json'), JSON.stringify(evidence, null, 2))
     await browser.close()

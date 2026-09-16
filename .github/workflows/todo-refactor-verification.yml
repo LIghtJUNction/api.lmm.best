@@ -48,6 +48,17 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: apps/web
         run: bun run typecheck 2>&1 | tee ../../todo-verification-output/typecheck.log
+      - name: Test todo suites independently
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: apps/web
+        run: |
+          {
+            result=0
+            while IFS= read -r test_file; do
+              bun test "$test_file" || result=1
+            done < <(find src/features/todos src/routes/_authenticated/todos -type f \( -name '*.test.ts' -o -name '*.test.tsx' \) | sort)
+            exit "$result"
+          } 2>&1 | tee ../../todo-verification-output/todo-tests.log
       - name: Test web workspace
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: apps/web
