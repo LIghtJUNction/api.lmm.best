@@ -1,0 +1,45 @@
+name: Referral implementation workbench
+on:
+  push:
+    branches: [codex/referral-first-topup-clawback]
+    paths:
+      - '.github/workflows/referral-workbench.yml'
+      - '.github/referral-implementation.patch'
+permissions:
+  contents: write
+jobs:
+  workbench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Apply reviewed implementation patch
+        id: patch
+        shell: bash
+        run: |
+          if [ -f .github/referral-implementation.patch ]; then
+            git apply --check .github/referral-implementation.patch
+            git apply --index .github/referral-implementation.patch
+            git rm .github/referral-implementation.patch
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'feat: implement first-paid-topup referral rewards and abuse clawbacks'
+            git push origin HEAD:codex/referral-first-topup-clawback
+            echo 'applied=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Export exact source snapshot
+        run: git archive --format=tar.gz -o /tmp/referral-source.tar.gz HEAD
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: referral-source
+          path: /tmp/referral-source.tar.gz
+          retention-days: 1
+      - uses: actions/setup-go@v5
+        if: steps.patch.outputs.applied == 'true'
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: apps/api-go/go.sum
+      - name: Test referral implementation
+        if: steps.patch.outputs.applied == 'true'
+        working-directory: apps/api-go
+        run: go test ./model ./controller ./router
