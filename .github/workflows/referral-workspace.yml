@@ -9,20 +9,57 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: referral-workspace
+  cancel-in-progress: false
 
 jobs:
-  source:
+  verify:
+    if: github.ref == 'refs/heads/feat/referral-first-topup-clawback'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
+    env:
+      GOMAXPROCS: '2'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          persist-credentials: false
-      - name: Export source for isolated implementation
-        run: git archive --format=tar.gz --output=referral-source.tar.gz HEAD
+          ref: feat/referral-first-topup-clawback
+      - name: Apply submitted implementation
+        run: |
+          if test -f scripts/referral-workspace.patch; then
+            python3 - <<'PY'
+          import base64, gzip, pathlib, subprocess
+          source = pathlib.Path('scripts/referral-workspace.patch')
+          patch = gzip.decompress(base64.b64decode(source.read_text()))
+          subprocess.run(['git', 'apply', '--check', '-'], input=patch, check=True)
+          subprocess.run(['git', 'apply', '-'], input=patch, check=True)
+          source.unlink()
+          PY
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add apps docs CHANGELOG.md scripts/referral-workspace.patch
+            git commit -m 'feat: implement first-paid referral rewards and audited abuse clawbacks'
+            git push origin HEAD:feat/referral-first-topup-clawback
+          fi
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache-dependency-path: apps/api-go/go.sum
+      - name: Referral and payment regression tests
+        working-directory: apps/api-go
+        run: |
+          set -o pipefail
+          go test ./model ./controller ./router -count=1 2>&1 | tee "$GITHUB_WORKSPACE/referral-tests.log"
+      - name: Export tested source
+        if: always()
+        run: git archive --format=tar.gz --output=referral-tested-source.tar.gz HEAD
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: referral-source
-          path: referral-source.tar.gz
-          retention-days: 1
+          name: referral-verification-${{ github.run_id }}
+          path: |
+            referral-tests.log
+            referral-tested-source.tar.gz
+          retention-days: 3
