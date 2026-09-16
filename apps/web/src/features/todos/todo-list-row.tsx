@@ -15,7 +15,11 @@ import { cn } from '@/lib/utils'
 import type { TodoItem } from './api'
 import { todoItemTitleKey } from './todo-labels'
 import { TODO_CATEGORY_LABELS, todoTimestamp } from './todo-list-model'
-import { todoDetailNumber, todoDetailString, todoItemCanOpen } from './todo-navigation'
+import {
+  todoDetailNumber,
+  todoDetailString,
+  todoItemCanOpen,
+} from './todo-navigation'
 
 export function TodoListRow({
   item,
@@ -42,7 +46,7 @@ export function TodoListRow({
       <button
         type='button'
         className={cn(
-          'focus-visible:ring-ring hover:bg-muted/50 flex min-h-11 w-full items-start gap-3 px-4 py-5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset disabled:cursor-default sm:gap-4 sm:px-5',
+          'focus-visible:ring-ring hover:bg-muted/50 relative flex min-h-11 w-full items-start gap-3 px-4 py-5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset disabled:cursor-default sm:gap-4 sm:px-5',
           !item.read && 'bg-primary/[0.035]'
         )}
         onClick={() => onOpen(item)}
@@ -51,14 +55,22 @@ export function TodoListRow({
       >
         <span className='mt-2 flex size-2 shrink-0 items-center justify-center'>
           <span
-            className={cn('bg-primary size-1.5 rounded-full', item.read && 'invisible')}
+            className={cn(
+              'bg-primary size-1.5 rounded-full',
+              item.read && 'invisible'
+            )}
             aria-hidden='true'
           />
           <span className='sr-only'>{t(item.read ? 'Read' : 'Unread')}</span>
         </span>
         <span className='min-w-0 flex-1'>
           <span className='flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1'>
-            <span className={cn('text-sm leading-6', item.read ? 'font-medium' : 'font-semibold')}>
+            <span
+              className={cn(
+                'text-sm leading-6',
+                item.read ? 'font-medium' : 'font-semibold'
+              )}
+            >
               {t(todoItemTitleKey(item.title))}
             </span>
             {dateTime ? (
@@ -67,7 +79,11 @@ export function TodoListRow({
                 dateTime={dateTime}
                 title={formatTimestampToDate(item.updated_at)}
               >
-                {formatTimestampRelative(item.updated_at, 'seconds', i18n.language)}
+                {formatTimestampRelative(
+                  item.updated_at,
+                  'seconds',
+                  i18n.language
+                )}
               </time>
             ) : null}
           </span>
@@ -77,13 +93,24 @@ export function TodoListRow({
             </span>
           ) : null}
           <span className='text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-5'>
-            <span>{t(TODO_CATEGORY_LABELS[item.category] ?? 'Notification')}</span>
-            {participant ? <span className='break-all'>@{participant}</span> : null}
-            {applicantId ? <span>{t('User ID')} {applicantId}</span> : null}
+            <span>
+              {t(TODO_CATEGORY_LABELS[item.category] ?? 'Notification')}
+            </span>
+            {participant ? (
+              <span className='break-all'>@{participant}</span>
+            ) : null}
+            {applicantId ? (
+              <span>
+                {t('User ID')} {applicantId}
+              </span>
+            ) : null}
             {email ? <span className='break-all'>{email}</span> : null}
           </span>
         </span>
-        <span className='mt-1 flex size-4 shrink-0 items-center justify-center' aria-hidden='true'>
+        <span
+          className='mt-1 flex size-4 shrink-0 items-center justify-center'
+          aria-hidden='true'
+        >
           {busy ? (
             <LoaderCircle className='size-4 animate-spin motion-reduce:animate-none' />
           ) : canOpen ? (

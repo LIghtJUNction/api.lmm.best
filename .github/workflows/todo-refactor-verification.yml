@@ -9,18 +9,19 @@ on:
       - .github/workflows/todo-refactor-verification.yml
 
 permissions:
-  contents: read
+  contents: write
 
 defaults:
   run:
     shell: bash
 
 concurrency:
-  group: todo-refactor-verification
+  group: todo-refactor-verification-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
   verify:
+    if: github.event.head_commit.message != 'style(web): format validated todo refactor'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -41,14 +42,17 @@ jobs:
         working-directory: apps/web
         run: bun run format 2>&1 | tee ../../todo-verification-output/format.log
       - name: Lint
+        id: lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: apps/web
         run: bun run lint 2>&1 | tee ../../todo-verification-output/lint.log
       - name: Typecheck
+        id: typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: apps/web
         run: bun run typecheck 2>&1 | tee ../../todo-verification-output/typecheck.log
       - name: Test todo suites independently
+        id: todo_tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: apps/web
         run: |
@@ -64,10 +68,12 @@ jobs:
         working-directory: apps/web
         run: bun run test 2>&1 | tee ../../todo-verification-output/test.log
       - name: Production build
+        id: build
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         working-directory: apps/web
         run: bun run build 2>&1 | tee ../../todo-verification-output/build.log
       - name: Browser verification with isolated fixtures
+        id: browser
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
           PLAYWRIGHT_HOME: ${{ runner.temp }}/todo-browser
@@ -85,6 +91,34 @@ jobs:
             sleep 1
           done
           node .todo-review-browser.cjs 2>&1 | tee ../../todo-verification-output/browser.log
+      - name: Commit only validated todo formatting to the isolated branch
+        if: ${{ !cancelled() && github.ref == 'refs/heads/refactor/todo-workspace-20260916' && steps.lint.outcome == 'success' && steps.typecheck.outcome == 'success' && steps.todo_tests.outcome == 'success' && steps.build.outcome == 'success' && steps.browser.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            apps/web/src/features/todos/api.ts \
+            apps/web/src/features/todos/api.test.ts \
+            apps/web/src/features/todos/index.tsx \
+            apps/web/src/features/todos/todo-navigation.ts \
+            apps/web/src/features/todos/todo-list-model.ts \
+            apps/web/src/features/todos/todo-list-model.test.ts \
+            apps/web/src/features/todos/todo-list-regressions.test.tsx \
+            apps/web/src/features/todos/todo-list-row.tsx \
+            apps/web/src/features/todos/unified-todo-list.tsx \
+            apps/web/src/features/todos/use-todo-feed.ts
+          git diff --cached --name-only > todo-verification-output/formatted-paths.txt
+          git rev-parse HEAD > todo-verification-output/source-commit.txt
+          if git diff --cached --quiet; then exit 0; fi
+          git -c core.hooksPath=/dev/null commit -m 'style(web): format validated todo refactor'
+          basic_auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$basic_auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic_auth" push origin HEAD:refs/heads/refactor/todo-workspace-20260916
+          git rev-parse HEAD > todo-verification-output/source-commit.txt
       - name: Upload evidence and formatted source
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

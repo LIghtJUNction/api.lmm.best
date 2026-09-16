@@ -50,10 +50,15 @@ function UnifiedTodoListContent() {
   const [supportItem, setSupportItem] = useState<TodoItem | null>(null)
   const [navigationFailed, setNavigationFailed] = useState(false)
   const categories = query.data?.categories ?? []
-  const visibleCategories = visibleTodoCategories(categories, view.category, isAdmin)
-  const total = query.data?.category === view.category
-    ? query.data.total
-    : categories.find((item) => item.key === view.category)?.total
+  const visibleCategories = visibleTodoCategories(
+    categories,
+    view.category,
+    isAdmin
+  )
+  const total =
+    query.data?.category === view.category
+      ? query.data.total
+      : categories.find((item) => item.key === view.category)?.total
   const pages = todoPageCount(total ?? 0, query.data?.page_size ?? 50)
   const loadingRows = query.isLoading || query.isPlaceholderData
 
@@ -61,7 +66,10 @@ function UnifiedTodoListContent() {
     const securityDestination = todoSecurityReviewDestination(item)
     if (securityDestination) {
       await navigate({ to: securityDestination })
-    } else if (item.category === 'developer_access' || item.category === 'account_action') {
+    } else if (
+      item.category === 'developer_access' ||
+      item.category === 'account_action'
+    ) {
       await navigate({
         to: '/todos',
         search: { todo: item.category, request: item.source_id },
@@ -106,28 +114,39 @@ function UnifiedTodoListContent() {
   }
 
   return (
-    <section aria-label={t('To-dos')} aria-busy={query.isFetching} className='min-w-0'>
+    <section
+      aria-label={t('To-dos')}
+      aria-busy={query.isFetching}
+      className='relative min-w-0'
+    >
       <div className='border-border mb-5 overflow-x-auto border-b'>
-        <div role='group' aria-label={t('To-dos')} className='flex min-w-max gap-1'>
+        <div
+          role='group'
+          aria-label={t('To-dos')}
+          className='flex min-w-max gap-1'
+        >
           {visibleCategories.map((key) => {
-            const unread = key === 'all'
-              ? query.data?.total_unread_count
-              : categories.find((item) => item.key === key)?.unread
+            const unread =
+              key === 'all'
+                ? query.data?.total_unread_count
+                : categories.find((item) => item.key === key)?.unread
             return (
               <button
                 key={key}
                 type='button'
                 aria-pressed={view.category === key}
                 className={cn(
-                  'focus-visible:ring-ring text-muted-foreground hover:text-foreground flex min-h-11 shrink-0 items-center gap-2 border-b-2 border-transparent px-3 py-3 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset',
-                  view.category === key && 'border-primary text-foreground font-medium'
+                  'focus-visible:ring-ring text-muted-foreground hover:text-foreground relative flex min-h-11 shrink-0 items-center gap-2 border-b-2 border-transparent px-3 py-3 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset',
+                  view.category === key &&
+                    'border-primary text-foreground font-medium'
                 )}
                 onClick={() => feed.selectCategory(key)}
               >
                 {t(TODO_CATEGORY_LABELS[key])}
                 {unread ? (
                   <span className='bg-muted text-foreground rounded-md px-1.5 py-0.5 text-xs tabular-nums'>
-                    <span className='sr-only'>{t('Unread')} </span>{unread}
+                    <span className='sr-only'>{t('Unread')} </span>
+                    {unread}
                   </span>
                 ) : null}
               </button>
@@ -138,7 +157,9 @@ function UnifiedTodoListContent() {
 
       <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
         <div className='flex flex-wrap items-baseline gap-x-3 gap-y-1'>
-          <h3 className='text-sm font-semibold'>{t(TODO_CATEGORY_LABELS[view.category])}</h3>
+          <h3 className='text-sm font-semibold'>
+            {t(TODO_CATEGORY_LABELS[view.category])}
+          </h3>
           <span className='text-muted-foreground text-xs tabular-nums'>
             {t('Total')}: {total ?? '—'}
           </span>
@@ -168,25 +189,46 @@ function UnifiedTodoListContent() {
           >
             <RefreshCw
               aria-hidden='true'
-              className={cn('size-4', query.isFetching && 'animate-spin motion-reduce:animate-none')}
+              className={cn(
+                'size-4',
+                query.isFetching && 'animate-spin motion-reduce:animate-none'
+              )}
             />
           </Button>
         </div>
       </div>
 
       {query.isError ? (
-        <div role='alert' className='border-destructive/30 bg-destructive/5 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm'>
+        <div
+          role='alert'
+          className='border-destructive/30 bg-destructive/5 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm'
+        >
           <p>{t('Failed to load to-dos')}</p>
-          <Button variant='outline' size='sm' className='min-h-11' disabled={query.isFetching} onClick={() => void query.refetch()}>
+          <Button
+            variant='outline'
+            size='sm'
+            className='min-h-11'
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
             {t('Retry')}
           </Button>
         </div>
       ) : null}
       {feed.failedRead || navigationFailed ? (
-        <div role='alert' className='border-destructive/30 bg-destructive/5 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm'>
+        <div
+          role='alert'
+          className='border-destructive/30 bg-destructive/5 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3 text-sm'
+        >
           <p>{t('Operation failed')}</p>
           {feed.failedRead ? (
-            <Button variant='outline' size='sm' className='min-h-11' disabled={feed.pendingReads.size > 0} onClick={feed.retryRead}>
+            <Button
+              variant='outline'
+              size='sm'
+              className='min-h-11'
+              disabled={feed.pendingReads.size > 0}
+              onClick={feed.retryRead}
+            >
               {t('Retry')}
             </Button>
           ) : null}
@@ -198,7 +240,11 @@ function UnifiedTodoListContent() {
           <div role='status' className='divide-border divide-y'>
             <span className='sr-only'>{t('Loading')}</span>
             {[0, 1, 2, 3].map((key) => (
-              <div key={key} aria-hidden='true' className='space-y-3 px-5 py-6 motion-safe:animate-pulse'>
+              <div
+                key={key}
+                aria-hidden='true'
+                className='space-y-3 px-5 py-6 motion-safe:animate-pulse'
+              >
                 <div className='bg-muted h-4 w-1/3 rounded' />
                 <div className='bg-muted h-3 w-3/4 rounded' />
                 <div className='bg-muted h-3 w-1/2 rounded' />
@@ -212,24 +258,35 @@ function UnifiedTodoListContent() {
                 key={item.id}
                 item={item}
                 isAdmin={isAdmin}
-                busy={feed.pendingReads.has(item.id) || feed.pendingReads.has('all')}
+                busy={
+                  feed.pendingReads.has(item.id) || feed.pendingReads.has('all')
+                }
                 onOpen={openItem}
               />
             ))}
           </ul>
         ) : !query.isError ? (
           <div className='px-6 py-16 text-center'>
-            <Inbox aria-hidden='true' className='text-muted-foreground mx-auto mb-4 size-7' />
+            <Inbox
+              aria-hidden='true'
+              className='text-muted-foreground mx-auto mb-4 size-7'
+            />
             <p className='text-sm font-medium'>{t('No pending to-dos')}</p>
             <p className='text-muted-foreground mx-auto mt-2 max-w-sm text-sm leading-6'>
-              {t('Submitted challenge work and account requests will appear here.')}
+              {t(
+                'Submitted challenge work and account requests will appear here.'
+              )}
             </p>
           </div>
         ) : null}
         {pages > 1 || view.page > 1 ? (
           <div className='border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3'>
-            <span className='text-muted-foreground text-xs tabular-nums' aria-live='polite'>
-              {t('Page')} {view.page}{total !== undefined ? ` / ${pages}` : ''}
+            <span
+              className='text-muted-foreground text-xs tabular-nums'
+              aria-live='polite'
+            >
+              {t('Page')} {view.page}
+              {total !== undefined ? ` / ${pages}` : ''}
             </span>
             <div className='flex items-center gap-2'>
               <Button
@@ -240,17 +297,21 @@ function UnifiedTodoListContent() {
                 disabled={view.page <= 1 || query.isFetching}
                 onClick={() => feed.selectPage(view.page - 1)}
               >
-                <ChevronLeft className='size-4' aria-hidden='true' />{t('Previous')}
+                <ChevronLeft className='size-4' aria-hidden='true' />
+                {t('Previous')}
               </Button>
               <Button
                 variant='outline'
                 size='sm'
                 className='min-h-11'
                 aria-label={t('Next page')}
-                disabled={view.page >= pages || query.isFetching || query.isError}
+                disabled={
+                  view.page >= pages || query.isFetching || query.isError
+                }
                 onClick={() => feed.selectPage(view.page + 1)}
               >
-                {t('Next')}<ChevronRight className='size-4' aria-hidden='true' />
+                {t('Next')}
+                <ChevronRight className='size-4' aria-hidden='true' />
               </Button>
             </div>
           </div>
@@ -258,7 +319,10 @@ function UnifiedTodoListContent() {
       </div>
       {supportItem && isAdmin ? (
         <HumanSupportDialog
-          item={query.data?.items.find((item) => item.id === supportItem.id) ?? supportItem}
+          item={
+            query.data?.items.find((item) => item.id === supportItem.id) ??
+            supportItem
+          }
           onClose={() => setSupportItem(null)}
         />
       ) : null}
