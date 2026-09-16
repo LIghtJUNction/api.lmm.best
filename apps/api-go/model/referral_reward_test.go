@@ -303,3 +303,18 @@ func TestReferralInternalAndUnverifiedOrdersDoNotConsumeFirstTopUp(t *testing.T)
 		})
 	}
 }
+
+func TestReferralPolicyNormalizesValidatedWhitespace(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	previous := common.OptionMap
+	common.OptionMap = map[string]string{"ReferralPenaltyPercent": " 35 ", "ReferralMinTopUpQuota": " 200 "}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previous
+		common.OptionMapRWMutex.Unlock()
+	})
+	policy := GetReferralPolicy()
+	require.Equal(t, 35, policy.PenaltyPercent)
+	require.Equal(t, 200, policy.MinTopUpQuota)
+}

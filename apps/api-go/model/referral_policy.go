@@ -42,7 +42,7 @@ func GetReferralPolicy() ReferralPolicy {
 			values[key] = value
 		}
 	}
-	parse := func(key string) int { value, _ := strconv.Atoi(values[key]); return value }
+	parse := func(key string) int { value, _ := strconv.Atoi(strings.TrimSpace(values[key])); return value }
 	return ReferralPolicy{RewardQuota: max(0, min(common.QuotaForInviter, common.MaxWalletQuota)),
 		MinTopUpQuota: parse("ReferralMinTopUpQuota"), MaxRewardQuota: parse("ReferralMaxRewardQuota"),
 		PenaltyPercent: parse("ReferralPenaltyPercent"), MaxPenaltyQuota: parse("ReferralMaxPenaltyQuota")}
