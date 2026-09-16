@@ -116,7 +116,12 @@ jobs:
           bun run --filter @lmm/web copyright:check
           bun run --filter @lmm/web lint
           bun run --filter @lmm/web typecheck
-      - name: Frontend tests
-        run: bun run --filter @lmm/web test
+      - name: Referral wallet regression
+        working-directory: apps/web
+        run: bun test src/features/wallet/components/affiliate-rewards-card.test.tsx
+      - name: Frontend route manifest regression
+        run: bash apps/api-rust/tests/behavior-oracle/tests/test-frontend-api-route-manifest.sh
       - name: Frontend production build
         run: bun run --filter @lmm/web build
+      - name: Frontend full regression suite
+        run: bun run --filter @lmm/web test
