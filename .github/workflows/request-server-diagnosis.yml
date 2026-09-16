@@ -1,0 +1,42 @@
+name: Request existing server diagnosis
+
+on:
+  push:
+    branches: [ops/request-diagnosis-343]
+    paths: [.github/workflows/request-server-diagnosis.yml]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: request-server-diagnosis-343
+  cancel-in-progress: false
+
+jobs:
+  request:
+    if: >-
+      github.repository == 'LIghtJUNction/api.lmm.best' &&
+      github.actor == 'LIghtJUNction' &&
+      github.triggering_actor == 'LIghtJUNction' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Request the existing diagnose operation without changing its authorization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo=LIghtJUNction/api.lmm.best
+          expected=5bc1c61840ebfe555cb0c32f28ebd3688316c5d0
+          actual=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
+          test "$actual" = "$expected"
+          gh api "repos/$repo/actions/workflows/server-ops.yml" --jq '{id,path,state}'
+          gh api --method POST "repos/$repo/actions/workflows/server-ops.yml/dispatches" \
+            --input - <<'JSON'
+          {"ref":"main","inputs":{"operation":"diagnose","reason":"Issue #343: owner-requested read-only service diagnosis","repair_script":"","confirm":"","timeout_seconds":"180"}}
+          JSON
+          echo 'Requested diagnose on the existing workflow. That workflow still validates its real actor and production environment before loading credentials.'
+          echo 'This request job has no production environment or SSH secrets; no repair, retry, rollback, restart, release, or authorization change is performed here.'
