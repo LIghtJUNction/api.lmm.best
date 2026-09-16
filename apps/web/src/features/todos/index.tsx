@@ -18,7 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useSearch } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -129,7 +136,7 @@ function AdminTodoSection(props: {
     >
       <summary
         ref={summaryRef}
-        className='focus-visible:ring-ring text-foreground flex min-h-11 scroll-mt-4 cursor-pointer list-none items-center justify-between gap-3 rounded-sm text-sm font-medium outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden'
+        className='focus-visible:ring-ring text-foreground flex min-h-11 cursor-pointer scroll-mt-4 list-none items-center justify-between gap-3 rounded-sm text-sm font-medium outline-none focus-visible:ring-2 [&::-webkit-details-marker]:hidden'
       >
         {props.title}
         <ChevronRight
@@ -140,7 +147,13 @@ function AdminTodoSection(props: {
           )}
         />
       </summary>
-      <Suspense fallback={<p role='status' className='text-muted-foreground py-5 text-sm'>{t('Loading')}</p>}>
+      <Suspense
+        fallback={
+          <p role='status' className='text-muted-foreground py-5 text-sm'>
+            {t('Loading')}
+          </p>
+        }
+      >
         {mounted ? <div className='pt-5'>{props.children}</div> : null}
       </Suspense>
     </details>

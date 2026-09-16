@@ -61,7 +61,14 @@ export function useTodoFeed() {
   }
 
   const query = useQuery({
-    queryKey: ['todos', user?.id, sessionId, user?.role, view.category, view.page],
+    queryKey: [
+      'todos',
+      user?.id,
+      sessionId,
+      user?.role,
+      view.category,
+      view.page,
+    ],
     queryFn: ({ signal }) => getTodos(view.category, view.page, signal),
     enabled: Boolean(user),
     staleTime: 10_000,
@@ -80,7 +87,14 @@ export function useTodoFeed() {
       // A formerly valid page can disappear after an item is processed.
       // The destination page must not resurrect a still-fresh cached list.
       void queryClient.invalidateQueries({
-        queryKey: ['todos', user?.id, sessionId, user?.role, view.category, lastPage],
+        queryKey: [
+          'todos',
+          user?.id,
+          sessionId,
+          user?.role,
+          view.category,
+          lastPage,
+        ],
         exact: true,
         refetchType: 'none',
       })
@@ -121,8 +135,7 @@ export function useTodoFeed() {
       await readMutation.mutateAsync(operation)
       if (!isCurrentSession()) return
       setFailedRead((previous) => {
-        const previousKey =
-          previous?.kind === 'all' ? 'all' : previous?.item.id
+        const previousKey = previous?.kind === 'all' ? 'all' : previous?.item.id
         return operation.kind === 'all' || previousKey === key ? null : previous
       })
       // Include the navigation badge and all cached categories, as before.
@@ -143,7 +156,8 @@ export function useTodoFeed() {
     failedRead,
     isCurrentSession,
     selectCategory: (category: TodoCategory) => setView({ category, page: 1 }),
-    selectPage: (page: number) => setView((previous) => ({ ...previous, page })),
+    selectPage: (page: number) =>
+      setView((previous) => ({ ...previous, page })),
     markRead: (item: TodoItem) => {
       if (!item.read) void runRead({ kind: 'item', item })
     },
